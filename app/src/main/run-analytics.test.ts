@@ -1,15 +1,14 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, it, vi } from "vitest";
 import { mountRunAnalytics } from "./run-analytics";
-import type { RunAnalyticsApi, RunReport, RunTrace } from "./run-analytics-types";
+import type { RunAnalyticsApi, RunReport } from "./run-analytics-types";
 import { setLocale } from "./i18n";
 
 afterEach(() => document.body.replaceChildren());
 it("shows catalog model names, localized members and durations, and expands the member top five", async () => {
   const summary = { duration_ms: 185200, cost_usd: .01, tokens: 120, ai_steps: 1, tools: 0, errors: 0 };
-  const run = { ...summary, kind: "turn" as const, id: 1, at_ms: 200000, started_at_ms: 14800, member_id: 0, member_name: "Raphael", avatar: "", title: "Question", model: "cli:codex:gpt-6.1", provider: "openai", routine: "" };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, runs: [run], total: 1, groups: { member: Array.from({length:7}, (_, i) => ({label: i ? `Member ${i}` : "Raphael", member_id: i, tokens: 7-i, cost_usd: 0, runs: 1})), model: [{label:run.model,tokens:120,cost_usd:.01,runs:1}], day: [], provider: [], routine: [] } };
-  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageTrace: vi.fn().mockResolvedValue({run,summary,spans:[{kind:"model",model:run.model,ms:21000,at_ms:40000,outcome:"ok",tool:"",server:""}]}), usageExport: vi.fn(), usageAllowances: vi.fn().mockResolvedValue({brains:[]}), saveUsageCsv:vi.fn(), brainsCli:vi.fn().mockResolvedValue({clis:[{id:"codex",models:[{id:"gpt-6.1",name:"GPT-6.1",provider:"OpenAI"}]}]}) };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 1, groups: { member: Array.from({length:7}, (_, i) => ({label: i ? `Member ${i}` : "Raphael", member_id: i, tokens: 7-i, cost_usd: 0, runs: 1})), model: [{label:"cli:codex:gpt-6.1",tokens:120,cost_usd:.01,runs:1}], day: [], provider: [], routine: [] } };
+  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageExport: vi.fn(), usageAllowances: vi.fn().mockResolvedValue({brains:[]}), saveUsageCsv:vi.fn(), brainsCli:vi.fn().mockResolvedValue({clis:[{id:"codex",models:[{id:"gpt-6.1",name:"GPT-6.1",provider:"OpenAI"}]}]}) };
   setLocale("zh-TW");
   const host = document.createElement("div"); document.body.append(host);
   const view = mountRunAnalytics(host,api); await view.ready;
@@ -21,64 +20,34 @@ it("shows catalog model names, localized members and durations, and expands the 
   host.querySelector<HTMLButtonElement>('[data-run-act="members"]')!.click();
   expect(host.querySelectorAll('.run-members .run-bars li')).toHaveLength(7);
   expect(host.querySelector('.tabs.switch [aria-selected="true"]')?.textContent).toBe("模型");
-  host.querySelector<HTMLButtonElement>('[data-run-id]')!.click();
-  await vi.waitFor(() => expect(host.querySelector('.run-timeline')).not.toBeNull());
-  expect(host.textContent).toContain("21 秒");
-  expect(host.textContent).not.toContain("cli:codex:");
   setLocale("en"); expect(host.textContent).toContain("3m 5s");
   setLocale("ja"); expect(host.textContent).toContain("3分5秒");
   view.destroy(); setLocale("zh-TW");
 });
-it("filters, opens measured spans, groups tools and exports every matching run", async () => {
+it("keeps totals, grouping and CSV export without any per-run navigation", async () => {
   const summary = { duration_ms: 2000, cost_usd: .01, tokens: 120, ai_steps: 1, tools: 2, errors: 0 };
-  const run = { ...summary, kind: "turn" as const, id: 1, at_ms: 10000, started_at_ms: 8000, member_id: 0, member_name: "Raphael", avatar: "", title: "<question>", model: "m", provider: "p", routine: "" };
-  const report: RunReport = { range: "month", start_day: "2026-10-01", end_day: "2026-10-24", summary, runs: [run], total: 1, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
-  const trace: RunTrace = { run, summary, spans: [100, 200].map(ms => ({ at_ms: 9000, ms, kind: "tool", tool: "web_search", server: "web", outcome: "ok" })) };
-  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageTrace: vi.fn().mockResolvedValue(trace), usageExport: vi.fn().mockResolvedValue({ csv: "all runs" }), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn().mockResolvedValue(true) };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
+  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageExport: vi.fn().mockResolvedValue({ csv: "all runs" }), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn().mockResolvedValue(true) };
   const host = document.createElement("div"); document.body.append(host);
-  const traceChanged = vi.fn();
-  const view = mountRunAnalytics(host, api, traceChanged); await view.ready;
+  const view = mountRunAnalytics(host, api); await view.ready;
   expect(host.querySelectorAll(".run-tile")).toHaveLength(6);
-  expect(host.innerHTML).toContain("&lt;question&gt;");
-  host.querySelector<HTMLButtonElement>("[data-run-id]")!.click();
-  await vi.waitFor(() => expect(host.querySelector(".run-timeline")).not.toBeNull());
-  expect(host.querySelectorAll(".run-tool-group")).toHaveLength(1);
-  host.querySelector<HTMLButtonElement>('[data-run-act="tools"]')!.click();
-  expect(host.querySelector<HTMLOListElement>('.run-tool-group ol')!.hidden).toBe(false);
-  expect(host.querySelector('[data-run-act="tools"]')?.getAttribute('aria-expanded')).toBe('true');
-  expect(host.querySelectorAll(".run-slowest")).toHaveLength(1);
-  expect(traceChanged).toHaveBeenLastCalledWith(true);
-  host.querySelector<HTMLButtonElement>('[data-run-act="back"]')!.click();
-  expect(traceChanged).toHaveBeenLastCalledWith(false);
+  expect(host.querySelector(".run-list, .run-timeline, [data-run-id]")).toBeNull();
+  host.querySelector<HTMLButtonElement>('[data-run-group="day"]')!.click();
+  expect(host.querySelector('[data-run-group="day"]')?.getAttribute("aria-selected")).toBe("true");
   host.querySelector<HTMLButtonElement>('[data-run-act="export"]')!.click();
   await vi.waitFor(() => expect(api.saveUsageCsv).toHaveBeenCalledWith("all runs"));
   expect(api.usageExport).toHaveBeenCalledWith(expect.objectContaining({ range: "month" }));
-  view.destroy(); expect(host.childElementCount).toBe(0);
-});
-
-it("paginates retained rows and resets the request when the period changes", async () => {
-  const summary = { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 };
-  const run = { ...summary, kind: "turn" as const, id: 1, at_ms: 10000, started_at_ms: null, duration_ms: null, tokens: null, member_id: 1, member_name: "Research", avatar: "", title: "Research", model: "", provider: "unknown", routine: "" };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, runs: [run], total: 2, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
-  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValueOnce(report).mockResolvedValueOnce({ ...report, runs: [{ ...run, id: 2 }] }).mockResolvedValue({ ...report, runs: [], total: 0 }), usageTrace: vi.fn(), usageExport: vi.fn(), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn() };
-  const host = document.createElement("div"); document.body.append(host);
-  const view = mountRunAnalytics(host, api); await view.ready;
-  host.querySelector<HTMLButtonElement>('[data-run-act="more"]')!.click();
-  await vi.waitFor(() => expect(host.querySelectorAll(".run-row")).toHaveLength(2));
-  expect(api.usageRuns).toHaveBeenLastCalledWith(expect.objectContaining({ range: "month", offset: 1 }));
   host.querySelector<HTMLButtonElement>('[data-run-act="period"]')!.click();
-  document.querySelector<HTMLButtonElement>('.menu [data-value="week"]')!.click();
-  await vi.waitFor(() => expect(host.querySelectorAll(".run-row")).toHaveLength(0));
-  expect(api.usageRuns).toHaveBeenLastCalledWith(expect.objectContaining({ range: "week" }));
-  expect(api.usageRuns).not.toHaveBeenLastCalledWith(expect.objectContaining({ offset: 2 }));
-  view.destroy();
+  document.querySelector<HTMLButtonElement>('[data-value="week"]')!.click();
+  await vi.waitFor(() => expect(api.usageRuns).toHaveBeenLastCalledWith(expect.objectContaining({ range: "week" })));
+  view.destroy(); expect(host.childElementCount).toBe(0);
 });
 
 it("retries a failed load and does not open a save dialog after the view is destroyed", async () => {
   const summary = { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, runs: [], total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
   let finish!: (result: { csv: string }) => void;
-  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockRejectedValueOnce("offline").mockResolvedValue(report), usageTrace: vi.fn(), usageExport: vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; })), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn() };
+  const api: RunAnalyticsApi = { usageRuns: vi.fn().mockRejectedValueOnce("offline").mockResolvedValue(report), usageExport: vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; })), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn() };
   const host = document.createElement("div"); document.body.append(host);
   const view = mountRunAnalytics(host, api); await view.ready;
   expect(host.querySelector('[role="alert"]')!.textContent).toContain("offline");
@@ -93,8 +62,8 @@ it("retries a failed load and does not open a save dialog after the view is dest
 
 it("shows recorded subscription exhaustion and reset beside live Codex allowances", async () => {
   const summary = { duration_ms:0, cost_usd:0, tokens:0, ai_steps:0, tools:0, errors:0 };
-  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, runs:[], total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
-  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageTrace:vi.fn(), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[{id:"codex",name:"Codex CLI",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792800000}]},{id:"claude",name:"Claude",windows:[]},{id:"gemini",name:"Antigravity",windows:[]}],quotas:[{provider:"claude",reset_at_ms:1792800000000},{provider:"gemini",reset_at_ms:null}]}) };
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
+  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[{id:"codex",name:"Codex CLI",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792800000}]},{id:"claude",name:"Claude",windows:[]},{id:"gemini",name:"Antigravity",windows:[]}],quotas:[{provider:"claude",reset_at_ms:1792800000000},{provider:"gemini",reset_at_ms:null}]}) };
   const host = document.createElement("div"); document.body.append(host);
   const view = mountRunAnalytics(host,api); await view.ready;
   const text = host.querySelector(".run-allowance")!.textContent;
@@ -105,8 +74,8 @@ it("shows recorded subscription exhaustion and reset beside live Codex allowance
 
 it("renders and refreshes all allowance sources with maker marks and honest unknown percentages", async () => {
   const summary = { duration_ms:0, cost_usd:0, tokens:0, ai_steps:0, tools:0, errors:0 };
-  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, runs:[], total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
-  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageTrace:vi.fn(), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
+  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[
     {id:"codex",name:"Codex",source:"live",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792900000}]},
     {id:"claude",name:"Claude",source:"reported",windows:[
       {period:"fiveHour",remaining_percent:17,resets_at:1,status:"allowed_warning",updated_at_ms:1792800000000},

@@ -8,14 +8,15 @@ attachments, reply quoting, message actions, search and composer menus.
 ## How to get to it (user POV)
 
 Open Conversation. Select Raphael or another member in the sidebar (compact width:
-member picker). The conversation title opens its picker. Select the current member
-again to open details; conversation row menus live there. Use sidebar search, or
+member picker). Click the stacked member/conversation title to toggle details. The title displays
+the current session only; conversation creation, search, switching and row menus
+live in the details list. The top-right gear opens Settings. Use sidebar search, or
 the compact picker's search action, for messages.
 
 ## Driving it with look
 
 ```powershell
-npm run look -- chat running empty picker no-conversations new-conversation row-menu rename delete --theme both --width 1120,720
+npm run look -- chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720
 npm run look -- work composer mode actions reply search search-target tooltip --theme both --width 1120,720
 npm run look -- member-composer-empty member-text member-composer-hover conversation-notice --theme both --width 1120,720
 ```
@@ -30,6 +31,7 @@ conversation persistence. Keep the resulting turn and relevant logs.
 
 Collapsed work contains hidden `.chat-message` elements before the visible reply.
 Answer scenes target `.chat-message[data-expandable]`; the driver chooses a visible
-match. The header picker deliberately has no row actions. Rename/delete scenes open
+match. The title reflects the details panel with aria-expanded; opening rooms preserves
+the remembered member-panel preference. Rename/delete scenes open
 dialogs, not committed changes. Empty/running are fixture variants, not proof of
 streaming, cancellation, persistence or file transfer.

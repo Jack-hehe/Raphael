@@ -4,7 +4,7 @@ From `app/`:
 
 ```sh
 npm run look -- --list
-npm run look -- chat picker --theme both --width 1120,720
+npm run look -- chat details --theme both --width 1120,720
 npm run look -- --all --theme both --width 1120,720
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
@@ -22,7 +22,8 @@ means a scene, runtime, layout, raw translation key, or visible native select/ti
 check failed; missing dependencies produce a `blocked` report and a nonzero exit.
 Inspect contact sheets and full-size PNGs as well as the automated checks.
 
-The real `index.html`, `main.ts` and CSS run through Vite. Only the Tauri IPC boundary is
+The real `index.html`, `main.ts` and CSS run through Vite. Overlay scenes select
+the production `overlay.html` entry. Only the Tauri IPC boundary is
 replaced by `mock-ipc.js`. Unsupported calls are failures, including rejections caught by
 the app. External browser requests are blocked and reported. Every scene gets a fresh
 copy of `fixture.json`: public synthetic Traditional Chinese content, local/embedded avatars,
@@ -35,19 +36,21 @@ export it from `scenes/index.mjs`. Steps include click, type, hover, key, wait, 
 member/room selection and drag/drop. Use real UI selectors and wait for the resulting
 state; do not replace app modules or inject a separate preview page. Fixture overrides
 can replace collections; `running`, `problem`, `onlyRaphael`, `usageEmpty`
-and `onboarding` select boundary variants. All scenarios appear in `--list`.
+and `onboarding` select boundary variants. `overlayEvents` replays the native overlay
+channel contract; `advance-time` advances the shared fixed clock for production timers. All scenarios appear in `--list`.
 
 Use `check(name)` for browser assertions that need rendered geometry. The shared
-`checks.mjs` guards conversation-picker overflow and complete calendar-chip times;
+`checks.mjs` guards title/panel state, conversation-list overflow, equal 32px
+composer buttons, percentage captions and complete calendar-chip times;
 successful measurements are saved in each result's `assertions`. Keep prerequisite
 data in the shared fixture: usage expansion needs more than five historical member
 groups, and a dictation heatmap day must have a nonzero count before it can be opened.
 
 Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage matrix,
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
-Conversation row actions now open through member details. Automation run history uses
-the unified usage trace. The deliberately removed owner menu/photo controls have no
-scenes. There are 127 current scenes (508 combinations for both themes and widths).
+Conversation management opens through the title-controlled details panel. Usage
+retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
+scenes. There are 126 current scenes (504 combinations for both themes and widths).
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
 the driver chooses the first visible match. Favicon requests return an empty 204.
 

@@ -1798,7 +1798,7 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
 
 
-async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_history(make_app):
+async def test_an_agent_dictation_goes_through_shared_cleanup_without_history(make_app):
     kit = make_kit()
     app = make_app(kit)
     await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
@@ -1819,13 +1819,13 @@ async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_
         "audio_seconds": pytest.approx(1.0),
         "silent": False,
     }
-    assert asked == []  # no cleanup
+    assert len(asked) == 1  # the same cleanup request as dictation
     assert (await app.call("history.list"))["items"] == []  # no history row
     assert (await app.call("history.latest"))["item"] is None  # nothing for "paste last"
     assert (await app.call("status.get"))["spend"]["month_usd"] == 0
     # The next one is a dictation as ever.
     again = await dictate(app, "d1")
-    assert again["cleaned"] is True and len(asked) == 1
+    assert again["cleaned"] is True and len(asked) == 2
 
 
 async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):

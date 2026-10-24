@@ -24,18 +24,11 @@ def runs(conn):
 async def test_runs_have_real_metrics_and_local_calendar_periods(runs):
     result = await runs.read({'range':'month','tz':'Asia/Taipei'})
     assert result['summary'] == {'duration_ms':2000,'cost_usd':0.03,'tokens':120,'ai_steps':1,'tools':1,'errors':0}
-    assert result['runs'][0]['member_name'] == 'Raphael'
+    assert result['groups']['member'][0]['label'] == 'Raphael'
+    assert 'runs' not in result
     assert result['groups']['model'][0]['label'] == 'vendor/model'
     assert result['start_day'] == '2026-10-01'
-    assert (await runs.read({'range':'last_month','tz':'UTC'}))['runs'] == []
-
-
-async def test_trace_joins_metadata_without_tool_arguments(runs):
-    result = await runs.trace({'kind':'turn','id':1})
-    assert result['run']['duration_ms'] == 2000
-    assert {span['kind'] for span in result['spans']} == {'model','tool'}
-    assert result['spans'][0]['ms'] == 1000
-    assert 'arguments' not in json.dumps(result)
+    assert (await runs.read({'range':'last_month','tz':'UTC'}))['total'] == 0
 
 
 async def test_csv_exports_every_run_and_prevents_spreadsheet_formulas(runs, conn):
@@ -48,20 +41,20 @@ async def test_csv_exports_every_run_and_prevents_spreadsheet_formulas(runs, con
     assert conn.execute('SELECT COUNT(*) FROM run_metrics').fetchone()[0] == 0
 
 
-async def test_pagination_does_not_limit_totals_or_csv_and_linked_reports_are_not_double_counted(runs, conn):
+async def test_aggregates_and_csv_do_not_double_count_linked_reports(runs, conn):
     conn.execute("INSERT INTO agent_turns(id,created_at_ms,session_id,question,route,prefix,text,status,cost_usd,model) VALUES(2,?,'s','Copied report','routine','','ok','done',0.07,'m')", (at('2026-10-24'),))
     conn.execute("INSERT INTO worker_tasks(id,created_at_ms,state,session_id,turn_id,language,text,cost_usd) VALUES(1,?,'done','s',2,'en','Research task',0.07)", (at('2026-10-24'),))
-    page = await runs.read({'range':'all','tz':'UTC','limit':1,'offset':1})
-    assert page['total'] == 2 and len(page['runs']) == 1
+    page = await runs.read({'range':'all','tz':'UTC'})
+    assert page['total'] == 2
     assert page['summary']['cost_usd'] == pytest.approx(.1)
-    rows = list(csv.DictReader(io.StringIO((await runs.export({'range':'all','tz':'UTC','limit':1}))['csv'])))
+    rows = list(csv.DictReader(io.StringIO((await runs.export({'range':'all','tz':'UTC'}))['csv'])))
     assert {row['title'] for row in rows} == {"'=SUM(A1)", 'Research task'}
-    task = await runs.trace({'kind':'task','id':1})
-    assert task['run']['duration_ms'] is None and task['run']['tokens'] is None
+    task = next(row for row in rows if row['title'] == 'Research task')
+    assert task['duration_ms'] == '' and task['tokens'] == ''
 
 
-@pytest.mark.parametrize('params', [{'range':'yesterday'}, {'tz':'not/a-zone'}, {'limit':True}, {'offset':-1}])
-async def test_invalid_period_and_page_are_rejected(runs, params):
+@pytest.mark.parametrize('params', [{'range':'yesterday'}, {'tz':'not/a-zone'}])
+async def test_invalid_period_is_rejected(runs, params):
     from raphael_core.protocol import RpcError
     with pytest.raises(RpcError):
         await runs.read(params)
@@ -83,21 +76,17 @@ async def test_routine_runs_use_record_cost_and_metadata_without_counting_the_li
     result = await runs.read({'range':'all'})
     assert result['total'] == 2
     assert result['summary']['cost_usd'] == pytest.approx(.1)
-    routine = next(row for row in result['runs'] if row['kind'] == 'routine')
-    assert (routine['title'], routine['routine'], routine['tokens']) == ('Daily review', 'Daily review', 42)
+    rows = list(csv.DictReader(io.StringIO((await runs.export({'range':'all'}))['csv'])))
+    routine = next(row for row in rows if row['title'] == 'Daily review')
+    assert routine['tokens'] == '42'
     assert any(group['label'] == 'Daily review' and group['runs'] == 1 for group in result['groups']['routine'])
-    trace = await runs.trace({'kind':'routine','id':1})
-    assert trace['run']['tokens'] == 42
-    assert trace['run']['status'] == 'done'
 
 
-async def test_routine_run_without_retained_turn_still_has_cost_status_and_trace(runs, conn):
+async def test_routine_run_without_retained_turn_still_has_cost_and_status(runs, conn):
     conn.execute("INSERT INTO routines(id,member_id,title,prompt,schedule,next_run_ms,created_at_ms) VALUES(1,0,'Daily review','Review','{}',0,0)")
     conn.execute("INSERT INTO routine_runs(id,routine_id,started,finished,status,cost) VALUES(3,1,?,?,'error',.02)", (at('2026-10-24'), at('2026-10-24')+3000))
     result = await runs.read({'range':'all'})
     assert result['total'] == 2
-    trace = await runs.trace({'kind':'routine','id':3})
-    assert trace['run']['duration_ms'] == 3000
-    assert trace['run']['cost_usd'] == .02
-    assert trace['summary']['errors'] == 1
-    assert trace['spans'] == []
+    assert result['summary']['duration_ms'] == 5000
+    assert result['summary']['cost_usd'] == .05
+    assert result['summary']['errors'] == 1

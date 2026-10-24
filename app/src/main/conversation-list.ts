@@ -1,4 +1,4 @@
-// A self-contained conversation list shared by the thread picker and the member details panel.
+// A self-contained conversation list in the member details panel.
 // The caller owns navigation; this component owns loading, searching and its CRUD dialogs.
 import * as api from "./api";
 import { onLocaleChange, t } from "./i18n";
@@ -30,7 +30,7 @@ export function relativeTime(ms: number, now = Date.now()): string {
   return t("conversations.days", { p0: Math.floor(minutes / 1440) });
 }
 
-export function mountConversationList(host: HTMLElement, options: { memberId: number; onOpen(id: number): void; manage?: boolean; collapseWhenEmpty?: boolean; onVisibility?(visible: boolean): void }): { refresh(): Promise<void>; destroy(): void } {
+export function mountConversationList(host: HTMLElement, options: { memberId: number; onOpen(id: number): void; collapseWhenEmpty?: boolean; onVisibility?(visible: boolean): void }): { refresh(): Promise<void>; destroy(): void } {
   let conversations: ConversationInfo[] = [];
   let epoch = 0, destroyed = false;
   host.classList.add("conversation-list");
@@ -47,7 +47,7 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
     const found = conversations.filter(c => conversationTitle(c).toLocaleLowerCase().includes(input.value.trim().toLocaleLowerCase()));
     rows.innerHTML = found.length ? found.map(c => `<div class="conversation-row">` +
       btn(`<span>${esc(conversationTitle(c))}</span><small>${esc(relativeTime(c.updated_at_ms))}</small>`, "conversation-open", ` data-conversation-open="${c.id}"`) +
-      (options.manage === false ? "" : iconButton("more", t("chat.more"), ` data-conversation-more="${c.id}" aria-haspopup="menu"`, "conversation-more")) + `</div>`).join("") : `<p class="conversation-empty">${esc(t("conversations.empty"))}</p>`;
+      (iconButton("more", t("chat.more"), ` data-conversation-more="${c.id}" aria-haspopup="menu"`, "conversation-more")) + `</div>`).join("") : `<p class="conversation-empty">${esc(t("conversations.empty"))}</p>`;
   }
 
   async function refresh(): Promise<void> {
@@ -84,7 +84,7 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
     const open = target.closest<HTMLElement>("[data-conversation-open]");
     if (open) { closeMenu(); options.onOpen(Number(open.dataset.conversationOpen)); return; }
     const more = target.closest<HTMLElement>("[data-conversation-more]");
-    if (more && options.manage !== false) {
+    if (more) {
       const c = conversations.find(c => c.id === Number(more.dataset.conversationMore));
       if (!c) return;
       openActions(more, [{ id: "rename", label: t("conversations.rename"), icon: "pencil" }, { id: "delete", label: t("members.delete"), icon: "trash" }], act => {

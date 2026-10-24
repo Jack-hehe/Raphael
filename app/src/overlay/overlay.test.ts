@@ -83,11 +83,9 @@ class FakeEmblem implements EmblemControl {
 }
 
 class FakeView implements OverlayView {
-  progressCaption: string | undefined;
   percent: number | null = null;
   readonly percentages: Array<number | null> = [];
-  showProgress(percent: number | null, caption?: string): void {
-    this.progressCaption = caption;
+  showProgress(percent: number | null): void {
     this.percent = percent;
     this.percentages.push(percent);
     this.checkOnePlace();
@@ -409,22 +407,6 @@ test("processing reports its percentage beside the emblem", () => {
   expect(view.percent).toBeGreaterThanOrEqual(60);
   expect(view.percent).toBeLessThan(100);
   expect(lines()).toEqual([]);
-});
-
-test("a pending tail shows elapsed time immediately and changes to the cleaning stage", () => {
-  send({ type: "settings", px: 96, subtitles: "all", language: "en" });
-  send({ type: "show", mode: "listening" });
-  send({ type: "mode", mode: "thinking" });
-  send({ type: "progress", stage: "transcribing", done: 0, total: 1, audio_seconds: 2, label: "Transcribing" });
-  expect(view.progressCaption).toBe("《 Transcribing · 0s 》");
-  vi.advanceTimersByTime(2500);
-  expect(view.progressCaption).toBe("《 Transcribing · 2s 》");
-  send({ type: "progress", stage: "cleaning", done: 1, total: 1, audio_seconds: 2, label: "Cleaning" });
-  expect(view.progressCaption).toBe("《 Cleaning · 0s 》");
-  vi.advanceTimersByTime(1100);
-  expect(view.progressCaption).toBe("《 Cleaning · 1s 》");
-  send({ type: "hide" });
-  expect(view.progressCaption).toBeUndefined();
 });
 
 test("text readiness waits for delivery before announcing completion", () => {

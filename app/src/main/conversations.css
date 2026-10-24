@@ -15,7 +15,7 @@
 .conversation-open small { color: var(--text-3); font-size: 11px; }
 .conversation-more { flex: 0 0 auto; margin-right: 5px; }
 .conversation-empty { padding: 16px; text-align: center; color: var(--text-3); }
-.conversation-picker { width: min(390px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
+.conversation-search { width: min(390px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
 .conversation-list .conversation-new { width: calc(100% - 16px); margin: 8px; justify-content: flex-start; gap: 8px; }
 .conversation-head { display: flex; justify-content: center; min-width: 0; }
 .page.page-agent .page-head.mb-head { grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr); }

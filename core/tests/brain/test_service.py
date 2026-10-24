@@ -58,7 +58,6 @@ METHODS = [
     "stats.summary",
     "usage.analytics",
     "usage.runs",
-    "usage.trace",
     "usage.export",
 ]
 
@@ -596,15 +595,16 @@ def gated(fake_client):
     return entered, gate.set
 
 
+@pytest.mark.parametrize("purpose", ["dictation", "agent"])
 async def test_a_dictation_cancelled_while_it_is_cleaned_is_paid_for_and_not_kept(
-    router, fake_client, keys
+    router, fake_client, keys, purpose
 ):
     keys.set(KEY)
     fake_client.next_completion = completion({"text": "早安，你好嗎。"}, cost=0.0004)
     await finalize(router, "早安你好嗎", session_id="s0")  # the dictation "paste last" should find
     fake_client.next_completion = completion({"text": "你好嗎我很好。"}, cost=0.0004)
     entered, open_gate = gated(fake_client)
-    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1", purpose=purpose))
     await entered.wait()
     assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
     open_gate()
@@ -1787,3 +1787,43 @@ async def test_import_refuses_bad_params(router, params):
     with pytest.raises(RpcError) as err:
         await router.call("dictionary.import", params)
     assert err.value.code == INVALID_PARAMS
+
+
+@pytest.mark.parametrize("purpose", ["dictation", "agent"])
+async def test_cleanup_contract_and_cost_are_shared_but_agent_keeps_paste_last(
+    router, fake_client, keys, conn, purpose,
+):
+    seed_history(conn, 1, start_ms=NOW_MS)
+    previous = (await router.call("history.latest", {}))["item"]
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "Please open YouTube."}, cost=0.0002)
+    result = await finalize(router, "um please open YouTube", purpose=purpose)
+    assert result["text"] == "Please open YouTube."
+    assert result["cleaned"]
+    assert fake_client.calls
+    spend = conn.execute("SELECT purpose, cost_usd FROM spend").fetchall()
+    assert [(row[0], row[1]) for row in spend] == [("cleanup", 0.0002)]
+    latest = (await router.call("history.latest", {}))["item"]
+    if purpose == "agent":
+        assert result["id"] is None
+        assert latest == previous
+    else:
+        assert latest["text"] == result["text"]
+
+
+async def test_agent_cleanup_retains_the_short_sentence_shortcut(router, fake_client, keys, conn):
+    keys.set(KEY)
+    result = await finalize(router, "Hello world.", purpose="agent")
+    assert result["text"] == "Hello world." and result["cleaned"]
+    assert result["llm_ms"] == 0 and result["id"] is None
+    assert fake_client.calls == []
+    assert conn.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 0
+    assert (await router.call("history.latest", {}))["item"] is None
+
+
+async def test_agent_cleanup_without_a_key_retains_normalization_without_history(router):
+    await router.call("dictionary.add", {"word": "Raphael", "misheard": ["Rafael"]})
+    result = await finalize(router, "Rafael \u6211\u4eec\u5f00\u4f1a", purpose="agent")
+    assert result["text"] == "Raphael \u6211\u5011\u958b\u6703"
+    assert not result["cleaned"] and result["id"] is None
+    assert (await router.call("history.latest", {}))["item"] is None

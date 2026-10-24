@@ -109,13 +109,12 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .window-controls { display: flex; flex: none; }
 .window-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); cursor: default; }
 .window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
-.window-button:hover { background: var(--hover); }
+.window-button:hover { background: transparent; }
 .window-button:focus-visible { outline-offset: -3px; }
-/* The focus colour is lost on the close button's red, and on the dimmed page behind the controls
-   while the settings are open: white on the red, and a surface of its own over the dimmed page. */
-.window-close:hover:focus-visible { outline-color: var(--on-close); }
-:root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: var(--content); }
-.window-close:hover { background: var(--close); color: var(--on-close); }
+/* Caption actions retain a visible keyboard outline inside the window. */
+.window-close:hover:focus-visible { outline-color: var(--focus); }
+:root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: transparent; }
+.window-close:hover { background: transparent; color: var(--err); }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
 :root[data-window-maximized="true"] .window-restore-glyph { display: block; }
@@ -217,16 +216,14 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .btn.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .btn.pri:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); }
 .btn.sm { min-height: var(--h-ctl-sm); padding: 4px 10px; font-size: var(--fs-xs); }
-/* A button with an icon only (trash, the close cross, a chevron, search, settings, sliders) has no
-   border: only a fill under the pointer, a deeper one when pressed, and the focus ring. A border is
-   what tells a button with words in it. A primary one (the approval of a pairing code) keeps its fill. */
+/* Icon-only actions use color for hover and selection; keyboard focus retains its ring. */
 .btn.icon { width: var(--h-ctl); padding: 0; border-color: transparent; background: transparent; color: var(--text-2); }
-.btn.icon:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
-.btn.icon:active:not(:disabled) { background: var(--pressed); border-color: transparent; }
+.btn.icon:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--text); }
+.btn.icon:active:not(:disabled) { background: transparent; border-color: transparent; color: var(--accent-icon); }
 :where(:root[data-keys]) .btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.btn.icon.pri { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn.icon.pri:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--on-accent); }
-.btn.icon.pri:active:not(:disabled) { background: var(--accent-pressed); border-color: var(--accent-pressed); color: var(--on-accent); }
+.btn.icon.pri { background: transparent; border-color: transparent; color: var(--accent-icon); }
+.btn.icon.pri:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--accent-icon); }
+.btn.icon.pri:active:not(:disabled) { background: transparent; border-color: transparent; color: var(--accent-icon); }
 /* The small one on a row: copy, delete, close, previous month. */
 .btn.icon.row { width: var(--h-ctl-sm); min-height: var(--h-ctl-sm); padding: 0; }
 /* Scope interaction tokens so menu, icon and page-specific controls retain destructive intent. */
@@ -1763,3 +1760,20 @@ kbd.ob-cap { white-space: nowrap; }
   --rg-glow: rgba(240, 190, 85, 0.18);
   color-scheme: dark;
 }
+
+/* Custom icon controls share the same interaction policy as iconButton. */
+:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x, .window-button):is(:hover, :active) { background: transparent; color: var(--text); filter: none; }
+:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x, .window-button):is(:active, [aria-pressed="true"], [aria-expanded="true"], [aria-selected="true"]):not(:disabled) { background: transparent; color: var(--accent-icon); }
+:where(:root[data-keys]) .btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .cmp-attach:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .cmp-voice:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .mp-star:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .lm-del:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .chip-x:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+:where(:root[data-keys]) .window-button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.menu .btn.icon:is(:hover, :active, :focus-visible) { background: transparent; }
+
+:root[data-rail="true"] .side .nav:is(:hover, :active, [aria-current="page"]) { background: transparent; color: var(--text); }
+:root[data-rail="true"] .side .nav:is(:active, [aria-current="page"]) { color: var(--accent-icon); }
+:where(:root[data-keys]) .side .nav:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.window-controls .window-button:focus-visible { outline-offset: -3px; }

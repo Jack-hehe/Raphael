@@ -61,19 +61,6 @@ impl Notice {
     }
 }
 
-/// The captions of dictation processing, followed by elapsed seconds in the overlay.
-pub const TRANSCRIBING: Notice = Notice {
-    zh: "轉錄中",
-    en: "Transcribing",
-    ja: "文字起こし中",
-};
-
-pub const CLEANING: Notice = Notice {
-    zh: "整理中",
-    en: "Cleaning",
-    ja: "整文中",
-};
-
 /// The target window runs elevated, so the text was only copied.
 pub const ELEVATED: Notice = Notice {
     zh: "《告。此視窗權限較高，無法貼上。文字已複製，請按 Ctrl+V。》",

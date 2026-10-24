@@ -11,11 +11,12 @@ import type { AppContext } from "../types";
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); vi.useRealTimers(); });
 
-test("the stacked member and conversation title opens the picker; only a gear is at the right", async () => {
+test("the stacked member and conversation title toggles details with one state; the gear still opens Settings", async () => {
   api.agentQuestionOpen.mockResolvedValue(null);
   api.agentHistoryList.mockResolvedValue({ turns: [] });
   api.core.mockImplementation(async method => method === "conversations.list" ? { conversations: [{ id: 1, member_id: 0, is_default: 1, title: "Research" }] } : method === "background.questions.list" ? { questions: [] } : {});
-  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  const go = vi.fn();
+  const page = createAgent({ go, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
   document.body.append(page.el); page.show(); await flush();
   const title = page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!;
   expect(title.querySelector(".mb-pill-t")?.textContent).toBe("拉斐爾");
@@ -26,9 +27,22 @@ test("the stacked member and conversation title opens the picker; only a gear is
   const expectedGear = document.createElement("div"); expectedGear.innerHTML = ico("gear");
   expect(page.el.querySelector('[data-act="settings"] path')?.getAttribute("d")).toBe(expectedGear.querySelector("path")?.getAttribute("d"));
   expect(page.el.querySelector('[data-act="clear"]')).toBeNull();
+  expect(title.hasAttribute("aria-haspopup")).toBe(false);
+  expect(title.querySelector(".i")).toBeNull();
+  const initial = title.getAttribute("aria-expanded") === "true";
   title.click(); await flush();
-  expect(document.querySelector('[data-conversation-open="1"]')).not.toBeNull();
-  expect(document.querySelector('#app-popover [data-conversation-more]')).toBeNull();
+  expect(title.getAttribute("aria-expanded")).toBe(String(!initial));
+  if (initial) { title.click(); await flush(); }
+  expect(page.el.querySelector<HTMLElement>(".mb-det")!.hidden).toBe(false);
+  expect(document.querySelector("#app-popover")).toBeNull();
+  page.el.querySelector<HTMLButtonElement>('[data-det="close"]')!.click(); await flush();
+  expect(title.getAttribute("aria-expanded")).toBe("false");
+  page.hide(); page.show(); await flush();
+  expect(title.getAttribute("aria-expanded")).toBe("false");
+  title.click(); await flush();
+  expect(title.getAttribute("aria-expanded")).toBe("true");
+  page.el.querySelector<HTMLButtonElement>('[data-act="settings"]')!.click();
+  expect(go).toHaveBeenCalledWith("settings", "agent");
   page.hide();
 });
 
@@ -59,8 +73,8 @@ test("switching conversations scopes history, quotes the entire answer and sends
   api.agentHistoryList.mockImplementation(async ({ conversation_id }) => ({ turns: [{ id: conversation_id, conversation_id, member_id: 0, question: "Explain", text: "**Entire** answer\n\nSecond paragraph.", prefix: "", created_at_ms: 1000, status: "done", route: "answer", source: "app", detail: null }] }));
   const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
   document.body.append(page.el); page.show(); await flush();
-  page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
-  document.querySelector<HTMLButtonElement>('#app-popover [data-conversation-open="2"]')!.click(); await flush();
+  if (page.el.querySelector(".conversation-trigger")!.getAttribute("aria-expanded") !== "true") page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
+  document.querySelector<HTMLButtonElement>('.mb-det [data-conversation-open="2"]')!.click(); await flush();
   expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2 }));
   page.el.querySelector<HTMLButtonElement>('.ra [data-act="reply-message"]')!.click();
   expect(page.el.querySelector(".cmp-quote .quote-text")?.textContent).toBe("《Entire answer\nSecond paragraph.》");
