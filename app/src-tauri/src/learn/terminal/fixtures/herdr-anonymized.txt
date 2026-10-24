@@ -1,0 +1,49 @@
+﻿ record             │  Archive     notebook-archive    +                                                                                                                                    
+                    │┌───────────────────────────────────────────────────────────────────────────────┐┌────────────────────────────────────────────────────────────────────────────────────┐
+ ○ Cloud            ││                                                                               ││› Notebook note map cloud (note note): on Notebook → 測試文字用 → 於匿 map, map 「… │
+   note             ││                                                                               ││  └    Cloud on  00:00:00                                                           │
+ ● Archive          ││● 名範例保留：cloud 畫面結構測試文，Archive Notebook                           ││       Notebook  0.00a (documents 00%, information 00%, record 00%, cloud 0%)       │
+   map/archive      ││  字用於匿名範例保留畫面結構測試文字用，於匿 Archive                           ││                                                                                    │
+                    ││  名範例保留畫面結構。測試文字用於匿名範例保留畫 Cloud（面 cloud 結構測試文）。││    + 00 cloud (note+a on record)                                                   │
+                    ││                                                                               ││                                                                                    │
+                    ││● Record a Archive Notebook MAP note record map map cloud                      ││• Record (note 0) $ExamplEexample = [Record.Note.MAP0Notebook]::map($cloud); $map:A…│
+                    ││  ⎿  $ Map-Note -ApplicatIons EXAmpleexampLeexam, EXAmpleexampLeexa            ││  └ map/map/note\cloud-record.map:0:.on-record.cloud-archive { cloud: map(000on, on…│
+                    ││     $note = [Record.Archive.Collection.ExampleexaMpleexa]::InfoRmation        ││    map/map/note\cloud-record.map:0:.cloud-archive .on-map-note { note: note; map-a…│
+                    ││     $note = Map-Record Record.Archive.Collection.ExampleeXampleexa([Record.Map││    map/map/note\cloud-record.map:00:.cloud-archive .on-map-note a0 { note: note; a…│
+                    ││     note.Collection.ExampleexaMpleexa]::ExampLeexAmpleexa,                    ││    + 00 cloud (note+a on record)                                                   │
+                    ││     "NOTEBOOK_ARCHIVE_RECORD_CLOUD")                                          ││                                                                                    │
+                    ││     $a = $a…                                                                  ││• Archive (00a 00a • map on documents)                                              │
+                    ││                                                                               ││  └ Map: Map /record on documents notebook documents.                               │
+                    ││· Notebook… (00a 00a · ↓ 00.0a record)                                         ││                                                                                    │
+                    ││▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔││                                                                                    │
+                    ││                                                                               ││› Map Cloud on on notebook                                                          │
+                    ││    /map 字用於匿 Record 名範例保留畫面？結構測試文字，用於匿名範例保留畫面？  ││                                                                                    │
+                    ││                                                                               ││  MAP-0.0-Map note · A:\Exampleexampl\record_cloud\Archive\.documents\archive · 結… │
+                    ││      構測試文字用 Record 於匿名，範例保留畫面 Archive 結構測試文字用於。      ││  ? map documents                                         ⚠ 0 notebook · a0 on note │
+                    ││                                                                               │└────────────────────────────────────────────────────────────────────────────────────┘
+                    ││      匿名範例 Information MAP（保留畫 map）                                   │┌────────────────────────────────────────────────────────────────────────────────────┐
+ map            note││      - 面結構 %APPLICATIONS%\map\map\map.map，測試 0.0.0，文字用於匿 Record   ││› Map note. Note map cloud on A:/Cloud/note0/ArcHive/Cloud/Note/record/A--Notebook… │
+────────────────────││        名範例保。                                                             ││• Record cloud record-note-0000.map                                                 │
+ record      archive││      - 留畫 Record 面 Information 結構測試文字用於。                          ││                                                                                    │
+                    ││      - 匿名範例保留畫面結構 record.map，測試文字用於 map %*。匿名範例 record  ││$ Map-DocumEnts record-cloud/cloud -Record *.map | Archive-Record; map note --record│
+ ○ Cloud · record   ││        保留畫面結 map，構測試文字「用於匿名範例 Record，保 MAP」留畫面。      ││    --note; map note -- map/map/note/cloud.map map/map/note/cloud-record.on map/map/│
+   record           ││      - 結構 map record 測試，文字用於 Record 0 Cloud、Record 0.0 Cloud，匿名  ││    note/record-record.on map/map/note/documents.map map/map/note/cloud/cloud.on    │
+ ● Archive · Archive││        Record Note／Record 0.0 範 MAP-MAP 000A。                              ││    map/map/note/documents.map map/map/note/on.on map/map/archive/archive.map map/  │
+   record           ││                                                                               ││    archive/cloud-archive.map                                                       │
+ ● Archive · Archive││      例保留畫面結「Record MAP」                                               ││                                                                                    │
+   notebook         ││      - 構測 Record 試文字用 map 於匿名範例。                                  ││                                                                                    │
+ ○ Archive · Archive││      - Archive 保留畫面結構測試，文字用於匿名範例「Record MAP                 ││Cloud    : 00                                                                       │
+   archive          ││        保留畫」，面結構測試文字用於匿名。                                     ││Archive  :                                                                          │
+                    ││                                                                               ││Map      :                                                                          │
+                    ││      範例保                                                                   ││Archive  :                                                                          │
+                    ││      - 留畫面結構測試文 Record MAP，字用於 Archive 匿名範例 Information。     ││Archive  :                                                                          │
+                    ││      - 保留畫面結：map 構測試文字用於匿，名範例保留畫，面結構測試文字用（於   ││Notebook :                                                                          │
+                    ││        匿名範例保）留畫面結構測，試文字用於匿。                               ││                                                                                    │
+                    ││      - 名範例保留畫面結構測試文字用於（MAP）匿名範。例保 MAP                  ││archive: record on record 'A:\Cloud\note0/.record/map/record': Collection record    │
+                    ││        留畫面結構測，試文 ~/.record/record/map_record.note                    ││                               ↓ Note on record · map                               │
+                    ││        字用於匿，名範例保留畫面結構。                                         ││                                                                                    │
+                    ││      - 測試「文字用於」匿名範，例保留「Information」畫面結構測試文字，用於匿  ││› Map Cloud on on notebook                                                          │
+                    ││        名範例保留。                                                           ││                                                                                    │
+                    ││                                                                               ││  MAP-0.0-Map note · A:\Exampleexampl\record_cloud\Archive\.documents\cloud · Cloud…│
+                    ││    ↑/↓ on record · a on note · a on note · Map on cloud                       ││  ↑ notebook · ↓ note · cloud archive · map note                                    │
+                   «│└───────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────
