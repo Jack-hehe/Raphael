@@ -312,7 +312,11 @@ SCHEMA_V25 = {**SCHEMA_V24, "run_metrics": [
     "finished_at_ms INTEGER", "tokens INTEGER NOT NULL DEFAULT 0", "ai_steps INTEGER NOT NULL DEFAULT 0",
     "model_spans TEXT NOT NULL DEFAULT '[]'",
 ]}
-LATEST = 25
+SCHEMA_V26 = {**SCHEMA_V25, "subscription_allowances": [
+    "provider TEXT PK NOT NULL", "period TEXT PK NOT NULL", "remaining_percent REAL", "resets_at INTEGER",
+    "status TEXT NOT NULL", "updated_at_ms INTEGER NOT NULL",
+]}
+LATEST = 26
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -326,7 +330,7 @@ def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(t
     raw.commit()
     raw.close()
     migrated = db.connect(path)
-    assert migrated.execute("PRAGMA user_version").fetchone()[0] == 25
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert migrated.execute("SELECT provider FROM subscription_quotas").fetchone()[0] == "claude"
     turn = migrated.execute("SELECT id,conversation_id FROM agent_turns").fetchone()
     assert migrated.execute("SELECT id FROM conversations WHERE id=?", (turn[1],)).fetchone()
@@ -357,7 +361,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V25) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V26) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -371,7 +375,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V25.items():
+    for table, columns in SCHEMA_V26.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

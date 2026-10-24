@@ -623,7 +623,14 @@ class AgentService:
 
     async def _allowances(self, params: dict) -> dict:
         from .cli.allowances import read_allowances
-        return {**await read_allowances(self._cli_brains), "quotas": self.quotas.list()}
+        result = await read_allowances(self._cli_brains)
+        for brain in result["brains"]:
+            if brain["windows"]:
+                brain["source"] = "live"
+            else:
+                brain["windows"] = self.quotas.allowances(brain["id"])
+                brain["source"] = "reported" if brain["windows"] else "unavailable"
+        return {**result, "quotas": self.quotas.list()}
 
     async def _list_clis(self, params: dict) -> dict:
         return await self._cli_brains.list(params)

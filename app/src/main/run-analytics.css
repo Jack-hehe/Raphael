@@ -28,6 +28,12 @@
 .run-question { overflow-wrap:anywhere; }
 .run-allowance { margin-top:26px; }
 .run-allowance header h3 { margin:0; }
+.run-subscription { border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:12px; background:var(--panel); }
+.run-subscription h4 { display:flex; align-items:center; gap:8px; margin:0; font-size:13px; }
+.run-subscription h4 .mono { width:22px; height:22px; flex:none; }
+.run-allowance-source,.run-allowance-unavailable,.run-quota small { font-size:12px; color:var(--text-3); }
+.run-allowance-unavailable { margin:12px 0 0; }
+.run-quota { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:12px; }
 .run-window { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:12px 0; font-size:12px; }
 .run-window .run-bar-track { width:100%; }
 .run-timeline ol { list-style:none; padding:0; margin:16px 0; }

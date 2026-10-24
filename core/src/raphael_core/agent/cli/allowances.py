@@ -7,9 +7,36 @@ from .process import Child
 
 
 async def read_allowances(brains):
+    rows = []
+    for name, label in (("codex", "Codex"), ("claude", "Claude"), ("gemini", "Antigravity")):
+        command = brains.command(name)
+        signed_in = brains.logged_in(name) if command else False
+        if name == "claude" and command and signed_in is None:
+            signed_in = await _claude_signed_in(command, brains.environ)
+        if signed_in is True:
+            rows.append({"id": name, "name": label, "windows": []})
+    if any(row["id"] == "codex" for row in rows):
+        rows[0]["windows"] = await _codex_windows(brains)
+    return {"brains": rows}
+
+
+async def _claude_signed_in(command, environ):
+    """Let the CLI check its OS credential store; retain only the login boolean."""
+    child = Child([*command, "auth", "status", "--json"], environ=environ)
+    try:
+        async with asyncio.timeout(3):
+            await child.start()
+            raw = await child.process.stdout.read(64001)
+            await child.process.wait()
+        return child.process.returncode == 0 and len(raw) <= 64000 and json.loads(raw).get("loggedIn") is True
+    except (OSError, ValueError, TypeError, AttributeError, TimeoutError):
+        return False
+    finally:
+        await child.kill()
+
+
+async def _codex_windows(brains):
     command = brains.command("codex")
-    if not command or brains.logged_in("codex") is not True:
-        return {"brains": []}
     child = Child([*command, "app-server"], environ=brains.environ)
 
     async def request(number, method, params):
@@ -40,8 +67,8 @@ async def read_allowances(brains):
             if period and type(used) is int and 0 <= used <= 100:
                 windows.append({"period": period, "remaining_percent": 100 - used,
                                 "resets_at": reset if type(reset) is int and reset > 0 else None})
-        return {"brains": [{"id": "codex", "name": "Codex CLI", "windows": windows}] if windows else []}
+        return windows
     except (OSError, ValueError, TypeError, AttributeError, TimeoutError):
-        return {"brains": []}
+        return []
     finally:
         await child.kill()
