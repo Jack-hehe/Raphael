@@ -3,6 +3,9 @@
 .au-header { display: flex; align-items: center; gap: 12px; padding: 20px 28px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .au-header h1 { font-size: 24px; margin: 0 auto 0 0; font-weight: 650; display: flex; align-items: center; gap: 12px; }
 .au-header h1 small { font-size: 13px; color: var(--text-3); font-weight: 500; }
+.au-heading { flex: 1; min-width: 0; }
+.au-heading p { margin: 6px 0 0; font-size: 13px; color: var(--text-2); line-height: 1.7; }
+.au-calendar-hint { margin: 0; padding: 8px 20px 0; font-size: 13px; color: var(--text-2); }
 .au-segment { display: flex; padding: 3px; border: 1px solid var(--edge); border-radius: 9px; background: var(--surface-2); gap: 2px; }
 .au-segment .btn { border-color: transparent; background: transparent; }
 .au-segment .btn[aria-pressed="true"] { background: var(--panel); border-color: var(--edge); box-shadow: var(--tab-shadow); }
@@ -11,13 +14,20 @@
 .au-card-head { display: flex; gap: 12px; align-items: flex-start; }
 .au-status { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); flex-shrink: 0; margin-top: 11px; }
 .au-status.is-on { background: var(--ok); }
-.au-edit.btn { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; padding: 4px; height: auto; border: 0; background: transparent; text-align: left; white-space: normal; gap: 6px; }
+.au-edit.btn { display: flex; align-items: flex-start; justify-content: flex-start; flex: 1; min-width: 0; padding: 4px; height: auto; border: 0; background: transparent; text-align: left; white-space: normal; gap: 8px; }
+.au-edit .au-sentence { color: var(--text); font-size: 15px; line-height: 1.8; overflow-wrap: anywhere; }
+.au-edit .av { flex-shrink: 0; }
+.au-card-foot a { font-size: 13px; color: var(--accent-text); text-underline-offset: 3px; }
 .au-edit b { font-size: 15px; overflow-wrap: anywhere; }
-.au-edit span, .au-card p, .au-person { color: var(--text-2); font-size: 13px; }
+.au-edit span, .au-card p { color: var(--text-2); font-size: 13px; }
 .au-card p { line-height: 1.7; margin: 10px 0 12px 24px; overflow-wrap: anywhere; }
 .au-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-left: 24px; }
-.au-person { display: inline-flex; align-items: center; gap: 8px; }
 .au-awake { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 12px 4px; font-size: 13px; color: var(--text-2); }
+.au-awake small { display: block; font-size: 13px; color: var(--text-3); margin-top: 4px; }
+.au-empty h2 { font-size: 18px; color: var(--text); margin: 12px 0; }
+.au-empty p { line-height: 1.8; max-width: 54ch; margin: 0 auto 20px; }
+.au-examples { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 20px auto; max-width: 480px; }
+.au-example.btn { height: auto; min-height: 48px; white-space: normal; text-align: left; justify-content: flex-start; padding: 12px; gap: 10px; }
 .au-empty { padding: 48px 16px; color: var(--text-3); text-align: center; }
 .au-empty > .i { width: 20px; height: 20px; }
 .au-routine-dialog.mb-dialog { width: min(690px, calc(100vw - 40px)); }
@@ -44,13 +54,6 @@
 .au-month-grid .btn.au-other-month { color: var(--text-3); }
 .au-month-grid .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-radius: 50%; }
 .au-month-grid .btn:hover { background: var(--hover); }
-.au-runs-dialog.mb-dialog { width: min(620px, calc(100vw - 40px)); }
-.au-run { border-bottom: 1px solid var(--line); padding: 16px 0; }
-.au-run:first-child { padding-top: 0; }
-.au-run > div, .au-run footer { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
-.au-run > div { font-size: 13px; color: var(--text-2); }
-.au-run p { line-height: 1.7; overflow-wrap: anywhere; }
-.au-run small { color: var(--text-3); }
 .au-calendar-toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 1px solid var(--line); font-size: 13px; flex-shrink: 0; flex-wrap: wrap; }
 .au-spacer { flex: 1; }
 .au-calendar { display: flex; min-height: 0; flex: 1; }
@@ -113,11 +116,6 @@
 .au-room-thread .ra { align-items: flex-start; }
 .au-room-thread .room-turn { white-space: nowrap; }
 .au-room-row [aria-current="true"] { background: var(--accent-soft) !important; color: var(--text); }
-.au-run:last-child { border-bottom: 0; padding-bottom: 0; }
-.au-runs-dialog .mb-dlg-body { overflow-y: auto; max-height: min(560px, 65vh); }
-.au-run-status { border-radius: 20px; padding: 3px 9px; background: var(--surface-2); color: var(--text-2); font-size: 12px; }
-.au-run-status[data-status="done"] { color: var(--ok); }
-.au-run-status[data-status="error"] { color: var(--danger); }
 .au-occurrence.is-past { opacity: 0.65; background: var(--surface-2); }
 .au-history-mark { font-style: normal; font-size: 11px; flex-shrink: 0; }
 .team-drop-empty { border-style: dashed; }

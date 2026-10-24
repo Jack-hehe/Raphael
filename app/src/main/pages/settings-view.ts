@@ -731,7 +731,7 @@ function aboutHTML(v: SettingsView): string {
 export function paneHTML(v: SettingsView): string {
   switch (v.pane) {
     case "appearance":
-      return headingHTML(v) + coreNote(v) + skinsHTML(v.brain) + (!v.brain?.skin || v.brain.skin === "default" ? section("", [row(t("settings.067"), "", sel(APPEARANCES, v.device.appearance, t("settings.067"), ' data-k="appearance"'))]) : "");
+      return headingHTML(v) + coreNote(v) + section("", [row(t("settings.067"), "", sel(APPEARANCES, v.device.appearance, t("settings.067"), ' data-k="appearance"'))]) + skinsHTML(v.brain);
     case "general":
       return generalHTML(v);
     case "dictation":

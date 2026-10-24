@@ -3,7 +3,6 @@ import * as api from "../api";
 import { occurrences } from "../automation-calendar";
 import { describeError } from "../format";
 import { getLocale, onLocaleChange, t } from "../i18n";
-import { openDialog } from "../member-dialogs";
 import { dayName, faceHTML, scheduleText } from "../members";
 import { openRoutineDialog } from "../routine-dialog";
 import { dateKey, localDay, shiftDay, monthLabel, monthGrid } from "../schedule-picker";
@@ -12,6 +11,12 @@ import type { AppContext, Member, Page, Routine, RoutineRun } from "../types";
 import { btn, esc, ico, iconButton, tg, toaster } from "../ui";
 import "../members.css";
 import "../automations.css";
+
+const EXAMPLES = [
+  { title: "auto.example.news", prompt: "auto.example.newsPrompt", time: "08:00", weekly: false },
+  { title: "auto.example.calendar", prompt: "auto.example.calendarPrompt", time: "08:00", weekly: true },
+  { title: "auto.example.japanese", prompt: "auto.example.japanesePrompt", time: "21:00", weekly: false },
+] as const;
 
 export const runStatus = (status: string): string => t(status === "skipped" ? "auto.skipped" : status === "running" || status === "confirm" ? "auto.running" : status === "done" ? "auto.done" : "auto.error");
 const stamp = (at: number): string => new Date(at).toLocaleString(getLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -23,8 +28,8 @@ export function createAutomationsPage(app: AppContext): Page {
   let visible = false, awake = false, loads = 0, pending = true;
   let timer: ReturnType<typeof setInterval> | undefined;
   const member = (id: number): Member | undefined => members.find(m => m.id === id);
-  const edit = (routine?: Routine, memberId?: number, day?: string, time?: string): void => {
-    openRoutineDialog({ members, routine, memberId, date: day, time, onSaved: () => void load(), onDeleted: () => void load() });
+  const edit = (routine?: Routine, memberId?: number, day?: string, time?: string, preset?: Parameters<typeof openRoutineDialog>[0]["preset"]): void => {
+    openRoutineDialog({ members, routine, memberId, date: day, time, preset, onSaved: () => void load(), onDeleted: () => void load() });
   };
   async function load(): Promise<void> {
     const mine = ++loads;
@@ -39,11 +44,11 @@ export function createAutomationsPage(app: AppContext): Page {
     return `<div class="au-list">${routines.length ? routines.map(r => {
       const m = member(r.member_id), last = logs.get(r.id)?.[0];
       const state = last ? runStatus(last.status) : t("auto.noRuns");
-      const line = [r.last_run ? t("auto.last", { p0: stamp(r.last_run) }) : "", last?.summary.trim().replace(/[。．.]+$/u, "") || state, r.next_run ? t("auto.next", { p0: stamp(r.next_run) }) : t("auto.ended")].filter(Boolean).join(" · ");
+      const line = [t("auto.last", { p0: r.last_run ? stamp(r.last_run) + " · " + state : t("auto.noRuns") }), r.next_run ? t("auto.next", { p0: stamp(r.next_run) }) : t("auto.ended")].join(" · ");
       return `<article class="au-card"><div class="au-card-head"><i class="au-status ${r.enabled && r.next_run ? "is-on" : ""}"></i>` +
-        btn(`<b>${esc(r.title)}</b><span>${esc(scheduleText(r.schedule))}</span>`, "au-edit", ` data-au="edit" data-id="${r.id}"`) +
-        tg(r.enabled, t("members.routineSwitch", { p0: r.title }), ` data-au="toggle" data-id="${r.id}"`) + `</div><p>${esc(line)}</p><div class="au-card-foot"><span class="au-person">${m ? faceHTML(m, 24) : ""}${esc(m?.name ?? "")}</span>${btn(ico("clock") + esc(t("auto.runs")), "sm", ` data-au="runs" data-id="${r.id}"`)}</div></article>`;
-    }).join("") : `<div class="au-empty">${ico("repeat")}<p>${esc(t("auto.noRoutines"))}</p>${btn(esc(t("auto.newRoutine")), "pri", ' data-au="new"')}</div>`}<div class="au-awake"><span>${esc(t("auto.keepAwake"))}</span>${tg(awake, t("auto.keepAwake"), ' data-au="awake"')}</div></div>`;
+        btn(`${m ? faceHTML(m, 28) : ""}<span class="au-sentence"><strong>${esc(m?.name ?? t("nav.agent"))}</strong> ${esc(t("auto.sentence", { p0: scheduleText(r.schedule), p1: r.title }))}</span>`, "au-edit", ` data-au="edit" data-id="${r.id}"`) +
+        tg(r.enabled, t("members.routineSwitch", { p0: r.title }), ` data-au="toggle" data-id="${r.id}"`) + `</div><p>${esc(line)}</p><div class="au-card-foot"><a href="#member-${r.member_id}" data-au="destination" data-id="${r.id}">${esc(t("auto.destination", { p0: m?.name ?? t("nav.agent") }))}</a></div></article>`;
+    }).join("") : `<div class="au-empty">${ico("repeat")}<h2>${esc(t("auto.noRoutines"))}</h2><p>${esc(t("auto.emptyHelp"))}</p><div class="au-examples">${EXAMPLES.map((example, i) => btn(ico("plus") + `<span>${esc(t(example.title))}</span>`, "au-example", ` data-au="example" data-example="${i}"`)).join("")}</div>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-au="new"')}</div>`}<div class="au-awake"><span>${esc(t("auto.keepAwake"))}<small>${esc(t("auto.awakeHelp"))}</small></span>${tg(awake, t("auto.keepAwake"), ' data-au="awake"')}</div></div>`;
   }
   function calendarHTML(): string {
     const start = period === "day" ? localDay(dateKey(date)) : shiftDay(localDay(dateKey(date)), -((date.getDay() + 6) % 7));
@@ -66,15 +71,9 @@ export function createAutomationsPage(app: AppContext): Page {
   }
   function draw(): void {
     const scroll = el.querySelector(".au-calendar-scroll"), top = scroll?.scrollTop ?? 8 * 64;
-    el.innerHTML = `<header class="au-header"><h1>${esc(t("auto.title"))}</h1><div class="au-segment">${["list", "calendar"].map(v => btn(esc(t(v === "list" ? "auto.list" : "auto.calendar")), "sm", ` data-au="view" data-view="${v}" aria-pressed="${view === v}"`)).join("")}</div>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-au="new"')}</header>` +
-      (pending ? `<div class="au-empty" role="status">${esc(t("common.loading"))}</div>` : view === "list" ? listHTML() : calendarHTML());
+    el.innerHTML = `<header class="au-header"><div class="au-heading"><h1>${esc(t("auto.title"))}</h1><p>${esc(t("auto.about"))}</p></div><div class="au-segment">${["list", "calendar"].map(v => btn(esc(t(v === "list" ? "auto.list" : "auto.calendar")), "sm", ` data-au="view" data-view="${v}" aria-pressed="${view === v}"`)).join("")}</div>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-au="new"')}</header>` +
+      (pending ? `<div class="au-empty" role="status">${esc(t("common.loading"))}</div>` : view === "list" ? listHTML() : `<p class="au-calendar-hint">${esc(t("auto.calendarHelp"))}</p>` + calendarHTML());
     const grid = el.querySelector(".au-calendar-scroll"); if (grid) grid.scrollTop = top;
-  }
-  async function runs(routine: Routine): Promise<void> {
-    try {
-      const { runs } = await api.routineRuns(routine.id);
-      const dlg = openDialog({ title: routine.title + " · " + t("auto.runs"), cls: "au-runs-dialog", body: runs.length ? [...runs].sort((a,b) => b.started-a.started || b.id-a.id).map(r => `<article class="au-run"><div><time>${esc(stamp(r.started))}</time><span class="au-run-status" data-status="${esc(r.status)}">${esc(runStatus(r.status))}</span></div><p>${esc(r.summary || runStatus(r.status))}</p><footer><small>${esc(t("auto.cost", { p0: new Intl.NumberFormat(getLocale(), { style: "currency", currency: "USD", maximumFractionDigits: 4 }).format(r.cost) }))}</small>${r.turn_id ? btn(esc(t("auto.turn")), "sm", ` data-dlg="turn" data-turn="${r.turn_id}"`) : ""}</footer></article>`).join("") : `<p class="au-empty">${esc(t("auto.noRuns"))}</p>`, actions: { secondary: btn(esc(t("common.close")), "", ' data-dlg="close"') }, onAct(act, target) { if (act === "turn") { dlg.close(); openMemberThread(app, routine.member_id, Number(target.dataset.turn)); } } });
-    } catch (error) { toaster.info(describeError(error)); }
   }
   el.addEventListener("click", e => {
     const target = (e.target as Element).closest<HTMLElement>("[data-au], [data-mini-date]"); if (!target) return;
@@ -82,7 +81,11 @@ export function createAutomationsPage(app: AppContext): Page {
     const act = target.dataset.au, r = routines.find(r => r.id === Number(target.dataset.id));
     if (act === "new") edit();
     else if (act === "edit" && r) edit(r);
-    else if (act === "runs" && r) void runs(r);
+    else if (act === "destination" && r) { e.preventDefault(); openMemberThread(app, r.member_id); }
+    else if (act === "example") {
+      const example = EXAMPLES[Number(target.dataset.example)];
+      if (example) edit(undefined, 0, undefined, undefined, { title: t(example.title), prompt: t(example.prompt), schedule: example.weekly ? { kind: "weekly", days: [1], time: example.time } : { kind: "daily", time: example.time } });
+    }
     else if (act === "toggle" && r) { (target as HTMLButtonElement).disabled = true; void api.routinesUpdate(r.id, { enabled: !r.enabled }).then(() => load()).catch(error => { (target as HTMLButtonElement).disabled = false; toaster.info(describeError(error)); }); }
     else if (act === "awake") { (target as HTMLButtonElement).disabled = true; void api.keepAwakeSet(!awake).then(value => { awake = value; draw(); }).catch(error => { (target as HTMLButtonElement).disabled = false; toaster.info(describeError(error)); }); }
     else if (act === "view") { view = target.dataset.view!; draw(); }

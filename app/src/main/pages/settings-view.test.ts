@@ -105,11 +105,13 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   confirmingClear: null, localModels: LOCAL_MODELS, localDownload: null, ...over,
 });
 
-test("only the default skin offers a system, light or dark override", () => {
+test("every skin offers a system, light or dark override", () => {
   expect(paneHTML(view({ pane: "general" }))).not.toContain('data-k="appearance"');
   for (const pane of ["appearance"] as const) {
     expect(paneHTML(view({ pane, brain: { ...brain, skin: "default" } }))).toContain('data-k="appearance"');
-    expect(paneHTML(view({ pane, brain: { ...brain, skin: "graphite" } }))).not.toContain('data-k="appearance"');
+    for (const skin of ["paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"]) {
+      expect(paneHTML(view({ pane, brain: { ...brain, skin } }))).toContain('data-k="appearance"');
+    }
   }
 });
 test("Telegram is in the 訊息平台 tab, and only there", () => {
@@ -291,7 +293,7 @@ describe("the rules for every tab, in every language", () => {
     for (const id of IDS) {
       const html = tab(id);
       if (id === "appearance") {
-        expect(html.match(/data-skin-choice=/g)).toHaveLength(8);
+        expect(html.match(/data-skin-choice=/g)).toHaveLength(9);
         expect(html.match(/aria-pressed="true"/g)).toHaveLength(1);
         continue;
       }

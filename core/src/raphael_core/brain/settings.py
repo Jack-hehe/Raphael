@@ -156,7 +156,7 @@ URL_MAX_CHARS = 300
 # What one background task may cost, as the settings page offers it.
 WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
 _CHOICES: dict[str, tuple[Any, ...]] = {
-    "skin": ("default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink"),
+    "skin": ("default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"),
     "action_mode": ("ask", "direct"),
     "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
