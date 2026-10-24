@@ -11,7 +11,7 @@ const read = (name: string): string => readFileSync(join(__dirname, name), "utf8
 const strip = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const agent = strip(read("agent.css"));
 const members = strip(read("members.css"));
-const both = agent + "\n" + members;
+const both = agent + "\n" + members + "\n" + strip(read("conversations.css"));
 
 /** The block that sets the tokens: its selectors and its declarations. */
 const block = /(\.page-agent, \.mb-scrim[^{]*)\{([^{}]*)\}/.exec(agent);
@@ -92,7 +92,7 @@ describe("the page's fluid sizes", () => {
     const important = [...both.matchAll(/([^;{}]+!important)/g)].map((m) => m[1].trim());
     const strays = important.filter((d) => !/^--av: var\(--pa-[\w-]+\) !important$/.test(d) && !/^animation: none !important$/.test(d) && !/^transition: none !important$/.test(d));
     expect(strays).toEqual([]);
-    for (const selector of [".nav.mb-chief > .av", ".nav.mb-row > .av", ".page-agent .btn.mb-pill .av", ".page-agent .btn.mb-avbtn .av", ".ra-face .av", ".ask-face .av"]) {
+    for (const selector of [".nav.mb-chief > .av", ".nav.mb-row > .av", ".conversation-trigger .mb-pill .av", ".page-agent .btn.mb-avbtn .av", ".ra-face .av", ".ask-face .av"]) {
       expect(both, selector).toContain(`${selector} { --av: var(--pa-`);
     }
   });

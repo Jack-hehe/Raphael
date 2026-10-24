@@ -6,13 +6,11 @@ import {
   hasDetail,
   highlightHTML,
   mergeTurns,
-  miniTurnHTML,
   oldestId,
   refreshTurns,
   sourceOf,
   threadItems,
   turnMatches,
-  turnStamp,
 } from "./conversation";
 import type { AgentTurn } from "./types";
 
@@ -152,21 +150,5 @@ describe("paging back", () => {
     // a page shorter than a page is the whole history; an empty one is no history
     expect(refreshTurns(span(1, 50), span(40, 60), 50)).toEqual({ turns: span(40, 60), keptOlder: false });
     expect(refreshTurns(span(1, 50), [], 50)).toEqual({ turns: [], keptOlder: false });
-  });
-});
-
-describe("the small list of the home page", () => {
-  test("today shows the time, yesterday and earlier the day", () => {
-    expect(turnStamp(at("2026-10-20T09:12:00+08:00"), now)).toBe("09:12");
-    expect(turnStamp(at("2026-10-19T09:12:00+08:00"), now)).toBe("昨天");
-    expect(turnStamp(at("2026-10-17T09:12:00+08:00"), now)).toBe("10 月 17 日");
-  });
-
-  test("a mini turn has the stamp, the words and the answer, escaped", () => {
-    const html = miniTurnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "<i>", text: "好" }), now);
-    expect(html).toContain('<div class="mini-time num">09:12</div>');
-    expect(html).toContain('<div class="mini-q">「&lt;i&gt;」</div>');
-    expect(html).toContain('<div class="mini-a">《答。好》</div>');
-    expect(miniTurnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "" }), now)).not.toContain("mini-q");
   });
 });

@@ -1,4 +1,4 @@
-/* 拉斐爾: one conversation. The head (the title, search, clear all and Raphael's settings), then the
+/* 拉斐爾: one conversation. The head (the title, search and Raphael's settings), then the
    stage: the thread, which scrolls, and the composer under it; or, with no turn at all, Raphael in
    the middle with the composer under him. The person's words are bubbles on the right, Raphael's
    are on the left beside his face. Colours are the app's tokens (styles.css); Raphael's own gold
@@ -118,9 +118,6 @@
 .page-agent .btn.ra-tool { width: var(--pa-ctl); min-height: var(--pa-ctl); padding: 0; border-radius: 50%; border-color: transparent; background: transparent; color: var(--text-2); }
 .page-agent .btn.ra-tool:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
 .page-agent .btn.ra-tool[aria-expanded="true"] { background: var(--selected); color: var(--text); }
-/* 清除全部 asking for its second press is a text button: it has a border, in the colour of what it does */
-.btn.ra-clear { transition: width 0.2s ease, color 0.15s ease; }
-.page-agent .btn.ra-clear.is-confirm { width: auto; padding: 0 12px 0 10px; border-radius: var(--r-sm); font-size: var(--pa-dfs); color: var(--err); border-color: var(--err); }
 
 .ra-find { display: flex; align-items: center; gap: var(--sp-2); max-width: var(--pa-colw); width: 100%; margin: 10px auto 0; padding: 0 6px 0 calc(12px + 4 * var(--pa-u)); min-height: calc(40px + 12 * var(--pa-u)); border: 1px solid var(--edge); border-radius: var(--r-pill); background: var(--panel); }
 .ra-find-ic { display: inline-grid; place-items: center; width: 18px; color: var(--text-3); }

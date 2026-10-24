@@ -1,0 +1,41 @@
+// @vitest-environment happy-dom
+import { afterEach, expect, test, vi } from "vitest";
+const api = vi.hoisted(() => ({ statusGet: vi.fn(), statusCheckOpenrouter: vi.fn() }));
+vi.mock("./api", () => api);
+import { createProblemNotice } from "./problem-notice";
+import { setLocale } from "./i18n";
+import type { AppContext, MainEvent } from "./types";
+const healthy = { openrouter: { state: "ok" }, spend: { month_usd: 1, limit_usd: 10 } };
+const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+afterEach(() => { vi.clearAllMocks(); document.body.replaceChildren(); setLocale("zh-TW"); });
+test("only actionable status is shown, it updates with settings, and key problems open usage settings", async () => {
+  let emit: (event: MainEvent) => void = () => {};
+  const go = vi.fn();
+  const notice = createProblemNotice({ go, onEvent(handler: (event: MainEvent) => void) { emit = handler; return () => {}; } } as unknown as AppContext);
+  document.body.append(notice.el);
+  api.statusGet.mockResolvedValue(healthy); notice.show(); await flush();
+  expect(notice.el.hidden).toBe(true);
+  expect(notice.el.textContent).toBe("");
+  api.statusGet.mockResolvedValue({ ...healthy, openrouter: { state: "no_key" } });
+  emit({ type: "SettingsChanged" } as MainEvent); await flush();
+  expect(notice.el.hidden).toBe(false);
+  notice.el.querySelector<HTMLButtonElement>("button")!.click();
+  expect(go).toHaveBeenCalledWith("settings", "usage");
+  const chinese = notice.el.textContent;
+  setLocale("en"); expect(notice.el.textContent).not.toBe(chinese);
+  api.statusGet.mockResolvedValue(healthy); emit({ type: "SettingsChanged" } as MainEvent); await flush();
+  expect(notice.el.hidden).toBe(true);
+  notice.hide();
+});
+test("connection failures can retry and a late result cannot resurrect a hidden notice", async () => {
+  const notice = createProblemNotice({ go() {}, onEvent: () => () => {} } as unknown as AppContext);
+  api.statusGet.mockRejectedValueOnce(new Error("Core down"));
+  notice.show(); await flush(); expect(notice.el.hidden).toBe(false);
+  api.statusGet.mockResolvedValue(healthy); api.statusCheckOpenrouter.mockResolvedValue({ state: "ok" });
+  notice.el.querySelector<HTMLButtonElement>("button")!.click(); await flush();
+  expect(api.statusCheckOpenrouter).toHaveBeenCalled(); expect(notice.el.hidden).toBe(true);
+  let resolve!: (value: unknown) => void;
+  api.statusGet.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  notice.show(); notice.hide(); resolve({ ...healthy, openrouter: { state: "no_key" } }); await flush();
+  expect(notice.el.hidden).toBe(true);
+});

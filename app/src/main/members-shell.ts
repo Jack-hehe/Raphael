@@ -1,7 +1,7 @@
 // The members of the 拉斐爾 page, put together: the list the core keeps (`members.list`), the column
 // on the left (member-column.ts), the details panel on the right (member-details.ts), the dialogs
-// (member-dialogs.ts) and, over the chat, the centred pill with the open member's picture and name,
-// which opens the details. Below 860 px the column gives way to a dropdown at the left of that row.
+// (member-dialogs.ts) and the member identity used by the stacked conversation title.
+// Below 860 px the column gives way to a dropdown at the left of that row.
 //
 // A new member of a group with places to look comes with the routine the core offers
 // (「每天早上的進度」): the owner is asked, and only 「加入」 makes it.
@@ -49,6 +49,7 @@ export interface MembersHost {
   onUpdate?(): void;
   /** Whether the page is on screen now (a thread read only then). */
   visible(): boolean;
+  focusHeader?(): void;
 }
 
 export interface MembersShell {
@@ -131,9 +132,8 @@ export function createMembers(host: MembersHost): MembersShell {
     openConversation: host.onOpenConversation ? (member, conversation) => host.onOpenConversation!(member, conversation) : undefined,
   });
 
-  const pill = document.createElement("button");
-  pill.type = "button";
-  pill.className = "btn mb-pill";
+  const pill = document.createElement("span");
+  pill.className = "mb-pill";
   pill.dataset.shell = "pill";
   const picker = document.createElement("button");
   picker.type = "button";
@@ -145,8 +145,6 @@ export function createMembers(host: MembersHost): MembersShell {
   function drawHead(): void {
     const m = member();
     pill.innerHTML = faceHTML(m, 22, { cls: "mb-pill-face" }) + `<span class="mb-pill-t">${esc(m.name)}</span>`;
-    pill.setAttribute("aria-label", t("members.open", { p0: m.name }));
-    pill.setAttribute("aria-expanded", String(open));
     const waiting = list?.members.some((other) => other.id !== current && (other.waiting || other.unread)) ?? false;
     picker.innerHTML = `<span>${esc(m.name)}</span>${waiting ? `<i class="mb-dot is-wait" aria-hidden="true"></i>` : ""}${ico("down")}`;
     picker.setAttribute("aria-label", `${t("members.pick")}: ${m.name}`);
@@ -247,7 +245,8 @@ export function createMembers(host: MembersHost): MembersShell {
   function select(id: number): void {
     if (id === current) {
       if (currentRoomId() !== null) { host.onSelect(id); drawAll(); }
-      // the member already open: on a narrow window its panel comes back
+      // Selecting the current member reopens its details without leaving the thread.
+      setDetails(true);
       return;
     }
     current = id;
@@ -282,13 +281,12 @@ export function createMembers(host: MembersHost): MembersShell {
         page?.removeAttribute("data-det");
         stopLeaving = null;
       });
-      pill.focus({ preventScroll: true });
+      if (host.focusHeader) host.focusHeader();
+      else picker.focus({ preventScroll: true });
     }
     drawHead();
   }
 
-  pill.addEventListener("click", () => setDetails(!open));
-  pill.addEventListener("contextmenu", event => { if (current !== RAPHAEL_ID) { event.preventDefault(); column.menu(current, pill); } });
   picker.addEventListener("click", () => {
     const people: Choice[] = [raphaelOf(list), ...memberSections(list ?? { members: [], groups: [] }).flatMap((s) => s.members)].map((m) => ({
       value: String(m.id),

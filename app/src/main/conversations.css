@@ -17,12 +17,15 @@
 .conversation-empty { padding: 16px; text-align: center; color: var(--text-3); }
 .conversation-picker { width: min(390px, calc(100vw - 24px)); max-width: calc(100vw - 24px); }
 .conversation-new { width: calc(100% - 16px); margin: 8px; justify-content: flex-start; gap: 8px; }
-.conversation-head { display: flex; align-items: center; min-width: 0; gap: 6px; }
-.page.page-agent .page-head.mb-head { grid-template-columns: auto minmax(0, 1fr) auto; }
-.mb-head-c { width: max-content; }
-.conversation-head .mb-pill { flex-shrink: 0; }
-.conversation-trigger { min-width: 0; max-width: 270px; gap: 6px; }
-.conversation-trigger .conversation-caption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-head { display: flex; justify-content: center; min-width: 0; }
+.page.page-agent .page-head.mb-head { grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr); }
+.mb-head-l { display: flex; align-items: center; gap: 4px; }
+.mb-head-c { width: 100%; }
+.page-agent .btn.conversation-trigger { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; width: 100%; max-width: min(320px, 100%); height: auto; min-height: 52px; padding: 5px 12px; border-color: transparent; background: transparent; box-shadow: none; border-radius: var(--r-sm); }
+.page-agent .conversation-trigger:hover { background: var(--hover); }
+.conversation-trigger .mb-pill { display: flex; align-items: center; justify-content: center; gap: 8px; max-width: 100%; font-size: var(--pa-pill-fs); font-weight: 600; line-height: 1.5; }
+.conversation-trigger .mb-pill .av { --av: var(--pa-pill-av) !important; flex-shrink: 0; }
+.conversation-trigger .conversation-caption { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-3); font-size: var(--fs-xs); font-weight: 400; line-height: 1.5; }
 .mb-chat { position: relative; }
 .quota-chips { display: grid; gap: 4px; width: 100%; max-width: var(--pa-colw); margin: 0 auto 8px; }
 .quota-chip { padding: 5px 12px; font-size: 12px; border-radius: var(--r-sm); color: var(--text-2); background: var(--surface-2); display: flex; gap: 6px; align-items: center; }
@@ -54,4 +57,3 @@
 .menu .menu-action > .mtd { flex: 1; }
 .menu-submenu .menu-head { text-align: left; }
 .conversation-search .mb-more, .conversation-search .mb-fold { display: none; }
-@media (max-width: 850px) { .conversation-trigger { max-width: 180px; } .conversation-head .mb-pill { max-width: 130px; } }

@@ -1,14 +1,36 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, test, vi } from "vitest";
-const api = vi.hoisted(() => ({ core: vi.fn(), agentHistoryList: vi.fn(), agentQuestionOpen: vi.fn(), agentAskText: vi.fn(), membersList: vi.fn(), roomsList: vi.fn(), roomMessages: vi.fn(), membersCommandsList: vi.fn(), membersRead: vi.fn(), roomSend: vi.fn() }));
+const api = vi.hoisted(() => ({ statusGet: vi.fn(async () => ({ openrouter: { state: "ok" }, spend: { month_usd: 0, limit_usd: 10 } })), core: vi.fn(), agentHistoryList: vi.fn(), agentQuestionOpen: vi.fn(), agentAskText: vi.fn(), membersList: vi.fn(), roomsList: vi.fn(), roomMessages: vi.fn(), membersCommandsList: vi.fn(), membersRead: vi.fn(), roomSend: vi.fn() }));
 vi.mock("../api", () => api);
 import { createAgent } from "./agent";
 import { Cleared } from "../cleared";
 import { closeMenu } from "../ui";
 import { setLocale } from "../i18n";
+import { ico } from "../ui";
 import type { AppContext } from "../types";
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); vi.useRealTimers(); });
+
+test("the stacked member and conversation title opens the picker; only a gear is at the right", async () => {
+  api.agentQuestionOpen.mockResolvedValue(null);
+  api.agentHistoryList.mockResolvedValue({ turns: [] });
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations: [{ id: 1, member_id: 0, is_default: 1, title: "Research" }] } : method === "background.questions.list" ? { questions: [] } : {});
+  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  const title = page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!;
+  expect(title.querySelector(".mb-pill-t")?.textContent).toBe("拉斐爾");
+  expect(title.querySelector(".conversation-caption")?.textContent).toBe("Research");
+  expect(title.querySelector("button")).toBeNull();
+  expect(page.el.querySelector(".conversation-head")?.textContent).not.toContain(" / ");
+  expect(page.el.querySelectorAll(".mb-head .ra-tools button")).toHaveLength(1);
+  const expectedGear = document.createElement("div"); expectedGear.innerHTML = ico("gear");
+  expect(page.el.querySelector('[data-act="settings"] path')?.getAttribute("d")).toBe(expectedGear.querySelector("path")?.getAttribute("d"));
+  expect(page.el.querySelector('[data-act="clear"]')).toBeNull();
+  title.click(); await flush();
+  expect(document.querySelector('[data-conversation-open="1"]')).not.toBeNull();
+  expect(document.querySelector('#app-popover [data-conversation-more]')).toBeNull();
+  page.hide();
+});
 
 test("quota notices stay immediately above the composer and disappear at reset", async () => {
   vi.useFakeTimers(); setLocale("zh-TW");

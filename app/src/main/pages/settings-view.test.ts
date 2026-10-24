@@ -175,6 +175,14 @@ test("服務 is in the 拉斐爾 tab, after its settings and before the memory, 
 
 const tab = (pane: SettingsPane, over: Partial<SettingsView> = {}): string => paneHTML(view({ pane, ...over }));
 
+test.each(["zh-TW", "en", "ja"] as const)("About exposes localized help and feedback in %s", locale => {
+  setLocale(locale);
+  const html = tab("about");
+  expect(html).toContain('data-act="help"');
+  expect(html).toContain(t("nav.help"));
+  expect(searchSettings(t("nav.help")).some(hit => hit.pane === "about")).toBe(true);
+});
+
 test.each([catalog, "loading", "failed"] as const)("a CLI answer is priced as subscription regardless of API catalog availability", (source) => {
   expect(priceTexts(view({ catalog: source, brain: { ...brain, agent_model: "cli:codex" } }))["agent-model"]).toBe("訂閱");
 });

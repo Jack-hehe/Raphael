@@ -193,7 +193,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let pendingJump: SearchHit | null = null;
 
   let brain: BrainSettings | null = null;
-  const ownerControls = createOwnerControls(el, settings => { brain = settings; if (visible) render(); });
+  const ownerControls = createOwnerControls(settings => { brain = settings; if (visible) render(); });
   let hasKey = false;
   let openrouter: Status["openrouter"] | null = null;
   let spend: Status["spend"] | null = null;
@@ -1248,6 +1248,9 @@ export function createSettings(app: AppContext): SettingsPage {
         break;
       case "clear-conversation":
         clear("conversation");
+        break;
+      case "help":
+        void api.openExternalUrl("https://github.com/Jack-hehe/Raphael/issues").catch(error => toaster.info(describeError(error)));
         break;
       case "license":
         e.preventDefault();

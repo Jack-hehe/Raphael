@@ -7,11 +7,11 @@ import { setLocale } from "./i18n";
 afterEach(() => { setAvatar(null); setLocale("zh-TW"); });
 
 describe("the sidebar's pages", () => {
-  test("the emblem is a keyboard-accessible home button using the Home item's navigation target", () => {
-    for (const [locale, label] of [["zh-TW", "回到首頁"], ["en", "Home"], ["ja", "ホームへ"]] as const) {
+  test("the emblem returns to the conversation page with a localized accessible name", () => {
+    for (const [locale, label] of [["zh-TW", "回到拉斐爾"], ["en", "Back to Raphael"], ["ja", "ラファエルへ"]] as const) {
       setLocale(locale);
       const nav = document.createElement("nav");
-      nav.innerHTML = navHomeHTML() + navItemHTML("home", "Home", "");
+      nav.innerHTML = navHomeHTML() + navItemHTML("agent", "Raphael", "");
       const emblem = nav.querySelector<HTMLButtonElement>(".brand")!;
       expect(emblem.tagName).toBe("BUTTON");
       expect(emblem.type).toBe("button");

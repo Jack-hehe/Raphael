@@ -1,37 +1,23 @@
-// Home: a strip with the emblem and Raphael's report, then two columns. On the
-// left the four numbers (words, time saved, speed, time spoken) and the activity with its days and
-// streaks (`stats.summary`, from lasting daily aggregates; a day with a dictation opens the
-// history at that day); on the right the shortcuts and Raphael's latest words
-// (`agent.history.list`). The key, connection and spend are in the settings; the report on the
-// strip says so, with a button, when one of them keeps dictation from working fully. The page
-// scrolls. Loads when shown and every 30 seconds.
+// Dictation overview: four usage numbers, activity grid and shortcuts.
 
 import { onLocaleChange, t } from "../i18n";
 
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
-import { miniTurnHTML } from "../conversation";
 import { homeHint } from "../dictation";
 import { buildGrid, dateOfTarget, heatAction, heatmapSVG, weeksThatFit } from "../heatmap";
 import { bindingLabels } from "../keys";
 import { loadingHTML } from "../loading";
-import { buildReport, coreDownReport } from "../report";
-import { Stage } from "../stage";
 import { durationParts, formatCount, hasDictations, periodSpeed } from "../stats";
-import type { AgentTurn, AppContext, Page, PageId, SettingsPane, Status, StatsSummary } from "../types";
+import type { AppContext, Page, PageId, SettingsPane, StatsSummary } from "../types";
 import { btn, esc, iconBtn, keys } from "../ui";
-import "../home.css";
+import "../dictation-overview.css";
 
 /** How often the page is read again while it is on screen. */
 const REFRESH_MS = 30_000;
-/** How long after a first OpenRouter check that timed out it is made again. */
-const RECHECK_MS = 6_000;
 /** The days the activity grid asks for first (26 weeks), and when paging back (the most there is). */
 const DAYS_FIRST = 182;
 const DAYS_ALL = 371;
-/** How many of Raphael's latest turns the right column shows. */
-const LATEST_TURNS = 3;
-
 const unit = (n: string, u: string): string => `${esc(n)}<small>${esc(u)}</small>`;
 const duration = (seconds: number): string =>
   durationParts(seconds)
@@ -84,42 +70,30 @@ function activityHTML(s: StatsSummary): string {
 /** The lasting usage cards: the four numbers, then the activity. */
 export const usageHTML = (s: StatsSummary): string => statsHTML(s) + activityHTML(s);
 
-/** The page: the strip, then the usage cards beside the shortcuts and Raphael's latest words. */
-export const homeHTML = (): string =>
-  `<div class="stage home-stage" role="region" aria-label="Raphael"><canvas class="emb" aria-hidden="true"></canvas><div class="subs" aria-live="polite"></div></div>` +
+/** Usage beside the shortcuts; the conversation lives on its own page. */
+export const overviewHTML = (): string =>
   `<div class="home">` +
   `<div class="home-main"><div class="usage"></div></div>` +
   `<aside class="home-side" aria-label="${esc(t("home.shortcuts"))}">` +
-  `<section class="card keys-card"></section><section class="card turns-card" hidden></section></aside>` +
+  `<section class="card keys-card"></section></aside>` +
   `</div>` +
   `<p class="ver num home-version" hidden></p>`;
 
-export function createHome(app: AppContext): Page {
+export function createDictationOverview(app: AppContext): Page {
   const el = document.createElement("div");
-  el.className = "page page-home";
-  el.dataset.page = "home";
+  el.className = "page page-overview";
+  el.dataset.page = "overview";
   el.hidden = true;
-  el.innerHTML = homeHTML();
+  el.innerHTML = overviewHTML();
   const usage = el.querySelector<HTMLElement>(".usage")!;
   const keysCard = el.querySelector<HTMLElement>(".keys-card")!;
-  const turnsCard = el.querySelector<HTMLElement>(".turns-card")!;
   const ver = el.querySelector<HTMLElement>(".ver")!;
-
-  const stage = new Stage(
-    el.querySelector("canvas")!,
-    el.querySelector<HTMLElement>(".subs")!,
-    // what the report asks to fix is the key or the limit, and both are in the tab 用量
-    (target) => (target === "settings" ? app.go("settings", "usage") : void retry()),
-  );
 
   let visible = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   /** Counts the loads, so that an answer that comes after a newer load started is dropped. */
   let loads = 0;
   let stats: StatsSummary | null = null;
-  let lastStatus: Status | null = null;
-  /** Raphael's latest turns, newest first; null when the core does not know conversations (an older one). */
-  let latest: AgentTurn[] | null = null;
   let version = "";
   /** How many days the grid asks for, and how many weeks back from this one it shows. */
   let daysWanted = DAYS_FIRST;
@@ -149,24 +123,6 @@ export function createHome(app: AppContext): Page {
     );
   }
 
-  /** Raphael's latest words; nothing at all when the core does not keep conversations. */
-  function turnsCardHTML(): string {
-    if (latest === null) return "";
-    const now = Date.now();
-    return (
-      `<div class="card-head"><h2>${esc(t("agent.title"))}</h2>${btn(t("agent.more"), "sm", ' data-go="agent"')}</div>` +
-      (latest.length > 0
-        ? latest.map((turn) => miniTurnHTML(turn, now)).join("")
-        : `<div class="mini-empty">${esc(t("agent.empty"))}</div>`)
-    );
-  }
-
-  /** Raphael's latest words in their card, which is not there when the core does not keep conversations. */
-  function paintTurns(): void {
-    turnsCard.hidden = latest === null;
-    turnsCard.innerHTML = turnsCardHTML();
-  }
-
   /** The cell of the day, if the grid has it. */
   const heatCell = (date: string): SVGElement | null => el.querySelector<SVGElement>(`.heat [data-date="${date}"]`);
 
@@ -194,12 +150,8 @@ export function createHome(app: AppContext): Page {
     cell.focus();
   }
 
-  function paint(status: Status | null, s: StatsSummary | null): void {
-    lastStatus = status;
-    stage.show(status ? buildReport(status, Date.now()) : coreDownReport());
+  function paint(s: StatsSummary | null): void {
     keysCard.innerHTML = keysCardHTML();
-    paintTurns();
-
     // redrawing everything takes the focus from a day of the grid; it is given back below
     const focused = dateOfTarget(document.activeElement);
     if (focused !== null) heatStop = focused;
@@ -216,69 +168,17 @@ export function createHome(app: AppContext): Page {
     }
   }
 
-  /** `replay`: the page was just shown, so the report starts again. */
-  async function load(replay: boolean): Promise<void> {
+  async function load(): Promise<void> {
     const mine = ++loads;
     if (!stats) usage.innerHTML = loadingHTML();
     usage.setAttribute("aria-busy", "true");
-    if (replay) stage.play();
-    // Raphael's latest words are not worth waiting for: the rest is drawn when it is there, they when they are
-    const turnsRequest = api.agentHistoryList({ limit: LATEST_TURNS }).then(
-      ({ turns }) => turns.slice(0, LATEST_TURNS),
-      () => null,
-    );
-    const [statusResult, statsResult] = await Promise.allSettled([api.statusGet(), api.statsSummary(daysWanted)]);
+    let next: StatsSummary | null;
+    try { next = await api.statsSummary(daysWanted); } catch { next = null; }
     if (mine !== loads || !visible) return;
-    // a core that does not answer: the report says so
-    const status = statusResult.status === "fulfilled" ? statusResult.value : null;
-    const s = statsResult.status === "fulfilled" ? statsResult.value : null;
-    paint(status, s);
+    paint(next);
     usage.setAttribute("aria-busy", "false");
-    void turnsRequest.then((turns) => {
-      if (mine !== loads || !visible) return;
-      latest = turns;
-      paintTurns();
-    });
-    if (replay && status?.openrouter.state === "unknown") void checkOpenrouter();
   }
-
-  /** Nothing has been sent to OpenRouter yet since the core started: ask once, and once more a
-   * little later if the network was too slow. The core's first seconds go to loading its speech
-   * models, and a check then can time out on a connection that works. */
-  async function checkOpenrouter(again = true): Promise<void> {
-    let checked: Awaited<ReturnType<typeof api.statusCheckOpenrouter>>;
-    try {
-      checked = await api.statusCheckOpenrouter();
-    } catch {
-      return;
-    }
-    if (visible) void load(false);
-    if (again && checked.state === "error" && (checked.error === "timeout" || checked.error === "network")) {
-      setTimeout(() => {
-        if (visible) void checkOpenrouter(false);
-      }, RECHECK_MS);
-    }
-  }
-
-  // Settings › 資料 emptied the dictations or the conversation: Raphael's latest words go at once,
-  // and the page, if it is on screen under the panel, reads its numbers again.
-  app.cleared.on("conversation", () => {
-    if (latest !== null) latest = [];
-    paintTurns();
-    if (visible) void load(false);
-  });
-  app.cleared.on("dictation", () => {
-    if (visible) void load(false);
-  });
-
-  async function retry(): Promise<void> {
-    try {
-      await api.statusCheckOpenrouter();
-    } catch {
-      // the report says what is wrong
-    }
-    if (visible) void load(true);
-  }
+  app.cleared.on("dictation", () => { if (visible) void load(); });
 
   /** Pages the grid a screenful of weeks back or forward; reads the whole year the first time back. */
   async function turn(older: boolean): Promise<void> {
@@ -354,19 +254,19 @@ export function createHome(app: AppContext): Page {
   onLocaleChange(() => {
     el.querySelector("aside")!.setAttribute("aria-label", t("home.shortcuts"));
     if (version) ver.textContent = t("home.027", { p0: version });
-    paint(lastStatus, stats);
+    paint(stats);
   });
 
   return {
-    id: "home",
+    id: "dictation",
     el,
     show() {
       visible = true;
       ver.hidden = false;
-      void load(true);
+      void load();
       clearInterval(timer);
       timer = setInterval(() => {
-        if (!document.hidden) void load(false);
+        if (!document.hidden) void load();
       }, REFRESH_MS);
     },
     hide() {

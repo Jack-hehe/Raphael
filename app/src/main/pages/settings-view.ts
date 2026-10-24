@@ -172,6 +172,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "data", label: "data.clearDictation", also: "settings.searchHistory" },
   { pane: "data", label: "data.clearConversation" },
   { pane: "about", label: "settings.078" },
+  { pane: "about", label: "nav.help" },
   { pane: "about", label: "settings.079" },
 ];
 
@@ -719,6 +720,7 @@ function aboutHTML(v: SettingsView): string {
     `<div class="about-brand">${brandIcon("about-icon")}<span class="about-name">Raphael</span></div>` +
     `<div class="slist about">` +
     row(t("settings.078"), "", `<span class="val num">${esc(v.version)}</span>`) +
+    row(t("nav.help"), "", btn(t("nav.help"), "", ' data-act="help"')) +
     row(t("settings.079"), t("settings.080"), btn(t("settings.081"), "", ' data-act="license"')) +
     `</div>` +
     t("settings.082")

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "../i18n";
 import type { StatsSummary } from "../types";
-import { homeHTML, usageHTML } from "./home";
+import { overviewHTML, usageHTML } from "./dictation-overview";
 
 afterEach(() => setLocale("zh-TW"));
 
@@ -20,9 +20,9 @@ const stats: StatsSummary = {
 };
 
 /** The page with the history's cards drawn into the main column, as `paint` does. */
-const page = (s: StatsSummary = stats): string => homeHTML().replace('<div class="usage"></div>', `<div class="usage">${usageHTML(s)}</div>`);
+const page = (s: StatsSummary = stats): string => overviewHTML().replace('<div class="usage"></div>', `<div class="usage">${usageHTML(s)}</div>`);
 
-describe("the main column of the home page", () => {
+describe("the dictation overview", () => {
   test.each(["zh-TW", "en", "ja"] as const)("estimated totals have a quiet localized tooltip in %s", (locale) => {
     setLocale(locale);
     const html = usageHTML({ ...stats, estimated_words: 5000, estimated_dictations: 50 });
@@ -65,10 +65,10 @@ describe("the main column of the home page", () => {
     for (const gone of ["persona", "rose", "personaChart", "個人化", "App 類型"]) expect(html).not.toContain(gone);
   });
 
-  test("the page still has the strip, the shortcuts and Raphael's latest words", () => {
-    const html = homeHTML();
-    expect(html.indexOf('class="stage home-stage"')).toBeLessThan(html.indexOf('class="home-main"'));
+  test("keeps shortcuts without the old status strip or recent conversation card", () => {
+    const html = overviewHTML();
     expect(html).toContain('class="card keys-card"');
-    expect(html).toContain('class="card turns-card"');
+    expect(html).not.toContain("home-stage");
+    expect(html).not.toContain("turns-card");
   });
 });
