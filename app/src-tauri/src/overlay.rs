@@ -33,8 +33,9 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use serde::Serialize;
@@ -493,7 +494,14 @@ pub struct Overlay {
     /// Whether the window takes the mouse now (see [`takes_clicks`]); the window starts out
     /// letting it through. Held while the window is changed, so that two changes cannot cross.
     clicks: Mutex<bool>,
+    /// When the window was created, and when it was last checked (ms after that): a long
+    /// recording has no other event, and another window may come over the emblem meanwhile.
+    born: Instant,
+    last_sight_ms: AtomicU64,
 }
+
+/// How often the window is checked while the emblem is on screen with nothing else happening.
+const SIGHT_EVERY_MS: u64 = 2_000;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -549,6 +557,8 @@ impl Overlay {
             emblem_px: AtomicU32::new(emblem_px),
             bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
             clicks: Mutex::new(false),
+            born: Instant::now(),
+            last_sight_ms: AtomicU64::new(0),
         });
         overlay.place_window();
         Ok(overlay)
@@ -652,9 +662,30 @@ impl Overlay {
     /// appear in (see [`sight`]). It is queued behind the placing that came before it, so it sees
     /// the window where it was just put; the caller does not wait for it.
     fn keep_in_sight(&self, placement: Option<Placement>) {
+        self.last_sight_ms.store(self.elapsed_ms(), Ordering::Relaxed);
         if let Some(hwnd) = self.hwnd {
             sight::check(&self.window, hwnd, placement);
         }
+    }
+
+    /// [`Self::keep_in_sight`], at most every [`SIGHT_EVERY_MS`]: for the events that keep coming
+    /// while the emblem is on screen (the microphone's level, an answer being said), so that a
+    /// window that came over it during a long recording is put back under it.
+    fn keep_in_sight_now_and_then(&self) {
+        let now = self.elapsed_ms();
+        let last = self.last_sight_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= SIGHT_EVERY_MS
+            && self
+                .last_sight_ms
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.keep_in_sight(None);
+        }
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 
@@ -694,6 +725,7 @@ impl OverlayApi for Overlay {
     }
 
     fn level(&self, value: f32) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Level { value });
     }
 
@@ -710,6 +742,7 @@ impl OverlayApi for Overlay {
     }
 
     fn say(&self, prefix: &str, text: &str) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Say {
             hold: false,
             prefix: prefix.to_owned(),
@@ -718,6 +751,7 @@ impl OverlayApi for Overlay {
     }
 
     fn say_held(&self, prefix: &str, text: &str) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Say {
             prefix: prefix.to_owned(),
             text: text.to_owned(),
@@ -730,6 +764,7 @@ impl OverlayApi for Overlay {
     }
 
     fn ask(&self, prompt: &AskPrompt) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Ask(prompt.clone()));
     }
 
