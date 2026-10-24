@@ -65,7 +65,6 @@
   --pa-step-logo: calc(16px + 4 * var(--pa-u));
   --pa-small-btn: calc(24px + 8 * var(--pa-u));
   --pa-cmp-btn: calc(36px + 8 * var(--pa-u));
-  --pa-cmp-av: calc(34px + 8 * var(--pa-u));
   --pa-cmp-r: calc(26px + 6 * var(--pa-u));
   --pa-cmp-p: calc(6px + 2 * var(--pa-u));
   --pa-cmp-py: calc(7px + 1 * var(--pa-u));
@@ -110,10 +109,9 @@
 
 /* ---------- the head ---------- */
 .ra-tools { display: flex; align-items: center; gap: var(--sp-1); }
-/* icon-only buttons have no border, only a hover background */
-.page-agent .btn.ra-tool { width: var(--pa-ctl); min-height: var(--pa-ctl); padding: 0; border-radius: 50%; border-color: transparent; background: transparent; color: var(--text-2); }
-.page-agent .btn.ra-tool:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
-.page-agent .btn.ra-tool[aria-expanded="true"] { background: var(--selected); color: var(--text); }
+/* Icon-only buttons use color and a keyboard focus ring. */
+.page-agent .btn.ra-tool { width: var(--pa-ctl); min-height: var(--pa-ctl); padding: 0; border-radius: var(--r-pill); border-color: transparent; background: transparent; color: var(--text-2); }
+.page-agent .btn.ra-tool[aria-expanded="true"] { background: transparent; color: var(--text); }
 
 .ra-find { display: flex; align-items: center; gap: var(--sp-2); max-width: var(--pa-colw); width: 100%; margin: var(--sp-2) auto 0; padding: 0 6px 0 calc(12px + 4 * var(--pa-u)); min-height: calc(40px + 12 * var(--pa-u)); border: 1px solid var(--edge); border-radius: var(--r-pill); background: var(--panel); }
 .ra-find-ic { display: inline-grid; place-items: center; width: 18px; color: var(--text-3); }
@@ -238,7 +236,6 @@
 .tn-detail { padding: var(--sp-2) var(--sp-3); border-radius: var(--r-lg); background: var(--surface-2); font-size: var(--pa-fs-d); line-height: 1.75; color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .tn-foot { display: flex; align-items: center; }
 .page-agent .btn.sm.icon.tn-more { width: calc(26px + 8 * var(--pa-u)); min-height: var(--pa-small-btn); padding: 0; border-color: transparent; background: transparent; color: var(--text-3); }
-.page-agent .btn.sm.icon.tn-more:hover { background: var(--hover); border-color: transparent; color: var(--text); }
 .tn-more .i { transition: transform 0.22s ease; }
 .tn-more[aria-expanded="true"] .i { transform: rotate(180deg); }
 
@@ -311,21 +308,16 @@
 .composer:focus-within { box-shadow: 0 6px 24px color-mix(in srgb, var(--text) 10%, transparent); }
 .cmp-row { display: flex; align-items: flex-end; gap: var(--sp-1); }
 .page-agent .btn.cmp-attach { flex: none; width: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 0; border-radius: var(--r-pill); border-color: transparent; background: transparent; color: var(--text-2); }
-.page-agent .btn.cmp-attach:hover:not(:disabled) { background: var(--hover); border-color: transparent; color: var(--text); }
+.page-agent .btn.cmp-attach:hover:not(:disabled) { background: transparent; border-color: transparent; color: var(--text); }
+.page-agent .btn.cmp-attach:is(:active, [aria-expanded="true"]):not(:disabled) { color: var(--accent-icon); }
 .btn.cmp-attach .i { width: 20px; height: 20px; }
 .cmp-input { flex: 1; min-width: 0; min-height: var(--pa-cmp-btn); max-height: calc(160px + 40 * var(--pa-u)); resize: none; border: 0; outline: 0; background: transparent; color: var(--text); font: var(--pa-cmp-fs)/var(--pa-cmp-lh) var(--voice); padding: var(--pa-cmp-py) 4px; overflow-y: hidden; }
 .cmp-input.is-tall { overflow-y: auto; }
 .cmp-input::placeholder { color: var(--text-3); }
 .cmp-input:focus-visible { outline: 0; }
-.page-agent .btn.cmp-voice { flex: none; width: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 0; border: 0; border-radius: 50%; background: transparent; transition: transform 0.16s ease; }
-.composer .btn.cmp-send { flex: none; width: var(--pa-cmp-btn); height: var(--pa-cmp-btn); min-height: var(--pa-cmp-btn); padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--accent-icon); }
-.composer .btn.cmp-send .i { width: var(--pa-cmp-av); height: var(--pa-cmp-av); }
-.composer .btn.cmp-send:hover:not(:disabled) { background: var(--hover); color: var(--accent-icon); }
-.composer .btn.cmp-send:active:not(:disabled) { background: var(--pressed); color: var(--accent-icon); }
+.composer .btn.cmp-send:hover:not(:disabled) { background: transparent; color: var(--accent-icon); }
+.composer .btn.cmp-send:active:not(:disabled) { background: transparent; color: var(--accent-icon); }
 .composer .btn.cmp-send:disabled { background: transparent; color: var(--text-3); opacity: 1; cursor: default; }
-.page-agent .btn.cmp-voice .av { --av: var(--pa-cmp-av) !important; }
-.page-agent .btn.cmp-voice:hover:not(:disabled) { background: transparent; transform: scale(1.08); }
-.page-agent .btn.cmp-voice:active:not(:disabled) { background: transparent; transform: scale(0.96); }
 /* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
 .vm-away > * { visibility: hidden; }
 .cmp-file { display: flex; flex-wrap: nowrap; gap: var(--sp-2); min-width: 0; overflow-x: auto; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2); }
@@ -335,7 +327,7 @@
 .cmp-chip > .attachment-name { flex: 1; }
 .me-file-t, .cmp-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmp-chip .chip-x { display: inline-grid; place-items: center; flex: 0 0 20px; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-3); }
-.cmp-chip .chip-x:hover { background: var(--hover); color: var(--text); }
+.cmp-chip .chip-x:hover { background: transparent; color: var(--text); }
 
 /* The drop target ends above whichever composer or approval card is visible. */
 .attachment-drop { position: absolute; inset: 12px; z-index: 12; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); border: 2px dashed var(--accent-text); border-radius: var(--r-lg); background: color-mix(in srgb, var(--accent-soft) 94%, transparent); color: var(--accent-text); font-size: var(--fs-md); font-weight: 600; pointer-events: none; }
@@ -451,3 +443,10 @@
 .ra-body > .ans, .chat-message > .ans { max-width: min(60ch, 100%); border: 0; border-radius: var(--r-lg); }
 
 .bubble .message-quote, .bubble .quote-author, .bubble .message-link { color: var(--on-accent); border-color: currentColor; }
+/* Send and Raphael voice form one quiet, equal-sized pair in every composer. */
+.cmp-pair { display: inline-flex; flex: none; align-items: center; gap: var(--sp-1); }
+.composer .cmp-pair .btn { width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; }
+.composer .cmp-pair .cmp-send { color: var(--accent-icon); }
+.composer .cmp-pair .cmp-send:disabled { color: var(--text-3); opacity: 1; }
+.composer .cmp-pair .cmp-send .i { width: 32px; height: 32px; }
+.composer .cmp-pair .cmp-voice:is(:hover, :active) { transform: none; }

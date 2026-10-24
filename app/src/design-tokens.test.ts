@@ -6,18 +6,9 @@ const source = __dirname;
 const cssFiles = (directory: string): string[] => readdirSync(directory, { withFileTypes: true }).flatMap(entry =>
   entry.isDirectory() ? cssFiles(join(directory, entry.name)) : entry.name.endsWith(".css") ? [join(directory, entry.name)] : []);
 
-// Frozen exceptions: parallel-owned controls/run rows and the separate native overlay.
+// Frozen exceptions: the separately styled native overlay.
 // Remove entries as those owners adopt tokens; never add entries or increase counts.
 const legacy: Record<string, number> = {
-  "main/agent.css | .page-agent .btn.ra-tool | border-radius: 50%": 1,
-  "main/agent.css | .page-agent .btn.cmp-voice | border-radius: 50%": 1,
-  "main/agent.css | .composer .btn.cmp-send | border-radius: 50%": 1,
-  "main/run-analytics.css | .run-bars small,.run-span small,.run-row small,.run-whole small,.run-window small | font-size: 11px": 1,
-  "main/run-analytics.css | .run-row-copy strong | font-size: 13px": 1,
-  "main/run-analytics.css | .run-row-numbers | font-size: 12px": 1,
-  "main/run-analytics.css | .run-row-copy>.run-model | font-size: 11px": 1,
-  "main/run-analytics.css | .run-card | border-radius: 10px": 1,
-  "main/run-analytics.css | .run-list + .ua-note | font-size: 11px": 1,
   "overlay/overlay.css | #picture | border-radius: 50%": 1,
   "overlay/overlay.css | .progress, .sub-line | font: 600 14px/1.45 var(--zh-sub)": 1,
   "overlay/overlay.css | .ask-btn | font: 700 15px/1 var(--zh-sub)": 1,

@@ -43,15 +43,14 @@ describe("keyboard focus and the window controls", () => {
     expect(lastOf(".window-button:focus-visible", "outline-offset")).toMatch(/^-\d+px$/);
   });
 
-  test("the focus ring of the close button stays visible on its red hover colour", () => {
-    // The ring takes the colour of the glyph on the red, and that is white.
-    expect(lastOf(".window-close:hover:focus-visible", "outline-color")).toBe(lastOf(".window-close:hover", "color"));
-    expect(lastOf(".window-close:hover", "color")).toBe("var(--on-close)");
-    expect(styles.match(/--on-close:\s*([^;]+);/)?.[1]).toBe("#ffffff");
+  test("the close button changes glyph color and retains its focus ring without a surface", () => {
+    expect(lastOf(".window-close:hover", "background")).toBe("transparent");
+    expect(lastOf(".window-close:hover", "color")).toBe("var(--err)");
+    expect(lastOf(".window-close:hover:focus-visible", "outline-color")).toBe("var(--focus)");
   });
 
-  test("a focused window button has a surface of its own while the settings dim the window", () => {
-    expect(lastOf(':root[data-window-modal="true"] .window-button:focus-visible:not(:hover)', "background")).toBe("var(--content)");
+  test("window controls stay transparent while settings dim the window", () => {
+    expect(lastOf(':root[data-window-modal="true"] .window-button:focus-visible:not(:hover)', "background")).toBe("transparent");
   });
 
   test("the page scrolls a focused element to below the window controls that cover its top", () => {

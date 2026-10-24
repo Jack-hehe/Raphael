@@ -9,11 +9,4 @@ export function progressPercent(stage: Stage, fraction: number): number {
 /** The progress caption, compact: `《 42 % 》`. */
 export const formatProgress = (percent: number): string => `《 ${percent} % 》`;
 
-/** Counts show completed segments; elapsed time stays honest when the tail is still pending. */
-export function processingCaption(stage: Stage, seconds: number, label: string): string | undefined {
-  if (stage === "done") return undefined;
-  const elapsed = Math.floor(Number.isFinite(seconds) && seconds > 0 ? seconds : 0);
-  return `《 ${label || "…"} · ${elapsed}s 》`;
-}
-
 export const COMPLETION_MS = 900;

@@ -35,9 +35,11 @@ const MAIN_WINDOW: &str = "main";
 /// Label of the overlay window. It is created in Rust, never by the config.
 const OVERLAY_WINDOW: &str = "overlay";
 
-/// Persist geometry without allowing saved state to choose the application's frame policy.
+/// Remember only whether the window was maximized: it always opens, and un-maximizes, at the default
+/// size from `tauri.conf.json`. Saved state never chooses the frame policy either.
 fn main_window_state_flags() -> StateFlags {
-    StateFlags::all() & !(StateFlags::VISIBLE | StateFlags::DECORATIONS)
+    StateFlags::all()
+        & !(StateFlags::VISIBLE | StateFlags::DECORATIONS | StateFlags::SIZE | StateFlags::POSITION)
 }
 
 /// Writes a panic to the log. The release build aborts on a panic (`panic = "abort"`) and has no
@@ -508,11 +510,14 @@ mod window_state_tests {
     fn restoring_saved_geometry_cannot_restore_a_native_titlebar_or_show_the_window() {
         let flags = main_window_state_flags();
         assert!(!flags.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
-        assert!(flags.contains(
-            StateFlags::SIZE
-                | StateFlags::POSITION
-                | StateFlags::MAXIMIZED
-                | StateFlags::FULLSCREEN
-        ));
+        assert!(flags.contains(StateFlags::MAXIMIZED | StateFlags::FULLSCREEN));
+    }
+
+    #[test]
+    fn the_window_always_opens_at_its_default_size() {
+        // The owner wants opening and un-maximizing to land on the default size (2026-10-24),
+        // so a size or place from an earlier session is never restored.
+        let flags = main_window_state_flags();
+        assert!(!flags.intersects(StateFlags::SIZE | StateFlags::POSITION));
     }
 }

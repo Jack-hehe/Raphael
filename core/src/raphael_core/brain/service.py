@@ -12,9 +12,9 @@ handler below; what a handler alone does not show is here:
   int and a bool is no number.
 - A dictation is not lost to bookkeeping. If the history cannot be written, the text still comes
   back (with id None); if the key store fails, it comes back as spoken, without cleanup.
-- What the voice assistant is asked (`brain.normalize_transcript`) is a transcript with the
-  dictionary's replacements and the Chinese script of the chosen variant, as a dictation is
-  normalized before its cleanup. No model is asked, nothing is written and nothing is paid for.
+- Voice questions share dictation cleanup and spend accounting but never write a history row.
+  Transcript-only consumers still use `brain.normalize_transcript` for dictionary and script
+  normalization without model calls, history or cost.
 - A dictation that is cancelled while its text is being cleaned (`brain.cancel_dictation`, for the
   `session_id` that `brain.finalize_dictation` was given) is paid for, because the request to the
   model is made, but it is not saved: it would be the latest dictation, which "paste last" pastes,
@@ -328,7 +328,6 @@ class Brain:
             "stats.summary": self._stats_summary,
             "usage.analytics": self._usage.read,
             "usage.runs": self._runs.read,
-            "usage.trace": self._runs.trace,
             "usage.export": self._runs.export,
         }
         for method, handler in methods.items():
@@ -343,10 +342,14 @@ class Brain:
         target_app = _opt_str(params, "target_app")
         stt = _opt_str(params, "stt")
         session_id = _opt_str(params, "session_id")
+        purpose = params.get("purpose", "dictation")
+        if purpose not in ("dictation", "agent"):
+            raise invalid_params("Unknown dictation purpose")
         incomplete = params.get("incomplete", False)
         if not isinstance(incomplete, bool):
             raise invalid_params("incomplete must be a boolean")
-        self._prune_history_if_due()
+        if purpose == "dictation":
+            self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
         # The Chinese written form the user chose decides the script of the text (or none).
@@ -449,6 +452,8 @@ class Brain:
         if cancelled:
             logger.info("A dictation was cancelled while its text was cleaned; not keeping it")
             entry_id = None
+        elif purpose == "agent":
+            entry_id = None
         else:
             entry_id = self._save(item)
         return {
@@ -463,7 +468,7 @@ class Brain:
     async def _normalize_transcript(self, params: dict) -> dict:
         """`{raw_text}` -> `{text}`: what speech-to-text heard, with the dictionary's replacements
         and the Chinese written form the user chose, as `brain.finalize_dictation` starts with.
-        This is the whole of it: for the voice assistant, whose requests are not cleaned."""
+        Used for transcript-only consumers and as a recovery path if finalization fails."""
         raw_text = _str(params, "raw_text")
         chinese = chinese_variant(self._settings.get("languages"))
         return {"text": normalize_transcript(raw_text, self._dictionary.replacements(), chinese=chinese)}

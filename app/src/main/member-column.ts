@@ -301,7 +301,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   });
 
   function openSearch(anchor: HTMLElement): void {
-    const panel = openPopover(anchor, '<div class="conversation-tools"><input type="search"></div><div class="conversation-rows page-agent"></div>', { className: "menu conversation-picker conversation-search", role: "dialog", label: t("chat.searchAll") });
+    const panel = openPopover(anchor, '<div class="conversation-tools"><input type="search"></div><div class="conversation-rows page-agent"></div>', { className: "menu conversation-search", role: "dialog", label: t("chat.searchAll") });
     const input = panel.querySelector<HTMLInputElement>("input")!;
     input.placeholder = t("chat.searchAll"); input.setAttribute("aria-label", t("chat.searchAll"));
     const results = panel.querySelector<HTMLElement>(".conversation-rows")!;

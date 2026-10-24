@@ -50,6 +50,7 @@ export interface MembersHost {
   /** Whether the page is on screen now (a thread read only then). */
   visible(): boolean;
   focusHeader?(): void;
+  onDetailsChange?(open: boolean): void;
 }
 
 export interface MembersShell {
@@ -261,6 +262,7 @@ export function createMembers(host: MembersHost): MembersShell {
   function setDetails(next: boolean): void {
     if (next === open) return;
     open = next;
+    host.onDetailsChange?.(open);
     const page = details.el.parentElement;
     stopLeaving?.();
     stopLeaving = null;

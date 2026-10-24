@@ -13,8 +13,6 @@ export type Stage = "transcribing" | "cleaning" | "done";
 
 /** A `progress` event from overlay.rs. */
 export interface ProgressReport {
-  /** Localized by the native shell; absent until the first core report arrives. */
-  label?: string;
   stage: Stage;
   /** Segments transcribed so far (transcribing). */
   done: number;
@@ -57,11 +55,6 @@ export class ProgressArc {
   private cleaningFor = 0;
   private expected = expectedCleanupSeconds(0);
   private value = 0;
-  private stageSeconds = 0;
-
-  get elapsedSeconds(): number {
-    return this.stageSeconds;
-  }
 
   /** Whether a dictation's progress is being followed. */
   get active(): boolean {
@@ -83,7 +76,6 @@ export class ProgressArc {
   report(r: ProgressReport): void {
     if (this.stage !== null && ORDER[r.stage] < ORDER[this.stage]) return;
     const entering = this.stage !== r.stage;
-    if (entering) this.stageSeconds = 0;
     this.stage = r.stage;
     if (r.stage === "transcribing") {
       const total = Number.isFinite(r.total) && r.total > 0 ? r.total : 0;
@@ -106,7 +98,6 @@ export class ProgressArc {
     this.counted = 0;
     this.cleaningFor = 0;
     this.value = 0;
-    this.stageSeconds = 0;
   }
 
   /** Where the arc is heading now. */
@@ -129,7 +120,6 @@ export class ProgressArc {
   /** Moves the arc on by `dt` seconds. */
   advance(dt: number): void {
     if (this.stage === null || !(dt > 0)) return;
-    this.stageSeconds += dt;
     if (this.stage === "cleaning") this.cleaningFor += dt;
     const target = this.target();
     const next = this.value + (target - this.value) * (1 - Math.exp(-dt / FOLLOW));

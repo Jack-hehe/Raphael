@@ -1,4 +1,4 @@
-/** Retained runs and their measured spans, alongside the existing daily analytics. */
+/** Aggregate retained usage and subscription allowances, alongside daily analytics. */
 import "./run-analytics.css";
 import { t, onLocaleChange } from "./i18n";
 import { usageModel } from "./usage-models";
@@ -8,9 +8,9 @@ import { modelsFor } from "./model-picker";
 import type { CatalogModel } from "./types";
 import { formatUsd, describeError } from "./format";
 import { faceHTML } from "./members";
-import { btn as uiBtn, esc, ico, iconButton, openMenu, sel, tabs, toaster } from "./ui";
+import { btn as uiBtn, esc, openMenu, sel, tabs, toaster } from "./ui";
 import type { MessageKey } from "./i18n/zh-TW";
-import type { CliAllowances, RunAnalyticsApi, RunGrouping, RunPeriod, RunReport, RunSpan, RunSummary, RunTrace } from "./run-analytics-types";
+import type { CliAllowances, RunAnalyticsApi, RunGrouping, RunPeriod, RunReport, RunSummary } from "./run-analytics-types";
 
 const btn = (label: string, attrs = "") => uiBtn(label, "", attrs);
 type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds" | "runs.allowanceUpdated">;
@@ -24,25 +24,20 @@ const duration = (ms: number | null) => {
 };
 const memberName = (id: number | undefined, name: string) => id === 0 || name === "Raphael" ? t("nav.agent") : name;
 const time = (ms: number) => new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-function toolName(span: RunSpan): string {
-  const labels: Record<string, Exclude<Extract<MessageKey, `usage.${string}`>, "usage.deleted" | "usage.estimates">> = { web_search: "usage.web_search", web_read: "usage.web_read", computer: "usage.computer", ask_member: "usage.ask_member", files: "usage.files", routines: "usage.routines" };
-  const name = span.tool || span.kind;
-  return labels[name] ? t(labels[name]) : name.replace(/[_-]+/g, " ");
-}
-function tiles(s: RunSummary, legacy?: { duration_ms: number | null; tokens: number | null }): string {
+function tiles(s: RunSummary): string {
   return `<div class="run-tiles">${([
-    ["runs.time", duration(legacy ? legacy.duration_ms : s.duration_ms)], ["runs.cost", formatUsd(s.cost_usd)], ["runs.tokens", legacy?.tokens === null ? t("runs.unknown") : number(s.tokens)],
+    ["runs.time", duration(s.duration_ms)], ["runs.cost", formatUsd(s.cost_usd)], ["runs.tokens", number(s.tokens)],
     ["runs.ai", number(s.ai_steps)], ["runs.tools", number(s.tools)], ["runs.errors", number(s.errors)],
   ] as [RunKey, string][]).map(([key, value]) => `<div class="run-tile"><span>${t(key)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>`;
 }
 
-export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTrace: (open: boolean) => void = () => {}, onModels: (models: CatalogModel[]) => void = () => {}) {
+export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onModels: (models: CatalogModel[]) => void = () => {}) {
   const root = document.createElement("section"); root.className = "run-analytics"; host.append(root);
   let models: CatalogModel[] = [], allMembers = false;
   function modelHTML(id: string): string {
     return usageModel(id,models).html;
   }
-  let range: RunPeriod = "month", grouping: RunGrouping = "model", report: RunReport | null = null, trace: RunTrace | null = null;
+  let range: RunPeriod = "month", grouping: RunGrouping = "model", report: RunReport | null = null;
   let allowance: CliAllowances = { brains: [] }, busy = false, exportBusy = false, allowanceBusy = false, error = "", revision = 0, disposed = false;
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const params = () => ({ range, tz });
@@ -73,59 +68,26 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
     return values.length ? `<ul class="run-bars">${values.map(g => `<li><div><span class="run-group-label">${group === "model" ? modelHTML(g.label) : group === "member" ? faceHTML({id:g.member_id ?? (g.label === "Raphael" ? 0 : -1),name:g.label,avatar_url:g.avatar_url},24) + esc(memberName(g.member_id,g.label)) : esc(g.label === "unknown" ? t("runs.unknown") : g.label)}</span><strong>${number(g.tokens || g.runs)}</strong></div>` +
       `<div class="run-bar-track"><i style="width:${Math.max(1, (g.tokens || g.runs) / peak * 100)}%"></i></div><small>${formatUsd(g.cost_usd)}</small></li>`).join("")}</ul>${group === "member" && all.length > 5 ? btn(t(allMembers ? "runs.showLess" : "runs.showAll"), ' data-run-act="members"') : ""}` : `<p class="ua-empty">${t("runs.empty")}</p>`;
   }
-  function spanHTML(span: RunSpan, origin: number, total: number, slowest: RunSpan | undefined): string {
-    const offset = Math.max(0, span.at_ms - span.ms - origin), width = Math.min(100, Math.max(.5, span.ms / total * 100));
-    return `<li class="run-span"><div><span>${span.kind === "model" ? modelHTML(span.model || span.server) : esc(toolName(span))}</span>` +
-      `<small>${duration(span.ms)}</small>${span === slowest ? `<b class="run-slowest">${t("runs.slowest")}</b>` : ""}` +
-      `${span.outcome !== "ok" ? `<b class="danger">${esc(span.outcome)}</b>` : ""}</div><div class="run-span-track"><i style="margin-left:${Math.min(99, offset / total * 100)}%;width:${Math.min(width, 100 - Math.min(99, offset / total * 100))}%"></i></div></li>`;
-  }
-  function traceHTML(): string {
-    const { run, spans } = trace!, origin = run.started_at_ms ?? Math.min(...spans.map(s => s.at_ms - s.ms), run.at_ms);
-    const total = Math.max(1, run.duration_ms || 0, ...spans.map(s => s.at_ms - origin));
-    const slowest = spans.reduce<RunSpan | undefined>((prior, span) => !prior || span.ms > prior.ms ? span : prior, undefined);
-    const groups = new Map<string, RunSpan[]>();
-    for (const span of spans) if (span.kind !== "model") {
-      const key = `${span.server || ""}:${span.tool || span.kind}`;
-      groups.set(key, [...(groups.get(key) || []), span]);
-    }
-    let rows = "";
-    const emitted = new Set<string>();
-    for (const span of spans) {
-      if (span.kind === "model") { rows += spanHTML(span, origin, total, slowest); continue; }
-      const key = `${span.server || ""}:${span.tool || span.kind}`;
-      if (emitted.has(key)) continue; emitted.add(key);
-      const calls = groups.get(key)!;
-      const listId = `run-tools-${emitted.size}`;
-      rows += `<li><div class="run-tool-group"><header>${iconButton("right", toolName(span), ` data-run-act="tools" aria-expanded="false" aria-controls="${listId}"`)}${esc(toolName(span))} <small>${calls.length} ${t("runs.calls")} · ${duration(calls.reduce((n, s) => n + s.ms, 0))}</small>${slowest && calls.includes(slowest) ? ` <b class="run-slowest">${t("runs.slowest")}</b>` : ""}</header><ol id="${listId}" hidden>${calls.map(s => spanHTML(s, origin, total, undefined)).join("")}</ol></div></li>`;
-    }
-    return `<header class="run-header">${btn(t("runs.back"), ' data-run-act="back"')}<h2>${t("runs.trace")}</h2></header><h3 class="run-question">${esc(run.title || t("runs.noTitle"))}</h3>` +
-      tiles(trace!.summary, run) + `<section class="run-timeline"><div class="run-whole">${faceHTML({ id: run.member_id, name: run.member_name, avatar_url: run.avatar_url }, 28)}<div><strong>${esc(memberName(run.member_id,run.member_name))}</strong><small>${modelHTML(run.model)}</small></div><span>${duration(run.duration_ms)}</span></div>` +
-      `<div class="run-whole-track"></div><ol>${rows}</ol>${!spans.length ? `<p class="ua-empty">${t("runs.unknown")}</p>` : ""}</section>`;
-  }
   function render(): void {
     if (disposed) return;
-    onTrace(Boolean(trace));
     const focus = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.runAct : undefined;
     root.setAttribute("aria-busy", String(busy));
-    let html = trace ? traceHTML() : `<header class="run-header"><h2>${t("runs.overview")}</h2><div>${sel(Object.entries(periodKey).map(([value, key]) => ({ value, label: t(key) })), range, t("usage.period"), ' data-run-act="period"')}${btn(t("runs.export"), ` data-run-act="export"${busy || exportBusy ? " disabled" : ""}`)}</div></header>`;
-    if (!trace && report) html += tiles(report.summary) + `<h3>${t("runs.where")}</h3><div class="run-groups"><section class="run-members"><h4>${t("runs.member")}</h4>${bars("member")}</section><section><div class="run-segments">` +
-      tabs((["model", "day", "provider", "routine"] as RunGrouping[]).map(g => ({id:g,label:t(groupKey[g]),attrs:` data-run-group="${g}" tabindex="${grouping === g ? 0 : -1}"`})),grouping,{label:t("runs.where"),kind:"nav"}) + `</div>${bars(grouping)}</section></div>` +
-      `<section class="run-list"><h3>${t("runs.title")}</h3><div class="run-card">${report.runs.length ? report.runs.map(run => `<button type="button" class="btn run-row" data-run-id="${run.id}" data-run-kind="${run.kind}">` +
-        faceHTML({ id: run.member_id, name: run.member_name, avatar_url: run.avatar_url }, 32) + `<span class="run-row-copy"><strong>${esc(run.title || t("runs.noTitle"))}</strong><small>${esc(memberName(run.member_id,run.member_name))} · ${esc(time(run.at_ms))}${run.status ? ` · ${esc(t(run.status === "done" ? "auto.done" : run.status === "running" || run.status === "confirm" ? "auto.running" : run.status === "skipped" ? "auto.skipped" : "auto.error"))}` : ""}</small>${modelHTML(run.model)}</span><span class="run-row-numbers"><span>${duration(run.duration_ms)}</span><small>${formatUsd(run.cost_usd)}</small></span><span class="run-chevron" aria-hidden="true">${ico("right")}</span></button>`).join("") : `<p class="ua-empty">${t("runs.empty")}</p>`}</div>` +
-      (report.runs.length < report.total ? btn(t("runs.loadMore"), ` data-run-act="more"${busy ? " disabled" : ""}`) : "") + `</section><p class="ua-note">${t("runs.legacy")}</p>`;
+    let html = `<header class="run-header"><h2>${t("runs.overview")}</h2><div>${sel(Object.entries(periodKey).map(([value, key]) => ({ value, label: t(key) })), range, t("usage.period"), ' data-run-act="period"')}${btn(t("runs.export"), ` data-run-act="export"${busy || exportBusy ? " disabled" : ""}`)}</div></header>`;
+    if (report) html += tiles(report.summary) + `<h3>${t("runs.where")}</h3><div class="run-groups"><section class="run-members"><h4>${t("runs.member")}</h4>${bars("member")}</section><section><div class="run-segments">` +
+      tabs((["model", "day", "provider", "routine"] as RunGrouping[]).map(g => ({id:g,label:t(groupKey[g]),attrs:` data-run-group="${g}" tabindex="${grouping === g ? 0 : -1}"`})),grouping,{label:t("runs.where"),kind:"nav"}) + `</div>${bars(grouping)}</section></div>`;
     if (busy) html += `<p role="status" class="ua-status">${t("usage.loading")}</p>`;
     if (error) html += `<p role="alert">${esc(error)}</p>${btn(t("usage.retry"), ' data-run-act="retry"')}`;
-    if (!trace) html += `<section class="run-allowance"><header><h3>${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
+    html += `<section class="run-allowance"><header><h3>${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
       allowanceHTML() + `</section>`;
     root.innerHTML = html;
     if (focus) root.querySelector<HTMLElement>(`[data-run-act="${focus}"]`)?.focus({ preventScroll: true });
   }
-  async function refresh(more = false): Promise<void> {
-    const current = ++revision; busy = true; error = ""; trace = null; render();
+  async function refresh(): Promise<void> {
+    const current = ++revision; busy = true; error = ""; render();
     try {
-      const result = await api.usageRuns({ ...params(), ...(more && report ? { offset: report.runs.length } : {}) });
+      const result = await api.usageRuns(params());
       if (disposed || current !== revision) return;
-      report = more && report ? { ...result, runs: [...report.runs, ...result.runs] } : result;
+      report = result;
     } catch (e) { if (current === revision) error = describeError(e); }
     if (current === revision) { busy = false; render(); }
   }
@@ -137,16 +99,10 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
   async function click(event: Event): Promise<void> {
     const button = (event.target as Element).closest<HTMLButtonElement>("button"); if (!button || button.disabled) return;
     const act = button.dataset.runAct;
-    if (act === "tools") {
-      const list = button.closest(".run-tool-group")!.querySelector<HTMLOListElement>("ol")!;
-      list.hidden = !list.hidden; button.setAttribute("aria-expanded",String(!list.hidden)); return;
-    }
     if (act === "period") openMenu(button, Object.entries(periodKey).map(([value, key]) => ({ value, label: t(key) })), range, value => {
       range = value as RunPeriod; report = null; void refresh();
     });
-    else if (act === "back") { ++revision; busy = false; error = ""; trace = null; render(); root.scrollIntoView?.({ block: "start" }); }
     else if (act === "retry") void refresh();
-    else if (act === "more") void refresh(true);
     else if (act === "members") { allMembers = !allMembers; render(); }
     else if (act === "allowance") void allowances();
     else if (act === "export") {
@@ -155,12 +111,7 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
       catch (e) { error = describeError(e); }
       exportBusy = false; render();
     } else if (button.dataset.runGroup) { grouping = button.dataset.runGroup as RunGrouping; render(); }
-    else if (button.dataset.runId) {
-      const current = ++revision; busy = true; error = ""; render();
-      try { const result = await api.usageTrace({ kind: button.dataset.runKind as "turn" | "task" | "routine", id: Number(button.dataset.runId) }); if (current === revision && !disposed) trace = result; }
-      catch (e) { if (current === revision) error = describeError(e); }
-      if (current === revision) { busy = false; render(); if (trace) root.scrollIntoView?.({ block: "start" }); }
-    }
+
   }
   root.addEventListener("click", click);
   const key = (event: KeyboardEvent) => {

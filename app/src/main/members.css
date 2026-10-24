@@ -11,7 +11,7 @@
 
 /* ---------- the page: the column, the chat, the panel ---------- */
 .page.page-agent { position: relative; max-width: none; height: 100%; padding: 0; display: grid; grid-template-columns: var(--pa-col) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
-.page.page-agent[data-det="open"] { grid-template-columns: var(--pa-col) minmax(0, 1fr) var(--pa-det); }
+.page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: var(--pa-col) minmax(0, 1fr) var(--pa-det); }
 .mb-chat { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; padding: calc(var(--window-controls-height) + 4px) var(--pa-chat-pad) 0; }
 
 /* ---------- the member column ---------- */
@@ -104,7 +104,6 @@
 .sys .av { --av: var(--pa-sys-face) !important; }
 .sys b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-2); }
 .page-agent .btn.sys-x { min-height: calc(26px + 10 * var(--pa-u)); padding: 2px calc(8px + 4 * var(--pa-u)); border-color: transparent; background: transparent; border-radius: var(--r-pill); font-size: var(--pa-sys); }
-.page-agent .btn.sys-x:hover:not(:disabled) { border-color: transparent; background: var(--hover); color: var(--text-2); }
 .sys-x .steps-chev .i { transition: transform 0.22s ease; }
 .sys-x[aria-expanded="true"] .steps-chev .i { transform: rotate(90deg); }
 .x-list { list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: 100%; max-width: calc(560px + 160 * var(--pa-u)); margin: 0 auto; padding: calc(10px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border-radius: var(--r-lg); background: var(--surface-2); font-size: var(--pa-fs-d); line-height: 1.6; color: var(--text-2); }
@@ -170,7 +169,7 @@
 .mb-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
 .mb-chip { display: inline-flex; align-items: center; gap: var(--sp-1); max-width: 100%; min-width: 0; padding: calc(2px + 2 * var(--pa-u)) calc(8px + 4 * var(--pa-u)); border-radius: var(--r-pill); background: var(--surface-2); font-size: var(--fs-2xs); color: var(--text-2); overflow-wrap: anywhere; }
 .mb-chip .chip-x { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; margin-right: -4px; padding: 0; border: 0; border-radius: var(--r-pill); background: transparent; color: var(--text-3); }
-.mb-chip .chip-x:hover { background: var(--hover); color: var(--text); }
+.mb-chip .chip-x:hover { background: transparent; color: var(--text); }
 /* 記憶: the list of the settings, narrower */
 .mb-det .sgroup { margin-top: 0; }
 .mb-det .slist { --slist-pad: 10px; }
@@ -241,12 +240,12 @@
 /* ---------- narrower windows ---------- */
 /* Under 1120 px the panel lies over the chat, at its right. */
 @media (max-width: 1119px) {
-  .page.page-agent[data-det="open"] { grid-template-columns: var(--pa-col) minmax(0, 1fr); }
+  .page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: var(--pa-col) minmax(0, 1fr); }
   .mb-det { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; width: var(--pa-det); max-width: calc(100% - 16px); box-shadow: var(--pop); }
 }
 /* Under 860 px the column becomes the dropdown at the left of the chat's top row. */
 @media (max-width: 859px) {
-  .page.page-agent, .page.page-agent[data-det="open"] { grid-template-columns: minmax(0, 1fr); }
+  .page.page-agent, .page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: minmax(0, 1fr); }
   .mb-col { display: none; }
   .sel.mb-pick { display: inline-flex; }
   .mb-chat { padding-inline: var(--sp-4); }
@@ -267,3 +266,5 @@
 .mb-fold-head[aria-expanded="true"] > .i { transform: rotate(180deg); }
 .mb-fold-head[aria-expanded="true"] { grid-template-columns: minmax(0, 1fr) auto; }
 @media (prefers-reduced-motion: reduce) { .mb-fold-head > .i { transition: none; } }
+
+.page-agent.is-room > .mb-det { display: none; }
