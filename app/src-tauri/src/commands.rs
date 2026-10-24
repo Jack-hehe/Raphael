@@ -127,7 +127,7 @@ impl From<HotkeyEvent> for HotkeyKind {
         match event {
             HotkeyEvent::DictationDown => Self::DictationDown,
             HotkeyEvent::DictationUp => Self::DictationUp,
-            HotkeyEvent::AgentDown => Self::AgentDown,
+            HotkeyEvent::AgentDown | HotkeyEvent::MemberDown(_) => Self::AgentDown,
             HotkeyEvent::AgentUp => Self::AgentUp,
             HotkeyEvent::PasteLast => Self::PasteLast,
             HotkeyEvent::Cancel => Self::Cancel,
@@ -209,7 +209,12 @@ pub enum MainEvent {
     Hotkey { kind: HotkeyKind },
     /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
     /// phase: what was said stays in the core.
-    Dictation { phase: DictationPhase, agent: bool },
+    Dictation {
+        phase: DictationPhase,
+        agent: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        member_id: Option<u64>,
+    },
     /// Raphael asks a YES/NO question, which the overlay shows: the 拉斐爾 page shows it on its card
     /// too and may answer it (`agent_question_answer`). Its words are shown, never logged.
     AgentQuestion(AskPrompt),
@@ -694,8 +699,19 @@ pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, 
     Ok(attachments)
 }
 
-/// Asks Raphael a question typed in the composer of the 拉斐爾 page, with the images and PDFs
-/// attached to it, if any (`attachments`, `agent.ask`'s, never logged), or, with a `member_id`
+/// The quote is data, never appended to the owner's question by the shell.
+pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
+    let Some(quote) = quote else { return Ok(None); };
+    let bounded = |key: &str, max: usize| quote.get(key).and_then(Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max);
+    if !bounded("text", 20_000) || !bounded("author", 256) {
+        return Err("invalid quote".to_owned());
+    }
+    Ok(Some(json!({"text": quote["text"], "author": quote["author"]})))
+}
+
+/// Asks Raphael a question typed in the composer, with optional images/PDFs and a selected
+/// passage as separate bounded context (never logged), or, with a `member_id`
 /// that is not 0, the member whose thread it was typed in (a member is reached only this way, with
 /// the source `app`). It goes the way a spoken one goes once its words are heard (`agent.ask` with
 /// the source `app`; the overlay shows the answer and any YES/NO question), and the call settles
@@ -708,9 +724,16 @@ pub async fn agent_ask_text(
     text: String,
     attachments: Option<Vec<Value>>,
     member_id: Option<u64>,
+    request_id: Option<String>,
+    replace_turn_id: Option<u64>,
+    quote: Option<Value>,
 ) -> Result<(), String> {
     require_main(&webview)?;
+    if request_id.as_deref().is_some_and(|id| !is_question_id(id)) {
+        return Err("invalid request id".to_owned());
+    }
     let attachments = typed_attachments(attachments)?;
+    let quote = typed_quote(quote)?;
     let text = typed_question_with(&text, !attachments.is_empty())?;
     let desk = app
         .try_state::<DeskHandle>()
@@ -718,7 +741,7 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text, attachments, member_id.unwrap_or(0))
+        .ask_typed(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote)
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -735,6 +758,23 @@ pub fn agent_question_open(app: AppHandle, webview: Webview) -> Result<Option<As
     Ok(app
         .try_state::<DeskHandle>()
         .and_then(|desk| desk.0.open_question()))
+}
+
+/// Stop and remove a named owner message, leaving any newer request alone.
+#[tauri::command]
+pub async fn agent_retract(
+    app: AppHandle,
+    webview: Webview,
+    session_id: String,
+    member_id: u64,
+    turn_id: Option<u64>,
+) -> Result<Value, String> {
+    require_main(&webview)?;
+    if !is_question_id(&session_id) { return Err("invalid request id".to_owned()); }
+    let desk = app.try_state::<DeskHandle>().map(|desk| desk.inner().clone()).ok_or(AGENT_OFF)?;
+    desk.0.retract(session_id, member_id, turn_id).await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
 }
 
 /// The page's card answers the question `id` (YES when `approved`), as the overlay's buttons do:
@@ -1260,8 +1300,12 @@ pub fn window_hotkey(
     webview: Webview,
     hotkeys: State<'_, Arc<HotkeyService>>,
     kind: WindowHotkey,
+    member_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
+    if let (WindowHotkey::AgentDown, Some(member)) = (kind, member_id) {
+        return hotkeys.member_voice(member);
+    }
     hotkeys.window_hotkey(kind)
 }
 
@@ -1645,6 +1689,7 @@ mod tests {
                 "agent_page_shown",
                 "agent_question_answer",
                 "agent_question_open",
+                "agent_retract",
                 "core_call",
                 "device_computer_app_remove",
                 "device_settings_get",
@@ -1662,6 +1707,16 @@ mod tests {
     }
 
     // ---- the window's own way to Raphael ----
+
+    #[test]
+    fn quotes_are_bounded_data_and_do_not_accept_a_malformed_author_or_passage() {
+        assert_eq!(typed_quote(None).unwrap(), None);
+        let quote = json!({"text":"しかねません", "author":"Teacher"});
+        assert_eq!(typed_quote(Some(quote.clone())).unwrap(), Some(quote));
+        for bad in [json!({}), json!({"text":"", "author":"Teacher"}), json!({"text":"x", "author":1}), json!({"text":"x".repeat(20_001), "author":"Teacher"})] {
+            assert!(typed_quote(Some(bad)).is_err());
+        }
+    }
 
     #[test]
     fn a_typed_question_has_words_and_a_bounded_length() {
@@ -1843,6 +1898,7 @@ mod tests {
     #[test]
     fn the_window_hears_a_question_open_and_close() {
         let prompt = AskPrompt {
+            member_id: None,
             always: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,
@@ -2670,7 +2726,8 @@ mod tests {
             assert_eq!(
                 serde_json::to_string(&MainEvent::Dictation {
                     phase,
-                    agent: false
+                    agent: false,
+                    member_id: None,
                 })
                 .unwrap(),
                 format!(r#"{{"type":"Dictation","phase":"{name}","agent":false}}"#)
@@ -2679,10 +2736,19 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&MainEvent::Dictation {
                 phase: DictationPhase::Listening,
-                agent: true
+                agent: true,
+                member_id: None,
             })
             .unwrap(),
             r#"{"type":"Dictation","phase":"listening","agent":true}"#
+        );
+        assert_eq!(
+            serde_json::to_value(MainEvent::Dictation {
+                phase: DictationPhase::Listening,
+                agent: true,
+                member_id: Some(3),
+            }).unwrap(),
+            json!({"type": "Dictation", "phase": "listening", "agent": true, "member_id": 3})
         );
     }
 

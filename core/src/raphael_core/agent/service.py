@@ -164,6 +164,7 @@ from .device import DeviceActions
 from .failure import AgentFailure, failure_kind
 from .gate import BUILTIN_SERVER, ToolGate
 from .history import VOICE, AgentHistory, Turn
+from .quotes import quote_from_wire
 from .ledger import Ledger
 from .harness_tools import (
     DEFINITIONS as HARNESS_TOOLS, ROUTINE_TOOLS, HarnessToolError,
@@ -389,6 +390,7 @@ class _Ask:
     steps: list[Step] = field(default_factory=list)
     # The files handed with the request, in memory only.
     attachments: list[Attachment] = field(default_factory=list)
+    quote: dict[str, str] | None = None
     # Who answers: Raphael, or a member of the team (`speaker`), in whose thread the turn is.
     speaker: Speaker = RAPHAEL
     # For a request one member hands another (`answer_for`): the one who asked. The turn is then an
@@ -585,6 +587,7 @@ class AgentService:
             "agent.history.list": self._history_list,
             "agent.history.search": self._history_search,
             "agent.history.clear": self._history_clear,
+            "agent.history.retract": self._history_retract,
             "brains.cli": self._list_clis,
             "brains.cli_login": self._login_cli,
         }
@@ -654,13 +657,31 @@ class AgentService:
             member_id = 0
         if type(member_id) is not int or member_id < 0:
             raise invalid_params("member_id must be a whole number of 0 or more")
+        session = _str(params, "session_id")
+        text = _str(params, "text", blank=True)
+        language = _str(params, "ui_language")
+        quote = quote_from_wire(params.get("quote"))
+        if quote is not None and params.get("source") != "app":
+            raise invalid_params("quotes are supported for composer requests")
+        replacement = _opt_int(params, "replace_turn_id")
+        if replacement is not None and not self._was_cancelled(session):
+            if not text.strip() and not attachments:
+                raise invalid_params("a replacement must contain text or attachments")
+            if self._speaker(member_id) is None:
+                raise invalid_params("there is no such member")
+            old = self._history.get(replacement)
+            if (old is None or old.member_id != member_id or old.status in ("running", "confirm")
+                    or old.source in ("member", "routine") or params.get("source") != "app"):
+                raise invalid_params("replace_turn_id must name a completed owner message in this thread")
+            await self._history_retract({"session_id": old.session_id, "turn_id": replacement, "member_id": member_id})
         return await self.ask(
-            _str(params, "session_id"),
-            _str(params, "text", blank=True),
-            _str(params, "ui_language"),
+            session,
+            text,
+            language,
             params.get("source"),
             attachments=attachments,
             member_id=member_id,
+            quote=quote,
         )
 
     def _speaker(self, member_id: int) -> Speaker | None:
@@ -684,12 +705,13 @@ class AgentService:
         *,
         attachments: Sequence[Attachment] = (),
         member_id: int = 0,
+        quote: dict[str, str] | None = None,
     ) -> dict:
         """One request, as `agent.ask` answers it. `attachments` are the files handed with it
         (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
         files and no words, the request asks 「看這個」 in its language. `member_id` is who it is
-        for: Raphael (0), or a member of the team, which only a message typed in its thread in the
-        app reaches (the voice and the chat apps always go to Raphael)."""
+        for: Raphael (0), or a member of the team addressed by its thread's composer, in writing
+        or by voice. The global voice hotkey and chat apps default to Raphael."""
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
@@ -698,14 +720,13 @@ class AgentService:
             text=text,
             language=normalize_language(ui_language),
             attachments=list(attachments),
+            quote=quote,
             speaker=speaker,
         )
         if source is not None:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
                 raise invalid_params("source must be a short lower-case word")
             ask.source = source
-        if not speaker.is_raphael and ask.source == VOICE:
-            raise invalid_params("voice requests go to Raphael")
         if len(ask.attachments) > MAX_ATTACHMENTS:
             raise RpcError(
                 INVALID_PARAMS, "Invalid params: attachments (count)", {"kind": "count"}
@@ -774,7 +795,7 @@ class AgentService:
             return self._finish(ask, "chat", "negative", phrase(ask.language, off), ledger)
         settings = self._read_settings(ask.speaker)
         blocked = self._blocked(settings)
-        if ask.source != VOICE:
+        if ask.source != VOICE or not ask.speaker.is_raphael:
             if blocked is not None:
                 return self._failed(ask, "answer", blocked, ledger)
             self._record(ask, "answer", "", "", "running", None, ledger)
@@ -1303,6 +1324,7 @@ class AgentService:
                 labelled_lines(ask.exchange_speakers[0], ask.text) if ask.exchange_speakers else ask.text,
                 self._moment(), context.turns, [], ask.language,
                 background_block(self._briefs(ask.speaker.id)), summary=context.summary, say_ja=say_ja, narrated=True,
+                quote=ask.quote,
             )
             if ask.attachments:
                 user += "\nFiles: " + json.dumps([
@@ -2569,7 +2591,7 @@ class AgentService:
                 model=model,
             )
         )
-        if turn is not None and turn.source != VOICE and text:
+        if turn is not None and (turn.source != VOICE or turn.member_id != 0) and text:
             self._write(lambda: self._history.add_message(
                 pending.turn_id, "reply", compose(prefix, text, None)
             ))
@@ -2635,6 +2657,30 @@ class AgentService:
         return session_id in self._cancelled
 
     # --- the history ----------------------------------------------------------------------------
+
+    async def _history_retract(self, params: dict) -> dict:
+        """Stop one owner's request and permanently remove its turn, including partial lines."""
+        member = self._member_param(params)
+        session = _str(params, "session_id")
+        turn_id = _opt_int(params, "turn_id")
+        turns = self._history.for_session(session)
+        own = [turn for turn in turns if turn.member_id == member and turn.source not in ("member", "routine")]
+        if (turn_id is not None and not any(turn.id == turn_id for turn in own)) or (turns and not own):
+            raise invalid_params("the message does not belong to this session and thread")
+        inflight = self._inflight.get(session)
+        await self._cancel({"session_id": session})
+        if inflight is not None:
+            await asyncio.gather(inflight, return_exceptions=True)
+        await self._background.cancel_session(session)
+        # Read again after stopping: a request may have written its first row before cancellation.
+        own = [turn for turn in self._history.for_session(session)
+               if turn.member_id == member and turn.source not in ("member", "routine")]
+        deleted = sum(self._history.delete(turn.id) for turn in own if turn.id is not None)
+        if deleted:
+            self._conversation_of(member).clear_summary()
+            for turn in own:
+                self._turn_changed(turn.id or 0, member)
+        return {"deleted": deleted}
 
     def _member_param(self, params: dict) -> int:
         """The thread a method of the history is about: `member_id`, 0 (Raphael's) by default. One
@@ -2704,6 +2750,7 @@ class AgentService:
                     "peer_id": turn.peer_id,
                     # The files handed with the request: their names and types, never more.
                     "attachments": list(turn.attachments or []),
+                    **({"quote": turn.quote} if turn.quote else {}),
                     # What the fast tier did, then what the worker did for the task it was given.
                     "steps": [_step_view(step) for step in steps.get(turn.id or 0, [])]
                     + task_steps,
@@ -2829,7 +2876,7 @@ class AgentService:
         prefix: it speaks in plain sentences."""
         prefix = _prefix(ask.language, which) if ask.speaker.is_raphael else ""
         turn_id = self._record(ask, route, prefix, text, status, detail, ledger)
-        if ask.source != VOICE and status != "confirm":
+        if (ask.source != VOICE or not ask.speaker.is_raphael) and status != "confirm":
             for line in ask.replies or [text]:
                 self._message(ask, "reply", line, prefix)
             ask.replies = []
@@ -2981,6 +3028,7 @@ class AgentService:
                     detail=detail, status=status, cost_usd=cost,
                     source=ask.source, model=ledger.model, steps=ask.steps,
                     attachments=[{"name": a.name, "mime": a.mime} for a in ask.attachments],
+                    quote=ask.quote,
                     member_id=member_id, peer_id=ask.peer,
                 )
                 ask.turn_id = turn_id

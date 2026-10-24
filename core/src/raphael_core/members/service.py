@@ -50,7 +50,7 @@ completed with the report. It never uses the desktop (the worker has no tool for
 the owner at the overlay; every run counts toward the month's limit, as every task does.
 
 Unread. A turn written or completed in a thread that is not on screen (`members.viewing`) marks it
-unread, unless the owner heard it said (`source` "voice").
+unread, unless it is Raphael's reply heard on the voice overlay.
 
 Waiting. A thread is waiting while a question for a yes waits in it: a turn with the status
 "confirm" (a question of the fast tier), or a question that a background task of that member waits
@@ -341,10 +341,10 @@ class MembersService:
 
     def turn_arrived(self, turn_id: int) -> None:
         """A turn was written or completed: its thread is unread, unless it is on screen or the
-        owner heard the turn said (`source` "voice")."""
+        owner heard Raphael's turn said (`source` "voice", member 0)."""
         try:
             turn = self._history.get(turn_id)
-            if turn is None or turn.source == "voice" or turn.member_id == self._viewing:
+            if turn is None or (turn.source == "voice" and turn.member_id == 0) or turn.member_id == self._viewing:
                 return
             was_unread = turn.member_id in self.store.unread()
             self.store.mark_unread(turn.member_id)

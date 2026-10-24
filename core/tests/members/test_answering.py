@@ -126,12 +126,24 @@ async def test_a_member_has_its_own_model_when_it_has_one(setup, client):
     assert client.chat_calls[0]["model"] == "own/model"
 
 
-async def test_the_voice_always_goes_to_raphael(setup):
+@pytest.mark.parametrize("source", ["voice", None])
+async def test_a_spoken_question_reaches_the_named_member(voiced, client, source):
+    rig, team, voice = voiced
+    one = member(team, model="own/model")
+    client.chats.append(live_said("Your next lesson.", messages=["Example.", "Your next lesson."]))
+    result = await typed(rig, "Teach me", one.id, source=source, language="en")
+    assert result["text"] == "Your next lesson." and result["prefix"] == ""
+    [turn] = (await rig.call("agent.history.list", {"member_id": one.id}))["turns"]
+    assert (turn["member_id"], turn["source"], turn["question"]) == (one.id, "voice", "Teach me")
+    assert [m["text"] for m in turn["messages"] if m["kind"] == "reply"] == ["Example.", "Your next lesson."]
+    assert (await rig.call("agent.history.list", {}))["turns"] == []
+    assert client.chat_calls[0]["model"] == "own/model"
+    assert "You are 小行程" in client.chat_calls[0]["messages"][0]["content"]
+    assert voice.said == []
+
+
+async def test_requests_and_history_reject_an_unknown_member(setup):
     rig, team = setup
-    one = member(team)
-    for source in ("voice",):
-        with pytest.raises(RpcError):
-            await typed(rig, "你好", one.id, source=source)
     with pytest.raises(RpcError):
         await typed(rig, "你好", 42)
     with pytest.raises(RpcError):

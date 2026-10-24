@@ -271,6 +271,7 @@ export interface MediaPayload {
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
+  quote?: MessageQuote | null;
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
   messages?: TurnMessage[];
   id: number;
@@ -315,6 +316,12 @@ export interface AgentTurn {
 export interface TurnAttachment {
   name: string;
   mime: string;
+}
+
+/** A selected passage, separate from the owner's instructions. */
+export interface MessageQuote {
+  text: string;
+  author: string;
 }
 
 /**
@@ -558,7 +565,7 @@ export type MainEvent =
   /** A key of Raphael went down or up (from the hook or from the window itself), whether or not the guide practises. */
   | { type: "Hotkey"; kind: HotkeyKind }
   /** A dictation (`agent` false) or a question to Raphael (`agent` true) moved on. */
-  | { type: "Dictation"; phase: DictationPhase; agent: boolean }
+  | { type: "Dictation"; phase: DictationPhase; agent: boolean; member_id?: number }
   /** Raphael asks a YES/NO question (the overlay shows it too): the 拉斐爾 page's card answers it as well. */
   | ({ type: "AgentQuestion" } & AgentQuestion)
   /** The question `id` was answered (here or on the overlay), ran out or was dropped. */
@@ -568,6 +575,8 @@ export type MainEvent =
 
 /** A YES/NO question of Raphael's that waits for its answer (`AgentQuestion`, `agent_question_open`). */
 export interface AgentQuestion {
+  /** The thread that owns this confirmation, including when the page reopens mid-turn. */
+  member_id?: number;
   id: string;
   /** 問, or its word in the language of the window. */
   prefix: string;

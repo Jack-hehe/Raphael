@@ -48,6 +48,9 @@ class FakeBackground:
     def clear(self):
         self.cleared += 1
 
+    async def cancel_session(self, session_id):
+        return any(request[0] == session_id for request in self.submitted)
+
     def tasks_for_turns(self, turn_ids):
         # Each task as the history shows it with the turn that handed it over.
         brief = {"id": 0, "state": "running", "started_at_ms": 5}

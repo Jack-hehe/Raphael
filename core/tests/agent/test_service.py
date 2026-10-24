@@ -39,6 +39,7 @@ METHODS = [
     "agent.confirm",
     "agent.history.clear",
     "agent.history.list",
+    "agent.history.retract",
     "agent.history.search",
     "brains.cli",
     "brains.cli_login",

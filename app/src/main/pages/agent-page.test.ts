@@ -122,7 +122,7 @@ test("messages copy plain text, code copies exactly, only the latest reply regen
   expect(expand.hidden).toBe(false); expand.click();
   expect(document.querySelector('.tn[data-id="2"] .is-expanded')).not.toBeNull();
   document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
-  await flush(); expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 2");
+  await flush(); expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 2", [], 0, expect.objectContaining({ requestId: expect.any(String) }));
   copy.mockRestore(); agent.hide();
 });
 

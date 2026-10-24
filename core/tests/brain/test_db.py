@@ -281,7 +281,8 @@ SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
     "estimated INTEGER NOT NULL DEFAULT 0", "estimated_words INTEGER NOT NULL DEFAULT 0",
     "estimated_dictations INTEGER NOT NULL DEFAULT 0",
 ]}
-LATEST = 20
+SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
+LATEST = 21
 
 
 def schema_names(conn, kind):
@@ -305,7 +306,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V20) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V21) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -319,7 +320,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V20.items():
+    for table, columns in SCHEMA_V21.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -522,7 +523,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V15["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V21["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -1033,3 +1034,25 @@ def test_v18_preserves_live_messages_and_their_order_and_cascade(tmp_path):
     migrated.execute("DELETE FROM agent_turns WHERE id = 1")
     assert migrated.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0] == 0
     migrated.close()
+
+
+def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
+    from raphael_core.agent.history import AgentHistory
+
+    path = tmp_path / "v20.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 21):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO agent_turns (session_id, question, route, prefix, text, status, created_at_ms) VALUES ('old', 'q', 'chat', '', 'a', 'done', 1)")
+    raw.commit(); raw.close()
+    migrated = db.connect(path)
+    history = AgentHistory(migrated)
+    assert history.get(1).quote is None
+    quote = {"text": "Selected passage", "author": "Teacher"}
+    new_id = history.add(session_id="new", question="Explain", route="chat", prefix="", text="Answer", status="done", quote=quote)
+    migrated.close()
+    reopened = db.connect(path)
+    assert AgentHistory(reopened).get(new_id).quote == quote
+    assert AgentHistory(reopened).get(1).question == "q"
+    reopened.close()

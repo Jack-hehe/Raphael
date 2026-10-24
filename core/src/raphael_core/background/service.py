@@ -1247,8 +1247,19 @@ class BackgroundService:
 
     # --- the end of a task ----------------------------------------------------------------------
 
+    def _has_linked_turn(self, task: Task) -> bool:
+        """A cancelled task may finish after its turn was deleted and its id reused."""
+        if not task.turn_id:
+            return False
+        try:
+            current = self._store.get(task.id)
+        except sqlite3.Error as exc:
+            logger.warning("Could not read the turn of a task: %s", type(exc).__name__)
+            return False
+        return current is not None and current.turn_id == task.turn_id
+
     def _progress(self, task: Task, text: str) -> None:
-        if task.id in self._discarded or not task.turn_id:
+        if task.id in self._discarded or not self._has_linked_turn(task):
             return
         prefix = PREFIXES[task.language].notice if task.member_id == 0 else ""
         try:
@@ -1327,7 +1338,7 @@ class BackgroundService:
             self._store.finish(task.id, state, prefix=prefix, text=text, detail=detail, reason=reason)
         except sqlite3.Error as exc:
             logger.warning("Could not write down the end of a task: %s", type(exc).__name__)
-        if task.turn_id:
+        if self._has_linked_turn(task):
             try:
                 self._history.resolve(
                     task.turn_id,

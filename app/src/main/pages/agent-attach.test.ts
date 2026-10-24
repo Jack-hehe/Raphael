@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   agentHistoryClear: vi.fn(),
   agentHistorySearch: vi.fn(),
   agentAskText: vi.fn(),
+  agentRetract: vi.fn(),
   agentQuestionOpen: vi.fn(),
   agentQuestionAnswer: vi.fn(),
   agentVoice: vi.fn(),
@@ -83,6 +84,7 @@ beforeEach(() => {
   api.agentQuestionOpen.mockResolvedValue(null);
   api.agentHistoryList.mockResolvedValue({ turns: [] });
   api.agentAskText.mockResolvedValue(undefined);
+  api.agentRetract.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -131,6 +133,24 @@ describe("what 「＋」 takes", () => {
 });
 
 describe("the composer with images and PDFs", () => {
+  test("cancelling restores the original attachment bytes and draft, ready for resending", async () => {
+    api.agentAskText.mockImplementation(() => new Promise<void>(() => {}));
+    const { agent, pick, field, chips } = mount(); await flush();
+    await pick(png(), pdf());
+    expect(agent.el.querySelector<HTMLButtonElement>(".cmp-send")!.disabled).toBe(false);
+    field().value = "original draft";
+    agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit(); await flush();
+    agent.el.querySelector<HTMLButtonElement>('[data-act="cancel-message"]')!.click(); await flush();
+    expect(field().value).toBe("original draft");
+    expect(chips()).toEqual(["photo.png", "report.pdf"]);
+    expect(field().selectionStart).toBe(field().value.length);
+    agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit(); await flush();
+    expect(api.agentAskText.mock.calls[1][1]).toEqual([
+      { name: "photo.png", mime: "image/png", data: base64Of(PNG) },
+      { name: "report.pdf", mime: "application/pdf", data: base64Of(PDF) },
+    ]);
+    agent.hide();
+  });
   test("an image and a PDF show as chips with ×; the image with a small picture of itself", async () => {
     const { agent, pick, chips } = mount();
     await flush();
@@ -204,7 +224,7 @@ describe("the composer with images and PDFs", () => {
     expect(api.agentAskText).toHaveBeenCalledWith("這是什麼？", [
       { name: "photo.png", mime: "image/png", data: base64Of(PNG) },
       { name: "report.pdf", mime: "application/pdf", data: base64Of(PDF) },
-    ]);
+    ], 0, expect.objectContaining({ requestId: expect.any(String) }));
     expect(chips()).toEqual([]);
     expect(field().value).toBe("");
   });
@@ -215,7 +235,7 @@ describe("the composer with images and PDFs", () => {
     await pick(png());
     agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit();
     await flush();
-    expect(api.agentAskText).toHaveBeenCalledWith("", [{ name: "photo.png", mime: "image/png", data: base64Of(PNG) }]);
+    expect(api.agentAskText).toHaveBeenCalledWith("", [{ name: "photo.png", mime: "image/png", data: base64Of(PNG) }], 0, expect.objectContaining({ requestId: expect.any(String) }));
   });
 
   test("a question without files sends none", async () => {
@@ -224,7 +244,7 @@ describe("the composer with images and PDFs", () => {
     field().value = "你好";
     agent.el.querySelector<HTMLFormElement>(".composer")!.requestSubmit();
     await flush();
-    expect(api.agentAskText).toHaveBeenCalledWith("你好", []);
+    expect(api.agentAskText).toHaveBeenCalledWith("你好", [], 0, expect.objectContaining({ requestId: expect.any(String) }));
   });
 
   test("a question that fails gives its files back to the composer", async () => {
