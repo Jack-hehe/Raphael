@@ -35,7 +35,7 @@ const subject = (selector: string): string => selector.split(/\s+|>|\+|~/).filte
 function reachesEmblem(selector: string): boolean {
   if (/\.av-custom|\.mb-av\b|\.mb-av-/.test(selector)) return false;
   const last = subject(selector);
-  return /\.av(?![\w-])|\.mb-pill-face|\.sys-face|\.mb-avbtn|\.mb-chief|\.ra-face|\.ask-face|\.nav-face/.test(last);
+  return /\.av(?![\w-])|\.mb-pill-face|\.sys-face|\.mb-avbtn|\.ra-face|\.ask-face|\.nav-face/.test(last);
 }
 
 /** A declaration that would draw something around or behind the emblem. */
@@ -52,7 +52,7 @@ describe("Raphael's emblem stands bare", () => {
     const hits = rules.filter((r) => reachesEmblem(r.selector));
     // the rules that size and place it are found, so the reading works
     expect(hits.some((r) => r.name === "avatar.css" && /^\.av$/.test(r.selector))).toBe(true);
-    expect(hits.some((r) => r.name === "members.css" && /mb-chief/.test(r.selector))).toBe(true);
+    expect(hits.some((r) => r.name === "members.css" && /mb-row > \.av/.test(r.selector))).toBe(true);
     const bad = hits.flatMap((r) => framing(r.body).map((d) => `${r.name}: ${r.selector} { ${d} }`));
     expect(bad).toEqual([]);
   });
@@ -68,7 +68,7 @@ describe("Raphael's emblem stands bare", () => {
     column.innerHTML = columnHTML({ list: null, current: 0, previews: new Map(), query: "", folded: new Set(), fresh: new Set() });
     const face = column.querySelector(".mb-chief > .av")!;
     expect(face.className).toBe("av");
-    expect(face.getAttribute("style")).toBe("--av:64px");
+    expect(face.getAttribute("style")).toBe("--av:40px");
   });
 
   test("on the line of an exchange with him, too", () => {

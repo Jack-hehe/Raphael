@@ -10,13 +10,13 @@
 .mem-more[aria-expanded="true"] .i { transform: rotate(180deg); }
 /* the notes sit under the row of the memory, set in as its own */
 .slist > .row.mem-sub > .lbl { padding-left: var(--sp-6); min-width: 0; }
-.mem-line { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.mem-line { display: flex; align-items: baseline; gap: var(--sp-2); min-width: 0; }
 .mem-type { flex: none; min-width: 3.2em; font-size: var(--fs-xs); color: var(--text-3); }
 .mem-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--text); }
-.mem-tag { flex: none; padding: 0 6px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); }
+.mem-tag { flex: none; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); }
 /* a note, open under its row: its title on one line, then its text */
 .mem-edit { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); padding: var(--sp-2) var(--sp-4) var(--sp-3) var(--sp-6); border-top: 1px solid var(--line); }
-.mem-body { width: 100%; min-height: 96px; resize: vertical; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); line-height: 1.6; }
-.mem-title { width: 100%; min-height: 32px; padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); }
+.mem-body { width: 100%; min-height: 96px; resize: vertical; padding: var(--sp-2) var(--sp-2); border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); line-height: 1.6; }
+.mem-title { width: 100%; min-height: 32px; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); border: 1px solid var(--btn-edge); background: var(--panel); font-size: var(--fs-sm); }
 .mem-body:focus, .mem-title:focus { outline: 0; }
-.mem-foot { margin: 10px 0 0 4px; }
+.mem-foot { margin: var(--sp-2) 0 0 var(--sp-1); }

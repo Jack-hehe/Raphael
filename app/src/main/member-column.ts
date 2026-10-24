@@ -1,9 +1,5 @@
-// The member column of the 拉斐爾 page (the mockup's `members`, left): at the top a search, which
-// narrows the members by name and role, and 「＋」, a menu of 「新增成員」 and 「新增分組」; then Raphael,
-// his emblem at 64 px and his name and nothing else; then the groups, each under a header that folds
-// it away, and 未分組 last. A member's row is its picture, its name, its role in small muted words and
-// a line of its last message; a question that waits for the owner turns that line gold, 「等你處理：…」,
-// with a gold dot, and a thread with news has a dot of the accent.
+// The member column keeps Raphael pinned first, followed by member groups and ungrouped members.
+// Every row shares the same face, name, role, time and preview layout.
 //
 // A right click on a row, or its borderless 「more」 that shows under the pointer, gives 「移到分組 ▸」
 // and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
@@ -14,6 +10,7 @@
 
 import { createRoomsSection, openNewGroupChat } from "./group-chats";
 import { t } from "./i18n";
+import { formatClock } from "./format";
 import { createMessageSearch } from "./message-search";
 import { type MemberSection, faceHTML, memberMatches, memberSections, previewOf, raphaelOf } from "./members";
 import type { Member, MembersList } from "./types";
@@ -35,6 +32,8 @@ export interface ColumnView {
 
 /** A member's row: its picture, name, role, the line under them and the dot; then its 「more」. */
 export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "previews" | "fresh">): string {
+  const chief = member.id === 0;
+  const lastAt = new Date(member.last_at ?? NaN);
   const preview = previewOf(member, v.previews.get(member.id));
   const dot = member.waiting
     ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>`
@@ -43,12 +42,13 @@ export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "p
       : "";
   return (
     `<div class="mb-item${v.fresh.has(member.id) ? " is-new" : ""}" data-member-item="${member.id}">` +
-    `<button type="button" class="nav mb-row" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
-    faceHTML(member, 34) +
-    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${member.pinned ? `<span class="mb-pin" aria-label="${esc(t("members.sidePinned"))}">${ico("pin")}</span>` : ""}${member.role ? `<i>${esc(member.role)}</i>` : ""}</span>` +
+    `<button type="button" class="nav mb-row${chief ? " mb-chief" : ""}" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
+    faceHTML(member, 40) +
+    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${chief || member.pinned ? `<span class="mb-pin" aria-label="${esc(t("members.sidePinned"))}">${ico("pin")}</span>` : ""}${member.role ? `<i>${esc(member.role)}</i>` : ""}` +
+    (Number.isFinite(lastAt.getTime()) ? `<time class="mb-row-time" datetime="${lastAt.toISOString()}">${formatClock(lastAt.getTime())}</time>` : "") + `</span>` +
     (preview.text ? `<span class="mb-row-p${preview.waiting ? " is-wait" : ""}">${esc(preview.text)}</span>` : "") +
     `</span>${dot}</button>` +
-    iconButton("more", t("members.more", { p0: member.name }), ` data-member-more="${member.id}" aria-haspopup="menu" aria-expanded="false" data-k="member-more:${member.id}"`, "mb-more") +
+    (chief ? "" : iconButton("more", t("members.more", { p0: member.name }), ` data-member-more="${member.id}" aria-haspopup="menu" aria-expanded="false" data-k="member-more:${member.id}"`, "mb-more")) +
     `</div>`
   );
 }
@@ -79,13 +79,9 @@ export function columnHTML(v: ColumnView): string {
   const pinned = all.members.filter(m => m.id !== 0 && m.pinned && !m.hidden && memberMatches(m, v.query));
   const sections = memberSections({ ...all, members: all.members.filter(m => !m.pinned) }, v.query);
   const searching = v.query.trim() !== "";
-  const chief =
-    `<button type="button" class="nav mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0">` +
-    faceHTML(raphael, 64) +
-    `<b>${esc(raphael.name)}</b>` +
-    (raphael.waiting ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>` : "") +
-    `</button>`;
-  return (!searching || memberMatches(raphael, v.query) ? chief : "") + (pinned.length ? `<div class="mb-pinned">${pinned.map(m => memberRowHTML(m, v)).join("")}</div>` : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 && pinned.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
+  const chief = memberRowHTML(raphael, v);
+  const showChief = !searching || memberMatches(raphael, v.query);
+  return (showChief ? chief : "") + (pinned.length ? `<div class="mb-pinned">${pinned.map(m => memberRowHTML(m, v)).join("")}</div>` : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && !showChief && sections.length === 0 && pinned.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
 }
 
 export interface ColumnHost {

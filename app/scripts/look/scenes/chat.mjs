@@ -4,7 +4,7 @@ const picker = [click(".conversation-trigger"), wait("#app-popover [data-convers
 const details = [member(1), member(1), wait(".mb-det:not([hidden])")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 export default [
-  scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]")]),
+  scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
   scene("empty", "Conversation without turns", [], { turns: [] }),
   scene("picker", "Conversation picker", picker),

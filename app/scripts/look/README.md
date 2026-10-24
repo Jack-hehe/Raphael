@@ -8,6 +8,7 @@ npm run look -- chat picker --theme both --width 1120,720
 npm run look -- --all --theme both --width 1120,720
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
+npm run verify -- --out ../.fold/app/.look
 npm run verify -- --quick
 npm run verify -- --core --rust
 ```
@@ -39,7 +40,9 @@ and `onboarding` select boundary variants. All scenarios appear in `--list`.
 
 Use `check(name)` for browser assertions that need rendered geometry. The shared
 `checks.mjs` guards conversation-picker overflow and complete calendar-chip times;
-successful measurements are saved in each result's `assertions`. Keep prerequisite
+successful measurements are saved in each result's `assertions`. Every settings
+journey checks the dialog radius and close-control hit target, then waits for the
+requested navigation entry to become current before continuing. Keep prerequisite
 data in the shared fixture: usage expansion needs more than five historical member
 groups, and a dictation heatmap day must have a nonzero count before it can be opened.
 
@@ -47,12 +50,13 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation row actions now open through member details. Automation run history uses
 the unified usage trace. The deliberately removed owner menu/photo controls have no
-scenes. There are 127 current scenes (508 combinations for both themes and widths).
+scenes. There are 128 current scenes (512 combinations for both themes and widths).
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
 the driver chooses the first visible match. Favicon requests return an empty 204.
 
 Verify always runs TypeScript and Vitest; its default also runs contrast. `--quick`
 excludes contrast; `--core` adds offline pytest and `--rust` adds offline locked cargo
 tests. Optional checks use the existing environment/cache and fail if unavailable.
-Logs, exit codes and a JSON summary live in `.look/verify-*/`; independent checks
+Use `--out dir` to select a writable evidence directory for look or verify.
+Logs, exit codes and a JSON summary live in `.look/verify-*/` by default; independent checks
 continue after a failure. These tools do not build, install, launch or deploy the native app.

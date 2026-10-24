@@ -2,6 +2,43 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "settings-shell") {
+    const modal = document.querySelector(".modal"), close = modal?.querySelector(".modal-x");
+    require(visible(modal) && visible(close), "settings and its close control are visible");
+    require(getComputedStyle(modal).borderTopLeftRadius === "12px", "settings uses the dialog radius rather than a pill");
+    const box = close.getBoundingClientRect(), hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    require(close === hit || close.contains(hit), "rounded corners do not clip the close control");
+    return { check: name, radius: getComputedStyle(modal).borderTopLeftRadius };
+  }
+  if (name === "dictation-navigation") {
+    const nav = document.querySelector(".dictation-nav"), tabs = [...nav.querySelectorAll('[role="tab"]')];
+    const active = tabs.filter(tab => tab.getAttribute("aria-selected") === "true");
+    require(nav.getAttribute("aria-orientation") === "vertical" && active.length === 1, "one selected vertical navigation entry");
+    const panel = document.getElementById(active[0].getAttribute("aria-controls"));
+    require(visible(panel) && !panel.hidden, "selected navigation displays its panel");
+    const navBox = nav.getBoundingClientRect(), panelBox = panel.getBoundingClientRect();
+    require(navBox.right < panelBox.left, "navigation remains to the left of the content");
+    for (let i = 1; i < tabs.length; i++) require(tabs[i].getBoundingClientRect().top >= tabs[i - 1].getBoundingClientRect().bottom, "entries form a vertical list");
+    require(panel.scrollWidth <= panel.clientWidth + 1, "selected content fits its column");
+    return { check: name, selected: active[0].dataset.dictationTab, panelWidth: panel.clientWidth };
+  }
+  if (name === "conversation-design") {
+    const bubble = document.querySelector(".bubble"), answer = document.querySelector('[data-expandable] > .ans');
+    for (const element of [bubble, answer]) {
+      require(visible(element), "owner and assistant messages are visible");
+      const style = getComputedStyle(element);
+      require(style.fontSize === "15px" && style.lineHeight === "24px", "messages use 15px type at 1.6 line height");
+      require(style.borderTopLeftRadius === "12px", "messages use the shared card radius");
+    }
+    require(getComputedStyle(answer).borderTopWidth === "0px", "assistant bubble has no decorative border");
+    const column = document.querySelector(".mb-col");
+    if (visible(column)) {
+      const rows = [...column.querySelectorAll(".mb-row")], first = rows[0];
+      require(first.dataset.member === "0" && first.querySelector(".mb-pin"), "Raphael is pinned first");
+      for (const row of rows) require(Math.abs(row.querySelector(".av").getBoundingClientRect().width - 40) < 1, "members share 40px faces");
+    }
+    return { check: name, sidebarVisible: visible(column), fontSize: getComputedStyle(bubble).fontSize };
+  }
   if (name === "conversation-picker") {
     const list = document.querySelector("#app-popover .conversation-menu-list");
     require(visible(list), "conversation list is visible");

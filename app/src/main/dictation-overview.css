@@ -1,11 +1,11 @@
 /* Dictation usage and shortcuts, using the app palette. */
 
 /* ---------- the two columns ---------- */
-.page-overview .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-items: start; margin-top: 18px; }
+.page-overview .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); align-items: start; margin-top: var(--sp-4); }
 .page-overview .home-main { min-width: 0; container: homemain / inline-size; }
-.page-overview .home-main > .usage { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.page-overview .home-main > .usage { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
 /* An implicit grid column is as wide as its widest unbroken line (a long question on the right). minmax(0, 1fr) lets it shrink and the line truncate. */
-.page-overview .home-side { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.page-overview .home-side { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
 /* The shortcuts stay on the right in a window of middling size too: narrower there, at full width
    from 860 px. */
 @container main (min-width: 640px) {
@@ -13,30 +13,30 @@
   .page-overview .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
 }
 @container main (min-width: 860px) {
-  .page-overview .home { grid-template-columns: minmax(0, 1fr) 252px; gap: 20px; }
+  .page-overview .home { grid-template-columns: minmax(0, 1fr) 252px; gap: var(--sp-4); }
 }
 
-.page-overview .card { padding: 16px 18px 18px; }
-.page-overview .card-head { display: flex; align-items: center; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; min-height: var(--h-ctl-sm); margin-bottom: var(--sp-2); }
-.page-overview .card-head h2 { margin: 0; font: 650 var(--fs-md)/1.4 var(--ui); color: var(--text); }
+.page-overview .card { padding: var(--sp-4) 0; }
+.page-overview .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-1) var(--sp-3); flex-wrap: wrap; min-height: var(--h-ctl-sm); margin-bottom: var(--sp-2); }
+.page-overview .card-head h2 { margin: 0; font: 600 var(--fs-md)/1.4 var(--ui); color: var(--text); }
 
 /* ---------- the four numbers ---------- */
-.page-overview .icards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.page-overview .icards { background: var(--side); padding: var(--sp-3); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
 @container homemain (min-width: 520px) {
   .page-overview .icards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-.page-overview .icard { min-width: 0; padding: 12px 14px; background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; }
-.page-overview .icard .v { font: 650 22px/1.25 var(--display); font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.page-overview .icard .v small { margin: 0 6px 0 3px; font: 500 var(--fs-xs)/1 var(--ui); letter-spacing: 0; color: var(--text-2); }
+.page-overview .icard { min-width: 0; padding: var(--sp-3) var(--sp-3); background: transparent; border: 0; border-radius: 0; }
+.page-overview .icard .v { font: 600 var(--fs-h1)/1.25 var(--display); font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.page-overview .icard .v small { margin: 0 var(--sp-1) 0 var(--sp-1); font: 500 var(--fs-xs)/1 var(--ui); letter-spacing: 0; color: var(--text-2); }
 .page-overview .icard .v small:last-child { margin-right: 0; }
-.page-overview .icard .v.none { font: 400 var(--fs-md)/31px var(--ui); color: var(--text-3); }
+.page-overview .icard .v.none { font: 400 var(--fs-md)/1.6 var(--ui); color: var(--text-3); }
 .page-overview .icard .k { margin-top: var(--sp-1); font-size: var(--fs-xs); color: var(--text-3); }
 
 /* ---------- the activity ---------- */
-.page-overview .activity-head { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-bottom: var(--sp-3); }
-.page-overview .activity-head h2 { margin: 0; font: 650 var(--fs-md)/1.4 var(--ui); color: var(--text); }
-.page-overview .activity-sum { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: var(--fs-xs); color: var(--text-2); }
-.page-overview .activity-nav { display: flex; gap: 2px; margin-left: auto; }
+.page-overview .activity-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-bottom: var(--sp-3); }
+.page-overview .activity-head h2 { margin: 0; font: 600 var(--fs-md)/1.4 var(--ui); color: var(--text); }
+.page-overview .activity-sum { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-xs); color: var(--text-2); }
+.page-overview .activity-nav { display: flex; gap: var(--sp-1); margin-left: auto; }
 .page-overview .activity-nav .btn.icon.row { width: 24px; }
 .page-overview .activity-nav .btn.icon.row:disabled { opacity: 0.35; cursor: default; background: transparent; }
 .page-overview .heat-box { overflow: hidden; }
@@ -52,18 +52,18 @@
 .heat [data-date] { cursor: pointer; }
 .heat [data-date]:focus { outline: none; }
 :where(:root[data-keys]) .heat [data-date]:focus-visible { stroke: var(--text); stroke-width: 2; }
-.heat .ax { font: 10px var(--ui); fill: var(--text-3); }
-.legend { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-1); margin-top: 10px; font-size: var(--fs-xs); color: var(--text-3); }
-.legend span:first-child { margin-right: 2px; } .legend span:last-child { margin-left: 2px; }
-.legend i { width: 11px; height: 11px; border-radius: 3px; background: var(--heat-0); }
+.heat .ax { font: var(--fs-2xs) var(--ui); fill: var(--text-3); }
+.legend { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-1); margin-top: var(--sp-2); font-size: var(--fs-xs); color: var(--text-3); }
+.legend span:first-child { margin-right: var(--sp-1); } .legend span:last-child { margin-left: var(--sp-1); }
+.legend i { width: 11px; height: 11px; border-radius: var(--r-sm); background: var(--heat-0); }
 .legend i.h1 { background: var(--heat-1); } .legend i.h2 { background: var(--heat-2); } .legend i.h3 { background: var(--heat-3); } .legend i.h4 { background: var(--heat-4); }
 
 /* ---------- the shortcuts ---------- */
-.page-overview .kc-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.page-overview .kc-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); padding: var(--sp-2) 0; border-top: 1px solid var(--line); }
 .page-overview .card-head + .kc-row { border-top: 0; }
 .page-overview .kc-name { font-size: var(--fs-sm); color: var(--text-2); }
-.page-overview .kc-keys { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 6px; margin-left: auto; }
-.page-overview .kc-keys > .keys { gap: 3px; }
+.page-overview .kc-keys { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-1) var(--sp-1); margin-left: auto; }
+.page-overview .kc-keys > .keys { gap: var(--sp-1); }
 .page-overview .kc-keys > span:not(.keys) { font-size: var(--fs-xs); color: var(--text-3); }
 
 /* The version, in the corner of the window (main.ts moves it out of the page). */
@@ -72,14 +72,14 @@
 /* Wide, tall windows give the same page more room. */
 @media (min-width: 1440px) and (min-height: 800px) {
   @container main (min-width: 760px) {
-    .page-overview .home { grid-template-columns: minmax(0, 1fr) 288px; gap: 28px; }
+    .page-overview .home { grid-template-columns: minmax(0, 1fr) 288px; gap: var(--sp-5); }
   }
-  .page-overview .home { gap: var(--sp-5); margin-top: 22px; }
-  .page-overview .home-main > .usage, .page-overview .home-side { gap: 18px; }
-  .page-overview .card { padding: 20px 22px 22px; }
-  .page-overview .card-head h2, .page-overview .activity-head h2 { font-size: 16px; }
-  .page-overview .icards { gap: 14px; }
-  .page-overview .icard { padding: 16px 18px; }
+  .page-overview .home { gap: var(--sp-5); margin-top: var(--sp-5); }
+  .page-overview .home-main > .usage, .page-overview .home-side { gap: var(--sp-4); }
+  .page-overview .card { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
+  .page-overview .card-head h2, .page-overview .activity-head h2 { font-size: var(--fs-md); }
+  .page-overview .icards { gap: var(--sp-3); }
+  .page-overview .icard { padding: var(--sp-4) var(--sp-4); }
   .page-overview .icard .v { font-size: var(--fs-h1); }
   .page-overview .icard .v small { font-size: var(--fs-md); }
   .page-overview .icard .k { font-size: var(--fs-md); }
@@ -94,6 +94,6 @@
   .page-overview .home { gap: var(--sp-3); margin-top: var(--sp-3); }
   .page-overview .home-side { position: static; }
   .page-overview .home-main > .usage { gap: var(--sp-3); }
-  .page-overview .icard { padding: 10px 12px; }
+  .page-overview .icard { padding: var(--sp-2) var(--sp-3); }
   .home-version { display: none; }
 }

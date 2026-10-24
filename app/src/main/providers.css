@@ -17,7 +17,7 @@
 .pv-card .mono.md { width: 24px; height: 24px; }
 .pv-card .mono .i { width: 20px; height: 20px; }
 .pv-card .tx { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); min-width: 0; flex: 1; }
-.pv-card .nm { font-size: var(--fs-md); font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-card .nm { font-size: var(--fs-md); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pv-card .ds { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pv-card .chev { display: inline-flex; color: var(--text-3); }
 .btn.pv-create { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--sp-3); min-height: 96px; padding: var(--sp-4); border: 1px dashed var(--edge); border-radius: var(--r-lg); background: var(--panel); text-align: start; }

@@ -1,8 +1,4 @@
-// The size of the 拉斐爾 page follows the window (the --pa-* tokens at the top of agent.css): the
-// compact sizes of the first design in a small window, the roomy ones of a desktop messenger in a
-// maximised one, and a straight line between them, so that the page is right at 720 px and at 2560 px
-// wide alike. These read the style sheets for what keeps it so: the tokens and their two ends, the
-// columns, the breakpoints, and that no other page is touched.
+// Conversation geometry stays responsive while type and rows use the shared scale.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -23,7 +19,7 @@ function ends(name: string): [number, number] {
   return [Number(m[1]), Number(m[1]) + Number(m[2])];
 }
 
-describe("the page's fluid sizes", () => {
+describe("the page's responsive sizes", () => {
   test("the tokens are on the page and what it opens at the body, never on :root", () => {
     expect(block).not.toBeNull();
     const selectors = block![1].split(",").map((s) => s.trim());
@@ -43,39 +39,11 @@ describe("the page's fluid sizes", () => {
     expect(members).toContain('.page.page-agent[data-det="open"] { grid-template-columns: var(--pa-col) minmax(0, 1fr) var(--pa-det); }');
   });
 
-  test("a small window keeps the sizes of the first design, a maximised one the Grok-like ones", () => {
+  test("the columns and controls retain their responsive geometry", () => {
     const wanted: Record<string, [number, number]> = {
-      // the member column
-      "pa-tool": [30, 48],
-      "pa-chief-av": [64, 96],
-      "pa-chief-fs": [15, 17],
-      "pa-gh-fs": [12.5, 15],
-      "pa-row-h": [52, 76],
-      "pa-row-av": [34, 52],
-      "pa-row-name": [14.5, 18],
-      "pa-row-role": [12, 13],
-      "pa-row-pv": [13, 15],
-      // the chat
-      "pa-pill-h": [32, 52],
-      "pa-pill-av": [22, 36],
-      "pa-pill-fs": [14, 17],
-      "pa-sys": [13, 15],
-      "pa-fs-b": [15.5, 17],
-      "pa-bpy": [8, 14],
-      "pa-bpx": [13, 18],
-      "pa-br": [16, 22],
-      "pa-colw": [760, 1010],
-      "pa-cmp-btn": [36, 44],
-      "pa-cmp-fs": [15.5, 17],
-      // the details panel
-      "pa-dclose": [34, 48],
-      "pa-det-av": [64, 96],
-      "pa-dname": [16, 24],
-      "pa-drole": [13, 15],
-      "pa-dtab": [14, 16],
-      "pa-dlabel": [12.5, 16],
-      "pa-rt-t": [14, 16],
-      "pa-rt-s": [12.5, 15],
+      "pa-tool": [30, 48], "pa-pill-h": [32, 52], "pa-pill-av": [22, 36],
+      "pa-colw": [760, 1010], "pa-cmp-btn": [36, 44], "pa-cmp-fs": [15.5, 17],
+      "pa-dclose": [34, 48], "pa-det-av": [64, 96],
     };
     for (const [name, [small, big]] of Object.entries(wanted)) expect(ends(name), name).toEqual([small, big]);
   });
@@ -92,7 +60,7 @@ describe("the page's fluid sizes", () => {
     const important = [...both.matchAll(/([^;{}]+!important)/g)].map((m) => m[1].trim());
     const strays = important.filter((d) => !/^--av: var\(--pa-[\w-]+\) !important$/.test(d) && !/^animation: none !important$/.test(d) && !/^transition: none !important$/.test(d));
     expect(strays).toEqual([]);
-    for (const selector of [".nav.mb-chief > .av", ".nav.mb-row > .av", ".conversation-trigger .mb-pill .av", ".page-agent .btn.mb-avbtn .av", ".ra-face .av", ".ask-face .av"]) {
+    for (const selector of [".nav.mb-row > .av", ".conversation-trigger .mb-pill .av", ".page-agent .btn.mb-avbtn .av", ".ra-face .av", ".ask-face .av"]) {
       expect(both, selector).toContain(`${selector} { --av: var(--pa-`);
     }
   });

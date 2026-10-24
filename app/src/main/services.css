@@ -8,7 +8,7 @@
 
 /* A row of the list: the row, the service in use in small muted words, the switch, the chevron */
 .svc-item { grid-template-columns: minmax(0, 1fr) auto auto 18px; }
-.svc-now { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--text-3); }
+.svc-now { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size:var(--fs-2xs); color: var(--text-3); }
 .svc-item.off .nm { color: var(--text-2); }
 /* a row the settings' search lit */
 .cs-item.found, .cs-list.found > .cs-item { background: var(--accent-soft); }
@@ -16,10 +16,10 @@
 /* The dialog's list of services: the mark, the name and its note, the check on the one in use, the chevron */
 .svc-srv { grid-template-columns: minmax(0, 1fr) 16px 18px; }
 .svc-chk { display: inline-flex; justify-content: center; width: 16px; color: var(--accent-text); }
-.svc-h { margin: 0 0 -4px 2px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+.svc-h { margin: 0 0 -4px var(--sp-1); font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 
 /* The two views of the dialog: the page that comes in slides from the side it is reached from (180 ms) */
-.svc-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.svc-view { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
 .svc-view.slide-in { animation: svc-in 0.18s ease-out; }
 .svc-view.slide-out { animation: svc-out 0.18s ease-out; }
 @keyframes svc-in { from { opacity: 0; transform: translateX(14px); } }

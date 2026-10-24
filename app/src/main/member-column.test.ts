@@ -2,7 +2,7 @@
 // The member column (member-column.ts): Raphael at the top, the groups and 未分組, the search, and
 // how a row shows a question that waits and a thread with news.
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { type ColumnHost, columnHTML, createMemberColumn } from "./member-column";
+import { type ColumnHost, columnHTML, createMemberColumn, memberRowHTML } from "./member-column";
 import { openNewGroupChat } from "./group-chats";
 vi.mock("./group-chats", () => ({ createRoomsSection: () => document.createElement("section"), openNewGroupChat: vi.fn() }));
 import type { Member, MembersList } from "./types";
@@ -35,13 +35,28 @@ const dom = (html: string): HTMLElement => {
 };
 
 describe("the column, drawn", () => {
-  test("Raphael first, his emblem at 64 px and his name and nothing else", () => {
+  test("rows show valid last-message times and omit missing or invalid timestamps", () => {
+    const time = new Date(2026, 9, 24, 13, 45).getTime();
+    const row = dom(memberRowHTML(member(1, { last_at: time }), view()));
+    expect(row.querySelector("time")?.textContent).toBe("13:45");
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(new Date(time).toISOString());
+    for (const last_at of [null, NaN, 1e20]) expect(dom(memberRowHTML(member(1, { last_at }), view())).querySelector("time")).toBeNull();
+  });
+
+  test("search matching only Raphael does not show a contradictory empty result", () => {
+    const el = dom(columnHTML(view({ query: LIST.members[0].name })));
+    expect(el.querySelectorAll(".mb-row")).toHaveLength(1);
+    expect(el.querySelector(".mb-none")).toBeNull();
+  });
+  test("Raphael is the first pinned row with a bare 40 px emblem", () => {
     const el = dom(columnHTML(view()));
     const chief = el.querySelector<HTMLElement>(".mb-chief")!;
-    expect(el.firstElementChild).toBe(chief);
+    expect(el.firstElementChild).toBe(chief.parentElement);
+    expect(chief.classList.contains("mb-row")).toBe(true);
+    expect(chief.querySelector(".mb-pin")).not.toBeNull();
     expect(chief.dataset.member).toBe("0");
     expect(chief.textContent).toBe("拉斐爾");
-    expect(chief.querySelector(".av")!.getAttribute("style")).toBe("--av:64px");
+    expect(chief.querySelector(".av")!.getAttribute("style")).toBe("--av:40px");
     expect(chief.innerHTML).not.toMatch(/管理員|mb-av|badge/);
     expect(chief.getAttribute("aria-current")).toBe("true");
   });
@@ -143,7 +158,7 @@ describe("the column, used", () => {
     expect([...column.el.querySelectorAll(".mb-row")].map((n) => (n as HTMLElement).dataset.member)).toEqual(["4"]);
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(column.query()).toBe("");
-    expect(column.el.querySelectorAll(".mb-row")).toHaveLength(4);
+    expect(column.el.querySelectorAll(".mb-row")).toHaveLength(5);
   });
 
   test("the narrow-window search opens a member and closes its popover", () => {
