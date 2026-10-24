@@ -1,0 +1,35 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+import { scenes } from "./scenes/index.mjs";
+import { parseOptions } from "./options.mjs";
+
+const root = resolve(import.meta.dirname, "../../..");
+const deployed = resolve(root, ".agents/skills/verify-raphael");
+// Protected instruction paths can be staged at the brief's explicit fallback.
+const skill = existsSync(deployed) ? deployed : resolve(root, ".fold/.agents/skills/verify-raphael");
+const names = ["conversation", "members", "automations", "team-and-rooms", "dictation", "settings-appearance", "connections-mcp", "usage", "onboarding"];
+
+describe("maintained verification feature map", () => {
+  it("documents every requested feature with executable, current scene commands", () => {
+    const index = readFileSync(resolve(skill, "features/README.md"), "utf8");
+    for (const name of names) {
+      expect(index).toContain(`](${name}.md)`);
+      const content = readFileSync(resolve(skill, `features/${name}.md`), "utf8");
+      for (const heading of ["Sub-features", "How to get to it (user POV)", "Driving it with look", "Gotchas"])
+        expect(content, name).toContain(`## ${heading}`);
+      const commands = [...content.matchAll(/^npm run look -- (.+)$/gm)];
+      expect(commands.length, name).toBeGreaterThan(0);
+      for (const [, command] of commands) {
+        const options = parseOptions(command.trim().split(/\s+/), scenes);
+        expect(options.themes, `${name}: ${command}`).toEqual(["light", "dark"]);
+        expect(options.widths, `${name}: ${command}`).toEqual([1120, 720]);
+      }
+    }
+    expect(readdirSync(resolve(skill, "features")).filter(file => file !== "README.md").sort()).toEqual(names.map(name => `${name}.md`).sort());
+  });
+  it("retires deliberately removed owner controls", () => {
+    for (const name of ["owner-menu", "owner-keyboard-menu", "owner-photo"])
+      expect(() => parseOptions([name], scenes)).toThrow(/Unknown/);
+  });
+});

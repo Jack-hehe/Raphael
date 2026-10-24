@@ -1,0 +1,81 @@
+import { checkRendered } from "./checks.mjs";
+
+export function findVisibleElement(selector) {
+  return [...document.querySelectorAll(selector)].find(element => {
+    const box = element.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) return false;
+    for (let parent = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (parent.hidden || style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return false;
+    }
+    return true;
+  }) ?? null;
+}
+
+export async function perform(page, step) {
+  // A collapsed work section can precede the visible reply with the same selector.
+  const visible = async selector => {
+    try { return (await page.waitForFunction(findVisibleElement, { timeout: 6000 }, selector)).asElement(); }
+    catch (error) { throw new Error(`No visible match: ${selector}`, { cause: error }); }
+  };
+  const click = async selector => { const element = await visible(selector); try { await element.click(); } finally { await element.dispose(); } };
+  const fill = async (selector, text) => {
+    const element = await visible(selector);
+    await element.evaluate((input, value) => { input.focus(); input.value = value; input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); }, text);
+    await element.dispose();
+  };
+  const compact = () => page.evaluate(() => getComputedStyle(document.querySelector(".mb-pick")).display !== "none");
+  const roomsMenu = async () => {
+    if (await compact()) { await click(".mb-pick"); await click('#app-popover [data-action="1"]'); }
+    else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
+  };
+  switch (step.action) {
+    case "check": return page.evaluate(checkRendered, step.name);
+    case "click": await click(step.selector); break;
+    case "type": await fill(step.selector, step.text); break;
+    case "hover": { const element = await visible(step.selector); await element.hover(); await element.dispose(); break; }
+    case "wait": { const element = await visible(step.selector); await element.dispose(); break; }
+    case "require":
+      if (!await page.$(step.selector)) throw new Error(`Unavailable in this checkout: ${step.reason} (${step.selector})`);
+      break;
+    case "key": await page.keyboard.press(step.key); break;
+    case "focus": await page.focus(step.selector); break;
+    case "scroll": { const element = await visible(step.selector); await element.evaluate(element => element.scrollIntoView({ block: "end", inline: "nearest" })); await element.dispose(); break; }
+    case "member":
+      if (await compact()) { await click(".mb-pick"); await click(`#app-popover [data-value="${step.id}"]`); }
+      else await click(`.mb-col [data-member="${step.id}"]`);
+      break;
+    case "room":
+      if (await compact()) { await roomsMenu(); await click(`#app-popover [data-value="${step.id}"]`); }
+      else await click(`[data-room="${step.id}"]`);
+      break;
+    case "new-room":
+      if (await compact()) { await roomsMenu(); await click('#app-popover [data-action="0"]'); }
+      else await click("[data-room-new]");
+      break;
+    case "rooms-menu":
+      if (await compact()) await roomsMenu();
+      else await page.waitForSelector(".mb-col [data-room]", { visible: true });
+      break;
+    case "search":
+      if (await compact()) { await click(".mb-pick"); await click('#app-popover [data-action="0"]'); await fill("#app-popover input", step.text); }
+      else { await click('[data-col="search"]'); await fill(".mb-find-input", step.text); }
+      break;
+    case "drop": case "drag-start":
+      { const element = await visible(step.selector);
+      await element.evaluate((element, options) => {
+        const transfer = new DataTransfer();
+        transfer.setData("application/x-raphael-member", String(options.memberId ?? element.dataset.teamMember));
+        element.dispatchEvent(new DragEvent(options.action === "drop" ? "drop" : "dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+      }, step);
+      await element.dispose(); }
+      break;
+    case "disable-abilities":
+      await visible("#ob [data-ability]");
+      while (await page.$('#ob [data-ability][aria-checked="true"]')) await click('#ob [data-ability][aria-checked="true"]');
+      break;
+    default: throw new Error(`Unknown scene action: ${step.action}`);
+  }
+  // Let event handlers, microtasks and popover positioning finish between declarative actions.
+  await new Promise(resolve => setTimeout(resolve, 100));
+}

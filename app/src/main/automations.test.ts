@@ -74,6 +74,16 @@ test("calendar switches between day and week and mini dates navigate",async()=>{
   const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-view="calendar"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(7);click('[data-period="day"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);click('[data-mini-date]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);page.hide();
 });
 
+test("calendar chips keep complete compact times and full task details when edited",async()=>{
+  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-view="calendar"]');
+  const chip=page.el.querySelector<HTMLButtonElement>('.au-occurrence')!;
+  expect(chip.querySelector('time')?.textContent).toBe("09:00");
+  expect(chip.title).toContain("Review");expect(chip.title).toContain("09:00");
+  expect(chip.getAttribute("aria-label")).toContain("Alice");
+  chip.click();expect(document.querySelector<HTMLInputElement>("#au-title")!.value).toBe("Review");
+  expect(document.querySelector<HTMLInputElement>("#au-time")!.value).toBe("09:00");page.hide();
+});
+
 test("team cards share the global model and a group menu can rename",async()=>{
   const page=createTeamPage(app());document.body.append(page.el);page.show();await flush();expect(page.el.querySelectorAll('.team-member')).toHaveLength(3);expect(page.el.querySelectorAll('.team-model')).toHaveLength(3);expect(page.el.textContent).toContain("shared-model");click('[data-team="group-menu"]');expect(document.querySelector('#app-popover')!.textContent).toContain("Rename");page.hide();
 });

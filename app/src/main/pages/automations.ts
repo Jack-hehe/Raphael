@@ -1,7 +1,7 @@
 // The owner's routines across the entire team, as a list or a local-time day/week calendar.
 import * as api from "../api";
 import { occurrences } from "../automation-calendar";
-import { describeError } from "../format";
+import { describeError, formatClock } from "../format";
 import { getLocale, onLocaleChange, t } from "../i18n";
 import { dayName, faceHTML, scheduleText } from "../members";
 import { openRoutineDialog } from "../routine-dialog";
@@ -65,7 +65,8 @@ export function createAutomationsPage(app: AppContext): Page {
         const key = dateKey(d), events = all.filter(o => dateKey(new Date(o.at)) === key);
         return `<div class="au-day-col" data-day="${key}">${Array.from({ length: 24 }, (_, h) => `<div class="au-slot" data-slot="${key}" data-hour="${h}"></div>`).join("")}` +
           events.map((o, index) => { const at = new Date(o.at), m = member(o.routine.member_id); const overlaps = events.filter(e => Math.abs(e.at - o.at) < 1800000).length; const lane = events.slice(0, index).filter(e => Math.abs(e.at - o.at) < 1800000).length;
-            return btn(`${o.run ? `<i class="au-history-mark" title="${esc(runStatus(o.run.status))}">${o.run.status === "done" ? "✓" : o.run.status === "skipped" ? "–" : "!"}</i>` : ""}${m ? faceHTML(m, 20) : ""}<span><b>${esc(o.routine.title)}</b><small>${at.toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit" })}</small></span>`, `au-occurrence${o.run ? " is-past" : ""}`, ` ${o.run ? `data-run="${o.run.id}" data-status="${o.run.status}" aria-label="${esc(o.routine.title)} · ${esc(runStatus(o.run.status))}"` : ""} title="${esc(o.routine.title)} · ${esc(at.toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit" }))}" data-au="edit" data-id="${o.routine.id}" style="top:${(at.getHours() + at.getMinutes() / 60) * 64}px;left:calc(${lane * 100 / overlaps}% + 2px);width:calc(${100 / overlaps}% - 4px)"`);
+            const clock = formatClock(o.at), label = [m?.name, o.routine.title, clock, o.run ? runStatus(o.run.status) : ""].filter(Boolean).join(" · ");
+            return btn(`${o.run ? `<i class="au-history-mark" title="${esc(runStatus(o.run.status))}">${o.run.status === "done" ? "✓" : o.run.status === "skipped" ? "–" : "!"}</i>` : ""}${m ? faceHTML(m, 20) : ""}<span class="au-occurrence-copy"><b>${esc(o.routine.title)}</b><time datetime="${at.toISOString()}">${clock}</time></span>`, `au-occurrence${o.run ? " is-past" : ""}`, ` ${o.run ? `data-run="${o.run.id}" data-status="${o.run.status}"` : ""} aria-label="${esc(label)}" title="${esc(label)}" data-au="edit" data-id="${o.routine.id}" style="top:${(at.getHours() + at.getMinutes() / 60) * 64}px;left:calc(${lane * 100 / overlaps}% + 2px);width:calc(${100 / overlaps}% - 4px)"`);
           }).join("") + (key === today ? `<i class="au-now" style="top:${(now.getHours() + now.getMinutes() / 60) * 64}px"></i>` : "") + `</div>`;
       }).join("") + `</div></div></div>`;
   }
