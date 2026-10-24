@@ -271,6 +271,7 @@ export interface MediaPayload {
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
+  conversation_id?: number;
   quote?: MessageQuote | null;
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
   messages?: TurnMessage[];
@@ -387,6 +388,7 @@ export interface BrainSettings {
   owner_about?: string;
   owner_photo?: string;
   skin?: string;
+  action_mode?: "ask" | "direct";
   agent_fallbacks?: string[];
   cleanup_fallbacks?: string[];
   router_fallbacks?: string[];
@@ -552,6 +554,9 @@ export interface DeviceSettings {
 
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
 export type MainEvent =
+  | { type: "ConversationsChanged"; member_id: number }
+  | { type: "QuotaChanged" }
+  | { type: "ActionModeChanged" }
   | { type: "Level"; value: number }
   | { type: "ModelProgress"; name: string; done: number; total: number }
   /** An editor hides its text from UI Automation, so corrections in it cannot be learned. */
@@ -560,6 +565,7 @@ export type MainEvent =
   | { type: "TrayOpen"; page: TrayPage; action?: TrayAction }
   /** A turn of the conversations was written or completed, in the thread of `member_id` (0: Raphael's; none from an older shell). */
   | { type: "AgentTurn"; turn_id: number; member_id?: number }
+  | { type: "RoomsChanged"; room_id: number }
   | { type: "RoutinesChanged"; member_id: number }
   | { type: "MembersChanged" }
   | { type: "ProvidersChanged" }
@@ -584,6 +590,7 @@ export type MainEvent =
 
 /** A YES/NO question of Raphael's that waits for its answer (`AgentQuestion`, `agent_question_open`). */
 export interface AgentQuestion {
+  conversation_id?: number;
   /** The thread that owns this confirmation, including when the page reopens mid-turn. */
   member_id?: number;
   id: string;
@@ -621,6 +628,14 @@ export interface Member {
   instructions: string;
   /** Character and speaking style; absent in older cached member lists. */
   personality?: string;
+  blurb?: string;
+  reply_style?: "full" | "conversational";
+  voice?: string;
+  read_aloud?: boolean;
+  notify?: boolean;
+  ask_before_members?: boolean;
+  pinned?: boolean;
+  hidden?: boolean;
   /** `""`, `"preset:<stem>"` or `"file:<stored name>"`. */
   avatar: string;
   avatar_url?: string;
@@ -672,13 +687,19 @@ export interface NewMember {
   tools?: string[];
   model?: string;
   ui_language?: string;
+  blurb?: string;
+  reply_style?: "full" | "conversational";
+  voice?: string;
+  read_aloud?: boolean;
+  notify?: boolean;
+  ask_before_members?: boolean;
 }
 
 /**
  * What `members.update` may change, beside its `id`: the avatar only as `""` or `"preset:<stem>"`
  * (a picture of the PC goes by `members.set_avatar`).
  */
-export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position">>;
+export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position" | "blurb" | "reply_style" | "voice" | "read_aloud" | "notify" | "ask_before_members" | "pinned" | "hidden">>;
 
 /** An image of the presets folder (`members.presets`): its avatar value, its file stem, and the picture as a data URL. */
 export interface AvatarPreset {
@@ -696,10 +717,27 @@ export interface RoutineOffer {
 }
 
 /** When a routine runs: at a time each day, on days of the week (0 is Sunday) at a time, or every 1 to 24 hours. */
-export type RoutineSchedule =
+export type RoutineSchedule = (
+  | { kind: "once"; time: string }
   | { kind: "daily"; time: string }
+  | { kind: "weekdays"; time: string }
   | { kind: "weekly"; days: number[]; time: string }
-  | { kind: "every"; hours: number };
+  | { kind: "every"; hours: number; time?: string }
+) & { start_date?: string; max_runs?: number; until?: string };
+
+export interface RoutineRun {
+  id: number; routine_id: number; scheduled?: number; started: number; finished: number | null;
+  status: string; turn_id: number | null; summary: string; cost: number;
+}
+export interface Room {
+  id: number; name: string; group_id: number | null; created: number;
+  is_team: number; member_ids: number[];
+}
+export interface RoomMessage {
+  id: number; room_id: number; member_id: number | null; text: string; created: number;
+  request_id: string | null; reply_to: number | null; turn_id: number | null;
+  status: string; cost?: number; attachments?: TurnAttachment[];
+}
 
 /** A routine of `routines.list`. Times are ms; null for never. */
 export interface Routine {
@@ -880,3 +918,7 @@ export interface McpCandidate {
 }
 export interface McpPreview { candidates: McpCandidate[]; rejected: number }
 export interface McpTest { ok: boolean; tools: string[]; error?: string }
+/** Member-owned resources; command templates expand only in the core. */
+export interface MemberSkill { id: number; name: string; description: string; enabled: boolean; source: string }
+export interface MemberCommand { id: number; name: string; description: string; template: string }
+export interface MemberVoice { id: string; name: string }

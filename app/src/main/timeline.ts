@@ -18,7 +18,7 @@ import { quoteHTML } from "./message-quote";
 import { previewCardsHTML } from "./link-previews";
 import { formatClock, formatUsd } from "./format";
 import { SERVICE_ICONS, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
-import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, MessageQuote, TurnAttachment, TurnMessage } from "./types";
+import type { AgentStep, AgentTask, AgentTurn, MainEvent, MediaPayload, MessageQuote, TurnAttachment } from "./types";
 import { btn, esc, ico, iconBtn } from "./ui";
 
 /** The small turning ring of something under way. */
@@ -242,10 +242,6 @@ export const emptyTimelineState = (): TimelineState => ({
 
 /** Whether a turn's steps are open: as the reader left them, else open while its task runs and closed once it is done. */
 export const stepsOpen = (turn: AgentTurn, state: TimelineState): boolean => state.open.get(turn.id) ?? isLive(turn.task);
-
-/** Whether a turn's thinking block is open: open while the turn runs, collapsed once done, unless the reader toggled it. */
-export const isThinkingOpen = (turn: AgentTurn, state: TimelineState): boolean =>
-  state.thinkingOpen?.get(turn.id) ?? (turn.status === "running" || turn.status === "confirm");
 
 /**
  * Before a draw: a task seen under way that has ended since is `ended` for this draw (its check
@@ -574,13 +570,14 @@ function bubbleHTML(words: string, files: readonly TurnAttachment[] | undefined,
   return files?.length ? `<div class="owner-content">${filesHTML(files)}${bubble}</div>` : bubble;
 }
 
-function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel"): string {
+export function messageActionsHTML(time: number, regenerate = false, owner?: "edit" | "cancel", actionable = true): string {
   const action = (icon: Parameters<typeof iconBtn>[0], label: string, act: string): string =>
     iconBtn(icon, label, ` data-act="${act}"`).replace(" title=", " data-tooltip=");
-  return `<div class="message-actions"><time datetime="${esc(new Date(time).toISOString())}">${esc(formatClock(time))}</time>` +
+  return `<div class="message-actions"><time tabindex="0" data-tooltip="${esc(new Date(time).toLocaleString())}" datetime="${esc(new Date(time).toISOString())}">${esc(formatClock(time))}</time>` +
+    (actionable ? action("reply", t("chat.reply"), "reply-message") : "") +
     action("copy", t("chat.copy"), "copy-message") +
     (owner ? action(owner === "edit" ? "pencil" : "x", t(owner === "edit" ? "chat.edit" : "common.cancel"), `${owner}-message`) : "") +
-    (regenerate ? action("refresh", t("chat.regenerate"), "regenerate") : "") + `</div>`;
+    (!owner && actionable ? action("more", t("chat.more"), "more-message").replace('data-act="more-message"', `data-act="more-message" data-regenerate="${regenerate}" aria-haspopup="menu"`) : "") + `</div>`;
 }
 
 function messageBlockHTML(turn: AgentTurn, key: string, text: string, time: number, query: string, state: TimelineState, reply: boolean, regenerate = false): string {
@@ -588,7 +585,7 @@ function messageBlockHTML(turn: AgentTurn, key: string, text: string, time: numb
   return `<div class="chat-message${expanded ? " is-expanded" : ""}" data-message="${esc(key)}"${reply ? ' data-expandable="true"' : ""}>` +
     `<div class="ans${reply ? "" : " progress"}"><div class="message-text">${messageHTML(text, query, reply)}</div></div>` +
     (reply ? btn(esc(t(expanded ? "chat.showLess" : "chat.showAll")), "sm message-expand", ` data-act="expand-message" aria-expanded="${expanded}"${text.split("\n").length > 30 || text.length > 3000 || expanded ? "" : " hidden"}`) : "") +
-    messageActionsHTML(time, regenerate) + (reply ? previewCardsHTML(text) : "") + `</div>`;
+    messageActionsHTML(time, regenerate, undefined, reply) + (reply ? previewCardsHTML(text) : "") + `</div>`;
 }
 
 /** Validates an http(s) URL; returns null for any other scheme or invalid URL. */
@@ -666,45 +663,25 @@ export function parseMediaPayload(raw: string): MediaPayload | null {
   }
 }
 
-/** Elapsed thinking time in whole seconds (at least 1s) for the collapsed `思考了 N 秒` header. */
-export function thinkingSeconds(turn: AgentTurn, thinkingMsgs: readonly TurnMessage[]): number {
-  const times = thinkingMsgs.map((m) => m.at_ms).filter((ms) => typeof ms === "number" && ms > 0);
-  if (times.length > 0) {
-    const first = Math.min(...times);
-    const last = Math.max(...times);
-    const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
-    const lastThinkSeq = Math.max(...thinkingMsgs.map((m) => m.seq));
-    const nextMsg = ordered.find((m) => m.seq > lastThinkSeq && m.at_ms >= last);
-    const start = turn.created_at_ms > 0 && turn.created_at_ms <= first ? turn.created_at_ms : first;
-    const end = nextMsg && nextMsg.at_ms > last ? nextMsg.at_ms : last;
-    const spanMs = end - start;
-    if (spanMs >= 500) return Math.max(1, Math.round(spanMs / 1000));
-  }
-  const stepMs = (turn.steps ?? []).reduce((sum, s) => sum + (s.ms > 0 ? s.ms : 0), 0);
-  if (stepMs >= 500) return Math.max(1, Math.round(stepMs / 1000));
-  return Math.max(1, thinkingMsgs.length * 2);
-}
-
-/** One collapsible `思考過程` block per turn: open with a live shimmer while running, collapsed to `思考了 N 秒` when done. */
-function thinkingBlockHTML(turn: AgentTurn, thinkingMsgs: readonly TurnMessage[], state: TimelineState, query: string): string {
-  const running = turn.status === "running" || turn.status === "confirm";
-  const queryMatch = query.trim() !== "" && thinkingMsgs.some((m) => highlightHTML(m.text, query).includes("<mark>"));
-  const open = queryMatch || isThinkingOpen(turn, state);
-  const secs = thinkingSeconds(turn, thinkingMsgs);
-  const headText = running ? t("agent.thinkingProcess") : t("agent.thoughtFor", { p0: secs });
-  const bodyId = `tn-think-${esc(turn.id)}`;
-  const toggle = btn(
-    `<span class="think-label${running ? " shimmer" : ""}">${esc(headText)}</span><span class="steps-chev">${ico("down")}</span>`,
-    "think-toggle",
-    ` data-act="thinking" aria-expanded="${open}" aria-controls="${bodyId}"`,
-  );
-  const lines = thinkingMsgs.map((m) => `<div class="chat-message" data-message="${esc(m.seq)}"><p class="think-line">${messageHTML(m.text.trim(), query)}</p>${messageActionsHTML(m.at_ms)}</div>`).join("");
-  return (
-    `<div class="think-box${open ? " is-open" : ""}${running ? " is-live" : ""}" data-thinking-turn="${esc(turn.id)}">` +
-    toggle +
-    `<div class="think-body" id="${bodyId}"${open ? "" : " hidden"}>${lines}</div>` +
-    `</div>`
-  );
+/** Keep all work behind one closed chip; running turns show their latest public update. */
+function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, exchanges = ""): string {
+  const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && m.text.trim());
+  if (!messages.length && !exchanges && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
+  const live = turn.status === "running" || isLive(turn.task);
+  const firstReply = (turn.messages ?? []).find(m => m.kind === "reply" && m.at_ms >= turn.created_at_ms)?.at_ms;
+  const end = live ? state.nowMs : turn.task?.finished_at_ms ?? firstReply ?? Math.max(turn.created_at_ms, ...messages.map(m => m.at_ms), ...(turn.steps ?? []).map(step => step.at_ms + step.ms));
+  const seconds = Math.max(0, Math.round((end - turn.created_at_ms) / 1000));
+  const open = state.thinkingOpen.get(turn.id) ?? false;
+  const latest = [...messages].reverse().find(m => m.kind === "progress" || m.kind === "thinking");
+  const label = live
+    ? `<span class="work-latest">${esc(latest?.text ?? t("agent.thinking"))}</span><span class="work-time">${esc(t("chat.workingFor", { p0: seconds }))}</span>`
+    : `<span>${esc(t("chat.workedFor", { p0: seconds }))}</span>`;
+  const indicator = live ? `<span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span>` : ico("check");
+  const body = messages.map(m => `<div class="chat-message" data-message="${m.seq}"><div class="${m.kind === "event" ? "turn-event" : "work-progress"}">${messageHTML(m.text, query)}</div></div>`).join("") + exchanges +
+    ((turn.steps?.length ?? 0) > 0 ? `<ol class="step-list">${shownSteps(turn).map(step => stepHTML(step, false)).join("")}</ol>` : "");
+  return `<div class="work-section think-box${open ? " is-open" : ""}${live ? " is-live" : ""}" data-thinking-turn="${turn.id}">` +
+    btn(`${indicator}${label}<span class="work-chevron">${ico("right")}</span>`, "work-toggle", ` data-act="thinking" aria-expanded="${open}" aria-controls="work-${turn.id}"`) +
+    `<div class="work-body think-body" id="work-${turn.id}"${open ? "" : " hidden"}>${body}</div></div>`;
 }
 
 /** An inline media card (`link`, `image`, `video`, or `pdf`) with a safe `在網站開啟` action button. */
@@ -779,37 +756,18 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
 function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined, regenerate: boolean, inner = ""): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
-  const thinkingMsgs = ordered.filter((m) => m.kind === "thinking" && m.text.trim() !== "");
-  let thinkingDrawn = false;
   const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
-  // what the members said while the turn was answered comes just before its answer
-  const html = ordered
-    .map((message) => {
-      const text = message.text.trim();
-      if (!text) return "";
-      if (message.kind === "thinking") {
-        if (thinkingDrawn || thinkingMsgs.length === 0) return "";
-        thinkingDrawn = true;
-        return thinkingBlockHTML(turn, thinkingMsgs, state, query);
-      }
-      if (message.kind === "event") {
-        const isRoutine = text.includes(t("members.routineLine")) || /routine/i.test(text);
-        const icon = isRoutine ? ico("repeat") : ico("check");
-        return `<div class="chat-message" data-message="${esc(message.seq)}"><div class="turn-event" data-seq="${esc(message.seq)}">${icon}<span>${messageHTML(text, query)}</span></div>${messageActionsHTML(message.at_ms)}</div>`;
-      }
-      if (message.kind === "media") {
-        const media = parseMediaPayload(text);
-        return media ? `<div class="chat-message" data-message="${esc(message.seq)}">${mediaCardHTML(media, query, message.seq)}${messageActionsHTML(message.at_ms)}</div>` : messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, false);
-      }
-      if (message.kind === "progress") {
-        return `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, false)}</div>`;
-      }
-      const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
-      return (message.seq === lastReply ? inner : "") +
-        `<div data-seq="${esc(message.seq)}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
-    })
-    .join("");
-  return lastReply === undefined ? html + inner : html;
+  const work = workSectionHTML(turn, state, query, inner);
+  return work + ordered.filter(message => message.kind === "reply" || message.kind === "media").map(message => {
+    const text = message.text.trim();
+    if (!text) return "";
+    if (message.kind === "media") {
+      const media = parseMediaPayload(text);
+      return media ? `<div class="chat-message" data-message="${message.seq}">${mediaCardHTML(media, query, message.seq)}</div>` : "";
+    }
+    const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
+    return `<div data-seq="${message.seq}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
+  }).join("");
 }
 
 /** The line of an exchange, named and faced after the member on its other side. */
@@ -862,10 +820,10 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span><div class="ra-body">` +
     (hasMsgs
       ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
-      : (turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
-        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "") +
+      : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
+        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "")) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
-    (live || revealing ? typingHTML() : "") +
+    (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +
     more +
     taskActionsHTML(turn, state) +

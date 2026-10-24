@@ -88,11 +88,12 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
     if (!trace && report) html += tiles(report.summary) + `<h3>${t("runs.where")}</h3><div class="run-groups"><section class="run-members"><h4>${t("runs.member")}</h4>${bars("member")}</section><section><div class="run-segments">` +
       tabs((["model", "day", "provider", "routine"] as RunGrouping[]).map(g => ({id:g,label:t(groupKey[g]),attrs:` data-run-group="${g}" tabindex="${grouping === g ? 0 : -1}"`})),grouping,{label:t("runs.where"),kind:"nav"}) + `</div>${bars(grouping)}</section></div>` +
       `<section class="run-list"><h3>${t("runs.title")}</h3><div class="run-card">${report.runs.length ? report.runs.map(run => `<button type="button" class="btn run-row" data-run-id="${run.id}" data-run-kind="${run.kind}">` +
-        faceHTML({ id: run.member_id, name: run.member_name, avatar_url: run.avatar_url }, 32) + `<span class="run-row-copy"><strong>${esc(run.title || t("runs.noTitle"))}</strong><small>${esc(memberName(run.member_id,run.member_name))} · ${esc(time(run.at_ms))}</small>${modelHTML(run.model)}</span><span class="run-row-numbers"><span>${duration(run.duration_ms)}</span><small>${formatUsd(run.cost_usd)}</small></span><span class="run-chevron" aria-hidden="true">${ico("right")}</span></button>`).join("") : `<p class="ua-empty">${t("runs.empty")}</p>`}</div>` +
+        faceHTML({ id: run.member_id, name: run.member_name, avatar_url: run.avatar_url }, 32) + `<span class="run-row-copy"><strong>${esc(run.title || t("runs.noTitle"))}</strong><small>${esc(memberName(run.member_id,run.member_name))} · ${esc(time(run.at_ms))}${run.status ? ` · ${esc(t(run.status === "done" ? "auto.done" : run.status === "running" || run.status === "confirm" ? "auto.running" : run.status === "skipped" ? "auto.skipped" : "auto.error"))}` : ""}</small>${modelHTML(run.model)}</span><span class="run-row-numbers"><span>${duration(run.duration_ms)}</span><small>${formatUsd(run.cost_usd)}</small></span><span class="run-chevron" aria-hidden="true">${ico("right")}</span></button>`).join("") : `<p class="ua-empty">${t("runs.empty")}</p>`}</div>` +
       (report.runs.length < report.total ? btn(t("runs.loadMore"), ` data-run-act="more"${busy ? " disabled" : ""}`) : "") + `</section><p class="ua-note">${t("runs.legacy")}</p>`;
     if (busy) html += `<p role="status" class="ua-status">${t("usage.loading")}</p>`;
     if (error) html += `<p role="alert">${esc(error)}</p>${btn(t("usage.retry"), ' data-run-act="retry"')}`;
     if (!trace) html += `<section class="run-allowance"><header><h3>${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
+      (allowance.quotas ?? []).map(quota => `<div class="run-window"><h4>${esc(({codex:"Codex CLI",claude:"Claude",gemini:"Gemini"} as Record<string,string>)[quota.provider] ?? quota.provider)}</h4><strong>${t("runs.exhausted")}</strong><small>${quota.reset_at_ms ? `${t("runs.resets")} ${esc(time(quota.reset_at_ms))}` : t("runs.resetUnknown")}</small></div>`).join("") +
       allowance.brains.map(brain => `<h4>${esc(brain.name)}</h4>${brain.windows.map(w => `<div class="run-window"><span>${t(w.period === "fiveHour" ? "runs.fiveHour" : "runs.weekly")}</span><strong>${w.remaining_percent}% ${t("runs.remaining")}</strong><div class="run-bar-track" role="progressbar" aria-label="${esc(brain.name)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w.remaining_percent}"><i style="width:${Math.min(100,Math.max(0,w.remaining_percent))}%"></i></div>` +
         (w.resets_at ? `<small>${t("runs.resets")} ${esc(time(w.resets_at * 1000))}</small>` : "") + `</div>`).join("")}`).join("") + `</section>`;
     root.innerHTML = html;
@@ -135,7 +136,7 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
     } else if (button.dataset.runGroup) { grouping = button.dataset.runGroup as RunGrouping; render(); }
     else if (button.dataset.runId) {
       const current = ++revision; busy = true; error = ""; render();
-      try { const result = await api.usageTrace({ kind: button.dataset.runKind as "turn" | "task", id: Number(button.dataset.runId) }); if (current === revision && !disposed) trace = result; }
+      try { const result = await api.usageTrace({ kind: button.dataset.runKind as "turn" | "task" | "routine", id: Number(button.dataset.runId) }); if (current === revision && !disposed) trace = result; }
       catch (e) { if (current === revision) error = describeError(e); }
       if (current === revision) { busy = false; render(); if (trace) root.scrollIntoView?.({ block: "start" }); }
     }
@@ -156,5 +157,5 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onTra
     if (!disposed) { onModels(models); render(); }
   });
   const ready = Promise.all([refresh(), allowances(), metadata]).then(() => {});
-  return { ready, refresh: () => refresh(), destroy() { disposed = true; ++revision; stopLocale(); root.removeEventListener("click", click); root.removeEventListener("keydown",key); root.remove(); } };
+  return { ready, refresh: async () => { await Promise.all([refresh(), allowances()]); }, destroy() { disposed = true; ++revision; stopLocale(); root.removeEventListener("click", click); root.removeEventListener("keydown",key); root.remove(); } };
 }

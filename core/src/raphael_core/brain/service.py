@@ -299,6 +299,7 @@ class Brain:
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
         self._notify_settings = lambda: router.notify("settings.changed", {})
+        self._notify_action_mode = lambda: router.notify("action_mode.changed", {})
         if self._providers:
             self._notify_providers = lambda: router.notify("providers.changed", {})
         methods = {
@@ -592,6 +593,8 @@ class Brain:
             if key == "vision_model":
                 self._check_vision_model(value)
             self._settings.set(key, value)
+        if key == "action_mode":
+            self._notify_action_mode()
         if key == "history_retention_days":
             self._prune_history()
         self._notify_settings()

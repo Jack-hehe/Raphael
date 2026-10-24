@@ -3,14 +3,14 @@ import { expect, test } from "vitest";
 import { createNavigationPage, registerNavigationPages } from "./navigation-pages";
 import type { AppContext, Page } from "./types";
 
-test("the rail has stable destinations before and after the other worktree registers its pages", () => {
+test("both rail destinations use their registered production factories", () => {
   const ctx = {} as AppContext;
-  const fallback = createNavigationPage("team", ctx);
-  fallback.show();
-  expect(fallback.id).toBe("team");
-  expect(fallback.el.textContent).toContain("團隊");
-  const page = { id: "team", el: document.createElement("section"), show() {}, hide() {} } as Page;
-  registerNavigationPages({ team: received => { expect(received).toBe(ctx); return page; } });
-  expect(createNavigationPage("team", ctx)).toBe(page);
-  expect(createNavigationPage("automations", ctx).id).toBe("automations");
+  const page = (id: "team" | "automations") => ({ id, el: document.createElement("section"), show() {}, hide() {} }) as Page;
+  const team = page("team"), automations = page("automations");
+  registerNavigationPages({
+    team: received => { expect(received).toBe(ctx); return team; },
+    automations: received => { expect(received).toBe(ctx); return automations; },
+  });
+  expect(createNavigationPage("team", ctx)).toBe(team);
+  expect(createNavigationPage("automations", ctx)).toBe(automations);
 });

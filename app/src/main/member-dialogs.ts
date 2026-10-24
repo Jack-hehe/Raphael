@@ -9,24 +9,19 @@
 // focus back to what had it. What a person types goes into the page through `esc` only.
 
 import { t } from "./i18n";
+import { openMemberProfile } from "./member-profile";
+export { openEditMemberDialog, openMemberProfile } from "./member-profile";
+export type { MemberProfileHost, ProfileTab } from "./member-profile";
 import { isTopLayer, registerDismissal } from "./dismissals";
-import { describeError } from "./format";
 import {
   GROUP_NAME_MAX,
-  INSTRUCTIONS_MAX,
-  NAME_MAX,
-  PERSONALITY_MAX,
-  ROLE_MAX,
   cleanName,
-  faceHTML,
-  initialOf,
-  isMemberNameTaken,
   parseSource,
   scheduleText,
   sourceLabel,
 } from "./members";
-import type { AvatarPreset, MemberGroup, MemberSource, NewMember, RoutineOffer, WireAttachment } from "./types";
-import { type ActionRowOptions, actionRow, btn, closeMenu, esc, ico, iconButton, openMenu, openPopover, sel, toaster } from "./ui";
+import type { AvatarPreset, Member, MemberGroup, MemberSource, NewMember, RoutineOffer, WireAttachment } from "./types";
+import { type ActionRowOptions, actionRow, btn, closeMenu, esc, ico, iconButton, openPopover, toaster } from "./ui";
 
 // ---------- the dialog ----------
 
@@ -97,7 +92,7 @@ export function openDialog(o: DialogOptions): Dialog {
         ...dialog.el.querySelectorAll<HTMLElement>(
           'button:not(:disabled), input:not([type=file]):not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
         ),
-      ];
+      ].filter(element => !element.closest("[hidden]"));
       if (stops.length === 0) return;
       const first = stops[0]!;
       const last = stops[stops.length - 1]!;
@@ -176,7 +171,7 @@ export function offerRoutine(offer: RoutineOffer): Promise<boolean> {
 }
 
 /** A group's name: a new group's (`title` 新增分組) or a new name. Resolves with the name, or null when it is left. */
-export function askGroupName(title: string, current = ""): Promise<string | null> {
+export function askGroupName(title: string, current = "", label = t("members.groupName")): Promise<string | null> {
   return new Promise((resolve) => {
     let result: string | null = null;
     const save = (dialog: Dialog): void => {
@@ -192,7 +187,7 @@ export function askGroupName(title: string, current = ""): Promise<string | null
     };
     openDialog({
       title,
-      body: field("mb-group-name", t("members.groupName"), current, GROUP_NAME_MAX),
+      body: field("mb-group-name", label, current, GROUP_NAME_MAX),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(current ? t("members.save") : t("members.create")), attrs: ' data-dlg="save"' } },
       onAct(act, _target, dialog) {
         if (act === "save") save(dialog);
@@ -323,8 +318,11 @@ export function pickPicture(then: (file: File) => void): void {
       const file = picker?.files?.[0];
       if (file && picked) picked(file);
     });
-    document.body.append(picker);
   }
+  // The native chooser starts with a synthetic click. Keep its hidden input inside the active
+  // modal so the shared outside-click dismissal does not consume that click and close it.
+  const dialogs = document.querySelectorAll<HTMLElement>(".mb-dialog");
+  (dialogs[dialogs.length - 1] ?? document.body).append(picker);
   picked = then;
   picker.value = "";
   picker.click();
@@ -388,7 +386,7 @@ export interface NewMemberOptions {
   /** The names already taken (the names are unique). */
   taken: readonly string[];
   /** Makes the member; true when it was made and the dialog may close. */
-  create(result: NewMemberResult): Promise<boolean>;
+  create(result: NewMemberResult): Promise<boolean | Member>;
 }
 
 /** The value of a group in the dropdowns: its id, or `none` for 未分組. */
@@ -403,123 +401,5 @@ export const groupChoices = (groups: readonly MemberGroup[]): { value: string; l
 
 /** 新增成員, the mockup's `new-member`. */
 export function openNewMember(o: NewMemberOptions): Dialog {
-  let groupId = o.groupId;
-  let avatar = "";
-  let picture: WireAttachment | null = null;
-  let pictureUrl: string | null = null;
-  let busy = false;
-  const groupOf = (): MemberGroup | undefined => o.groups.find((group) => group.id === groupId);
-
-  const dialog = openDialog({
-    title: t("members.newMember"),
-    cls: "mb-new",
-    body:
-      `<div class="mb-new-face"><span class="mb-new-av"></span>${btn(esc(t("members.changeAvatar")), "sm", ' data-dlg="avatar" aria-haspopup="menu" aria-expanded="false"')}</div>` +
-      field("mb-new-name", t("members.name"), "", NAME_MAX) +
-      field("mb-new-role", t("members.role"), "", ROLE_MAX) +
-      `<label class="mb-frow mb-frow-top" for="mb-new-personality"><span>${esc(t("members.personality"))}</span>` +
-      `<textarea id="mb-new-personality" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}"></textarea></label>` +
-      `<label class="mb-frow mb-frow-top" for="mb-new-instr"><span>${esc(t("members.instructions"))}</span>` +
-      `<textarea id="mb-new-instr" class="mb-fin mb-ta" rows="3" maxlength="${INSTRUCTIONS_MAX}"></textarea></label>` +
-      `<div class="mb-frow"><span>${esc(t("members.group"))}</span><span class="mb-new-group"></span></div>`,
-    actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.create")), attrs: ' data-dlg="create"' } },
-    canClose: () => !busy,
-    onEnter: () => void create(),
-    onAct(act, target) {
-      if (busy) return;
-      if (act === "cancel") dialog.close();
-      else if (act === "create") void create();
-      else if (act === "avatar") avatarMenu(target);
-      else if (act === "group") {
-        openMenu(target, groupChoices(o.groups), groupValue(groupId), (value) => {
-          groupId = groupFromValue(value);
-          draw();
-        });
-      }
-    },
-  });
-  const nameInput = dialog.el.querySelector<HTMLInputElement>("#mb-new-name")!;
-  const face = dialog.el.querySelector<HTMLElement>(".mb-new-av")!;
-
-  function drawFace(): void {
-    face.innerHTML = faceHTML({ id: -1, name: nameInput.value, avatar_url: pictureUrl }, 64);
-  }
-
-  function draw(): void {
-    drawFace();
-    const group = groupOf();
-    dialog.el.querySelector<HTMLElement>(".mb-new-group")!.innerHTML = sel(
-      groupChoices(o.groups),
-      groupValue(group ? group.id : null),
-      t("members.group"),
-      ' data-dlg="group"',
-    );
-  }
-
-  function avatarMenu(anchor: HTMLElement): void {
-    openAvatarPicker(anchor, {
-      presets: o.presets,
-      onPreset(value) {
-        avatar = value;
-        picture = null;
-        pictureUrl = o.presets.find((preset) => preset.avatar === value)?.url ?? null;
-        drawFace();
-      },
-      onComputer: () =>
-        pickPicture((file) =>
-          void readPicture(file).then((read) => {
-            if (!read) return;
-            picture = read;
-            avatar = "";
-            pictureUrl = `data:${read.mime};base64,${read.data}`;
-            drawFace();
-          }),
-        ),
-    });
-  }
-
-  async function create(): Promise<void> {
-    if (busy) return;
-    const name = cleanName(nameInput.value);
-    if (name === "") {
-      toaster.info(t("members.nameEmpty"));
-      nameInput.focus();
-      return;
-    }
-    if (isMemberNameTaken(name, o.taken)) {
-      toaster.info(t("members.nameTaken", { p0: name }));
-      nameInput.focus();
-      return;
-    }
-    const group = groupOf();
-    const member: NewMember = {
-      name,
-      role: cleanName(dialog.el.querySelector<HTMLInputElement>("#mb-new-role")!.value),
-      personality: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-personality")!.value.trim(),
-      instructions: dialog.el.querySelector<HTMLTextAreaElement>("#mb-new-instr")!.value.trim(),
-      group_id: group ? group.id : null,
-      ...(avatar ? { avatar } : {}),
-    };
-    busy = true;
-    dialog.el.querySelectorAll<HTMLButtonElement>(".mb-dlg-act .btn").forEach((button) => (button.disabled = true));
-    let made = false;
-    try {
-      made = await o.create({ member, picture });
-    } catch (err) {
-      toaster.info(describeError(err));
-    }
-    busy = false;
-    if (made) dialog.close();
-    else {
-      dialog.el.querySelectorAll<HTMLButtonElement>(".mb-dlg-act .btn").forEach((button) => (button.disabled = false));
-      if (!dialog.el.contains(document.activeElement)) nameInput.focus();
-    }
-  }
-
-  nameInput.addEventListener("input", () => {
-    const letter = face.querySelector(".mb-av-letter");
-    if (letter) letter.textContent = initialOf(nameInput.value);
-  });
-  draw();
-  return dialog;
+  return openMemberProfile(o);
 }

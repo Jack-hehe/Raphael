@@ -12,8 +12,10 @@
 // `columnHTML` draws the list from a snapshot (pure, so its rules can be tested without a browser);
 // `createMemberColumn` keeps the search and the folded groups and hands the clicks over.
 
+import { createRoomsSection, openNewGroupChat } from "./group-chats";
 import { t } from "./i18n";
-import { type MemberSection, faceHTML, memberSections, previewOf, raphaelOf } from "./members";
+import { createMessageSearch } from "./message-search";
+import { type MemberSection, faceHTML, memberMatches, memberSections, previewOf, raphaelOf } from "./members";
 import type { Member, MembersList } from "./types";
 import { closeMenu, esc, ico, iconButton, openPopover } from "./ui";
 
@@ -43,7 +45,7 @@ export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "p
     `<div class="mb-item${v.fresh.has(member.id) ? " is-new" : ""}" data-member-item="${member.id}">` +
     `<button type="button" class="nav mb-row" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
     faceHTML(member, 34) +
-    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${member.role ? `<i>${esc(member.role)}</i>` : ""}</span>` +
+    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${member.pinned ? `<span class="mb-pin" aria-label="${esc(t("members.sidePinned"))}">${ico("pin")}</span>` : ""}${member.role ? `<i>${esc(member.role)}</i>` : ""}</span>` +
     (preview.text ? `<span class="mb-row-p${preview.waiting ? " is-wait" : ""}">${esc(preview.text)}</span>` : "") +
     `</span>${dot}</button>` +
     iconButton("more", t("members.more", { p0: member.name }), ` data-member-more="${member.id}" aria-haspopup="menu" aria-expanded="false" data-k="member-more:${member.id}"`, "mb-more") +
@@ -73,7 +75,9 @@ function sectionHTML(section: MemberSection, v: ColumnView): string {
 /** The list under the search: Raphael, the groups, 未分組; or a line that nothing matches. */
 export function columnHTML(v: ColumnView): string {
   const raphael = raphaelOf(v.list);
-  const sections = memberSections(v.list ?? { members: [], groups: [] }, v.query);
+  const all = v.list ?? { members: [], groups: [] };
+  const pinned = all.members.filter(m => m.id !== 0 && m.pinned && !m.hidden && memberMatches(m, v.query));
+  const sections = memberSections({ ...all, members: all.members.filter(m => !m.pinned) }, v.query);
   const searching = v.query.trim() !== "";
   const chief =
     `<button type="button" class="nav mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0">` +
@@ -81,15 +85,19 @@ export function columnHTML(v: ColumnView): string {
     `<b>${esc(raphael.name)}</b>` +
     (raphael.waiting ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>` : "") +
     `</button>`;
-  return chief + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
+  return (!searching || memberMatches(raphael, v.query) ? chief : "") + (pinned.length ? `<div class="mb-pinned">${pinned.map(m => memberRowHTML(m, v)).join("")}</div>` : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && sections.length === 0 && pinned.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
 }
 
 export interface ColumnHost {
+  openMessage?(member: number, conversation: number, turn: number): void;
   view(): Omit<ColumnView, "query" | "folded">;
   /** Opens the thread of member `id`. */
   select(id: number): void;
   newMember(groupId: number | null): void;
   newGroup(): void;
+  newConversation?(): void;
+  newGroupChat?(): void;
+  memberAction?(id: number, action: string): void;
   /** 移到分組 chose a group for member `id` (null: 未分組). */
   moveMember(id: number, groupId: number | null, anchor: HTMLElement): void;
   deleteMember(id: number): void;
@@ -101,8 +109,11 @@ export interface ColumnHost {
 export interface MemberColumn {
   readonly el: HTMLElement;
   draw(): void;
+  /** The same cross-conversation search, available when the column is hidden on narrow windows. */
+  openSearch(anchor: HTMLElement): void;
   /** The search's words now. */
   query(): string;
+  menu(id: number, anchor: HTMLElement): void;
 }
 
 /** A menu of plain items under `anchor`; `onPick` gets the chosen item's `id`. */
@@ -143,6 +154,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     iconButton("plus", t("members.add"), ' data-col="add" aria-haspopup="menu" aria-expanded="false"', "mb-tool") +
     `</div>` +
     `<nav class="mb-scroll"><div class="mb-list"></div></nav>`;
+  el.querySelector(".mb-scroll")!.append(createRoomsSection());
   const find = el.querySelector<HTMLElement>(".mb-find")!;
   const findInput = el.querySelector<HTMLInputElement>(".mb-find-input")!;
   const searchButton = el.querySelector<HTMLElement>('[data-col="search"]')!;
@@ -151,6 +163,15 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   const nav = el.querySelector<HTMLElement>(".mb-scroll")!;
   let query = "";
   const folded = new Set<number>();
+  const search = createMessageSearch(list, {
+    name: id => (id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id))?.name ?? "",
+    face: id => {
+      const members = host.view().list;
+      const member = id === 0 ? raphaelOf(members) : members?.members.find(member => member.id === id);
+      return member ? faceHTML(member, 34) : "";
+    },
+    open: (member, conversation, turn) => host.openMessage?.(member, conversation, turn),
+  });
 
   function draw(): void {
     nav.setAttribute("aria-label", t("members.title"));
@@ -161,11 +182,11 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
       button.setAttribute("aria-label", label);
       button.title = label;
     }
-    findInput.placeholder = t("members.search");
-    findInput.setAttribute("aria-label", t("members.search"));
+    findInput.placeholder = t("chat.searchAll");
+    findInput.setAttribute("aria-label", t("chat.searchAll"));
     const focusKey = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-k]");
     const key = focusKey && list.contains(focusKey) ? focusKey.dataset.k : undefined;
-    list.innerHTML = columnHTML({ ...host.view(), query, folded });
+    search.draw(query, columnHTML({ ...host.view(), query, folded }));
     if (key) list.querySelector<HTMLElement>(`[data-k="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
   }
 
@@ -184,17 +205,20 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   }
 
   function memberMenu(id: number, anchor: HTMLElement): void {
-    openActions(
-      anchor,
-      [
-        { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
-        { id: "delete", label: t("members.delete"), icon: "trash" },
-      ],
-      (pick) => {
-        if (pick === "move") host.moveMember(id, null, anchor);
-        else host.deleteMember(id);
-      },
-    );
+    const member = host.view().list?.members.find(m => m.id === id);
+    openActions(anchor, [
+      { id: "pin", label: t(member?.pinned ? "members.sideUnpin" : "members.sidePin"), icon: "pin" },
+      { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
+      { id: "unread", label: t("members.sideUnread"), icon: "chat" },
+      { id: "read-all", label: t("members.sideReadAll"), icon: "check" },
+      { id: "edit", label: t("members.sideEdit"), icon: "pencil" },
+      { id: "duplicate", label: t("members.sideDuplicate"), icon: "copy" },
+      { id: "clear", label: t("members.sideClear"), icon: "trash" },
+      { id: "hide", label: t("members.sideHide"), icon: "eyeOff" },
+    ], pick => {
+      if (pick === "move") host.moveMember(id, null, anchor);
+      else host.memberAction?.(id, pick);
+    });
   }
 
   function groupMenu(id: number, anchor: HTMLElement): void {
@@ -221,10 +245,18 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
       return openActions(
         addButton,
         [
-          { id: "member", label: t("members.newMember"), icon: "plus" },
+          { id: "conversation", label: t("members.sideNewConversation"), icon: "chat" },
+          { id: "member", label: t("members.newMember") + "  Ctrl+N", icon: "plus" },
           { id: "group", label: t("members.newGroup"), icon: "folder" },
+          { id: "group-chat", label: t("members.sideNewGroupChat"), icon: "chat" },
         ],
-        (pick) => (pick === "member" ? host.newMember(null) : host.newGroup()),
+        pick => {
+          if (pick === "member") host.newMember(null);
+          else if (pick === "conversation") host.newConversation?.();
+          else if (pick === "group") host.newGroup();
+          else if (host.newGroupChat) host.newGroupChat();
+          else void openNewGroupChat();
+        },
       );
     }
     const more = target.closest<HTMLElement>("[data-member-more]");
@@ -272,5 +304,26 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     }
   });
 
-  return { el, draw, query: () => query };
+  function openSearch(anchor: HTMLElement): void {
+    const panel = openPopover(anchor, '<div class="conversation-tools"><input type="search"></div><div class="conversation-rows page-agent"></div>', { className: "menu conversation-picker conversation-search", role: "dialog", label: t("chat.searchAll") });
+    const input = panel.querySelector<HTMLInputElement>("input")!;
+    input.placeholder = t("chat.searchAll"); input.setAttribute("aria-label", t("chat.searchAll"));
+    const results = panel.querySelector<HTMLElement>(".conversation-rows")!;
+    const lookup = createMessageSearch(results, {
+      name: id => (id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id))?.name ?? "",
+      face: id => {
+        const member = id === 0 ? raphaelOf(host.view().list) : host.view().list?.members.find(member => member.id === id);
+        return member ? faceHTML(member, 34) : "";
+      },
+      open: (member, conversation, turn) => { closeMenu(); host.openMessage?.(member, conversation, turn); },
+    });
+    const redraw = (): void => lookup.draw(input.value, columnHTML({ ...host.view(), query: input.value, folded }));
+    input.addEventListener("input", redraw);
+    results.addEventListener("click", event => {
+      const member = (event.target as Element).closest<HTMLElement>("[data-member]")?.dataset.member;
+      if (member !== undefined) { closeMenu(); host.select(Number(member)); }
+    });
+    redraw(); input.focus();
+  }
+  return { el, draw, openSearch, query: () => query, menu: memberMenu };
 }

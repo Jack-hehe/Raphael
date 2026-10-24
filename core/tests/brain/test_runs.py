@@ -72,3 +72,32 @@ async def test_calendar_period_starts_at_local_midnight(runs, conn):
     assert (await runs.read({'range':'month','tz':'Asia/Taipei'}))['total'] == 1
     assert (await runs.read({'range':'month','tz':'UTC'}))['total'] == 0
     assert (await runs.read({'range':'week','tz':'UTC'}))['start_day'] == '2026-10-19'
+
+
+async def test_routine_runs_use_record_cost_and_metadata_without_counting_the_linked_task(runs, conn):
+    conn.execute("INSERT INTO routines(id,member_id,title,prompt,schedule,next_run_ms,created_at_ms) VALUES(1,0,'Daily review','Review','{}',0,0)")
+    conn.execute("INSERT INTO agent_turns(id,created_at_ms,session_id,question,route,prefix,text,status,cost_usd) VALUES(2,?,'r','Report','routine','','ok','done',0.07)", (at('2026-10-24'),))
+    conn.execute("INSERT INTO worker_tasks(id,created_at_ms,state,session_id,turn_id,language,text,cost_usd,routine_id) VALUES(1,?,'done','r',2,'en','Review',0.07,1)", (at('2026-10-24'),))
+    conn.execute("INSERT INTO routine_runs(id,routine_id,started,finished,status,turn_id,cost) VALUES(1,1,?,?,'done',2,.07)", (at('2026-10-24'), at('2026-10-24')+3000))
+    conn.execute("INSERT INTO run_metrics VALUES('task',1,?,?,42,1,'[]')", (at('2026-10-24'), at('2026-10-24')+2000))
+    result = await runs.read({'range':'all'})
+    assert result['total'] == 2
+    assert result['summary']['cost_usd'] == pytest.approx(.1)
+    routine = next(row for row in result['runs'] if row['kind'] == 'routine')
+    assert (routine['title'], routine['routine'], routine['tokens']) == ('Daily review', 'Daily review', 42)
+    assert any(group['label'] == 'Daily review' and group['runs'] == 1 for group in result['groups']['routine'])
+    trace = await runs.trace({'kind':'routine','id':1})
+    assert trace['run']['tokens'] == 42
+    assert trace['run']['status'] == 'done'
+
+
+async def test_routine_run_without_retained_turn_still_has_cost_status_and_trace(runs, conn):
+    conn.execute("INSERT INTO routines(id,member_id,title,prompt,schedule,next_run_ms,created_at_ms) VALUES(1,0,'Daily review','Review','{}',0,0)")
+    conn.execute("INSERT INTO routine_runs(id,routine_id,started,finished,status,cost) VALUES(3,1,?,?,'error',.02)", (at('2026-10-24'), at('2026-10-24')+3000))
+    result = await runs.read({'range':'all'})
+    assert result['total'] == 2
+    trace = await runs.trace({'kind':'routine','id':3})
+    assert trace['run']['duration_ms'] == 3000
+    assert trace['run']['cost_usd'] == .02
+    assert trace['summary']['errors'] == 1
+    assert trace['spans'] == []

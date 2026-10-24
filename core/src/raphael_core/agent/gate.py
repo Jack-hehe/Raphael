@@ -87,9 +87,12 @@ class ToolGate:
     ) -> None:
         self._plugins = plugins
         self._safety = safety
+        from ..brain.settings import SettingsStore
+        self._settings = None if conn is None else SettingsStore(conn)
         self._registry = ToolRegistry(
             {name: command.tier for name, command in COMMANDS.items()},
             plugin_tier=None if plugins is None else plugins.tier_of,
+            ask_first=lambda name, tier: self.ask_first and tier > Tier.T0 and name != "ask_member",
         )
         for name in (*WEB_TOOLS, *MEMORY_READ_TOOLS, *ATTACHMENT_TOOLS):
             self._registry.register(name, Tier.T0)
@@ -109,6 +112,10 @@ class ToolGate:
     @property
     def plugins(self) -> PluginHub | None:
         return self._plugins
+
+    @property
+    def ask_first(self) -> bool:
+        return self._settings is not None and self._settings.get("action_mode") == "ask"
 
     # --- the registry ---------------------------------------------------------------------------
 
@@ -146,9 +153,11 @@ class ToolGate:
     async def screen(self, proposed: Proposed, *, language: str, ledger: Ledger) -> Screening:
         """What the owner's safety rules say of `proposed`, an action that changes something: PASS
         when there is no guard or no rule. Never raises but for a cancellation."""
-        if self._safety is None:
-            return PASS
-        return await self._safety.screen(proposed, language=language, ledger=ledger)
+        result = PASS if self._safety is None else await self._safety.screen(proposed, language=language, ledger=ledger)
+        # Explicit denials win; a stored allow can never waive the owner's global quick switch.
+        if self.ask_first and result.verdict != "deny":
+            return Screening("ask", result.rule, unchecked=result.unchecked)
+        return result
 
     def reads_only(self, server: str, tool: str) -> bool:
         """Whether the server of a plugin's tool says that the tool only reads (`readOnlyHint` and

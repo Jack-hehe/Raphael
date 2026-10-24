@@ -52,6 +52,7 @@ def test_a_turn_is_stored_as_given_and_stamped_with_the_time(history, clock):
         detail="長一點的答案",
         status="done",
         cost_usd=0.0004,
+        conversation_id=1,
     )
 
 

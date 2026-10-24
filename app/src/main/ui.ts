@@ -21,6 +21,9 @@ export const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, (c) => 
 // are small closed circles the stroke fills.
 const ICON = {
   person: "M10.75 4.75A3 3 0 1 1 4.75 4.75A3 3 0 1 1 10.75 4.75ZM2.75 13.25C2.75 8.25 12.75 8.25 12.75 13.25",
+  reply: "M6.25 3.25 2.75 6.75 6.25 10.25M3.25 6.75H9.25A3 3 0 0 1 12.25 9.75V12.25",
+  pin: "M5.25 2.25H10.25L9.75 6.25 12.25 8.75H8.25V13.75M7.25 8.75H3.25L5.75 6.25Z",
+  eyeOff: "M2.25 2.25 13.25 13.25M6.25 3.5 7.75 3.25C11.25 3.25 13.75 7.75 13.75 7.75L12 10M9.25 12 7.75 12.25C4.25 12.25 1.75 7.75 1.75 7.75L3.5 5.5",
   home: "M2.25 6.75 7.75 2.25 13.25 6.75M3.75 5.75V11.75A1.5 1.5 0 0 0 5.25 13.25H6.25V9.25H9.25V13.25H10.25A1.5 1.5 0 0 0 11.75 11.75V5.75",
   clock: "M13.25 7.75A5.5 5.5 0 1 1 2.25 7.75A5.5 5.5 0 1 1 13.25 7.75ZM7.75 4.25V7.75L10.25 9.25",
   book: "M4.75 2.75H10.75A1.5 1.5 0 0 1 12.25 4.25V13.25H4.75A1.5 1.5 0 0 1 3.25 11.75V4.25A1.5 1.5 0 0 1 4.75 2.75M3.25 11.75A1.5 1.5 0 0 1 4.75 10.25H12.25M6.25 5.75H9.25",
@@ -333,16 +336,27 @@ export function swapHTML(host: HTMLElement, html: string): void {
 // ---------- menu ----------
 
 /** The menu or panel that is open, the button that opened it, and what it does with keys of its own. */
-let menu: { el: HTMLElement; anchor: HTMLElement; stopOutside(): void; onKey?: (e: KeyboardEvent) => boolean } | null = null;
+interface MenuState {
+  el: HTMLElement; anchor: HTMLElement; rect: DOMRect; stopOutside(): void;
+  onKey?: (e: KeyboardEvent) => boolean; onClose?: () => void;
+  parent: MenuState | null; placement?: "beside";
+}
+let menu: MenuState | null = null;
 let menuListening = false;
 
 export function closeMenu(): void {
+  while (menu) closeMenuLevel();
+}
+
+function closeMenuLevel(): void {
   if (!menu) return;
-  menu.stopOutside();
-  menu.anchor.setAttribute("aria-expanded", "false");
-  menu.anchor.removeAttribute("aria-controls");
-  menu.el.remove();
-  menu = null;
+  const closing = menu;
+  menu = closing.parent;
+  closing.stopOutside();
+  closing.anchor.setAttribute("aria-expanded", "false");
+  closing.anchor.removeAttribute("aria-controls");
+  closing.el.remove();
+  closing.onClose?.();
 }
 
 /** The buttons of the open menu that can be reached with the arrow keys. */
@@ -358,14 +372,23 @@ function listenForMenuEvents(): void {
       e.preventDefault();
       return;
     }
+    if (menu.parent && (e.key === "Escape" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      const anchor = menu.anchor;
+      closeMenuLevel(); anchor.focus({ preventScroll: true });
+      return;
+    }
     if (e.key === "Escape" || e.key === "Tab") {
       if (e.key === "Escape") e.preventDefault();
-      const anchor = menu.anchor;
+      const anchor = menuRootAnchor() ?? menu.anchor;
       closeMenu();
       anchor.focus({ preventScroll: true });
       return;
     }
     const items = menuItems(menu.el);
+    if (e.key === "ArrowRight" && (document.activeElement as HTMLElement | null)?.getAttribute("aria-haspopup") === "menu") {
+      e.preventDefault(); (document.activeElement as HTMLElement).click(); return;
+    }
     if (items.length === 0) return;
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown") {
@@ -440,17 +463,32 @@ export function menuPlacement(
   };
 }
 
+/** A nested menu follows its row, preferring the right side while staying within the viewport. */
+export function submenuPlacement(
+  anchor: Pick<DOMRect, "top" | "left" | "right">,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number; headerBottom: number },
+): { left: number; top: number; maxHeight: number } {
+  const upper = viewport.headerBottom + 8, lower = Math.max(upper, viewport.height - 8);
+  const right = anchor.right + 4;
+  return {
+    left: Math.max(8, Math.min(right + size.width <= viewport.width - 8 ? right : anchor.left - size.width - 4, viewport.width - size.width - 8)),
+    top: Math.max(upper, Math.min(anchor.top, lower - Math.min(size.height, lower - upper))),
+    maxHeight: lower - upper,
+  };
+}
+
 /** Prefer below the trigger, then above it; long lists scroll on the roomier side. */
 export function placeMenu(): void {
   if (!menu) return;
   const { el, anchor } = menu;
-  const r = anchor.getBoundingClientRect();
+  const r = anchor.isConnected ? anchor.getBoundingClientRect() : menu.rect;
   const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
   // A dropdown's menu is at least as wide as the dropdown itself (owner, 2026-10-24).
   if (anchor.classList?.contains("sel")) el.style.minWidth = `${Math.round(r.width)}px`;
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
-  const placement = menuPlacement(r, { width: el.offsetWidth, height: el.offsetHeight }, {
+  const placement = (menu.placement === "beside" ? submenuPlacement : menuPlacement)(r, { width: el.offsetWidth, height: el.offsetHeight }, {
     width: innerWidth, height: innerHeight, headerBottom,
   });
   el.style.maxHeight = `${placement.maxHeight}px`;
@@ -459,6 +497,9 @@ export function placeMenu(): void {
 }
 
 export interface PopoverOptions {
+  /** Preserve the parent menu and anchor this panel beside one of its rows. */
+  placement?: "beside";
+  onClose?: () => void;
   /** The classes of the panel, `menu` among them. */
   className: string;
   role: string;
@@ -473,30 +514,41 @@ export interface PopoverOptions {
  */
 export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions): HTMLElement {
   listenForMenuEvents();
-  closeMenu();
+  const rect = anchor.getBoundingClientRect();
+  const parent = o.placement === "beside" && menu?.el.contains(anchor) ? menu : null;
+  if (!parent) closeMenu();
   const el = document.createElement("div");
   el.className = o.className;
-  el.id = "app-popover";
+  el.id = parent ? "app-submenu" : "app-popover";
   el.tabIndex = -1;
   el.setAttribute("role", o.role);
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
-  menu = { el, anchor, stopOutside: registerDismissal(el, () => { closeMenu(); anchor.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey };
+  menu = { el, anchor, rect, parent, placement: o.placement,
+    stopOutside: registerDismissal(el, () => { const root = menuRootAnchor(); closeMenu(); root?.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey, onClose: o.onClose };
   anchor.setAttribute("aria-expanded", "true");
   anchor.setAttribute("aria-controls", el.id);
   placeMenu();
   return el;
 }
 
+function menuRootAnchor(): HTMLElement | undefined {
+  let root = menu;
+  while (root?.parent) root = root.parent;
+  return root?.anchor;
+}
+
 /** An item at the foot of a menu that does something rather than choose (「重新搜尋麥克風」). */
 export interface MenuAction {
   label: string;
+  desc?: string;
   icon?: IconName;
+  submenu?: boolean;
   /** What it does is under way: the item stays where it is but does nothing until it is done. */
   busy?: boolean;
   /** Runs when the item is chosen. The menu stays open, so that what the action finds shows in it. */
-  run(): void;
+  run(anchor: HTMLElement): void;
 }
 
 /**
@@ -511,12 +563,13 @@ export function openMenu(
   onPick: (value: string) => void,
   head?: string,
   actions: readonly MenuAction[] = [],
+  placement?: Pick<PopoverOptions, "placement">,
 ): void {
   const active = document.activeElement as HTMLElement | null;
   const again = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
     active && menu.el.contains(active) ? active : null;
   const detailed = options.some((o) => o.detail);
-  const described = options.some((o) => o.desc);
+  const described = options.some((o) => o.desc) || actions.some(a => a.desc);
   const html =
     (head ? `<div class="menu-head" aria-hidden="true">${esc(head)}</div>` : "") +
     options
@@ -533,16 +586,17 @@ export function openMenu(
           `</button>`,
       )
       .join("") +
-    (actions.length ? `<div class="menu-sep" role="separator"></div>` : "") +
+    (options.length && actions.length ? `<div class="menu-sep" role="separator"></div>` : "") +
     actions
       .map(
         (a, i) =>
-          `<button type="button" role="menuitem" tabindex="-1" class="menu-action" data-action="${i}"${a.busy ? ' aria-disabled="true"' : ""}>` +
-          `<span class="ck">${a.icon ? ico(a.icon) : ""}</span><span class="mt">${esc(a.label)}</span></button>`,
+          `<button type="button" role="menuitem" tabindex="-1" class="menu-action" data-action="${i}"${a.busy ? ' aria-disabled="true"' : ""}${a.submenu ? ' aria-haspopup="menu" aria-expanded="false"' : ""}>` +
+          `<span class="ck">${a.icon ? ico(a.icon) : ""}</span><span class="mtd"><span class="mt">${esc(a.label)}</span>${a.desc ? `<span class="mdesc">${esc(a.desc)}</span>` : ""}</span>${a.submenu ? ico("right") : ""}</button>`,
       )
       .join("");
   const el = openPopover(anchor, html, {
-    className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}`,
+    className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}${placement?.placement === "beside" ? " menu-submenu" : ""}`,
+    ...placement,
     role: "menu",
     label: anchor.getAttribute("aria-label") ?? undefined,
   });
@@ -556,11 +610,12 @@ export function openMenu(
     if (!pick) return;
     if (pick.dataset.action !== undefined) {
       const action = actions[Number(pick.dataset.action)];
-      if (action && !action.busy) action.run();
+      if (action && !action.busy) action.run(pick);
       return;
     }
+    const root = menuRootAnchor();
     closeMenu();
-    anchor.focus();
+    (root ?? anchor).focus();
     onPick(pick.dataset.value ?? "");
   });
   // The item that had the focus before the menu was drawn again keeps it: a choice by its value, an

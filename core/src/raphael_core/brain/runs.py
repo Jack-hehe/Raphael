@@ -57,6 +57,16 @@ class RunAnalytics:
             except ValueError: pass
         return ident
 
+    def _routine_source(self, run):
+        if run["turn_id"] is not None:
+            task = self.conn.execute("SELECT * FROM worker_tasks WHERE turn_id=? ORDER BY id DESC LIMIT 1", (run["turn_id"],)).fetchone()
+            if task:
+                return "task", dict(task)
+            turn = self.conn.execute("SELECT * FROM agent_turns WHERE id=?", (run["turn_id"],)).fetchone()
+            if turn:
+                return "turn", dict(turn)
+        return None, None
+
     def _rows(self, lower, upper, only=None):
         members = {row[0]: (row[1], row[2]) for row in self.conn.execute("SELECT id,name,avatar FROM members")}
         members[0] = ("Raphael", "")
@@ -72,7 +82,9 @@ class RunAnalytics:
                 item = dict(raw)
                 # A routine's report is also copied into its member's conversation. The task is
                 # the measured run; its copied report is not another run that spent the same cost.
-                if kind == "turn" and (item["route"] == "routine" or self.conn.execute("SELECT 1 FROM worker_tasks WHERE turn_id=? LIMIT 1", (item["id"],)).fetchone()): continue
+                if kind == "turn" and (item["route"] == "routine" or self.conn.execute("SELECT 1 FROM routine_runs WHERE turn_id=? LIMIT 1", (item["id"],)).fetchone() or self.conn.execute("SELECT 1 FROM worker_tasks WHERE turn_id=? LIMIT 1", (item["id"],)).fetchone()): continue
+                if kind == "task" and not only and self.conn.execute("SELECT 1 FROM routine_runs WHERE turn_id=?", (item["turn_id"],)).fetchone():
+                    continue
                 mid = item["member_id"]
                 member, avatar = members.get(mid, (str(mid), ""))
                 metric = self.conn.execute("SELECT * FROM run_metrics WHERE kind=? AND run_id=?", (kind, item["id"])).fetchone()
@@ -95,6 +107,33 @@ class RunAnalytics:
                              "cost_usd": item["cost_usd"], "tokens": metric["tokens"] if metric else None,
                              "ai_steps": max(metric["ai_steps"], models) if metric else models, "tools": tools,
                              "errors": errors + (int(item.get("status", item.get("state")) in ("error", "failed")) if not errors else 0)})
+        if not only or only[0] == "routine":
+            query = "SELECT rr.*,r.title,r.member_id FROM routine_runs rr JOIN routines r ON r.id=rr.routine_id WHERE rr.started>=? AND rr.started<?"
+            args = (lower, upper)
+            if only:
+                query += " AND rr.id=?"
+                args += (only[1],)
+            for raw in self.conn.execute(query, args):
+                record = dict(raw)
+                source_kind, source = self._routine_source(record)
+                backing = self._rows(0, 2**53, (source_kind, source["id"])) if source and source_kind == "task" else []
+                # A routine turn is excluded from regular runs; collect its metadata directly.
+                if source and source_kind == "turn":
+                    metric = self.conn.execute("SELECT * FROM run_metrics WHERE kind='turn' AND run_id=?", (source["id"],)).fetchone()
+                    steps = self.conn.execute("SELECT COUNT(CASE WHEN kind!='model' THEN 1 END), COUNT(CASE WHEN outcome NOT IN ('ok','running') THEN 1 END), COUNT(CASE WHEN kind='model' THEN 1 END) FROM agent_steps WHERE turn_id=?", (source["id"],)).fetchone()
+                    backing = [{"tokens": metric["tokens"] if metric else None, "ai_steps": max(metric["ai_steps"],steps[2]) if metric else steps[2], "tools": steps[0], "errors": steps[1], "model": source.get("model") or ""}]
+                base = backing[0] if backing else {}
+                started, finished = record["started"], record["finished"]
+                member, avatar = members.get(record["member_id"], (str(record["member_id"]), ""))
+                model = base.get("model", "")
+                rows.append({**base, "kind": "routine", "id": record["id"], "at_ms": started, "started_at_ms": started,
+                             "duration_ms": max(0, finished-started) if finished is not None else base.get("duration_ms"),
+                             "member_id": record["member_id"], "member_name": member, "avatar": avatar,
+                             "title": record["title"], "routine": record["title"], "status": record["status"],
+                             "model": model, "provider": self._provider(model),
+                             "cost_usd": record["cost"] if finished is not None else (source["cost_usd"] if source else record["cost"]),
+                             "tokens": base.get("tokens"), "ai_steps": base.get("ai_steps",0), "tools": base.get("tools",0),
+                             "errors": base.get("errors",0) or int(record["status"] in ("error","failed"))})
         return sorted(rows, key=lambda r: (-r["at_ms"], r["kind"], -r["id"]))
 
     @staticmethod
@@ -125,10 +164,16 @@ class RunAnalytics:
 
     async def trace(self, params):
         kind, ident = params.get("kind"), params.get("id")
-        if kind not in ("turn", "task") or type(ident) is not int or ident <= 0:
+        if kind not in ("turn", "task", "routine") or type(ident) is not int or ident <= 0:
             raise invalid_params("Expected a run kind and id")
         run = next((r for r in self._rows(0, 2**53, (kind, ident)) if r["id"] == ident and r["kind"] == kind), None)
         if run is None: raise invalid_params("Run no longer exists")
+        if kind == "routine":
+            record = self.conn.execute("SELECT * FROM routine_runs WHERE id=?", (ident,)).fetchone()
+            source_kind, source = self._routine_source(record)
+            if not source:
+                return {"run": run, "summary": self.summary([run]), "spans": []}
+            kind, ident = source_kind, source["id"]
         metric = self.conn.execute("SELECT model_spans FROM run_metrics WHERE kind=? AND run_id=?", (kind, ident)).fetchone()
         spans = [{**s, "kind": "model", "tool": "", "server": s.get("model")} for s in json.loads(metric[0])] if metric else []
         table, field = ("agent_steps", "turn_id") if kind == "turn" else ("worker_steps", "task_id")

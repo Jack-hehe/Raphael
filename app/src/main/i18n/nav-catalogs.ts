@@ -1,5 +1,6 @@
 /** Navigation, owner settings, MCP management and run analytics. */
 export const navZh = {
+  "runs.exhausted": "額度已用完", "runs.resetUnknown": "重設時間未提供",
   "runs.minutesSeconds": "{m} 分 {s} 秒", "runs.seconds": "{s} 秒",
   "skin.styles": "風格", "mcp.actions": "更多動作", "mcp.delete": "刪除", "runs.overview": "總覽", "runs.showAll": "顯示全部", "runs.showLess": "收起",
   "nav.you": "你", "nav.usage": "用量", "nav.help": "說明與意見回饋", "nav.automations": "自動化", "nav.team": "團隊", "nav.pagePending": "頁面尚未載入",
@@ -11,6 +12,7 @@ export const navZh = {
 } as const;
 
 export const navEn: Record<keyof typeof navZh, string> = {
+  "runs.exhausted": "Allowance exhausted", "runs.resetUnknown": "Reset time unavailable",
   "runs.minutesSeconds": "{m}m {s}s", "runs.seconds": "{s}s",
   "skin.styles": "Styles", "mcp.actions": "More actions", "mcp.delete": "Delete", "runs.overview": "Overview", "runs.showAll": "Show all", "runs.showLess": "Show less",
   "nav.you": "You", "nav.usage": "Usage", "nav.help": "Help and feedback", "nav.automations": "Automations", "nav.team": "Team", "nav.pagePending": "Page not loaded",
@@ -22,6 +24,7 @@ export const navEn: Record<keyof typeof navZh, string> = {
 };
 
 export const navJa: Record<keyof typeof navZh, string> = {
+  "runs.exhausted": "上限に到達", "runs.resetUnknown": "リセット時刻は未提供",
   "runs.minutesSeconds": "{m}分{s}秒", "runs.seconds": "{s}秒",
   "skin.styles": "スタイル", "mcp.actions": "その他の操作", "mcp.delete": "削除", "runs.overview": "概要", "runs.showAll": "すべて表示", "runs.showLess": "折りたたむ",
   "nav.you": "あなた", "nav.usage": "使用量", "nav.help": "ヘルプとフィードバック", "nav.automations": "自動化", "nav.team": "チーム", "nav.pagePending": "ページは未読み込みです",

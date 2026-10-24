@@ -89,3 +89,16 @@ it("retries a failed load and does not open a save dialog after the view is dest
   await Promise.resolve(); await Promise.resolve();
   expect(api.saveUsageCsv).not.toHaveBeenCalled();
 });
+
+
+it("shows recorded subscription exhaustion and reset beside live Codex allowances", async () => {
+  const summary = { duration_ms:0, cost_usd:0, tokens:0, ai_steps:0, tools:0, errors:0 };
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, runs:[], total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
+  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageTrace:vi.fn(), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[{id:"codex",name:"Codex CLI",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792800000}]}],quotas:[{provider:"claude",reset_at_ms:1792800000000},{provider:"gemini",reset_at_ms:null}]}) };
+  const host = document.createElement("div"); document.body.append(host);
+  const view = mountRunAnalytics(host,api); await view.ready;
+  const text = host.querySelector(".run-allowance")!.textContent;
+  expect(text).toContain("76%"); expect(text).toContain("Claude"); expect(text).toContain("Gemini");
+  expect(text).toContain("額度已用完"); expect(text).toContain("重設時間未提供");
+  view.destroy();
+});

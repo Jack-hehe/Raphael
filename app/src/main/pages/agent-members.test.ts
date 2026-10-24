@@ -33,6 +33,8 @@ const api = vi.hoisted(() => ({
   providersList: vi.fn(),
   brainsCli: vi.fn(),
   core: vi.fn(),
+  roomsList: vi.fn(),
+  roomMessages: vi.fn(),
 }));
 vi.mock("../api", () => api);
 
@@ -87,6 +89,39 @@ const pick = async (id: number) => {
   await flush();
 };
 
+test("sidebar pin and hide update only their target and hiding the open member returns to Raphael", async () => {
+  const agent = mount(); await flush(); await pick(3);
+  api.membersUpdate.mockResolvedValue({});
+  $('[data-member-more="3"]').click(); $('[data-pick="pin"]').click(); await flush();
+  expect(api.membersUpdate).toHaveBeenCalledWith(3, {pinned: true});
+  $('[data-member-more="3"]').click(); $('[data-pick="hide"]').click(); await flush();
+  expect(api.membersUpdate).toHaveBeenCalledWith(3, {hidden: true});
+  expect(document.querySelector('.mb-chief[aria-current="true"]')).not.toBeNull();
+  agent.hide();
+});
+
+test("clearing conversations requires confirmation and scopes the request to that member", async () => {
+  const agent = mount(); await flush(); await pick(3);
+  api.core.mockResolvedValue({questions: []});
+  $('[data-member-more="3"]').click(); $('[data-pick="clear"]').click();
+  expect(api.core).not.toHaveBeenCalledWith("agent.history.clear", expect.anything());
+  $('[data-dlg="cancel"]').click();
+  $('[data-member-more="3"]').click(); $('[data-pick="clear"]').click();
+  $('[data-dlg="clear"]').click(); await flush();
+  expect(api.core).toHaveBeenCalledWith("agent.history.clear", {member_id: 3});
+  expect(document.querySelector(".mb-confirm")).toBeNull(); agent.hide();
+});
+
+test("new conversation picker filters members and opens the selected member", async () => {
+  const agent = mount(); await flush();
+  $('[data-col="add"]').click(); $('[data-pick="conversation"]').click();
+  const search = $<HTMLInputElement>("[data-chat-search]"); search.value = LIST.members[2].name; search.dispatchEvent(new Event("input"));
+  expect(document.querySelectorAll('[data-dlg="conversation"]')).toHaveLength(1);
+  $('[data-dlg="conversation"]').click(); await flush();
+  expect(document.querySelector('[data-member="4"][aria-current="true"]')).not.toBeNull();
+  expect(document.querySelector(".mb-chat-picker")).toBeNull(); agent.hide();
+});
+
 test("files dropped into a member's thread are sent only to that member", async () => {
   const agent = mount(); await flush(); await pick(3);
   const event = new Event("drop", { bubbles: true, cancelable: true });
@@ -99,9 +134,22 @@ test("files dropped into a member's thread are sent only to that member", async 
   agent.hide();
 });
 
+test("a routine run link selects its member and loads the linked older turn", async () => {
+  const agent = mount(); await flush();
+  api.agentHistoryList.mockImplementation(async (q: { member_id?: number; before_id?: number }) => ({ turns: q.before_id === 11 ? [turn(10, { member_id: 3, text: "Linked routine result" })] : THREADS[q.member_id ?? 0] }));
+  window.dispatchEvent(new CustomEvent("raphael:open-member", { detail: { memberId: 3, turnId: 10 } }));
+  await flush(); await flush();
+  expect(api.agentHistoryList).toHaveBeenCalledWith(expect.objectContaining({ member_id: 3, before_id: 11 }));
+  expect(agent.el.querySelector('.tn[data-id="10"]')?.textContent).toContain("Linked routine result");
+  expect(agent.el.querySelector('.mb-col [data-member="3"]')?.getAttribute("aria-current")).toBe("true");
+  agent.hide();
+});
+
 beforeEach(() => {
   document.body.innerHTML = "";
   for (const fn of Object.values(api)) fn.mockReset();
+  api.roomsList.mockResolvedValue({rooms:[{id:1,name:"Launch",member_ids:[0,3],is_team:0}]});
+  api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:3,text:"Ready",created:1,status:"done",turn_id:31}]});
   api.brainsCli.mockResolvedValue({ clis: [] });
   api.providersList.mockResolvedValue({ providers: [] });
   api.agentQuestionOpen.mockResolvedValue(null);
@@ -200,7 +248,8 @@ test.each(["edit", "cancel", "regenerate"])("%s after reload retrieves stored fi
   api.agentHistoryList.mockImplementation(async ({ member_id }: { member_id?: number }) => ({ turns: member_id === 3 ? [original] : [] }));
   api.core.mockImplementation(async (method: string) => method === "attachments.get" ? { mime: "text/csv", data: btoa("report") } : { questions: [] });
   const agent = mount(); await flush(); await pick(3);
-  $(`[data-id="8"] [data-act="${action === "regenerate" ? action : `${action}-message`}"]`).click(); await flush();
+  $(`[data-id="8"] [data-act="${action === "regenerate" ? "more-message" : `${action}-message`}"]`).click(); await flush();
+  if (action === "regenerate") { $('[data-pick="regenerate"]').click(); await flush(); }
   expect(api.core).toHaveBeenCalledWith("attachments.get", { id });
   if (action !== "regenerate") {
     expect($<HTMLTextAreaElement>(".cmp-input").value).toBe("問題 8");
@@ -294,8 +343,9 @@ test.each(["finish", "switch", "search", "reduced"])("a live member burst reveal
 
 test("regenerating the latest member reply asks the same question in that member's thread", async () => {
   const agent = mount(); await flush(); await pick(3);
-  expect(document.querySelectorAll('[data-act="regenerate"]')).toHaveLength(1);
-  document.querySelector<HTMLButtonElement>('[data-act="regenerate"]')!.click();
+  expect(document.querySelectorAll('[data-regenerate="true"]')).toHaveLength(1);
+  document.querySelector<HTMLButtonElement>('[data-regenerate="true"]')!.click();
+  await flush(); document.querySelector<HTMLButtonElement>('[data-pick="regenerate"]')!.click();
   await flush();
   expect(api.agentAskText).toHaveBeenCalledExactlyOnceWith("問題 31", [], 3, expect.objectContaining({ requestId: expect.any(String) }));
   agent.hide();
@@ -306,13 +356,14 @@ test("routine notifications refresh the open panel immediately and keep the rout
   await flush();
   await pick(3);
   $(".mb-pill").click();
+  $('[data-tab="routines"]').click();
   const routine: Routine = { id: 9, member_id: 3, title: "Daily review", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
   api.routinesList.mockResolvedValue({ routines: [routine] });
   send({ type: "RoutinesChanged", member_id: 3 });
   await flush();
   expect($(".mb-rts").textContent).toContain("Daily review");
   $('[data-det="routine-edit"]').click();
-  const title = $<HTMLInputElement>("#mb-r-title");
+  const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.focus();
   title.value = "My unsaved title";
   title.setSelectionRange(3, 5);
@@ -322,9 +373,9 @@ test("routine notifications refresh the open panel immediately and keep the rout
   send({ type: "RoutinesChanged", member_id: 3 });
   await flush();
   expect($(".mb-rts").textContent).toContain("New routine");
-  expect($<HTMLInputElement>("#mb-r-title").value).toBe("My unsaved title");
-  expect(document.activeElement).toBe($("#mb-r-title"));
-  expect($<HTMLInputElement>("#mb-r-title").selectionStart).toBe(3);
+  expect(document.querySelector<HTMLInputElement>("#au-title")!.value).toBe("My unsaved title");
+  expect(document.activeElement).toBe(document.querySelector("#au-title"));
+  expect(document.querySelector<HTMLInputElement>("#au-title")!.selectionStart).toBe(3);
   expect(scroll.scrollTop).toBe(84);
 });
 
@@ -334,6 +385,7 @@ test("a chat event refreshes routines even when its explicit change notification
   await flush();
   await pick(3);
   $(".mb-pill").click();
+  $('[data-tab="routines"]').click();
   const routine = { id: 9, member_id: 3, title: "Created from chat", prompt: "Review", schedule: { kind: "daily", time: "09:00" }, enabled: true, next_run: null, last_run: null };
   api.routinesList.mockResolvedValue({ routines: [routine] });
   api.agentHistoryList.mockResolvedValue({ turns: [turn(99, { member_id: 3, messages: [{ seq: 1, kind: "event", text: "Routine created", at_ms: 1 }] })] });
@@ -653,7 +705,7 @@ describe("a member's thread", () => {
     await pick(3);
     const run = $('.tn[data-id="32"]');
     expect(run.querySelector(".sys")!.textContent).toBe("例行任務每天的單字");
-    expect(run.querySelector(".ans.thinking")).not.toBeNull();
+    expect(run.querySelector(".work-toggle .think")).not.toBeNull();
     expect(run.querySelector(".me")).toBeNull();
     THREADS[3] = [turn(31, { member_id: 3, text: "今天的單字" })];
   });
@@ -775,7 +827,7 @@ describe("a new member", () => {
   test("is made in the language of the window and opened; the routine the core offers is asked, 加入 makes it", async () => {
     vi.useFakeTimers();
     await create(OFFER);
-    expect(api.membersCreate).toHaveBeenCalledWith({ name: "進度官", role: "", personality: "", instructions: "", group_id: null, ui_language: "zh-TW" });
+    expect(api.membersCreate).toHaveBeenCalledWith({ name: "進度官", role: "", personality: "", instructions: "", group_id: null, ui_language: "zh-TW", blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false });
     expect($(".mb-pill-t").textContent).toBe("進度官");
     expect(api.routinesCreate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(10);
@@ -804,7 +856,7 @@ describe("a new member", () => {
     const picker = $<HTMLButtonElement>(".mb-pick");
     picker.click();
     expect(document.getElementById("app-popover")).not.toBeNull();
-    $<HTMLElement>('#app-popover [data-action="0"]').click();
+    $<HTMLElement>('#app-popover [data-action="3"]').click();
     expect(document.getElementById("app-popover")).toBeNull();
     expect(document.querySelector(".mb-dialog")).not.toBeNull();
     expect(document.activeElement?.id).toBe("mb-new-name");
@@ -875,4 +927,12 @@ test("a core without the members: Raphael alone, and the page works as before", 
   expect(document.querySelectorAll(".mb-col .mb-row")).toHaveLength(0);
   expect($(".mb-col .mb-chief").textContent).toBe("拉斐爾");
   expect($(".thread").textContent).toContain("《答。回答 2》");
+});
+
+
+test("rooms replace the main conversation pane and member selection returns to its thread", async()=>{
+ const agent=mount();await flush();const original=agent.el.querySelector<HTMLElement>(".mb-chat")!;
+ window.dispatchEvent(new CustomEvent("raphael:open-room",{detail:{roomId:1}}));await flush();
+ expect(original.hidden).toBe(true);expect(agent.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(false);expect(agent.el.querySelector(".au-room-heading")!.textContent).toContain("Launch");expect(document.querySelector('[role="dialog"]')).toBeNull();
+ await pick(3);expect(original.hidden).toBe(false);expect(agent.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(true);expect(agent.el.querySelector(".thread")!.textContent).toContain("10");
 });

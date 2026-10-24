@@ -123,7 +123,7 @@ import sqlite3
 import time
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, tzinfo
 from typing import TYPE_CHECKING, Any
 
@@ -157,7 +157,7 @@ from .answers import Reply, Voice, build_user_message
 from .attribution import labelled_lines, owner_lines, relayed_answer
 from .narration import NarratedLoop
 from .cli.discovery import CliBrains, brain_ref
-from .cli.loop import CliLoop, MEMORY_TOOLS, Sessions as CliSessions
+from .cli.loop import MEMORY_TOOLS, CliLoop, Sessions as CliSessions
 from .persona import cli_system_prompt
 from ..brain.owner import owner_context
 from .cities import cities_in
@@ -166,6 +166,8 @@ from .device import DeviceActions
 from .failure import AgentFailure, failure_kind
 from .gate import BUILTIN_SERVER, ToolGate
 from .history import VOICE, AgentHistory, Turn
+from .conversations import Conversations
+from .quota import Quotas
 from .quotes import quote_from_wire
 from .ledger import Ledger
 from .harness_tools import (
@@ -212,7 +214,7 @@ from .policy import (
 )
 from .routing import OpenAnswer, RouteDecision, Router
 from .speaker import RAPHAEL, RAPHAEL_NAMES, Speaker
-from .safety import DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
+from .safety import ASK, DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
 from .steps import Step, reason_of
 from .targets import OpenTargets
 from .team import (
@@ -222,6 +224,7 @@ from .team import (
     REQUEST_MAX_CHARS,
     TEAM_SERVER,
     TEAM_TOOLS,
+    SKILL_READ,
     Team,
     asks_to_create_member,
     names_raphael,
@@ -387,6 +390,8 @@ class _Ask:
     session_id: str
     text: str
     language: str
+    conversation_id: int | None = None
+    original_text: str | None = None
     source: str = VOICE
     started_at_ms: int = field(default_factory=wall_clock_ms)
     call_base: int = 0
@@ -446,6 +451,7 @@ class _Followup:
     call: PlannedCall
     results: list[ToolResult]
     loop: NarratedLoop | CliLoop | None = None
+    memory_reply: tuple[str, Reply, Ledger] | None = None
 
 
 class AgentService:
@@ -536,6 +542,9 @@ class AgentService:
         self._metrics_conn = conn
         self._spend = SpendTracker(conn, now_ms, tz)
         self._history = AgentHistory(conn, now_ms)
+        self.conversations = Conversations(conn, now_ms)
+        self.quotas = Quotas(conn, now_ms, notify)
+        self._named_conversations: dict[int, Conversation] = {}
         self._confirmations = Confirmations(clock)
         self._plugins = plugins
         self._gate = gate if gate is not None else ToolGate(plugins, conn=conn, now_ms=now_ms)
@@ -555,6 +564,7 @@ class AgentService:
         self._voice = Voice(client)
         self._decider = decider if decider is not None else Router(client)
         self._inflight: dict[str, asyncio.Task[dict]] = {}
+        self._inflight_members: dict[str, int] = {}
         self._clock = clock
         # session id -> when agent.cancel named it (the monotonic clock).
         self._cancelled: dict[str, float] = {}
@@ -595,6 +605,15 @@ class AgentService:
             "agent.history.search": self._history_search,
             "agent.history.clear": self._history_clear,
             "agent.history.retract": self._history_retract,
+            "agent.history.delete": self._history_delete,
+            "conversations.list": self._conversations_list,
+            "quota.list": self._quota_list,
+            "agent.speech.status": self._speech_status,
+            "agent.speak": self._speak_turn,
+            "messages.search": self._messages_search,
+            "conversations.create": self._conversations_create,
+            "conversations.rename": self._conversations_rename,
+            "conversations.delete": self._conversations_delete,
             "brains.cli": self._list_clis,
             "usage.allowances": self._allowances,
             "brains.cli_login": self._login_cli,
@@ -604,7 +623,7 @@ class AgentService:
 
     async def _allowances(self, params: dict) -> dict:
         from .cli.allowances import read_allowances
-        return await read_allowances(self._cli_brains)
+        return {**await read_allowances(self._cli_brains), "quotas": self.quotas.list()}
 
     async def _list_clis(self, params: dict) -> dict:
         return await self._cli_brains.list(params)
@@ -637,6 +656,8 @@ class AgentService:
             await self._conversation.aclose()
             for conversation in self._conversations.values():
                 await conversation.aclose()
+        for conversation in self._named_conversations.values():
+            await conversation.aclose()
         tasks = [*self._inflight.values(), *self._warming]
         refreshing = self._catalog.cancel()
         if refreshing is not None:
@@ -673,6 +694,7 @@ class AgentService:
         text = _str(params, "text", blank=True)
         language = _str(params, "ui_language")
         quote = quote_from_wire(params.get("quote"))
+        conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
         if quote is not None and params.get("source") != "app":
             raise invalid_params("quotes are supported for composer requests")
         replacement = _opt_int(params, "replace_turn_id")
@@ -682,7 +704,7 @@ class AgentService:
             if self._speaker(member_id) is None:
                 raise invalid_params("there is no such member")
             old = self._history.get(replacement)
-            if (old is None or old.member_id != member_id or old.status in ("running", "confirm")
+            if (old is None or old.member_id != member_id or old.conversation_id != conversation_id or old.status in ("running", "confirm")
                     or old.source in ("member", "routine") or params.get("source") != "app"):
                 raise invalid_params("replace_turn_id must name a completed owner message in this thread")
             await self._history_retract({"session_id": old.session_id, "turn_id": replacement, "member_id": member_id})
@@ -694,6 +716,7 @@ class AgentService:
             attachments=attachments,
             member_id=member_id,
             quote=quote,
+            conversation_id=conversation_id,
         )
 
     def _speaker(self, member_id: int) -> Speaker | None:
@@ -718,6 +741,7 @@ class AgentService:
         attachments: Sequence[Attachment] = (),
         member_id: int = 0,
         quote: dict[str, str] | None = None,
+        conversation_id: int | None = None,
     ) -> dict:
         """One request, as `agent.ask` answers it. `attachments` are the files handed with it
         (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
@@ -727,14 +751,22 @@ class AgentService:
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
+        original_text = None
+        expand = getattr(self._team, "expand_command", None)
+        if expand is not None:
+            expanded = expand(member_id, text)
+            if expanded != text:
+                original_text, text = text, expanded
         ask = _Ask(
             session_id=session_id,
             started_at_ms=self._now_ms(),
+            original_text=original_text,
             text=text,
             language=normalize_language(ui_language),
             attachments=list(attachments),
             quote=quote,
             speaker=speaker,
+            conversation_id=self.conversations.resolve(member_id, conversation_id),
         )
         if source is not None:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
@@ -771,6 +803,7 @@ class AgentService:
         await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
         task = asyncio.ensure_future(self._voice_answer(ask) if ask.source == VOICE else self._answer(ask))
         self._inflight[ask.session_id] = task
+        self._inflight_members[ask.session_id] = ask.speaker.id
         try:
             result = await task
             return await self._said(result, ask.source, ask.speaker.id, ask.language)
@@ -788,6 +821,7 @@ class AgentService:
                              ask.ledger or Ledger(self._spend), status="denied")
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
+                self._inflight_members.pop(ask.session_id, None)
             self._release(ask.held)  # a turn announced late must never be left unannounced
 
     async def _voice_answer(self, ask: _Ask) -> dict:
@@ -828,7 +862,7 @@ class AgentService:
                 decision = await self._decider.classify(
                     ask.text, DEFAULTS["agent_model"] if brain_ref(settings.model) else settings.model,
                     ledger, background_line(self._briefs(ask.speaker.id)),
-                    context=self._before_run(ask.speaker),
+                    context=self._before_run(ask.speaker, ask.conversation_id),
                 )
             except AgentFailure as error:
                 failure = error.kind
@@ -922,7 +956,7 @@ class AgentService:
         with what was found. AgentFailure as `Voice.reply` raises it. A member of the team reads
         its own conversation and memory, and speaks as itself."""
         member_id = ask.speaker.id
-        context = self._conversation_of(member_id).context(quick=route not in _FULL_CONTEXT_ROUTES)
+        context = self._conversation_of(member_id, ask.conversation_id).context(quick=route not in _FULL_CONTEXT_ROUTES)
         index = None if self._memory is None else self._memory.index(member_id)
 
         async def word(results: list[ToolResult], looked_up: bool) -> Reply:
@@ -968,7 +1002,7 @@ class AgentService:
             wanted.append(
                 (
                     "history_search",
-                    lambda: memory.search(reply.search, exclude=shown, member_id=member_id),
+                    lambda: memory.search(reply.search, exclude=shown, member_id=member_id, conversation_id=ask.conversation_id),
                 )
             )
         for name, look in wanted:
@@ -983,7 +1017,7 @@ class AgentService:
             results.append(result)
         return results
 
-    def _remember(self, ask: _Ask, reply: Reply, seen: list[ToolResult]) -> "Applied | None":
+    def _remember(self, ask: _Ask, reply: Reply, seen: list[ToolResult], *, approval: Approval | None = None, action: Action | None = None) -> "Applied | None":
         """Write or delete the notes the reply asked for, if it may: only from the owner's own
         turn, so not when the model was shown what the web or a connected service returned (that
         could have put the words in its mouth). Each change goes through the gate and is a step of
@@ -1006,7 +1040,7 @@ class AgentService:
         for item in reply.memory:
             tool = "memory_delete" if item.op == "DELETE" else "memory_write"
             try:
-                self._gate.check(Action(tool, {}), None)
+                self._gate.check(action or Action(tool, {}), approval)
             except (UnknownTool, NotApproved):
                 ask.steps.append(
                     self._step("tool", tool, BUILTIN_SERVER, "blocked", time.perf_counter(), "blocked")
@@ -1039,6 +1073,14 @@ class AgentService:
         note and said something else has the notice "remembered", which the overlay shows after
         the line."""
         language = ask.language
+        if (self._gate.ask_first and reply.memory and self._memory is not None and not ask.nested
+                and not any(r.untrusted or (r.name == "web_search" and r.ok) for r in seen)):
+            item = reply.memory[0]
+            tool = "memory_delete" if item.op == "DELETE" else "memory_write"
+            call = PlannedCall(PluginTool(tool, BUILTIN_SERVER, tool, "Change a requested memory", {}, Tier.T1), asdict(item))
+            result = self._ask_plugin(ask, call, seen, ledger)
+            self._followups[result["confirm"]["id"]].memory_reply = (route, reply, ledger)
+            return result
         applied = self._remember(ask, reply, seen)
         which, text, notice = reply.prefix, reply.text, None
         if applied is not None and (applied.written or applied.deleted):
@@ -1091,7 +1133,7 @@ class AgentService:
             ledger=ledger,
             over_budget=lambda: self._over_budget(limit),
             open_app=self._open_for_run,
-            background=self._before_run(ask.speaker),
+            background=self._before_run(ask.speaker, ask.conversation_id),
             clock=self._clock,
             now_ms=self._now_ms,
         )
@@ -1102,13 +1144,13 @@ class AgentService:
         run.task.add_done_callback(lambda _done, run=run: self._settle_unheard(run))
         return await self._next_from_run(run)
 
-    def _before_run(self, speaker: Speaker = RAPHAEL) -> str:
+    def _before_run(self, speaker: Speaker = RAPHAEL, conversation_id: int | None = None) -> str:
         """What a run is told of what came before its request: the memory's index, and the
         conversation as a quick answer reads it (the summary and the last few turns). A run
         writes no note, now or later: its turn holds what the model read on the screen, which is
         untrusted, and a note is written only from the owner's own words (see `_remember`, and the
         reflection pass, which reads only the owner's question of an `operate` turn)."""
-        context = self._conversation_of(speaker.id).context(quick=True)
+        context = self._conversation_of(speaker.id, conversation_id).context(quick=True)
         index = "" if self._memory is None else (
             self._memory.index() if speaker.is_raphael else self._memory.index(speaker.id)
         )
@@ -1119,7 +1161,7 @@ class AgentService:
             f"Personality: {speaker.personality}\n"
             f"Owner's instructions: {speaker.instructions}\n\n"
         )
-        return persona + conversation_block(context.summary, context.turns, index)
+        return persona + owner_context(self._settings) + conversation_block(context.summary, context.turns, index)
 
     async def _next_from_run(self, run: ComputerRun) -> dict:
         """What the run says next, as the reply of `agent.ask` or `agent.confirm`: its question
@@ -1318,7 +1360,7 @@ class AgentService:
     ) -> dict:
         """A narrated turn, sharing the fast tier's safety gate and permission cards."""
         if loop is None:
-            context = self._conversation_of(ask.speaker.id).context(quick=False)
+            context = self._conversation_of(ask.speaker.id, ask.conversation_id).context(quick=False)
             index = None if self._memory is None else self._memory.index(ask.speaker.id)
             say_ja = ask.voiced and ask.language != "ja"
             if brain_ref(settings.model):
@@ -1487,6 +1529,7 @@ class AgentService:
             if brain_ref(settings.model):
                 common["execute"] = cli_execute
                 loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
+                    conversation_id=ask.conversation_id, quota=self.quotas.record,
                     member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
                     expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)
                 if self._memory is not None:
@@ -1642,9 +1685,9 @@ class AgentService:
             detail=detail,
         )
 
-    def _context(self, count: int, member_id: int = 0) -> list[Turn]:
+    def _context(self, count: int, member_id: int = 0, conversation_id: int | None = None) -> list[Turn]:
         try:
-            return self._history.recent(count, member_id=member_id)
+            return self._history.recent(count, member_id=member_id, conversation_id=self.conversations.resolve(member_id, conversation_id))
         except sqlite3.Error as exc:
             logger.warning("Could not read the conversation so far: %s", type(exc).__name__)
             return []
@@ -1698,7 +1741,7 @@ class AgentService:
                 chosen = await self._picker.pick(
                     offer,
                     ask.text,
-                    self._context(PLAN_CONTEXT_TURNS, ask.speaker.id),
+                    self._context(PLAN_CONTEXT_TURNS, ask.speaker.id, ask.conversation_id),
                     model=model,
                     ledger=ledger,
                 )
@@ -1706,7 +1749,7 @@ class AgentService:
             return await self._planner.plan(
                 offer,
                 ask.text,
-                self._context(PLAN_CONTEXT_TURNS, ask.speaker.id),
+                self._context(PLAN_CONTEXT_TURNS, ask.speaker.id, ask.conversation_id),
                 model=model,
                 ledger=ledger,
             )
@@ -1770,7 +1813,7 @@ class AgentService:
 
     async def _screen_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> Screening:
         """What the owner's safety rules say of a call of a plugin's tool or a team tool: PASS for a
-        tool its server says only reads, and for `ask_member`, which are never judged."""
+        tool its server says only reads. Member contact preferences can require the owner's yes."""
         tool = call.tool
         if tool.key in HARNESS_TOOLS:
             if tool.key in ("routine_list", "show", "computer"):
@@ -1779,6 +1822,8 @@ class AgentService:
         if tool.key in TEAM_TOOLS:
             # Asking another assistant changes nothing (what the one asked does is judged as it
             # does it); adding a member does, and is judged by its own name.
+            if tool.key == ASK_MEMBER and ask.speaker.ask_before_members:
+                return Screening(ASK)
             if tool.key != CREATE_MEMBER:
                 return PASS
             proposed = Proposed(CREATE_MEMBER, tool.description, summarize(call.arguments))
@@ -1812,23 +1857,23 @@ class AgentService:
             self._gate.record_builtin(call.tool.key, outcome="ok" if result.ok else "blocked", approver="user")
             return result
         if call.tool.key in ("memory_write", "memory_delete"):
-            return self._cli_memory_call(ask, call, steps, approval)
+            return self._cli_memory_call(ask, call, steps, approval, action)
         if call.tool.key in HARNESS_TOOLS:
             return await self._harness_call(ask, call, approval, action, steps=steps)
         if call.tool.key in TEAM_TOOLS:
-            return await self._team_call(ask, call, ledger, steps=steps)
+            return await self._team_call(ask, call, ledger, approval=approval, action=action, steps=steps)
         return await self._plugin_call(call, approval, action, steps=ask.steps if steps is None else steps)
 
-    def _cli_memory_call(self, ask: _Ask, call: PlannedCall, steps: list[Step] | None, approval: Approval | None) -> ToolResult:
+    def _cli_memory_call(self, ask: _Ask, call: PlannedCall, steps: list[Step] | None, approval: Approval | None, action: Action | None) -> ToolResult:
         from .answers import parse_reply
         args = dict(call.arguments)
         args["op"] = "delete" if call.tool.key == "memory_delete" else "write"
-        loop = next((loop for loop in self._cli_loops if loop.member_id == ask.speaker.id), None)
+        loop = next((loop for loop in self._cli_loops if loop.member_id == ask.speaker.id and loop.conversation_id == ask.conversation_id), None)
         if not asks_to_remember(ask.text) or loop is None:
             return ToolResult(call.tool.key, False, None, "owner_request_required")
         reply = parse_reply({"text": "Memory update", "memory": [args]}, ask.language, plain=True)
         before = len(ask.steps)
-        applied = self._remember(ask, reply, loop.seen)
+        applied = self._remember(ask, reply, loop.seen, approval=approval, action=action)
         if steps is not None:
             steps.extend(ask.steps[before:])
             del ask.steps[before:]
@@ -1975,13 +2020,13 @@ class AgentService:
         try:
             turn_id = self._history.add(
                 session_id=ask.session_id,
-                question=ask.text,
+                question=ask.original_text if ask.original_text is not None else ask.text,
                 route="delegate",
                 prefix=_prefix(language, "understood") if speaker.is_raphael else "",
                 text=phrase(language, "handoff"),
                 status="done",
                 source=EXCHANGE_SOURCE,
-                member_id=speaker.id,
+                member_id=speaker.id, conversation_id=ask.conversation_id,
                 # who handed it over: the thread shows it as an exchange with that member
                 peer_id=ask.peer,
             )
@@ -1998,8 +2043,15 @@ class AgentService:
 
     # --- the team ---------------------------------------------------------------------------------
 
-    def _conversation_of(self, member_id: int) -> Conversation:
+    def _conversation_of(self, member_id: int, conversation_id: int | None = None) -> Conversation:
         """The conversation of the thread of `member_id`: Raphael's for 0."""
+        if conversation_id is not None and conversation_id != self.conversations.main(member_id):
+            if conversation_id not in self._named_conversations:
+                self._named_conversations[conversation_id] = Conversation(
+                    self._conn, self._client, now_ms=self._now_ms, clock=self._clock,
+                    reflected_through=lambda: 2**62, member_id=member_id, conversation_id=conversation_id,
+                )
+            return self._named_conversations[conversation_id]
         if member_id == 0:
             return self._conversation
         if self._memory is not None:
@@ -2018,7 +2070,7 @@ class AgentService:
         return conversation
 
     async def _team_call(
-        self, ask: _Ask, call: PlannedCall, ledger: Ledger, *, steps: list[Step] | None = None
+        self, ask: _Ask, call: PlannedCall, ledger: Ledger, *, approval: Approval | None = None, action: Action | None = None, steps: list[Step] | None = None
     ) -> ToolResult:
         """A team tool the picking call asked for, made for `ask` (see `team_tool`); a step of
         `steps` (the request's own when none is given), whatever came of it."""
@@ -2029,7 +2081,7 @@ class AgentService:
             call.arguments,
             language=ask.language,
             ledger=ledger,
-            session_id=ask.session_id,
+            session_id=ask.session_id, conversation_id=ask.conversation_id, approval=approval, action=action,
         )
         outcome = "ok" if result.ok else ("blocked" if result.error == "blocked" else "error")
         if result.error == "timeout":
@@ -2048,6 +2100,9 @@ class AgentService:
         language: str,
         ledger: Ledger,
         session_id: str,
+        conversation_id: int | None = None,
+        approval: Approval | None = None,
+        action: Action | None = None,
     ) -> ToolResult:
         """Make the team tool `name` (`team.ASK_MEMBER`, `team.CREATE_MEMBER`) for `speaker`, through
         the gate, and give what came of it as a tool's result. The fast tier calls it for a call
@@ -2055,14 +2110,19 @@ class AgentService:
         for a failure of the world: "blocked" when the speaker may not, "bad_arguments" for
         arguments it cannot take, "not_found" for nobody of that name."""
         team = self._team
-        if team is None or name not in TEAM_TOOLS or not speaker.may_ask:
+        if team is None or name not in TEAM_TOOLS or (name != SKILL_READ and not speaker.may_ask):
             return ToolResult(name, False, None, "blocked")
         if name == CREATE_MEMBER and speaker.depth:
             return ToolResult(name, False, None, "blocked")
         try:
-            self._gate.check(Action(name, dict(arguments)), None)
+            self._gate.check(action or Action(name, dict(arguments)), approval)
         except (UnknownTool, NotApproved):
             return ToolResult(name, False, None, "blocked")
+        if name == SKILL_READ:
+            read = getattr(team, "skill_read", None)
+            text = None if read is None else read(speaker.id, arguments.get("name"))
+            return ToolResult(name, text is not None, {"text": text} if text is not None else None,
+                              None if text is not None else "not_found", untrusted=True)
         if name == CREATE_MEMBER:
             try:
                 created = team.create(
@@ -2101,6 +2161,7 @@ class AgentService:
                     asker=speaker,
                     ledger=ledger,
                     session_id=session_id,
+                    asker_conversation_id=conversation_id,
                 ),
                 EXCHANGE_TIMEOUT_S,
             )
@@ -2119,6 +2180,7 @@ class AgentService:
         asker: Speaker,
         ledger: Ledger,
         session_id: str,
+        asker_conversation_id: int | None = None,
     ) -> tuple[bool, str]:
         """`target` answers `request`, which `asker` handed it (`ask_member`): whether it could,
         and what it said. It answers through the same path as a question of the owner's (the
@@ -2139,6 +2201,7 @@ class AgentService:
             language=language,
             source=EXCHANGE_SOURCE,
             speaker=target.asked_by(asker),
+            conversation_id=self.conversations.main(target.id),
             peer=asker.id,
             exchange_speakers=(requester, respondent),
             exchange_owner_sources=sources,
@@ -2169,6 +2232,7 @@ class AgentService:
             language=language,
             source=EXCHANGE_SOURCE,
             speaker=asker,
+            conversation_id=self.conversations.resolve(asker.id, asker_conversation_id),
             peer=target.id,
             cost_base=ledger.total,
             call_base=len(ledger.calls),
@@ -2192,6 +2256,16 @@ class AgentService:
     ) -> dict:
         """The yes came: make the call, then word what came of it."""
         language = pending.language
+        if followup.memory_reply is not None:
+            route, reply, ledger = followup.memory_reply
+            applied = self._remember(followup.ask, replace(reply, memory=reply.memory[:1]), followup.results, approval=approval, action=pending.action)
+            if applied is None or not (applied.written or applied.deleted):
+                return self._outcome(pending, "negative", phrase(language, "not_remembered"), "error")
+            self._memory.note_turn(applied.written, pending.turn_id, followup.ask.speaker.id)
+            remaining = replace(reply, memory=reply.memory[1:])
+            if not remaining.memory and not remaining.text:
+                remaining = replace(remaining, prefix="understood", text=phrase(language, "remembered" if applied.written else "forgotten"))
+            return self._finish_reply(followup.ask, route, remaining, followup.results, ledger)
         ledger = followup.loop.ledger if followup.loop else Ledger(self._spend)
         call = followup.call
         # The yes is for the tier the question was asked at. A tool that has none now, or a higher
@@ -2287,7 +2361,7 @@ class AgentService:
             logger.info("Open: step=%s kind=%s", opening.step, opening.kind)
             args = {"target_kind": opening.kind, "target": opening.target}
         elif command.kind == "copy":
-            copy = self._what_to_copy(ask.text)
+            copy = self._what_to_copy(ask.text, ask.speaker.id, ask.conversation_id)
             if copy is None:
                 return self._finish(
                     ask, "command", "negative", phrase(language, "nothing_to_copy"), ledger
@@ -2402,7 +2476,7 @@ class AgentService:
         except sqlite3.Error as exc:
             logger.warning("Could not keep a name that opened: %s", type(exc).__name__)
 
-    def _what_to_copy(self, text: str) -> tuple[str, str] | None:
+    def _what_to_copy(self, text: str, member_id: int = 0, conversation_id: int | None = None) -> tuple[str, str] | None:
         """`(what to copy, the phrase that asks about it)`, or None when there is nothing to copy:
         a text the speaker quoted, else Raphael's last answer, with its detail (`_copy_text`)."""
         for quote in _QUOTES:
@@ -2412,7 +2486,7 @@ class AgentService:
         last = next(
             (
                 turn
-                for turn in reversed(self._context(20))
+                for turn in reversed(self._context(20, member_id, conversation_id))
                 if turn.route in _ANSWER_ROUTES and (turn.detail or turn.text)
             ),
             None,
@@ -2433,7 +2507,7 @@ class AgentService:
         """Record the turn as waiting for a yes or a no and open the question for `action`, at the
         tier it has; the reply is the question as the overlay is given it."""
         language = ask.language
-        tier = self._gate.tier(action.tool)
+        tier = max(Tier.T2, self._gate.tier(action.tool))
         prefix = PREFIXES[language].question
         turn_id = self._record(ask, route, prefix, text, "confirm", None, ledger)
         pending = self._confirmations.open(ask.session_id, turn_id, action, tier, language)
@@ -2551,6 +2625,7 @@ class AgentService:
 
         task = asyncio.ensure_future(resume())
         self._inflight[ask.session_id] = task
+        self._inflight_members[ask.session_id] = ask.speaker.id
         try:
             return await task
         except asyncio.CancelledError:
@@ -2562,6 +2637,7 @@ class AgentService:
                 self._finish(ask, "answer", "understood", phrase(ask.language, "denied"), run.ledger, status="denied")
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
+                self._inflight_members.pop(ask.session_id, None)
 
     async def _resume_narrated(
         self, pending: Pending, approval: Approval | None, followup: _Followup
@@ -2570,6 +2646,7 @@ class AgentService:
         task = asyncio.ensure_future(self._confirm_plugin(pending, approval, followup))
         session_id = followup.ask.session_id
         self._inflight[session_id] = task
+        self._inflight_members[session_id] = followup.ask.speaker.id
         try:
             return await task
         except asyncio.CancelledError:
@@ -2582,6 +2659,7 @@ class AgentService:
                              followup.loop.ledger, status="denied")
             if self._inflight.get(session_id) is task:
                 del self._inflight[session_id]
+                self._inflight_members.pop(session_id, None)
 
     def _outcome(
         self,
@@ -2675,6 +2753,107 @@ class AgentService:
 
     # --- the history ----------------------------------------------------------------------------
 
+    async def _quota_list(self, params: dict) -> dict:
+        return {"quotas": self.quotas.list()}
+
+    async def _speech_status(self, params: dict) -> dict:
+        return {"ready": bool(self._speaking and self._speaking.speaks())}
+
+    async def _speak_turn(self, params: dict) -> dict:
+        member = self._member_param(params)
+        conversation_id = self.conversations.resolve(member, _opt_int(params, "conversation_id"))
+        turn = self._history.get(_opt_int(params, "turn_id"))
+        if turn is None or turn.member_id != member or turn.conversation_id != conversation_id:
+            raise invalid_params("there is no such turn in this conversation")
+        if not self._speaking or not self._speaking.speaks():
+            return {"ok": False, "kind": "not_configured"}
+        seq = _opt_int(params, "message_seq")
+        text = turn.text
+        if seq is not None:
+            message = next((m for m in self._history.messages([turn.id]).get(turn.id, []) if m["seq"] == seq and m["kind"] == "reply"), None)
+            if message is None:
+                raise invalid_params("message_seq must name an answer")
+            text = message["text"]
+        await self._speaking.say("", text, turn_id=turn.id)
+        return {"ok": True}
+
+    async def _messages_search(self, params: dict) -> dict:
+        query = _str(params, "query").strip()
+        if not query or len(query) > HISTORY_QUERY_MAX_CHARS:
+            raise invalid_params("query must be 1 to 200 characters")
+        turns = self._history.search(query, limit=50, most=50, member_id=None)
+        views = self._turn_views(turns)
+        for view in views:
+            conversation = self.conversations.get(view["conversation_id"])
+            view["conversation_title"] = conversation["title"]
+        return {"turns": views}
+
+    def _conversations_changed(self, member_id: int) -> None:
+        if self._notify:
+            self._notify("conversations.changed", {"member_id": member_id})
+
+    async def _conversations_list(self, params: dict) -> dict:
+        member = self._member_param(params)
+        query = params.get("query", "")
+        if not isinstance(query, str) or len(query) > 200:
+            raise invalid_params("query must be at most 200 characters")
+        return {"conversations": self.conversations.list(member, query.strip())}
+
+    async def _conversations_create(self, params: dict) -> dict:
+        member = self._member_param(params)
+        self.conversations.main(member)
+        conversation = self.conversations.create(member)
+        self._conversations_changed(member)
+        return {"conversation": conversation}
+
+    async def _conversations_rename(self, params: dict) -> dict:
+        conversation = self.conversations.rename(_opt_int(params, "id"), params.get("title"))
+        self._conversations_changed(conversation["member_id"])
+        return {"conversation": conversation}
+
+    async def _delete_turn(self, turn: Turn) -> bool:
+        if turn.status in ("running", "confirm"):
+            inflight = self._inflight.get(turn.session_id)
+            await self._cancel({"session_id": turn.session_id})
+            if inflight:
+                await asyncio.gather(inflight, return_exceptions=True)
+        await self._background.cancel_session(turn.session_id)
+        self._conversation_of(turn.member_id, turn.conversation_id).clear_summary()
+        with self._conn:
+            self._conn.execute("DELETE FROM agent_conversation_cli_sessions WHERE conversation_id = ?", (turn.conversation_id,))
+        deleted = self._history.delete(turn.id)
+        if deleted:
+            self._turn_changed(turn.id, turn.member_id)
+        return deleted
+
+    async def _history_delete(self, params: dict) -> dict:
+        member = self._member_param(params)
+        conversation_id = self.conversations.resolve(member, _opt_int(params, "conversation_id"))
+        turn = self._history.get(_opt_int(params, "turn_id"))
+        if turn is None or turn.member_id != member or turn.conversation_id != conversation_id:
+            raise invalid_params("there is no such turn in this conversation")
+        return {"deleted": int(await self._delete_turn(turn))}
+
+    async def _conversations_delete(self, params: dict) -> dict:
+        conversation = self.conversations.get(_opt_int(params, "id"))
+        member = conversation["member_id"]
+        conversation_id = conversation["id"]
+        # Stop writers before removing their rows, including background reports and pending yeses.
+        while turns := self._history.list(limit=200, member_id=member, conversation_id=conversation_id):
+            for turn in turns:
+                await self._delete_turn(turn)
+        cached = self._named_conversations.pop(conversation_id, None)
+        if cached:
+            cached.clear_summary()
+            await cached.aclose()
+        with self._conn:
+            self._conn.execute("DELETE FROM conversation_context_summaries WHERE conversation_id = ?", (conversation_id,))
+            self._conn.execute("DELETE FROM agent_conversation_cli_sessions WHERE conversation_id = ?", (conversation_id,))
+            self._conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        self.conversations.main(member)
+        self._conversations_changed(member)
+        return {"deleted": 1}
+
     async def _history_retract(self, params: dict) -> dict:
         """Stop one owner's request and permanently remove its turn, including partial lines."""
         member = self._member_param(params)
@@ -2694,7 +2873,10 @@ class AgentService:
                if turn.member_id == member and turn.source not in ("member", "routine")]
         deleted = sum(self._history.delete(turn.id) for turn in own if turn.id is not None)
         if deleted:
-            self._conversation_of(member).clear_summary()
+            for conversation_id in {turn.conversation_id for turn in own}:
+                self._conversation_of(member, conversation_id).clear_summary()
+                with self._conn:
+                    self._conn.execute("DELETE FROM agent_conversation_cli_sessions WHERE conversation_id = ?", (conversation_id,))
             for turn in own:
                 self._turn_changed(turn.id or 0, member)
         return {"deleted": deleted}
@@ -2714,10 +2896,20 @@ class AgentService:
         member_id = self._member_param(params)
         limit = _opt_int(params, "limit")
         before_id = _opt_int(params, "before_id")
+        around_id = _opt_int(params, "around_id")
         # A limit is clamped into 1..200: SQLite reads a negative LIMIT as "no limit".
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
-        turns = self._history.list(limit=limit, before_id=before_id, member_id=member_id)
+        turns = self._history.list(limit=limit, before_id=before_id, member_id=member_id,
+                                   conversation_id=self.conversations.resolve(member_id, _opt_int(params, "conversation_id")))
+        if around_id is not None:
+            conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
+            anchor = self._history.get(around_id)
+            if anchor is None or anchor.member_id != member_id or anchor.conversation_id != conversation_id:
+                raise invalid_params("around_id must name a turn in this conversation")
+            before = self._history.list(limit=limit, before_id=around_id + 1, member_id=member_id, conversation_id=conversation_id)
+            after = self._history.after(around_id, member_id=member_id, conversation_id=conversation_id)
+            turns = sorted([*before, *after[:limit]], key=lambda turn: turn.id, reverse=True)
         return {"turns": self._turn_views(turns)}
 
     async def _history_search(self, params: dict) -> dict:
@@ -2734,7 +2926,8 @@ class AgentService:
         limit = min(max(limit, 1), HISTORY_SEARCH_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
         turns = self._history.search(
-            query, limit=limit, most=HISTORY_SEARCH_MAX_LIMIT, member_id=member_id
+            query, limit=limit, most=HISTORY_SEARCH_MAX_LIMIT, member_id=member_id,
+            conversation_id=self.conversations.resolve(member_id, _opt_int(params, "conversation_id")),
         )
         return {"turns": self._turn_views(turns)}
 
@@ -2764,6 +2957,7 @@ class AgentService:
                     "model": turn.model,
                     # Whose thread it is in, and for an exchange the member on the other side.
                     "member_id": turn.member_id,
+                    "conversation_id": turn.conversation_id,
                     "peer_id": turn.peer_id,
                     # The files handed with the request: their names and types, never more.
                     "attachments": list(turn.attachments or []),
@@ -2780,6 +2974,37 @@ class AgentService:
     async def _history_clear(self, params: dict) -> dict:
         """Clear the conversations: every thread, with every summary (each member's too), what
         opening taught Raphael and the background tasks."""
+        if "member_id" in params:
+            member_id = self._member_param(params)
+            sessions = {row[0] for row in self._conn.execute("SELECT DISTINCT session_id FROM agent_turns WHERE member_id = ?", (member_id,))}
+            sessions |= {session for session, owner in self._inflight_members.items() if owner == member_id}
+            tasks = [self._inflight[session] for session in sessions if session in self._inflight]
+            for session in sessions:
+                self.stop_session(session)
+                if self._computer is not None:
+                    self._computer.stop_session(session)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            loops = [loop for loop in self._cli_loops if loop.member_id == member_id]
+            await asyncio.gather(*(loop.aclose() for loop in loops))
+            self._cli_loops.difference_update(loops)
+            self._cli_sessions.clear_member(member_id)
+            self._background.forget_member(member_id)
+            deleted = self._history.clear_member(member_id)
+            self._conversation_of(member_id).clear_summary()
+            for conversation in self._named_conversations.values():
+                if conversation.member_id == member_id:
+                    conversation.clear_summary()
+            with self._conn:
+                self._conn.execute("DELETE FROM conversation_context_summaries WHERE conversation_id IN (SELECT id FROM conversations WHERE member_id = ?)", (member_id,))
+            if self._memory is not None:
+                self._memory.forget_member_turns(member_id)
+            if self._team is not None and hasattr(self._team, "store"):
+                self._team.store.mark_read(member_id)
+            if self._notify is not None:
+                self._notify("agent.turn", {"turn_id": 0, "member_id": member_id})
+            if self._team is not None and hasattr(self._team, "_changed"):
+                self._team._changed()
+            return {"deleted": deleted}
         if self._cli_loops:
             for task in self._inflight.values():
                 task.cancel()
@@ -2792,6 +3017,10 @@ class AgentService:
         try:
             # The summary is made of the turns, and the reflection pass starts over with the ids.
             self._conversation.clear_summary()
+            for conversation in self._named_conversations.values():
+                conversation.clear_summary()
+            with self._conn:
+                self._conn.execute("DELETE FROM conversation_context_summaries")
             for member_id in self._member_ids():
                 self._conversation_of(member_id).clear_summary()
             if self._memory is not None:
@@ -2834,8 +3063,7 @@ class AgentService:
     # --- the parts every reply uses -------------------------------------------------------------
 
     def _read_settings(self, speaker: Speaker = RAPHAEL) -> _Settings:
-        """The settings of the assistant; one that is not valid reads as its default. A member of
-        the team that has a model of its own answers with that one."""
+        """Global assistant settings, including for legacy profiles with a stored model."""
         model = self._settings.get("agent_model")
         city = self._settings.get("agent_city")
         return _Settings(
@@ -3020,7 +3248,7 @@ class AgentService:
         its request; 0 if that fails, since the answer matters more. A request one member handed
         another is written as an exchange with the asker (`peer_id`)."""
         member_id = ask.speaker.id
-        question = ask.text
+        question = ask.original_text if ask.original_text is not None else ask.text
         if ask.exchange_speakers is not None:
             requester, respondent = ask.exchange_speakers
             question = labelled_lines(requester, question)
@@ -3047,6 +3275,7 @@ class AgentService:
                     attachments=[a.metadata() for a in ask.attachments],
                     quote=ask.quote,
                     member_id=member_id, peer_id=ask.peer,
+                    conversation_id=ask.conversation_id,
                 )
                 ask.turn_id = turn_id
             ask.recorded_cost = cost
@@ -3066,6 +3295,8 @@ class AgentService:
         if self._memory is not None and status not in ("running", "confirm"):
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.
+                if ask.conversation_id != self.conversations.main(member_id) and self._memory.may_spend():
+                    self._conversation_of(member_id, ask.conversation_id).schedule_fold(self._read_settings(ask.speaker).model, self._memory.ledger)
                 if member_id:
                     self._memory.after_turn(member_id)
                 else:
@@ -3086,6 +3317,7 @@ class AgentService:
         if member_id is None:
             turn = self.turn(turn_id)
             member_id = 0 if turn is None else turn.member_id
+        turn = self.turn(turn_id)
         self._notify("agent.turn", {"turn_id": turn_id, "member_id": member_id})
 
     @staticmethod

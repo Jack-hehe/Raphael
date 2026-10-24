@@ -11,6 +11,7 @@ from contextlib import aclosing
 from ...worker.loop import Call, Outcome, Stop, ToolOutcome, WAITING
 from ...worker.guards import RepeatGuard, wrap_untrusted
 from ..answers import parse_reply
+from ..conversations import Conversations
 from ..mcp_server import RaphaelMcp
 from ...brain.textnorm import public_line
 from ..narration import PUBLIC_PROGRESS_RULES
@@ -21,6 +22,9 @@ from .drivers import Driver
 from .process import secure_directory
 
 logger = logging.getLogger(__name__)
+
+# The line a CLI brain puts between two chat messages of one reply.
+MESSAGE_BREAK = "<<<next message>>>"
 
 APPROVE = {"type": "function", "function": {"name": "approve", "description": "Ask the owner for permission. Never grants permission by itself.",
            "parameters": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"}}, "additionalProperties": True}}}
@@ -33,36 +37,64 @@ class Sessions:
     def __init__(self, conn):
         self.conn = conn
         self.locks = {}
+        self.conversations = Conversations(conn)
         conn.execute("CREATE TABLE IF NOT EXISTS agent_cli_sessions (member_id INTEGER NOT NULL, brain TEXT NOT NULL, session_id TEXT NOT NULL, PRIMARY KEY(member_id, brain))")
         conn.execute("CREATE TRIGGER IF NOT EXISTS delete_member_cli_sessions AFTER DELETE ON members BEGIN DELETE FROM agent_cli_sessions WHERE member_id=OLD.id; END")
-        conn.commit()
+        # Existing native resume IDs belong only to the member's default conversation.
+        with conn:
+            conn.execute("INSERT OR IGNORE INTO agent_conversation_cli_sessions SELECT c.id, s.brain, s.session_id FROM agent_cli_sessions s JOIN conversations c ON c.member_id=s.member_id AND c.is_default=1")
+            conn.execute("DELETE FROM agent_cli_sessions WHERE member_id IN (SELECT member_id FROM conversations WHERE is_default=1)")
 
-    def get(self, member, brain):
-        row = self.conn.execute("SELECT session_id FROM agent_cli_sessions WHERE member_id=? AND brain=?", (member, brain)).fetchone()
+    def get(self, member, brain, conversation_id=None):
+        if conversation_id is None:
+            conversation_id = self.conversations.main(member)
+        row = self.conn.execute("SELECT s.session_id FROM agent_conversation_cli_sessions s JOIN conversations c ON c.id=s.conversation_id WHERE c.id=? AND c.member_id=? AND s.brain=?", (conversation_id, member, brain)).fetchone()
         return row[0] if row else None
 
-    def put(self, member, brain, session):
+    def put(self, member, brain, session, conversation_id=None):
         if not isinstance(session, str) or not 0 < len(session) <= 512:
             return
-        self.conn.execute("INSERT OR REPLACE INTO agent_cli_sessions VALUES(?,?,?)", (member, brain, session))
-        self.conn.commit()
+        if conversation_id is None:
+            conversation_id = self.conversations.main(member)
+        # A deleted conversation cannot be revived by a late session notification.
+        with self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO agent_conversation_cli_sessions SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM conversations WHERE id=? AND member_id=?)", (conversation_id, brain, session, conversation_id, member))
 
     def clear(self):
-        self.conn.execute("DELETE FROM agent_cli_sessions")
-        self.conn.commit()
+        with self.conn:
+            self.conn.execute("DELETE FROM agent_conversation_cli_sessions")
+            self.conn.execute("DELETE FROM agent_cli_sessions")
+
+    def clear_member(self, member_id):
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM agent_conversation_cli_sessions WHERE conversation_id IN "
+                "(SELECT id FROM conversations WHERE member_id = ?)",
+                (member_id,),
+            )
+            self.conn.execute("DELETE FROM agent_cli_sessions WHERE member_id = ?", (member_id,))
 
 
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
-                 system, user, tools, progress, thinking, event, execute, expire=None, spoken=False):
+                 system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
+                 conversation_id=None, quota=None):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
+        self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
+        self.quota = quota
         self.ledger, self.language, self.plain = ledger, language, plain
         self.spoken = spoken
         self.system = system + "\n" + PUBLIC_PROGRESS_RULES + "\nUse only Raphael MCP tools for actions and lookups. "
         self.system += (
-            'For the spoken reply only, return one JSON object with text, messages (at most four), '
+            'For the spoken reply only, return one JSON object with text, messages (usually one; several only '
+            'when naturally separate, at most four), '
             'and say_ja (the Japanese rendering for the voice). No other fields or prose.'
-            if spoken else "Reply in plain text, at most four paragraphs. Never output a JSON reply envelope."
+            if spoken else (
+                "Reply in plain text (Markdown is fine). It is one chat message unless it is naturally "
+                "several (an answer, then a separate exercise or question): then put a line with only "
+                f"{MESSAGE_BREAK} between them, at most four. Never split one thought or pad to fill. "
+                "Never output a JSON reply envelope."
+            )
         )
         self.user, self.tools = user, list(tools) + [APPROVE]
         self.progress, self.thinking, self.event, self.execute = progress, thinking, event, execute
@@ -192,7 +224,7 @@ class CliLoop:
         if self.brains.logged_in(name) is False:
             self._failure("login", NAMES[name])
             return
-        lock = self.sessions.locks.setdefault(self.member_id, asyncio.Lock())
+        lock = self.sessions.locks.setdefault((self.member_id, self.conversation_id), asyncio.Lock())
         if lock.locked():
             self._failure("busy", NAMES[name])
             return
@@ -201,17 +233,17 @@ class CliLoop:
             usage = {}
             try:
                 # A stable, empty workspace keeps native CLI resume independent of turn temp files.
-                workspace = self.brains.home / ".raphael" / "cli-workspaces" / str(self.member_id) / name
+                workspace = self.brains.home / ".raphael" / "cli-workspaces" / str(self.member_id) / str(self.conversation_id) / name
                 workspace.mkdir(parents=True, exist_ok=True)
                 await secure_directory(workspace)
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
-                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ)
+                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota)
                     async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
-                            token=server.token, session=self.sessions.get(self.member_id, self.model), permission=self._native_permission,
+                            token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id), permission=self._native_permission,
                             cwd=str(workspace))) as stream:
                         async for event in stream:
                             if event.kind == "session":
-                                self.sessions.put(self.member_id, self.model, event.text)
+                                self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
                             elif event.kind == "text_delta":
                                 self._buffer = (self._buffer + event.text)[-64000:]
                             elif event.kind == "thinking":
@@ -264,7 +296,9 @@ class CliLoop:
             data = next((obj for obj in reversed(objects) if isinstance(obj, dict) and ("text" in obj or "messages" in obj)), None)
             if data is not None:
                 return parse_reply(data, self.language, plain=self.plain, long=True)
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", outcome.final) if part.strip()]
-        if len(paragraphs) > 4:
-            paragraphs = paragraphs[:3] + ["\n\n".join(paragraphs[3:])]
-        return parse_reply({"text": outcome.final, "messages": paragraphs}, self.language, plain=self.plain, long=True)
+        # paragraphs stay in one message; only the model's own breaks make several
+        parts = [part.strip() for part in re.split(rf"^\s*{re.escape(MESSAGE_BREAK)}\s*$", outcome.final, flags=re.M) if part.strip()]
+        if len(parts) > 4:
+            parts = parts[:3] + ["\n\n".join(parts[3:])]
+        text = "\n\n".join(parts) if parts else outcome.final
+        return parse_reply({"text": text, "messages": parts or [outcome.final]}, self.language, plain=self.plain, long=True)

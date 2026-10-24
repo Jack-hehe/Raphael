@@ -11,12 +11,15 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
 import { avatarHTML, loadAvatar, onAvatarChange } from "./avatar";
+import { createAutomationsPage } from "./pages/automations";
+import { createTeamPage } from "./pages/team";
+import { configureRooms } from "./group-chats";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
 import { createHome } from "./pages/home";
 import { createSettings } from "./pages/settings";
-import { createNavigationPage } from "./navigation-pages";
+import { createNavigationPage, registerNavigationPages } from "./navigation-pages";
 import { applySkin, ownerButtonHTML } from "./owner-settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
@@ -157,6 +160,8 @@ async function start(): Promise<void> {
   const home = createHome(ctx);
   const agent = createAgent(ctx);
   const settings = createSettings(ctx);
+  configureRooms(ctx);
+  registerNavigationPages({ automations: createAutomationsPage, team: createTeamPage });
   const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
 
   const nav = document.getElementById("nav")!;

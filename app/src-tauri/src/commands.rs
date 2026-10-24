@@ -179,8 +179,12 @@ pub enum MainEvent {
     /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
     /// Raphael's, and a core from before the members names none): what was said stays in the core.
     AgentTurn { turn_id: u64, member_id: u64 },
+    ConversationsChanged { member_id: u64 },
+    QuotaChanged,
+    ActionModeChanged,
     /// Data changed: the window re-reads it without receiving private content.
     RoutinesChanged { member_id: u64 },
+    RoomsChanged { room_id: u64 },
     MembersChanged,
     ProvidersChanged,
     SettingsChanged,
@@ -343,7 +347,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 71] = [
+const ALLOWED_METHODS: [&str; 100] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -384,6 +388,7 @@ const ALLOWED_METHODS: [&str; 71] = [
     // Raphael's memory, in the settings (`validate_core_call` checks the name and the text). Named
     // one by one, like the messaging methods: a method added to the memory later stays closed.
     "memory.list",
+    "memory.create",
     "memory.get",
     "memory.update",
     "memory.delete",
@@ -401,6 +406,15 @@ const ALLOWED_METHODS: [&str; 71] = [
     // column and details panel). Named one by one as well; the core checks their params. A member
     // is asked something only by `agent_ask_text`, like Raphael: `agent.ask` stays closed.
     "members.list",
+    "conversations.list",
+    "conversations.create",
+    "conversations.rename",
+    "conversations.delete",
+    "agent.history.delete",
+    "messages.search",
+    "quota.list",
+    "agent.speech.status",
+    "agent.speak",
     "members.create",
     "members.update",
     "members.delete",
@@ -409,6 +423,17 @@ const ALLOWED_METHODS: [&str; 71] = [
     "members.read",
     "members.viewing",
     "members.tool_choices",
+    "members.skills.list",
+    "members.skills.import",
+    "members.skills.update",
+    "members.skills.delete",
+    "members.commands.list",
+    "members.commands.save",
+    "members.commands.delete",
+    "members.voices",
+    "members.duplicate",
+    "members.mark_all_read",
+    "members.unread",
     "groups.create",
     "groups.update",
     "groups.delete",
@@ -417,6 +442,14 @@ const ALLOWED_METHODS: [&str; 71] = [
     "routines.update",
     "routines.delete",
     "routines.template",
+    "routines.runs",
+    "rooms.list",
+    "rooms.create",
+    "rooms.delete",
+    "rooms.messages",
+    "rooms.send",
+    "rooms.transcribe",
+    "rooms.update",
     // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).
     "safety.rules.list",
     "safety.rules.create",
@@ -481,7 +514,7 @@ fn validate_history_search(params: &Value) -> Result<(), String> {
 }
 
 /// The params of a memory method: `name` a memory's name where one is needed, and for
-/// `memory.update` a `body` of text within the limit and, if given, a `description` within its own.
+/// `memory.update` or `memory.create` a `body` within the limit and an optional short description.
 fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
     let needs_name = matches!(
         method,
@@ -495,14 +528,22 @@ fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
     {
         return Err(format!("{method} needs the name of a memory"));
     }
-    if method != "memory.update" {
+    if !matches!(method, "memory.update" | "memory.create") {
         return Ok(());
     }
     let chars = |value: &Value| value.as_str().map(|text| text.chars().count());
+    if method == "memory.create"
+        && params
+            .get("body")
+            .and_then(Value::as_str)
+            .is_some_and(|body| body.trim().is_empty())
+    {
+        return Err("memory.create needs a non-empty body".to_owned());
+    }
     match params.get("body").and_then(chars) {
         Some(count) if count <= MEMORY_BODY_MAX => {}
         Some(_) => return Err("記憶內容最多 1,200 字".to_owned()),
-        None => return Err("memory.update needs the body of the memory".to_owned()),
+        None => return Err(format!("{method} needs the body of the memory")),
     }
     match params.get("description") {
         None | Some(Value::Null) => Ok(()),
@@ -754,6 +795,7 @@ pub async fn agent_ask_text(
     request_id: Option<String>,
     replace_turn_id: Option<u64>,
     quote: Option<Value>,
+    conversation_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if request_id.as_deref().is_some_and(|id| !is_question_id(id)) {
@@ -768,7 +810,7 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_typed(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote)
+        .ask_conversation(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote, conversation_id)
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -888,7 +930,13 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         "routines.changed" => Some(MainEvent::RoutinesChanged {
             member_id: params.get("member_id")?.as_u64()?,
         }),
+        "rooms.changed" => Some(MainEvent::RoomsChanged { room_id: params.get("room_id")?.as_u64()? }),
         "members.changed" => Some(MainEvent::MembersChanged),
+        "conversations.changed" => Some(MainEvent::ConversationsChanged {
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
+        }),
+        "quota.changed" => Some(MainEvent::QuotaChanged),
+        "action_mode.changed" => Some(MainEvent::ActionModeChanged),
         "providers.changed" => Some(MainEvent::ProvidersChanged),
         "settings.changed" => Some(MainEvent::SettingsChanged),
         "integrations.changed" => Some(MainEvent::ConnectionsChanged),
@@ -1680,6 +1728,19 @@ async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring
     }
 }
 
+/// The scheduler's persistent system-awake request is applied on its own OS thread.
+#[tauri::command]
+pub fn schedule_keep_awake_get(webview: Webview) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::get()
+}
+
+#[tauri::command]
+pub fn schedule_keep_awake_set(webview: Webview, enabled: bool) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::set(enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1742,6 +1803,8 @@ mod tests {
                 "open_external_url",
                 "open_link",
                 "save_usage_csv",
+                "schedule_keep_awake_get",
+                "schedule_keep_awake_set",
                 "window_hotkey",
             ]
         );
@@ -1861,6 +1924,18 @@ mod tests {
     #[test]
     fn the_main_window_manages_the_members_by_their_names_only() {
         for method in [
+            "memory.create",
+            "members.unread",
+            "members.skills.list",
+            "members.skills.import",
+            "members.skills.update",
+            "members.skills.delete",
+            "members.commands.list",
+            "members.commands.save",
+            "members.commands.delete",
+            "members.voices",
+            "members.duplicate",
+            "members.mark_all_read",
             "members.list",
             "members.create",
             "members.update",
@@ -1884,6 +1959,9 @@ mod tests {
         for method in [
             "members.",
             "members",
+            "members.skills.run",
+            "members.commands.execute",
+            "member.notice",
             "members.ask",
             "groups.",
             "routines.run",
@@ -1940,6 +2018,7 @@ mod tests {
     fn the_window_hears_a_question_open_and_close() {
         let prompt = AskPrompt {
             member_id: None,
+            conversation_id: None,
             always: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,
@@ -2074,6 +2153,10 @@ mod tests {
         assert!(ok("memory.get", json!({"name": "user-city"})));
         assert!(ok("memory.delete", json!({"name": "user-city"})));
         assert!(ok(
+            "memory.create",
+            json!({"member_id": 3, "space": "own", "body": "Owner note"})
+        ));
+        assert!(ok(
             "memory.update",
             json!({"name": "user-city", "body": "主人住在台北。"})
         ));
@@ -2086,6 +2169,11 @@ mod tests {
             json!({"name": "user-city", "body": "長".repeat(1200), "description": null})
         ));
         for (method, params) in [
+            ("memory.create", json!({"member_id": 3})),
+            ("memory.create", json!({"body": "  "})),
+            ("memory.create", json!({"body": 5})),
+            ("memory.create", json!({"body": "x".repeat(1201)})),
+            ("memory.create", json!({"body": "x", "description": "x".repeat(81)})),
             ("memory.get", json!({})),
             ("memory.get", json!({"name": "../raphael"})),
             ("memory.delete", json!({"name": 3})),

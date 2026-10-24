@@ -55,6 +55,7 @@ from dataclasses import dataclass
 from ..agent.failure import AgentFailure
 from ..agent.attribution import labelled_lines, turn_speakers
 from ..agent.history import AgentHistory, Turn
+from ..agent.conversations import Conversations
 from ..agent.ledger import Ledger
 from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
 from ..brain.providers.base import ModelProvider
@@ -257,10 +258,12 @@ class Conversation:
         clock: Callable[[], float] = time.monotonic,
         reflected_through: Callable[[], int] = lambda: 0,
         member_id: int = 0,
+        conversation_id: int | None = None,
         on_change: Callable[[], None] | None = None,
     ) -> None:
         self._on_change = on_change
         self.member_id = member_id
+        self.conversation_id = conversation_id
         self._conn = conn
         self._client = for_purpose(client, "memory")
         self._now_ms = now_ms
@@ -276,6 +279,12 @@ class Conversation:
     # --- the summary -----------------------------------------------------------------------------
 
     def summary(self) -> Summary:
+        if self.conversation_id is not None:
+            row = self._conn.execute(
+                "SELECT text, through_turn_id, updated_at_ms FROM conversation_context_summaries WHERE conversation_id = ?",
+                (self.conversation_id,),
+            ).fetchone()
+            return Summary("", 0, 0) if row is None else Summary(row[0], int(row[1]), int(row[2]))
         row = self._conn.execute(
             "SELECT text, through_turn_id, updated_at_ms FROM conversation_summaries"
             " WHERE member_id = ?",
@@ -286,6 +295,19 @@ class Conversation:
         return Summary(row[0], int(row[1]), int(row[2]))
 
     def _save(self, text: str, through_turn_id: int) -> None:
+        if self.conversation_id is not None:
+            # A deleted conversation must never be resurrected by an in-flight fold.
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO conversation_context_summaries (conversation_id, text, through_turn_id, updated_at_ms)"
+                    " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM conversations WHERE id = ?)"
+                    " ON CONFLICT(conversation_id) DO UPDATE SET text = excluded.text,"
+                    " through_turn_id = excluded.through_turn_id, updated_at_ms = excluded.updated_at_ms",
+                    (self.conversation_id, text, through_turn_id, self._now_ms(), self.conversation_id),
+                )
+            if self._on_change is not None:
+                self._on_change()
+            return
         with self._conn:
             self._conn.execute(
                 "INSERT INTO conversation_summaries (member_id, text, through_turn_id,"
@@ -302,6 +324,10 @@ class Conversation:
         """Forget the summary; whether there was one. The turns stay, and are read again from the
         start within the limits. A fold that waits for the model meanwhile will write nothing."""
         self._clears += 1
+        if self.conversation_id is not None:
+            with self._conn:
+                cursor = self._conn.execute("DELETE FROM conversation_context_summaries WHERE conversation_id = ?", (self.conversation_id,))
+            return cursor.rowcount > 0
         with self._conn:
             cursor = self._conn.execute(
                 "DELETE FROM conversation_summaries WHERE member_id = ?", (self.member_id,)
@@ -319,7 +345,8 @@ class Conversation:
         try:
             summary = self.summary()
             after = self._history.after(
-                summary.through_turn_id, limit=FOLD_AT_TURNS * 3, member_id=self.member_id
+                summary.through_turn_id, limit=FOLD_AT_TURNS * 3, member_id=self.member_id,
+                conversation_id=self.conversation_id or Conversations(self._conn, self._now_ms).main(self.member_id),
             )
         except sqlite3.Error as exc:
             logger.warning("Could not read the conversation so far: %s", type(exc).__name__)
@@ -373,7 +400,8 @@ class Conversation:
     def fold_due(self) -> tuple[list[Turn], int] | None:
         """What a fold now would fold (see `plan_fold`), or None."""
         summary = self.summary()
-        turns = self._history.after(summary.through_turn_id, member_id=self.member_id)
+        turns = self._history.after(summary.through_turn_id, member_id=self.member_id,
+                                    conversation_id=self.conversation_id or Conversations(self._conn, self._now_ms).main(self.member_id))
         return plan_fold(turns, self.protected(turns))
 
     def schedule_fold(self, model: str, ledger_for: Callable[[], Ledger]) -> None:

@@ -27,7 +27,7 @@ assert "PRIVATE-INSTRUCTIONS" in Path(sys.argv[sys.argv.index("--append-system-p
 json.loads(sys.stdin.readline())
 if "--resume" in sys.argv:
     assert sys.argv[sys.argv.index("--resume")+1] == "thread-one"
-print(json.dumps({"type":"result","subtype":"success","session_id":"thread-one","result":"Hello\\n\\nNext lesson.","usage":{"input_tokens":3,"output_tokens":5}}), flush=True)
+print(json.dumps({"type":"result","subtype":"success","session_id":"thread-one","result":"Hello\\n<<<next message>>>\\nNext lesson.","usage":{"input_tokens":3,"output_tokens":5}}), flush=True)
 ''')
     for _ in range(2):
         result = await typed(rig, "Teach me", teacher.id)
@@ -39,6 +39,47 @@ print(json.dumps({"type":"result","subtype":"success","session_id":"thread-one",
     assert [tuple(row) for row in rows] == [(0, "agent", "cli:claude:sonnet")] * 2
     assert client.calls == 0 and not client.chat_calls
 
+
+async def test_named_cli_conversations_resume_only_their_own_native_session(setup, tmp_path):
+    rig, team = setup
+    teacher = member(team, model="cli:claude")
+    record = tmp_path / "native-sessions.jsonl"
+    fake_brain(rig, tmp_path, '''import json, sys
+from pathlib import Path
+json.loads(sys.stdin.readline())
+workspace = Path.cwd()
+native = "native-" + workspace.parent.name
+resume = sys.argv[sys.argv.index("--resume")+1] if "--resume" in sys.argv else None
+assert resume is None or resume == native
+with Path(RECORD).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps({"workspace":str(workspace), "resume":resume, "native":native}) + "\\n")
+print(json.dumps({"type":"result", "subtype":"success", "session_id":native, "result":"Finished."}), flush=True)
+'''.replace("RECORD", repr(str(record))))
+    first = (await rig.call("conversations.create", {"member_id": teacher.id}))["conversation"]["id"]
+    second = (await rig.call("conversations.create", {"member_id": teacher.id}))["conversation"]["id"]
+    for number, conversation in enumerate([first, second, first]):
+        result = await rig.call("agent.ask", {"session_id": f"named-{number}", "text": "Teach me",
+                                             "source": "app", "ui_language": "en", "member_id": teacher.id,
+                                             "conversation_id": conversation})
+        assert result["text"] == "Finished."
+    assert (await typed(rig, "Hello", teacher.id))["text"] == "Finished."
+    rows = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
+    assert [row["resume"] for row in rows] == [None, None, f"native-{first}", None]
+    assert rows[0]["workspace"] == rows[2]["workspace"]
+    assert len({row["workspace"] for row in rows}) == 3
+
+
+async def test_a_cli_reply_is_one_message_unless_the_model_breaks_it(setup, tmp_path, client):
+    # paragraphs are one message: only the model's own break makes several (owner, 2026-10-24)
+    rig, team = setup
+    teacher = member(team, model="cli:claude:sonnet")
+    fake_brain(rig, tmp_path, """import json, sys
+json.loads(sys.stdin.readline())
+print(json.dumps({"type":"result","subtype":"success","session_id":"t","result":"One.\\n\\nTwo.\\n\\nThree.","usage":{}}), flush=True)
+""")
+    await typed(rig, "Hi", teacher.id)
+    turn = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"][0]
+    assert [m["text"] for m in turn["messages"] if m["kind"] == "reply"] == ["One.\n\nTwo.\n\nThree."]
 
 async def test_missing_cli_is_a_clear_reply_and_event_without_api_key(setup, tmp_path):
     rig, team = setup

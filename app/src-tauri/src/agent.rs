@@ -105,6 +105,7 @@ fn parse_ask(confirm: Option<&Value>) -> Result<Reply, Malformed> {
     Ok(Reply::Ask(AskPrompt {
         id: id.to_owned(),
         member_id: None,
+        conversation_id: None,
         tier: Tier::parse(confirm.get("tier").and_then(Value::as_str).unwrap_or("")),
         prefix: prefix.to_owned(),
         text: text.to_owned(),
@@ -229,6 +230,7 @@ mod tests {
             Ok(Reply::Ask(AskPrompt {
                 id: "c-1".into(),
                 member_id: None,
+                conversation_id: None,
                 tier: Tier::T2,
                 prefix: "問".into(),
                 text: "要複製到剪貼簿嗎？".into(),

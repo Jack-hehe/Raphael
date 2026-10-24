@@ -29,6 +29,9 @@ import type {
   NewMember,
   Routine,
   RoutineOffer,
+  RoutineRun,
+  Room,
+  RoomMessage,
   DeviceSettings,
   DictionaryEntry,
   HistoryItem,
@@ -108,6 +111,8 @@ export const historyClear = (): Promise<{ deleted: number }> => core("history.cl
 // ---------- conversations with Raphael ----------
 
 export interface AgentHistoryQuery {
+  conversation_id?: number;
+  around_id?: number;
   limit?: number;
   /** Only turns older than this id: the cursor of the next page. */
   before_id?: number;
@@ -124,8 +129,8 @@ export const workerCancel = (taskId: number): Promise<{ cancelled: boolean }> =>
 /** Runs a task that did not finish again, as a new task; its id. */
 export const workerRerun = (taskId: number): Promise<{ task_id: number }> => core("worker.rerun", { task_id: taskId });
 /** The answered turns whose words hold `query`, best first, over the whole history, in the shape of `agentHistoryList`. */
-export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns: AgentTurn[] }> =>
-  core("agent.history.search", { query, limit: 100, member_id: memberId });
+export const agentHistorySearch = (query: string, memberId = 0, conversationId?: number): Promise<{ turns: AgentTurn[] }> =>
+  core("agent.history.search", { query, limit: 100, member_id: memberId, ...(conversationId !== undefined ? { conversation_id: conversationId } : {}) });
 
 /**
  * Asks Raphael in writing (the composer of the 拉斐爾 page). The question goes the way a spoken one
@@ -135,7 +140,7 @@ export const agentHistorySearch = (query: string, memberId = 0): Promise<{ turns
  * when there are some: a question with files may have no words. `memberId` asks a member in its
  * own thread instead of Raphael (`agent.ask`'s `member_id`); it goes only when it is not 0.
  */
-export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote } = {}): Promise<void> =>
+export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote; conversationId?: number } = {}): Promise<void> =>
   invoke("agent_ask_text", {
     text,
     ...(attachments.length > 0 ? { attachments } : {}),
@@ -196,7 +201,7 @@ export const groupsUpdate = (id: number, patch: Partial<Pick<MemberGroup, "name"
 /** Deletes a group; its members are 未分組 from then on. */
 export const groupsDelete = (id: number): Promise<{ deleted: boolean }> => core("groups.delete", { id });
 
-export const routinesList = (memberId: number): Promise<{ routines: Routine[] }> => core("routines.list", { member_id: memberId });
+export const routinesList = (memberId?: number): Promise<{ routines: Routine[] }> => core("routines.list", memberId === undefined ? {} : { member_id: memberId });
 export const routinesCreate = (
   routine: Pick<Routine, "member_id" | "title" | "prompt" | "schedule"> & { enabled?: boolean },
 ): Promise<{ routine: Routine }> => core("routines.create", routine);
@@ -370,10 +375,30 @@ export async function usageRuns(params: RunRequest): Promise<RunReport> {
     return { ...group, member_id: member?.id ?? (group.label === "Raphael" ? 0 : undefined), avatar_url: member?.avatar_url };
   }) } } : {}) };
 }
-export async function usageTrace(params: { kind: "turn" | "task"; id: number }): Promise<RunTrace> {
+export async function usageTrace(params: { kind: "turn" | "task" | "routine"; id: number }): Promise<RunTrace> {
   const [trace, members] = await Promise.all([core<RunTrace>("usage.trace", params), membersList().catch(() => null)]);
   return { ...trace, run: runPicture(trace.run, members) };
 }
 export const usageExport = (params: RunRequest): Promise<{ csv: string }> => core("usage.export", params);
 export const usageAllowances = (): Promise<CliAllowances> => core("usage.allowances");
 export const saveUsageCsv = (csv: string): Promise<boolean> => invoke("save_usage_csv", { csv });
+// Group threads reuse the same worker and safety gate as individual conversations.
+export const routineRuns = (routineId: number): Promise<{ runs: RoutineRun[]; total?: number }> => core("routines.runs", { routine_id: routineId });
+export const roomsList = (): Promise<{ rooms: Room[] }> => core("rooms.list");
+export const roomsCreate = (room: { name: string; member_ids: number[]; group_id?: number | null; is_team?: boolean }): Promise<{ room: Room }> => core("rooms.create", room);
+export const roomsDelete = (roomId: number): Promise<{ deleted: boolean }> => core("rooms.delete", { room_id: roomId });
+export const roomsUpdate = (roomId: number, patch: { name?: string; member_ids?: number[] }): Promise<{ room: Room }> => core("rooms.update", { room_id: roomId, ...patch });
+export const roomTranscribe = (data: string, uiLanguage: string): Promise<{ text: string }> => core("rooms.transcribe", { data, ui_language: uiLanguage });
+export const roomMessages = (roomId: number, before?: number): Promise<{ messages: RoomMessage[] }> => core("rooms.messages", { room_id: roomId, before });
+export const roomSend = (roomId: number, text: string, requestId: string, uiLanguage: string, attachments: WireAttachment[] = []): Promise<{ message_id: number; duplicate: boolean }> => core("rooms.send", { room_id: roomId, text, request_id: requestId, ui_language: uiLanguage, ...(attachments.length ? { attachments } : {}) });
+export const keepAwakeGet = (): Promise<boolean> => invoke("schedule_keep_awake_get");
+export const keepAwakeSet = (enabled: boolean): Promise<boolean> => invoke("schedule_keep_awake_set", { enabled });
+// Member profile resources use the same member boundary as conversations.
+export const membersSkillsList = (memberId: number): Promise<{ skills: import("./types").MemberSkill[] }> => core("members.skills.list", { member_id: memberId });
+export const membersSkillsImport = (memberId: number, source: string): Promise<{ skill: import("./types").MemberSkill; skills?: import("./types").MemberSkill[] }> => core("members.skills.import", { member_id: memberId, source });
+export const membersSkillsUpdate = (memberId: number, id: number, enabled: boolean): Promise<unknown> => core("members.skills.update", { member_id: memberId, id, enabled });
+export const membersSkillsDelete = (memberId: number, id: number): Promise<unknown> => core("members.skills.delete", { member_id: memberId, id });
+export const membersCommandsList = (memberId: number): Promise<{ commands: import("./types").MemberCommand[] }> => core("members.commands.list", { member_id: memberId });
+export const membersCommandsSave = (memberId: number, command: Omit<import("./types").MemberCommand, "id"> & { id?: number }): Promise<unknown> => core("members.commands.save", { member_id: memberId, ...command });
+export const membersCommandsDelete = (memberId: number, id: number): Promise<unknown> => core("members.commands.delete", { member_id: memberId, id });
+export const membersVoices = (): Promise<{ voices: import("./types").MemberVoice[]; configured: boolean }> => core("members.voices");

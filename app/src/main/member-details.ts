@@ -1,25 +1,13 @@
-// The details panel of the 拉斐爾 page (the mockup's `members`, right): the member whose thread is
-// open. At the top its picture at 64 px, which opens the small popover that changes it (the presets,
-// if the owner has any, and 「從電腦選…」), then its name and role, changed where they are. Then three
-// tabs:
-//
-// - 詳細資訊: 個性 and 指示 (each closed to one line until opened, then a box saved when it loses
-//   the focus), 分組 (a dropdown), 例行任務 (a row each with its switch, a borderless pencil and trash; a
-//   borderless plus adds one in a small form: title, a dropdown of 每天 / 每週 / 每隔幾小時 with its
-//   time, day or interval, and what to do), and 看的地方, the group's places as chips (they are
-//   changed in the group's menu).
-// - 記憶: 「共同記憶」, which every agent shares, and 「<name> 的記憶」, the agent's own, with the list of
-//   Settings › 拉斐爾 › 記憶 (memory-view.ts); a note's 「more」 moves it from one to the other.
-//
-// Raphael's panel has his picture (changed here and nowhere else: from the PC, cut in the crop
-// dialog of avatar-settings.ts, or 還原 to his emblem), his routines and his memory.
-// His name and role are not changed, and he has no group or instructions here. No one has a model
-// of their own: every member answers with Raphael's (Settings › 模型與用量).
-//
-// The panel draws itself again from the host's data after each change; what is being typed is kept
-// in the fields (the name, the role, the instructions and the routine form are read back before).
+// The open member's panel keeps its avatar and editable identity above the conversation slot,
+// personality/instruction folds and resource rows. Each resource opens a subpage with a back
+// button; fields being typed in survive live member updates. Raphael keeps his special avatar,
+// routines and memory, while every member uses the same global model and tool capabilities.
 
+import { openRoutineDialog } from "./routine-dialog";
+import { mountConversationList } from "./conversation-list";
 import * as api from "./api";
+import { mountMemberResources } from "./member-profile-resources";
+import "./member-panel.css";
 import { changeRaphaelAvatar, resetRaphaelAvatar } from "./avatar-settings";
 import { currentAvatar } from "./avatar";
 import { describeError } from "./format";
@@ -28,61 +16,21 @@ import { groupChoices, groupFromValue, groupValue, openAvatarPicker, pickPicture
 import { createMemory } from "./memory-view";
 import { memoryHTML } from "./memory-view";
 import {
-  HOUR_STEPS,
   INSTRUCTIONS_MAX,
   NAME_MAX,
   PERSONALITY_MAX,
   RAPHAEL_ID,
   ROLE_MAX,
-  ROUTINE_PROMPT_MAX,
-  ROUTINE_TITLE_MAX,
   cleanName,
-  dayName,
   faceHTML,
   isMemberNameTaken,
-  isTime,
   scheduleText,
   sourceLabel,
 } from "./members";
-import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, Routine, RoutineSchedule, WireAttachment } from "./types";
-import { actionRow, btn, esc, ico, iconButton, openMenu, sel, tabs, tg, toaster } from "./ui";
+import type { AppContext, AvatarPreset, Member, MemberPatch, MembersList, Routine, WireAttachment } from "./types";
+import { btn, esc, ico, iconButton, openMenu, sel, tg, toaster } from "./ui";
 
-export type DetailsTab = "details" | "memory";
-
-/** The routine being written: a new one (`id` null) or one being changed. */
-export interface RoutineDraft {
-  id: number | null;
-  title: string;
-  prompt: string;
-  kind: RoutineSchedule["kind"];
-  time: string;
-  days: number[];
-  hours: number;
-}
-
-/** A form for a new routine: every morning at nine. */
-export const newRoutineDraft = (): RoutineDraft => ({ id: null, title: "", prompt: "", kind: "daily", time: "09:00", days: [1], hours: 3 });
-
-/** The form for changing `routine`. */
-export function routineDraft(routine: Routine): RoutineDraft {
-  const s = routine.schedule;
-  return {
-    id: routine.id,
-    title: routine.title,
-    prompt: routine.prompt,
-    kind: s.kind,
-    time: s.kind === "every" ? "09:00" : s.time,
-    days: s.kind === "weekly" && s.days.length ? [...s.days] : [1],
-    hours: s.kind === "every" ? s.hours : 3,
-  };
-}
-
-/** The schedule a form says, or null while its time is not one. */
-export function draftSchedule(d: RoutineDraft): RoutineSchedule | null {
-  if (d.kind === "every") return { kind: "every", hours: Math.min(24, Math.max(1, Math.round(d.hours))) };
-  if (!isTime(d.time)) return null;
-  return d.kind === "daily" ? { kind: "daily", time: d.time } : { kind: "weekly", days: [...new Set(d.days)].sort((a, b) => a - b), time: d.time };
-}
+export type DetailsTab = "details" | "memory" | "routines" | "skills" | "commands" | "voice";
 
 export interface DetailsHost {
   app: AppContext;
@@ -96,6 +44,9 @@ export interface DetailsHost {
   setPicture(id: number, file: WireAttachment): Promise<void>;
   /** The × of the panel. */
   close(): void;
+  edit?(member: Member): void;
+  hide?(member: Member): void;
+  openConversation?(member: number, conversation: number): void;
 }
 
 export interface DetailsPanel {
@@ -112,21 +63,72 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   const el = document.createElement("aside");
   el.className = "mb-det";
   el.innerHTML =
-    `<div class="mb-det-head"><span class="mb-det-fill"></span>${iconButton("x", t("members.close"), ' data-det="close"', "mb-tool")}</div>` +
+    `<div class="mb-det-head"><span class="mb-det-fill"></span>${iconButton("pencil", t("members.sideEdit"), ' data-det="edit"', "mb-tool")}${iconButton("x", t("members.close"), ' data-det="close"', "mb-tool")}</div>` +
     `<div class="mb-det-scroll"><div class="mb-who"></div><div class="mb-tabs"></div><div class="mb-tab-body"></div></div>`;
   const who = el.querySelector<HTMLElement>(".mb-who")!;
   const tabBar = el.querySelector<HTMLElement>(".mb-tabs")!;
   const body = el.querySelector<HTMLElement>(".mb-tab-body")!;
   const closeButton = el.querySelector<HTMLElement>('[data-det="close"]')!;
+  const editButton = el.querySelector<HTMLElement>('[data-det="edit"]')!;
 
   let tab: DetailsTab = "details";
   let routines: Routine[] | "loading" | "failed" = "loading";
   let routineLoads = 0;
-  let draft: RoutineDraft | null = null;
   /** The long fields that are open (個性, 指示): closed, each is one line. */
   const openFields = new Set<string>();
   /** The member the panel was last drawn for: its fields are drawn afresh when it changes. */
   let drawnFor: number | null = null;
+  let counts = { skills: 0, commands: 0, memory: 0 };
+  let countEpoch = 0;
+  let resources: ReturnType<typeof mountMemberResources> | null = null;
+  let resourceKey = "";
+  let memoryDraft = "";
+  const conversationHost = document.createElement("div");
+  let conversationMember: number | null = null;
+  let conversationList: ReturnType<typeof mountConversationList> | null = null;
+  function drawConversations(): void {
+    const memberId = host.member().id;
+    if (conversationMember !== memberId) {
+      conversationList?.destroy(); conversationList = null; conversationMember = memberId;
+    }
+    const slot = body.querySelector<HTMLElement>('[data-slot="conversations"]');
+    if (!slot || !host.openConversation) return;
+    slot.replaceChildren(conversationHost);
+    if (!conversationList) conversationList = mountConversationList(conversationHost, {
+      memberId, collapseWhenEmpty: true,
+      onVisibility(visible) { const current = body.querySelector<HTMLElement>('[data-slot="conversations"]'); if (current) current.hidden = !visible; },
+      onOpen(id) { host.openConversation?.(memberId, id); },
+    });
+    slot.hidden = conversationHost.hidden;
+  }
+  async function loadCounts(): Promise<void> {
+    const epoch = ++countEpoch, id = host.member().id;
+    const result = await Promise.allSettled([
+      id === RAPHAEL_ID ? Promise.resolve({skills: []}) : api.core<{skills: unknown[]}>("members.skills.list", {member_id: id}),
+      id === RAPHAEL_ID ? Promise.resolve({commands: []}) : api.core<{commands: unknown[]}>("members.commands.list", {member_id: id}),
+      api.core<{ memories: unknown[] }>("memory.list", { member_id: id, space: "own" }),
+    ]);
+    if (epoch !== countEpoch || id !== host.member().id) return;
+    counts = {
+      skills: result[0].status === "fulfilled" ? result[0].value?.skills?.length ?? 0 : 0,
+      commands: result[1].status === "fulfilled" ? result[1].value?.commands?.length ?? 0 : 0,
+      memory: result[2].status === "fulfilled" ? result[2].value?.memories?.length ?? 0 : 0,
+    };
+    draw();
+  }
+  function pageRow(page: DetailsTab, label: string, icon: Parameters<typeof ico>[0], detail = ""): string {
+    return `<button type="button" class="btn mb-panel-row" data-det="tab" data-tab="${page}" data-k="det-tab:${page}">${ico(icon)}<span>${esc(label)}</span><small>${esc(detail)}</small>${ico("right")}</button>`;
+  }
+  function pageRows(member: Member): string {
+    const active = Array.isArray(routines) ? routines.filter(r => r.enabled).length : 0;
+    return `<nav class="mb-panel-pages" aria-label="${esc(t("members.details"))}">` +
+      pageRow("routines", t("members.routines"), "clock", t("members.panelActive", {p0: active})) +
+      pageRow("memory", t("mem.title"), "memory", t("members.panelNotes", {p0: counts.memory})) +
+      (member.id === RAPHAEL_ID ? "" : pageRow("skills", t("members.panelSkills"), "sparkle", t("members.panelCount", {p0: counts.skills})) +
+      pageRow("commands", t("members.panelCommands"), "steps", t("members.panelCount", {p0: counts.commands})) +
+      pageRow("voice", t("members.panelVoice"), "voice") +
+      `<button type="button" class="btn mb-panel-row" data-det="hide">${ico("eyeOff")}<span class="mb-panel-row-copy"><span>${esc(t("members.panelHide"))}</span><small>${esc(t("members.panelHideHint"))}</small></span>${ico("right")}</button>`) + `</nav>`;
+  }
 
   const memoryHost = {
     visible: () => el.isConnected && !el.hidden && tab === "memory",
@@ -156,7 +158,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   }
 
   function routineRowHTML(routine: Routine): string {
-    if (draft?.id === routine.id) return routineFormHTML(draft);
     return (
       `<div class="mb-rt" data-routine="${routine.id}">` +
       `<span class="mb-rt-main"><b>${esc(routine.title)}</b><span>${esc(scheduleText(routine.schedule))}</span></span>` +
@@ -168,40 +169,15 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     );
   }
 
-  function routineFormHTML(d: RoutineDraft): string {
-    const kinds = [
-      { value: "daily", label: t("members.daily") },
-      { value: "weekly", label: t("members.weekly") },
-      { value: "every", label: t("members.every") },
-    ];
-    const days = Array.from({ length: 7 }, (_, n) => ({ value: String(n), label: dayName(n) }));
-    // a routine of several days keeps them until another day is chosen
-    const dayValue = d.days.length === 1 ? String(d.days[0]) : d.days.join(",");
-    if (d.days.length > 1) days.unshift({ value: dayValue, label: d.days.map(dayName).join(t("members.daysJoin")) });
-    const hours = HOUR_STEPS.map((n) => ({ value: String(n), label: n === 1 ? t("members.everyHour") : t("members.everyHours", { p0: n }) }));
-    const time = `<input id="mb-r-time" class="mb-fin mb-time" type="time" value="${esc(d.time)}" aria-label="${esc(t("members.time"))}">`;
-    return (
-      `<div class="mb-rform" data-routine-form>` +
-      `<input id="mb-r-title" class="mb-fin" type="text" maxlength="${ROUTINE_TITLE_MAX}" value="${esc(d.title)}" placeholder="${esc(t("members.routineTitle"))}" aria-label="${esc(t("members.routineTitle"))}" autocomplete="off">` +
-      `<div class="mb-rsched">${sel(kinds, d.kind, t("members.schedule"), ' data-det="r-kind" data-k="r-kind"')}` +
-      (d.kind === "weekly" ? sel(days, dayValue, t("members.day"), ' data-det="r-day" data-k="r-day"') : "") +
-      (d.kind === "every" ? sel(hours, String(d.hours), t("members.hours"), ' data-det="r-hours" data-k="r-hours"') : time) +
-      `</div>` +
-      `<textarea id="mb-r-prompt" class="mb-fin mb-ta" rows="3" maxlength="${ROUTINE_PROMPT_MAX}" placeholder="${esc(t("members.routinePrompt"))}" aria-label="${esc(t("members.routinePrompt"))}">${esc(d.prompt)}</textarea>` +
-      actionRow({ cls: "mb-ract", sticky: true, secondary: btn(esc(t("common.cancel")), "sm", ' data-det="r-cancel" data-k="r-cancel"'), primary: { label: esc(t("members.save")), kind: "sm", attrs: ' data-det="r-save" data-k="r-save"' } }) +
-      `</div>`
-    );
-  }
-
   function routinesHTML(): string {
     const head =
       `<div class="mb-dh"><span>${esc(t("members.routines"))}</span>` +
-      iconButton("plus", t("members.routineAdd"), ` data-det="routine-add" data-k="routine-add"${draft?.id === null ? " disabled" : ""}`, "row mb-tool") +
+      iconButton("plus", t("members.routineAdd"), ` data-det="routine-add" data-k="routine-add"`, "row mb-tool") +
       `</div>`;
     if (routines === "loading") return head + `<span class="spin" role="status" aria-label="${esc(t("common.loading"))}"></span>`;
     if (routines === "failed") return head;
-    const rows = routines.map(routineRowHTML).join("");
-    return head + (draft && (draft.id === null || !routines.some((r) => r.id === draft?.id)) ? routineFormHTML(draft) : "") + `<div class="mb-rts">${rows}</div>`;
+    const rows = routines.length ? routines.map(routineRowHTML).join("") : `<p class="mp-empty">${esc(t("members.profile.noRoutines"))}</p>`;
+    return head + `<div class="mb-rts">${rows}</div>`;
   }
 
   /**
@@ -218,19 +194,19 @@ export function createDetails(host: DetailsHost): DetailsPanel {
   }
 
   function detailsHTML(member: Member): string {
-    if (member.id === RAPHAEL_ID) return `<section class="mb-field">${routinesHTML()}</section>`;
+    if (member.id === RAPHAEL_ID) return `<div data-slot="conversations"></div>` + pageRows(member);
     const list = host.list();
     const group = list?.groups.find((g) => g.id === member.group_id) ?? null;
     const sources = group?.sources ?? [];
     return (
-      foldHTML("mb-det-personality", t("members.personality"), member.personality ?? "",
+      `<div data-slot="conversations"></div>` + foldHTML("mb-det-personality", t("members.personality"), member.personality ?? "",
         `<textarea id="mb-det-personality" data-member="${member.id}" class="mb-fin mb-ta" rows="3" maxlength="${PERSONALITY_MAX}" placeholder="${esc(t("members.personalityHint"))}">${esc(member.personality ?? "")}</textarea>`) +
       foldHTML("mb-det-instr", t("members.instructions"), member.instructions ?? "",
         `<textarea id="mb-det-instr" data-member="${member.id}" class="mb-fin mb-ta" rows="4" maxlength="${INSTRUCTIONS_MAX}">${esc(member.instructions ?? "")}</textarea>`) +
       `<section class="mb-field"><div class="mb-dh">${esc(t("members.group"))}</div>` +
       sel(groupChoices(list?.groups ?? []), groupValue(group ? group.id : null), t("members.group"), ' data-det="group" data-k="det-group"') +
       `</section>` +
-      `<section class="mb-field">${routinesHTML()}</section>` +
+      pageRows(member) +
       (sources.length
         ? `<section class="mb-field"><div class="mb-dh">${esc(t("members.sources"))}</div><div class="mb-chips">` +
           sources.map((source) => `<span class="mb-chip">${esc(sourceLabel(source))}</span>`).join("") +
@@ -239,22 +215,14 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     );
   }
 
-  /** The fields being typed in keep what they hold when the panel draws again. */
-  function keepTyping(): void {
-    if (!draft) return;
-    const title = body.querySelector<HTMLInputElement>("#mb-r-title");
-    const prompt = body.querySelector<HTMLTextAreaElement>("#mb-r-prompt");
-    const time = body.querySelector<HTMLInputElement>("#mb-r-time");
-    if (title) draft.title = title.value;
-    if (prompt) draft.prompt = prompt.value;
-    if (time) draft.time = time.value;
-  }
-
   function draw(): void {
     const member = host.member();
     const sameMember = drawnFor === member.id;
     closeButton.setAttribute("aria-label", t("members.close"));
     closeButton.title = t("members.close");
+    editButton.hidden = member.id === RAPHAEL_ID;
+    editButton.setAttribute("aria-label", t("members.sideEdit"));
+    editButton.title = t("members.sideEdit");
     el.setAttribute("aria-label", t("members.panel"));
     const focused = document.activeElement as HTMLElement | null;
     const typingIn = focused && el.contains(focused) && (focused.matches("input, textarea") ? focused.id : null);
@@ -280,15 +248,10 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       }
     }
     drawnFor = member.id;
-    tabBar.innerHTML = tabs(
-      [
-        { id: "details", label: t("members.details"), attrs: ' data-det="tab" data-tab="details" data-k="det-tab:details"' },
-        { id: "memory", label: t("mem.title"), attrs: ' data-det="tab" data-tab="memory" data-k="det-tab:memory"' },
-      ],
-      tab,
-      { label: t("members.panel"), kind: "nav", plain: true, fill: true },
-    );
-    keepTyping();
+    who.hidden = tab !== "details";
+    tabBar.innerHTML = tab === "details"
+      ? ""
+      : `<button type="button" class="btn mb-panel-back" data-det="tab" data-tab="details" data-k="det-tab:details">${ico("left")}${esc(t("members.panelBack"))}</button>`;
     const typingText = typingIn === "mb-det-instr" || typingIn === "mb-det-personality";
     const kept = typingText ? (focused as HTMLElement).closest<HTMLElement>("section") : null;
     if (sameMember && kept && kept.parentElement === body && tab === "details") {
@@ -300,11 +263,26 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       for (const child of Array.from(body.children)) if (child !== kept) child.remove();
       kept.before(...fresh.slice(0, at));
       kept.after(...fresh.slice(at + 1));
+      drawConversations();
       scroll.scrollTop = scrollTop;
       return;
     }
     if (typingText) void saveField(focused as HTMLTextAreaElement, true);
-    body.innerHTML = tab === "details" ? detailsHTML(member) : memoryHTML(shared.view()) + memoryHTML(own.view());
+    const resourceTab = tab === "skills" || tab === "commands" || tab === "voice" ? tab : null;
+    const nextResourceKey = resourceTab ? `${member.id}:${resourceTab}` + (resourceTab === "voice" ? `:${member.voice}:${member.read_aloud}:${member.notify}` : "") : "";
+    if (resourceKey !== nextResourceKey) { resources?.destroy(); resources = null; resourceKey = nextResourceKey; }
+    if (resourceTab) {
+      if (!resources) {
+        body.replaceChildren();
+        resources = mountMemberResources(body, {memberId: member.id, tab: resourceTab, member, standalone: true, changed: () => void loadCounts()});
+      }
+    } else {
+      const input = body.querySelector<HTMLInputElement>("#mb-memory-new");
+      if (input) memoryDraft = input.value;
+      body.innerHTML = tab === "details" ? detailsHTML(member) : tab === "routines" ? routinesHTML() :
+        `<div class="mb-addrow mb-panel-memory-add"><input id="mb-memory-new" class="mb-fin" maxlength="1200" value="${esc(memoryDraft)}" placeholder="${esc(t("members.panelMemoryHint"))}" aria-label="${esc(t("members.panelMemoryHint"))}">${btn(esc(t("members.panelMemoryAdd")), "", ' data-det="memory-add"')}</div>` + memoryHTML(shared.view()) + memoryHTML(own.view());
+    }
+    drawConversations();
     if (sameMember && typingIn && typingIn !== "mb-det-name" && typingIn !== "mb-det-role") el.querySelector<HTMLElement>(`#${CSS.escape(typingIn)}`)?.focus({ preventScroll: true });
     else if (sameMember && focusKey) el.querySelector<HTMLElement>(`[data-k="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
     if (sameMember && selection && typingIn) {
@@ -328,33 +306,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       if (!Array.isArray(routines)) routines = "failed";
     }
     draw();
-  }
-
-  let savingRoutine = false;
-
-  async function saveRoutine(): Promise<void> {
-    if (!draft || savingRoutine) return;
-    keepTyping();
-    const d = draft;
-    const title = d.title.trim();
-    const prompt = d.prompt.trim();
-    const schedule = draftSchedule(d);
-    if (!title || !prompt || !schedule) {
-      toaster.info(t("members.routineNeeds"));
-      return;
-    }
-    savingRoutine = true;
-    try {
-      if (d.id === null) await api.routinesCreate({ member_id: host.member().id, title, prompt, schedule });
-      else await api.routinesUpdate(d.id, { title, prompt, schedule });
-    } catch (err) {
-      toaster.info(describeError(err));
-      return;
-    } finally {
-      savingRoutine = false;
-    }
-    draft = null;
-    await loadRoutines();
   }
 
   async function switchRoutine(id: number, button: HTMLElement): Promise<void> {
@@ -452,6 +403,19 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       case "close":
         host.close();
         break;
+      case "edit": host.edit?.(member); break;
+      case "hide": host.hide?.(member); break;
+      case "memory-add": {
+        const input = body.querySelector<HTMLInputElement>("#mb-memory-new");
+        const value = input?.value.trim();
+        if (!value) break;
+        (act as HTMLButtonElement).disabled = true;
+        void api.core("memory.create", {member_id: member.id, space: "own", body: value}).then(async () => {
+          memoryDraft = ""; if (input) input.value = "";
+          await own.load(); await loadCounts();
+        }).catch(err => toaster.info(describeError(err))).finally(() => { (act as HTMLButtonElement).disabled = false; });
+        break;
+      }
       case "avatar":
         avatarMenu(act);
         break;
@@ -466,6 +430,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       case "tab":
         tab = act.dataset.tab as DetailsTab;
         if (tab === "memory") for (const list of memories) void list.load();
+        if (tab === "routines") void loadRoutines();
         draw();
         break;
       case "group":
@@ -475,17 +440,11 @@ export function createDetails(host: DetailsHost): DetailsPanel {
         });
         break;
       case "routine-add":
-        keepTyping();
-        draft = newRoutineDraft();
-        draw();
-        body.querySelector<HTMLElement>("#mb-r-title")?.focus();
+        openRoutineDialog({ members: host.list()?.members ?? [host.member()], memberId: member.id, onSaved: () => void loadRoutines() });
         break;
       case "routine-edit": {
-        const routine = typeof routines === "object" ? routines.find((r) => r.id === Number(act.dataset.id)) : undefined;
-        if (!routine) break;
-        draft = routineDraft(routine);
-        draw();
-        body.querySelector<HTMLElement>("#mb-r-title")?.focus();
+        const routine = typeof routines === "object" ? routines.find(r => r.id === Number(act.dataset.id)) : undefined;
+        if (routine) openRoutineDialog({ members: host.list()?.members ?? [host.member()], routine, onSaved: () => void loadRoutines(), onDeleted: () => void loadRoutines() });
         break;
       }
       case "routine-delete":
@@ -494,41 +453,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       case "routine-switch":
         void switchRoutine(Number(act.dataset.id), act);
         break;
-      case "r-kind":
-        openMenu(act, [
-          { value: "daily", label: t("members.daily") },
-          { value: "weekly", label: t("members.weekly") },
-          { value: "every", label: t("members.every") },
-        ], draft?.kind ?? "daily", (value) => {
-          if (!draft) return;
-          keepTyping();
-          draft.kind = value as RoutineSchedule["kind"];
-          draw();
-        });
-        break;
-      case "r-day":
-        openMenu(act, Array.from({ length: 7 }, (_, n) => ({ value: String(n), label: dayName(n) })), String(draft?.days[0] ?? 1), (value) => {
-          if (!draft) return;
-          keepTyping();
-          draft.days = [Number(value)];
-          draw();
-        });
-        break;
-      case "r-hours":
-        openMenu(act, HOUR_STEPS.map((n) => ({ value: String(n), label: n === 1 ? t("members.everyHour") : t("members.everyHours", { p0: n }) })), String(draft?.hours ?? 3), (value) => {
-          if (!draft) return;
-          keepTyping();
-          draft.hours = Number(value);
-          draw();
-        });
-        break;
-      case "r-cancel":
-        draft = null;
-        draw();
-        break;
-      case "r-save":
-        void saveRoutine();
-        break;
+
     }
   });
 
@@ -562,13 +487,15 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     draw,
     refreshRoutines() { void loadRoutines(); },
     refreshMemory(memberId, space) {
+      if (memberId === host.member().id) { void loadCounts(); void resources?.refresh(); }
       if (!memoryHost.visible()) return;
       if (space !== "own") void shared.load();
       if (space !== "shared" && memberId === host.member().id) void own.load();
     },
     showMember() {
       tab = "details";
-      draft = null;
+      memoryDraft = ""; counts = {skills: 0, commands: 0, memory: 0};
+      void loadCounts();
       routines = "loading";
       for (const list of memories) list.reset();
       draw();

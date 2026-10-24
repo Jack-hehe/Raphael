@@ -88,9 +88,11 @@ class ToolRegistry:
         tiers: Mapping[str, Tier] | None = None,
         *,
         plugin_tier: Callable[[str], Tier | None] | None = None,
+        ask_first: Callable[[str, Tier], bool] | None = None,
     ) -> None:
         self._tiers: dict[str, Tier] = {}
         self._plugin_tier = plugin_tier
+        self._ask_first = ask_first
         for name, tier in (tiers or {}).items():
             self.register(name, tier)
 
@@ -115,13 +117,14 @@ class ToolRegistry:
             raise UnknownTool(name) from None
 
     def needs_confirmation(self, name: str) -> bool:
-        return self.tier(name) >= Tier.T2
+        tier = self.tier(name)
+        return tier >= Tier.T2 or bool(self._ask_first and self._ask_first(name, tier))
 
     def check(self, action: Action, approval: Approval | None) -> None:
         """Let `action` through: UnknownTool if it has no tier, NotApproved if it is at T2 or above
         and `approval` is not a yes for this very action that has not been used. The approval is
         spent by the check."""
-        if self.tier(action.tool) < Tier.T2:
+        if not self.needs_confirmation(action.tool):
             return
         if not isinstance(approval, Approval) or approval.action is not action or approval.spent:
             raise NotApproved(f"{action.tool} needs a yes")
