@@ -31,7 +31,7 @@
         "minHeight": 480,
         "decorations": false,
         "resizable": true,
-        "zoomHotkeysEnabled": true,
+        "zoomHotkeysEnabled": false,
         "visible": false
       }
     ],

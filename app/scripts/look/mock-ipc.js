@@ -254,7 +254,7 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "schedule_keep_awake_set") return data.awake = args.enabled;
       if (["open_external_url", "open_link"].includes(command)) { state.urls.push(args.url); return; }
       if (command === "save_usage_csv") { state.exported = args.csv; return true; }
-      if (["agent_page_shown", "hotkeys_pause", "hotkeys_practice", "plugin:event|unlisten", "plugin:window|set_focus"].includes(command)) return;
+      if (["agent_page_shown", "hotkeys_pause", "hotkeys_practice", "plugin:event|unlisten", "plugin:window|set_focus", "plugin:webview|set_webview_zoom"].includes(command)) return;
       return unsupported(command);
     },
   };

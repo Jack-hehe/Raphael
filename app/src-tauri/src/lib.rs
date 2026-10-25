@@ -522,10 +522,13 @@ mod window_state_tests {
     }
 
     #[test]
-    fn ctrl_plus_and_minus_zoom_the_main_window() {
-        // The owner zooms the window with Ctrl + plus / minus (2026-10-25); WebView2 handles the keys.
+    fn ctrl_plus_and_minus_zoom_the_main_window_within_three_steps() {
+        // The owner zooms with Ctrl + plus / minus (2026-10-25) but only three steps either way: the app's
+        // window-zoom.ts handles the keys, so WebView2's own 25%-500% zoom keys stay off.
         let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let main = config["app"]["windows"].as_array().unwrap().iter().find(|w| w["label"] == MAIN_WINDOW).unwrap();
-        assert_eq!(main["zoomHotkeysEnabled"], true);
+        assert_eq!(main["zoomHotkeysEnabled"], false);
+        let chrome: serde_json::Value = serde_json::from_str(include_str!("../capabilities/main-window-chrome.json")).unwrap();
+        assert!(chrome["permissions"].as_array().unwrap().iter().any(|p| p == "core:webview:allow-set-webview-zoom"));
     }
 }

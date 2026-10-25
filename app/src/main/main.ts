@@ -6,6 +6,7 @@
 // tooltip then.
 
 import { onLocaleChange, setLocale, t } from "./i18n";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
@@ -33,6 +34,7 @@ import { installWindowHotkeys } from "./window-hotkeys";
 import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
+import { installWindowZoom } from "./window-zoom";
 import type { AgentDraft, AppContext, DeviceSettings, MainEvent, MainPageId, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
@@ -111,6 +113,12 @@ function mountWindowChrome(): void {
     });
   } catch (error) {
     console.warn("main: window controls are unavailable outside Tauri", error);
+  }
+  try {
+    const webview = getCurrentWebview();
+    installWindowZoom(window, (factor) => webview.setZoom(factor));
+  } catch (error) {
+    console.warn("main: window zoom is unavailable outside Tauri", error);
   }
 }
 
