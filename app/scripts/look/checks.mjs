@@ -195,6 +195,18 @@ export function checkRendered(name) {
     const cancelBtn = panel.querySelector('[data-draft-act="cancel"]');
     require(visible(confirmBtn) && visible(cancelBtn), "confirm and cancel buttons are visible");
     require(cancelBtn.getBoundingClientRect().right <= confirmBtn.getBoundingClientRect().left, "primary action stays rightmost");
+    for (const card of cards) {
+      const roleInput = card.querySelector('[data-draft-field="role"]');
+      const nameInput = card.querySelector('[data-draft-field="name"]');
+      const groupBtn = card.querySelector('[data-draft-act="group"]');
+      const roleStyle = getComputedStyle(roleInput);
+      const roleContentWidth = roleInput.clientWidth - parseFloat(roleStyle.paddingLeft) - parseFloat(roleStyle.paddingRight);
+      const roleFontSize = parseFloat(roleStyle.fontSize);
+      require(roleContentWidth >= roleFontSize * 8, `role field fits at least 8 CJK characters (${roleContentWidth}px vs ${roleFontSize * 8}px)`);
+      require(roleInput.scrollWidth <= roleInput.clientWidth + 1, `role value is not clipped (${roleInput.value})`);
+      require(nameInput.clientWidth >= roleFontSize * 4.5, "name field has enough width");
+      require(groupBtn.getBoundingClientRect().width < roleInput.getBoundingClientRect().width, "group dropdown is narrower than role field");
+    }
     if (name === "member-draft") {
       require(cards.length === 3, "three member draft cards are shown");
       require(confirmBtn.textContent.trim() === "建立 3 位成員", "primary button shows three members to create");
@@ -221,7 +233,7 @@ export function checkRendered(name) {
     }
     const column = document.querySelector(".mb-col");
     if (visible(column)) {
-      const colText = column.textContent;
+      const colText = column.textContent + " " + [...column.querySelectorAll("[aria-label]")].map(el => el.getAttribute("aria-label")).join(" ");
       for (const createdName of ["COO", "PM", "RD"]) {
         require(colText.includes(createdName), `${createdName} appears in the left member column`);
       }

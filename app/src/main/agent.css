@@ -460,22 +460,25 @@
 /* ---------- inline member draft panel & settled summary ---------- */
 .ra:has(.draft-panel) { max-width: 100%; }
 .ra-dock > .draft-panel { max-width: var(--pa-colw); margin: 0 auto; }
-.draft-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: 100%; min-width: 0; padding: var(--sp-3); border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
+.draft-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: 100%; min-width: 0; padding: var(--sp-2); border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
 .draft-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
 .draft-face { display: inline-flex; width: 28px; height: 28px; flex: none; }
 .draft-title { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
 .draft-group-pill { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 2px var(--sp-2); border-radius: var(--r-pill); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-2xs); }
 .draft-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); max-height: min(52vh, 440px); overflow-x: hidden; overflow-y: auto; padding-right: 2px; }
-.draft-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); min-width: 0; padding: var(--sp-2) var(--sp-3); border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--content); }
-.draft-card-top { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-2); min-width: 0; }
+.draft-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; padding: var(--sp-2); border: 1px solid var(--edge); border-radius: var(--r-md); background: var(--content); }
+.draft-card-top { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: start; gap: 6px; min-width: 0; }
 .page-agent .btn.draft-av-btn { width: 40px; height: 40px; min-height: 40px; padding: 0; border-color: transparent; background: transparent; border-radius: var(--r-pill); }
 .page-agent .btn.draft-av-btn:hover:not(:disabled) { border-color: var(--hover-edge); background: transparent; }
-.draft-card-ident { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.35fr); align-items: center; gap: var(--sp-2); min-width: 0; }
-.draft-card .mb-fin { min-height: 32px; padding: var(--sp-1) var(--sp-2); font-size: var(--fs-xs); }
-.draft-group-wrap { display: flex; min-width: 0; }
-.draft-group-wrap .sel { width: 100%; max-width: 100%; min-width: 0; height: 32px; min-height: 32px; justify-content: space-between; padding: 0 var(--sp-2); font-size: var(--fs-xs); }
+.draft-card-ident { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.draft-card .mb-fin { width: 100%; min-height: 32px; padding: 4px 6px; font-size: var(--fs-xs); }
+.draft-card .draft-name { width: auto; flex: 1 1 70px; min-width: 68px; }
+.draft-card .draft-role { width: auto; flex: 2 1 124px; min-width: calc(8em + 16px); }
+.draft-group-wrap { display: flex; flex: 0.4 1 82px; min-width: 76px; max-width: 96px; }
+.page-agent .btn.icon.draft-remove { width: 24px; height: 24px; min-height: 24px; margin-top: 4px; padding: 0; border-radius: var(--r-pill); color: var(--text-3); }
+.draft-group-wrap .sel { width: 100%; max-width: 100%; min-width: 0; height: 32px; min-height: 32px; justify-content: space-between; gap: 2px; padding: 0 6px; font-size: var(--fs-2xs); }
 .draft-group-wrap .sel > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
-.page-agent .btn.icon.draft-remove { width: 28px; height: 28px; min-height: 28px; padding: 0; border-radius: var(--r-pill); color: var(--text-3); }
+
 .page-agent .btn.icon.draft-remove:hover:not(:disabled), .page-agent .btn.icon.draft-remove:active:not(:disabled) { background: transparent; border-color: transparent; color: var(--text); }
 .draft-card-blurb { min-width: 0; }
 .draft-more { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); min-width: 0; }

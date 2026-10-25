@@ -1,6 +1,6 @@
 /** Aggregate retained usage and subscription allowances, alongside daily analytics. */
 import "./run-analytics.css";
-import { t, onLocaleChange } from "./i18n";
+import { getLocale, t, onLocaleChange } from "./i18n";
 import { usageModel } from "./usage-models";
 import { CLIS, cliModels } from "./cli-brains";
 import { providerMark } from "./provider-marks";
@@ -16,14 +16,14 @@ const btn = (label: string, attrs = "") => uiBtn(label, "", attrs);
 type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds" | "runs.allowanceUpdated">;
 const periodKey: Record<RunPeriod, RunKey> = { week: "runs.week", month: "runs.month", last_month: "runs.lastMonth", all: "runs.all" };
 const groupKey: Record<RunGrouping, RunKey> = { member: "runs.member", model: "runs.model", day: "runs.day", provider: "runs.provider", routine: "runs.routine" };
-const number = (n: number) => new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(n);
+const number = (n: number) => new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 0 }).format(n);
 const duration = (ms: number | null) => {
   if (ms === null) return t("runs.untimed");
   const seconds = Math.max(0, Math.round(ms / 1000)), m = Math.floor(seconds / 60), s = seconds % 60;
   return m ? t("runs.minutesSeconds",{m,s}) : t("runs.seconds",{s});
 };
 const memberName = (id: number | undefined, name: string) => id === 0 || name === "Raphael" ? t("nav.agent") : name;
-const time = (ms: number) => new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const time = (ms: number) => new Date(ms).toLocaleString(getLocale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 function tiles(s: RunSummary): string {
   return `<div class="run-tiles">${([
     ["runs.time", duration(s.duration_ms)], ["runs.cost", formatUsd(s.cost_usd)], ["runs.tokens", number(s.tokens)],
