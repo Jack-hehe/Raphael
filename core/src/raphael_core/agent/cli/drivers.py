@@ -322,6 +322,9 @@ class Driver:
                     await request("thread/resume" if session else "thread/start", arguments, "session")
                 elif label == "session":
                     self.session = (result.get("thread") or {}).get("id")
+                    actual_model = result.get("model") or (result.get("thread") or {}).get("model")
+                    if isinstance(actual_model, str) and actual_model:
+                        yield Event("model", actual_model)
                     if not self.session:
                         raise ValueError("missing_session")
                     yield Event("session", self.session)

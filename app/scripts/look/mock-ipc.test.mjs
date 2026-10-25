@@ -1,9 +1,46 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { installMock } from "./mock-ipc.js";
+import { checkRendered } from "./checks.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it.each([true, false])("settles draft approval in the formal conversation while preserving quick history (%s)", async approved => {
+    const target = {};
+    installMock(fixture, { fixture: { adminApproval: "draft" } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const history = conversation_id => invoke("core_call", { method: "agent.history.list", params: { member_id: 0, conversation_id } });
+    const quick = await history(4);
+    expect((await history(1)).turns[0].status).toBe("confirm");
+    const question = await invoke("agent_question_open");
+    await invoke("agent_question_answer", { id: question.id, approved, drafts: question.drafts });
+    const turn = (await history(1)).turns[0];
+    expect(turn.status).toBe(approved ? "done" : "denied");
+    expect(turn.text).toBe(approved ? "已建立 COO、PM、RD" : "已取消建立成員。");
+    if (approved) expect(turn.detail.split("\n")).toHaveLength(3);
+    expect(await history(4)).toEqual(quick);
+  });
+  it("initializes rendered owner-view helpers before checking a reply and rejects progress in final messages", () => {
+    const answer = { textContent: "需要重新登入並授予讀取權限。", getBoundingClientRect: () => ({ width: 400, height: 40 }) };
+    vi.stubGlobal("document", { querySelectorAll: () => [answer] });
+    vi.stubGlobal("window", { __look: { calls: [{ method: "agent.history.list", params: { member_id: 0 } }] } });
+    try {
+      expect(checkRendered("live-scenario-owner-view").answers).toBe(1);
+      window.__look.calls[0].params = { conversation_id: 1 };
+      expect(checkRendered("live-scenario-owner-view").scope).toBe("personal");
+      answer.textContent += "正在查看";
+      expect(() => checkRendered("live-scenario-owner-view")).toThrow("progress stays outside");
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("replays the Guardian owner-view event/history contract without changing personal scope", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { liveScenarioOwnerView: true } }, target);
+    const result = await target.__TAURI_INTERNALS__.invoke("core_call", { method: "agent.history.list", params: { member_id: 0, conversation_id: 1 } });
+    expect(result.turns).toHaveLength(1);
+    expect(result.turns[0]).toMatchObject({ source: "app", member_id: 0, conversation_id: 1 });
+    expect(result.turns[0].messages.map(message => message.kind)).toEqual(["progress", "reply"]);
+    expect(result.turns[0].messages[1].text).not.toContain("正在");
+  });
   it("keeps reports out of today's work in both default and expanded home fixtures", async () => {
     for (const homeManyQuestions of [false, true]) {
       const target = {};

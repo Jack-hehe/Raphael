@@ -22,6 +22,7 @@ the compact picker's search action, for messages.
 ```powershell
 npm run look -- chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
 npm run look -- quick-conversation-list quick-conversation --theme both --width 1120,720,1920x1080
+npm run look -- live-scenario-owner-view --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
 npm run look -- member-composer-empty member-text member-composer-hover conversation-notice --theme both --width 1120,720,1920x1080
 npm run look -- composer-learn member-composer-learn room-composer-learn team-composer-learn --theme both --width 1120,720,1920x1080
@@ -57,3 +58,7 @@ Team administration approvals are covered by the member feature's `admin-*`
 scenes. Public progress parses complete reply envelopes and drops malformed or
 partial JSON; the exact CLI regression is exercised by core tests. The shared
 rendered audit also rejects non-finite durations in work summaries.
+
+## Guardian scenario owner view
+
+The live-scenario-owner-view scene replays S17 synthetic history through the shared IPC fixture. It checks the personal conversation, actionable Traditional Chinese failure, and separation of progress from the final answer. This rendered fixture does not prove live model or connector acceptance. Core scenario reports retain digests, scopes, message kinds and test-mode receipts in owner-view.json.

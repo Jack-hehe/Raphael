@@ -1,4 +1,18 @@
 {
+  "liveScenarioOwnerTurns": [
+    {
+      "id": 1700, "session_id": "guardian-owner-view", "member_id": 0, "conversation_id": 1,
+      "created_at_ms": 1792807154000, "question": "請讀取測試信件，無法讀取時請告訴我需要什麼。",
+      "route": "answer", "source": "app", "prefix": "", "text": "需要重新登入並授予讀取權限。",
+      "detail": null, "status": "done", "cost_usd": 0.001, "model": "openai/gpt-6-luna",
+      "messages": [
+        { "seq": 1, "kind": "progress", "text": "正在查看信件服務。", "at_ms": 1792807155000 },
+        { "seq": 2, "kind": "reply", "text": "需要重新登入並授予讀取權限。", "at_ms": 1792807156000 }
+      ],
+      "steps": [{ "kind": "tool", "tool": "read", "server": "Guardian", "outcome": "error", "at_ms": 1792807155000, "ms": 12, "reason": "auth" }],
+      "attachments": []
+    }
+  ],
   "composioConfigured": true,
   "managedConnectors": [
     { "id": "composio:notion", "kind": "composio", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "status": "ACTIVE", "enabled": true, "enabled_tools": ["NOTION_SEARCH", "NOTION_CREATE_PAGE", "NOTION_UPDATE_PAGE"], "disabled_tools": [] },

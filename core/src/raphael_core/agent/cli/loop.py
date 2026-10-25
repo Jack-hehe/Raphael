@@ -104,6 +104,7 @@ class CliLoop:
         self.response = None
         self.permission_always = False
         self.failed = False
+        self.actual_model = None
         self.driver = None
         self.task = None
         self._queue = asyncio.Queue()
@@ -270,6 +271,8 @@ class CliLoop:
                         async for event in stream:
                             if event.kind == "session" and self.resume_session:
                                 self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
+                            elif event.kind == "model":
+                                self.actual_model = event.text
                             elif event.kind == "text_delta":
                                 self._buffer = (self._buffer + event.text)[-64000:]
                             elif event.kind == "thinking":

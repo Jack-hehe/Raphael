@@ -1,5 +1,16 @@
 // Browser assertions run against the real app after the scene's user interactions.
 export function checkRendered(name) {
+  const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
+  const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "live-scenario-owner-view") {
+    const answers = [...document.querySelectorAll('.ra [data-expandable] > .ans')].filter(visible);
+    require(answers.length === 1, "one owner-visible terminal answer");
+    require(answers[0].textContent.includes("需要重新登入並授予讀取權限。"), "actionable zh-TW failure survives the real renderer");
+    require(!answers[0].textContent.includes("正在查看"), "progress stays outside final messages");
+    const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
+    require(calls.some(call => (call.params?.member_id ?? 0) === 0), "owner view reads Raphael's production RPC scope");
+    return { check: name, answers: answers.length, scope: "personal", status: "missing-connection" };
+  }
   if (name === "composer-learn") {
     const calls = window.__look.calls.filter(call => call.method === "dictionary.learn");
     if (calls.length !== 1 || JSON.stringify(calls[0].params.corrections) !== JSON.stringify([{ word: "OpenMausBot", misheard: "Open Mouse Bot" }])) throw new Error("The sent voice correction did not reach dictionary.learn exactly once");
@@ -13,8 +24,6 @@ export function checkRendered(name) {
     }
     return { check: name, corrections: calls[0].params.corrections };
   }
-  const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
-  const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
   if (name === "quick-model-row") {
     const row = document.querySelector('[data-row="quick-model"]');
     const picker = row?.querySelector('.mp-trigger');
