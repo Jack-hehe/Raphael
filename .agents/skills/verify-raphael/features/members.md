@@ -2,12 +2,14 @@
 
 ## Sub-features
 
-Identity/personality, profile editing, avatar selection, memory, routines, skills,
+Remembered member-column collapse, original Raphael emblem, identity/personality, profile editing, avatar selection, memory, routines, skills,
 commands and voice settings. Members have independent conversations.
 
 ## How to get to it (user POV)
 
-In Conversation select a member, then click the stacked header title for details.
+In Conversation the top-left arrow collapses the member column to a 56px face strip; the same arrow expands it. Raphael stays first with his original large bare emblem and name when expanded. Collapsed faces retain localized tooltips, active selection and unread/waiting dots, including members in folded groups. The choice is remembered in localStorage, with an in-memory fallback when storage is unavailable. Compact windows initially use the face strip; the member picker still exposes rooms and search. An open details overlay temporarily hides an expanded compact column so the title remains reachable; closing details restores it without changing the saved choice. The details-closed scene explicitly expands the column before testing the title.
+
+Select a member, then click the stacked header title for details.
 At compact width use the member picker to select the member first. The same title
 closes the panel; its close button updates the same remembered session state. Details has the avatar, edit pencil and resource
 panes. Team's creation menu is another entry point to member creation; verify the
@@ -16,8 +18,9 @@ complete flow for creation changes.
 ## Driving it with look
 
 ```powershell
-npm run look -- details member-avatar member-edit details-memory details-routines details-skills details-commands details-voice --theme both --width 1120,720
-npm run look -- team-new-menu member-text --theme both --width 1120,720
+npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded --theme both --width 1120,720,1920x1080
+npm run look -- details member-avatar member-edit details-memory details-routines details-skills details-commands details-voice --theme both --width 1120,720,1920x1080
+npm run look -- team-new-menu member-text --theme both --width 1120,720,1920x1080
 ```
 
 Keep details/resource-pane/avatar-menu/edit-dialog PNGs; check layering, focus and
@@ -42,7 +45,7 @@ Management tools, including the legacy create_member alias, are offered only to 
 presets, then the neutral silhouette, and the create dialog defaults.
 
 ```powershell
-npm run look -- admin-approval admin-approval-batch admin-approval-long admin-delete-approval admin-approved admin-denied --theme both --width 1120,720
+npm run look -- admin-approval admin-approval-batch admin-approval-long admin-delete-approval admin-approved admin-denied --theme both --width 1120,720,1920x1080
 ```
 
 The scenes retain full approval fields, allow long instructions to scroll by
@@ -61,3 +64,17 @@ back without publishing partial roster changes. Deletions retain per-member T3 c
 Chinese and Japanese labels use full-width colons; English uses colon-space.
 The admin-approval-batch scene checks all eight entries, internal keyboard scrolling
 and the one pair of actions in both themes and widths.
+
+## Codex subscription isolation
+
+Codex brains use a private home and empty working directory for each conversation.
+Only Raphael's MCP server is configured; its tools are direct, with personal apps,
+plugins, hooks, skill discovery, memories and project documents disabled. Existing
+personal Codex rollouts are not imported. Isolated sessions resume independently.
+
+Offline proof: core/tests/agent/test_cli_brains.py checks the actual fake child's
+command, environment, login snapshot, cleanup and session migration. The login
+snapshot has no refresh token; an expired access token requires the owner's Codex
+to refresh its login before the next Raphael turn. Browser fixtures cannot prove
+this boundary. For live acceptance on a Codex brain, ask Raphael to create members
+and check the turn's MCP steps show team_overview and member_create, not other tools.

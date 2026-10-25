@@ -316,7 +316,18 @@ SCHEMA_V26 = {**SCHEMA_V25, "subscription_allowances": [
     "provider TEXT PK NOT NULL", "period TEXT PK NOT NULL", "remaining_percent REAL", "resets_at INTEGER",
     "status TEXT NOT NULL", "updated_at_ms INTEGER NOT NULL",
 ]}
-LATEST = 26
+SCHEMA_V27 = {
+    **SCHEMA_V26,
+    "rooms": [*SCHEMA_V26["rooms"], "default_responder TEXT NOT NULL DEFAULT 'auto'"],
+    "room_messages": [*SCHEMA_V26["room_messages"], "reply_to_member INTEGER", "kind TEXT NOT NULL DEFAULT 'message'", "origin_message_id INTEGER", "exchange_settled INTEGER NOT NULL DEFAULT 0"],
+    "room_exchanges": [
+        "origin_message_id INTEGER PK", "room_id INTEGER NOT NULL", "state TEXT NOT NULL", "language TEXT NOT NULL",
+        "pending TEXT", "active_turn INTEGER", "turns_taken INTEGER NOT NULL DEFAULT 0", "spoken TEXT NOT NULL DEFAULT '[]'",
+        "hops INTEGER NOT NULL DEFAULT 0", "chime_ins INTEGER NOT NULL DEFAULT 0", "cost REAL NOT NULL DEFAULT 0",
+        "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
+    ],
+}
+LATEST = 27
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -361,7 +372,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V26) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V27) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -375,7 +386,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V26.items():
+    for table, columns in SCHEMA_V27.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

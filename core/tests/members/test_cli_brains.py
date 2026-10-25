@@ -105,8 +105,8 @@ def fake_brain(rig, tmp_path, script, *, name="claude"):
     path.write_text(script, encoding="utf-8")
     home = tmp_path / "home"
     (home / f".{name}").mkdir(parents=True)
-    (home / f".{name}" / ("auth.json" if name == "codex" else ".credentials.json")).touch()
-    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1"}, commands={name: [sys.executable, str(path)]})
+    (home / f".{name}" / ("auth.json" if name == "codex" else ".credentials.json")).write_text("{}", encoding="utf-8")
+    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1", "CODEX_HOME": str(home / ".codex")}, commands={name: [sys.executable, str(path)]})
 
 
 async def test_cli_member_uses_persona_records_zero_cost_and_resumes(setup, tmp_path, client):
@@ -212,8 +212,8 @@ for line in sys.stdin:
 ''', encoding="utf-8")
     home = tmp_path / "home"
     (home / ".codex").mkdir(parents=True)
-    (home / ".codex" / "auth.json").touch()
-    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1"}, commands={"codex": [sys.executable, str(path)]})
+    (home / ".codex" / "auth.json").write_text("{}", encoding="utf-8")
+    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1", "CODEX_HOME": str(home / ".codex")}, commands={"codex": [sys.executable, str(path)]})
     pending = await typed(rig, "Say hello", teacher.id)
     assert pending["status"] == "confirm", pending
     result = await rig.call("agent.confirm", {"id": pending["confirm"]["id"], "approved": decision != "no", "always": decision == "always"})
@@ -223,6 +223,7 @@ for line in sys.stdin:
     assert any(step["tool"] == "cli_permission" for step in turn["steps"])
     assert any(msg["kind"] == "progress" and msg["text"] == "我先確認這個動作。" for msg in turn["messages"])
     assert not rig.service._cli_loops
+    assert len(list((home / ".raphael" / "codex-brains").iterdir())) == 1
 
 
 async def test_mcp_routine_call_keeps_member_scope_and_safety_approval(setup, tmp_path, monkeypatch):

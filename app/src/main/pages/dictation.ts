@@ -2,7 +2,7 @@
 import { onLocaleChange, t } from "../i18n";
 import { createProblemNotice } from "../problem-notice";
 import type { AppContext, DictationTab, Page } from "../types";
-import { esc, ico } from "../ui";
+import { esc } from "../ui";
 import "../dictation-page.css";
 
 const TAB_IDS: DictationTab[] = ["overview", "history", "dictionary"];
@@ -18,9 +18,8 @@ export function createDictation(app: AppContext, pages: Record<DictationTab, Pag
   function paint(): void {
     const restoreFocus = head.contains(document.activeElement);
     head.innerHTML = `<div class="page-head"><h1>${esc(t("nav.dictation"))}</h1></div>` +
-      `<div class="dictation-nav" role="tablist" aria-orientation="vertical" aria-label="${esc(t("nav.dictation"))}">` +
+      `<div class="dictation-nav" role="tablist" aria-orientation="horizontal" aria-label="${esc(t("nav.dictation"))}">` +
       TAB_IDS.map(id => `<button type="button" class="nav" role="tab" aria-selected="${id === selected}" data-dictation-tab="${id}">` +
-        ico(id === "overview" ? "grid" : id === "history" ? "clock" : "book") +
         `<span>${esc(t(id === "overview" ? "dictation.overview" : id === "history" ? "main.002" : "main.003"))}</span></button>`).join("") + `</div>`;
     for (const id of TAB_IDS) {
       pages[id].el.hidden = id !== selected;
@@ -50,10 +49,10 @@ export function createDictation(app: AppContext, pages: Record<DictationTab, Pag
   });
   head.addEventListener("keydown", event => {
     const tab = (event.target as Element).closest<HTMLElement>("[data-dictation-tab]");
-    if (!tab || !["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const at = TAB_IDS.indexOf(selected);
-    const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : (at + (event.key === "ArrowDown" ? 1 : 2)) % 3;
+    const next = event.key === "Home" ? 0 : event.key === "End" ? 2 : (at + (event.key === "ArrowRight" ? 1 : 2)) % 3;
     head.querySelector<HTMLButtonElement>(`[data-dictation-tab="${TAB_IDS[next]}"]`)!.click();
     head.querySelector<HTMLElement>(`[data-dictation-tab="${TAB_IDS[next]}"]`)?.focus();
   });

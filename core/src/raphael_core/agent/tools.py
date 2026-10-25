@@ -38,6 +38,7 @@ import httpx
 from ..brain.openrouter import OpenRouterError
 from ..brain.providers.base import ModelProvider
 from ..services.attachments import Attachment
+from ..services.file_reader import read_text
 from ..services.common import ServiceError
 from .cities import city_key, geocoding_queries
 from .ledger import Ledger
@@ -363,6 +364,8 @@ class Tools:
         """Read a supplied file through its configured reader. `number` identifies it among the
         request's files. Paid vision calls use `ledger`; every result remains untrusted data."""
         kind = "pdf" if attachment.is_pdf else "image" if attachment.is_image else "file"
+        if (found := read_text(attachment)) is not None:
+            return ToolResult("read_attachment", True, {"file": number, "kind": "text", **found}, untrusted=True, detail="text")
         if self.services is None:
             return self._failed("read_attachment", "unavailable", kind)
         if (attachment.is_pdf or attachment.is_image) and not self.services.enabled("pdf" if attachment.is_pdf else "vision"):
@@ -406,8 +409,8 @@ class Tools:
 
     def turned_off(self) -> frozenset[str]:
         """The tools of Raphael's own that the owner turned off, so that the background worker is not
-        offered them: `web_search`, `web_read`, and `read_attachment` when neither the images nor
-        the PDFs may be read (with one of them on, the tool refuses the other kind itself)."""
+        offered them: `web_search` and `web_read`. Local files remain readable independently
+        of the vision/PDF switches; the attachment tool enforces those switches per file."""
         if self.services is None:
             return frozenset()
         off = {
@@ -415,8 +418,6 @@ class Tools:
             for tool, capability in (("web_search", "search"), ("web_read", "read"))
             if not self.services.enabled(capability)
         }
-        if not self.services.enabled("vision") and not self.services.enabled("pdf"):
-            off.add("read_attachment")
         return frozenset(off)
 
     # --- the time -------------------------------------------------------------------------------

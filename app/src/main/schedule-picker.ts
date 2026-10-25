@@ -11,7 +11,8 @@ export const monthLabel = (day: Date): string => day.toLocaleDateString(getLocal
 export function monthGrid(month: Date, selected: string, attr: string): string {
   const first = new Date(month.getFullYear(), month.getMonth(), 1);
   const start = shiftDay(first, -((first.getDay() + 6) % 7));
-  return `<div class="au-month-grid">${[1, 2, 3, 4, 5, 6, 0].map(n => `<span>${esc(dayName(n))}</span>`).join("")}` +
+  const weekday = new Intl.DateTimeFormat(getLocale(), { weekday: "narrow" });
+  return `<div class="au-month-grid">${[1, 2, 3, 4, 5, 6, 0].map(n => `<span title="${esc(dayName(n))}">${esc(weekday.format(new Date(2024, 0, 7 + n)))}</span>`).join("")}` +
     Array.from({ length: 42 }, (_, i) => {
       const day = shiftDay(start, i), key = dateKey(day);
       return btn(String(day.getDate()), `sm${day.getMonth() === month.getMonth() ? "" : " au-other-month"}`, ` ${attr}="${key}" aria-label="${key}" aria-pressed="${key === selected}"`);

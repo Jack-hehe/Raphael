@@ -37,6 +37,19 @@ export async function perform(page, step) {
       await page.evaluate(text => window.__look.emit({ type: "DictationPasted", text }), step.text);
       break;
     }
+    case "calendar-tools": {
+      if (await page.evaluate(() => document.querySelector('[data-au="tools"]').getBoundingClientRect().width > 0)) await click('[data-au="tools"]');
+      break;
+    }
+    case "member-column": {
+      const collapsed = await page.$eval('.mb-col', column => column.classList.contains('is-collapsed'));
+      if (collapsed !== step.collapsed) await click('[data-col="collapse"]');
+      else if (await page.evaluate(() => localStorage.getItem('raphael.members.collapsed')) !== String(collapsed)) {
+        await click('[data-col="collapse"]');
+        await click('[data-col="collapse"]');
+      }
+      break;
+    }
     case "advance-time":
       // Advance the shared fixed clock, then let production timers observe it.
       await page.evaluate(ms => { window.__look.now = Date.now() + ms; }, step.ms);
@@ -103,6 +116,15 @@ export async function perform(page, step) {
     case "new-room":
       if (await compact()) { await roomsMenu(); await click('#app-popover [data-action="0"]'); }
       else await click("[data-room-new]");
+      break;
+    case "room-row-menu":
+      if (await compact()) {
+        await roomsMenu(); await click(`#app-popover [data-value="${step.id}"]`);
+        await click("[data-room-menu]");
+      } else {
+        const more = await visible(`[data-room-more="${step.id}"]`);
+        try { await more.hover(); await more.click(); } finally { await more.dispose(); }
+      }
       break;
     case "rooms-menu":
       if (await compact()) await roomsMenu();

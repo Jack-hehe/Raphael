@@ -12,6 +12,14 @@ from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import Completion, Decision, ToolCall, ToolPlan
 
 
+@pytest.fixture(autouse=True)
+def private_codex_environment(tmp_path, monkeypatch):
+    """Driver tests must never borrow the machine owner's real CLI credentials."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+
+
 class FakeBackground:
     """A background worker that notes how it is called and carries nothing out. Every assistant has
     a worker (the app always gives it one); this is the tests'. `refuse` makes `submit` refuse with

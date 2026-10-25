@@ -78,7 +78,7 @@ class Sessions:
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
                  system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
-                 conversation_id=None, quota=None, attachments=()):
+                 conversation_id=None, quota=None, attachments=(), wait_timeout_s=None):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
         self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
         self.quota = quota
@@ -114,6 +114,7 @@ class CliLoop:
         self._repeats = RepeatGuard()
         self.on_done = None
         self.expire = expire
+        self.wait_timeout_s = CONFIRM_TIMEOUT_S if wait_timeout_s is None else wait_timeout_s
 
     def _progress(self):
         if line := public_line(self._buffer, self.language):
@@ -152,7 +153,7 @@ class CliLoop:
             self._resume = asyncio.get_running_loop().create_future()
             self._queue.put_nowait(Outcome("stopped", kind=WAITING))
             try:
-                return await asyncio.wait_for(self._resume, CONFIRM_TIMEOUT_S + .1)
+                return await asyncio.wait_for(self._resume, self.wait_timeout_s + .1)
             except TimeoutError:
                 if self.expire:
                     self.expire()
@@ -238,7 +239,7 @@ class CliLoop:
                 workspace.mkdir(parents=True, exist_ok=True)
                 await secure_directory(workspace)
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
-                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota)
+                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota, home=self.brains.home)
                     async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
                             token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id), permission=self._native_permission,
                             cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:

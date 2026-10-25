@@ -9,6 +9,9 @@ import { perform } from "./driver.mjs";
 import { contactSheets } from "./contact-sheet.mjs";
 import { requestDisposition } from "./requests.mjs";
 
+/** Product, model, unit and key names that stay in Latin letters in every language. */
+const LATIN_NAMES = ["Raphael", "Rimuru", "Google", "Gmail", "Calendar", "Composio", "OpenRouter", "OpenAI", "Anthropic", "Claude", "Codex", "Gemini", "GPT", "Grok", "Telegram", "Slack", "Discord", "Notion", "GitHub", "MCP", "API", "URL", "CLI", "STT", "PDF", "CSV", "JSON", "US", "KB", "MB", "GB", "GMT", "AM", "PM", "Alt", "AltGr", "Ctrl", "Shift", "Space", "Esc", "Enter", "Tab", "Win", "Windows", "Fn", "Edge", "Chrome", "macOS", "Whisper", "Typeless", "Webhook", "Hermes", "Simple", "Icons", "Bearer", "mcpServers", "Ollama", "Linear", "BotFather", "newbot", "English", "MIT", "JPG", "WebP", "GIF", "UTF", "Big", "txt", "px", "token", "Claude Code", "Antigravity", "Catppuccin", "Latte", "Mocha", "KEY=value"];
+
 // Agents run inside their own sandbox, where the browser cannot start a second one; the page is our
 // own app on loopback only.
 const BROWSER_ARGS = ["--no-sandbox", "--disable-gpu", "--disable-crash-reporter", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update"];
@@ -48,6 +51,9 @@ export async function run(options) {
     const { createServer } = await import(pathToFileURL(requireFromApp.resolve("vite")).href);
     const fixture = JSON.parse(await readFile(join(import.meta.dirname, "fixture.json"), "utf8"));
     const translations = await readFile(join(app, "src/main/i18n/zh-TW.ts"), "utf8");
+    // Words a Chinese window may show in Latin letters: the synthetic data's own, and names of products and keys.
+    const dataWords = value => typeof value === "string" ? value.match(/[A-Za-z]{2,}/g) ?? [] : Array.isArray(value) ? value.flatMap(dataWords) : value && typeof value === "object" ? Object.values(value).flatMap(dataWords) : [];
+    const latinFor = scene => options.locale === "zh-TW" ? [...new Set([...dataWords(fixture), ...dataWords(scene.fixture), ...LATIN_NAMES].map(word => word.toLowerCase()))] : null;
     const namespaces = [...new Set([...translations.matchAll(/"([a-z][A-Za-z0-9]*)\.[^"\n]+"\s*:/g)].map(match => match[1]))];
     server = await createServer({ configFile: false, root: app, cacheDir: join(directory, "vite-cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: null, fs: { allow: [app] } } });
     await server.listen();
@@ -55,12 +61,10 @@ export async function run(options) {
     const origin = `http://127.0.0.1:${address.port}`;
     browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: join(directory, "browser-profile"), args: BROWSER_ARGS, timeout: 60000 });
     report.browser = await browser.version();
-    const viewports = options.viewports ?? options.widths.map(width => ({ width, height: 900 }));
-    report.options.viewports = viewports;
-    for (const scene of options.selected) for (const theme of options.themes) for (const { width, height } of viewports) {
+    for (const scene of options.selected) for (const theme of options.themes) for (const width of options.widths) {
       const page = await browser.newPage();
       const runtimeErrors = [];
-      const result = { scene: scene.name, theme, width, height, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
+      const result = { scene: scene.name, theme, width, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
       report.results.push(result);
       const error = (kind, message) => runtimeErrors.push({ kind, message });
       page.on("pageerror", value => error("exception", value.message));
@@ -69,7 +73,7 @@ export async function run(options) {
       page.on("requestfailed", request => { if (!favicon(request.url())) error("request", `${request.url()}: ${request.failure()?.errorText}`); });
       page.on("response", response => { if (response.status() >= 400 && !favicon(response.url())) error("http", `${response.status()} ${response.url()}`); });
       try {
-        await page.setViewport({ width, height, deviceScaleFactor: 1 });
+        await page.setViewport({ width, height: options.heights[width] ?? 900, deviceScaleFactor: 1 });
         await page.emulateTimezone("Asia/Taipei");
         await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }, { name: "prefers-color-scheme", value: theme }]);
         await page.setRequestInterception(true);
@@ -90,7 +94,7 @@ export async function run(options) {
           window.addEventListener("unhandledrejection", event => { window.__look.errors.push(`Unhandled rejection: ${String(event.reason)}`); });
         }, fixture.now);
         await page.goto(`${origin}/${scene.entry ?? ""}`, { waitUntil: "networkidle0", timeout: 20000 });
-        await page.waitForSelector(scene.entry === "overlay.html" ? "#progress:not([hidden])" : scene.fixture.onboarding ? '#ob:not([hidden]) [data-ob="next"]' : '.page-home:not([hidden]) .ho-raphael', { visible: true, timeout: 10000 });
+        await page.waitForSelector(scene.entry === "overlay.html" ? "#progress:not([hidden])" : scene.fixture.onboarding ? '#ob:not([hidden]) [data-ob="next"]' : '.page-home:not([hidden]) .ho-hero', { visible: true, timeout: 10000 });
         // Existing conversation journeys enter through the real rail after the home is ready.
         if (scene.entry !== "overlay.html" && !scene.fixture.onboarding && !scene.name.startsWith("home")) {
           await perform(page, { action: "click", selector: '#nav .nav[data-go="agent"]' });
@@ -107,10 +111,10 @@ export async function run(options) {
         result.diagnostics = await page.evaluate(() => ({ messages: [...document.querySelectorAll('.message-text, .ans, .ra')].map(el => ({ tag: el.tagName, class: el.className, parent: el.parentElement?.outerHTML.slice(0, 500) })) })).catch(() => null);
       }
       try {
-        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height }, namespaces));
+        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: options.heights[width] ?? 900 }, namespaces, latinFor(scene)));
         const mockErrors = await page.evaluate(() => window.__look?.errors ?? ["Mock boundary was not installed"]);
         for (const message of mockErrors) error("ipc", message);
-        const image = `${scene.name}-${theme}-${height === 900 ? width : `${width}x${height}`}.png`;
+        const image = `${scene.name}-${theme}-${width}.png`;
         await page.screenshot({ path: join(directory, image), type: "png" });
         result.image = image;
         result.failed = failedChecks(result);

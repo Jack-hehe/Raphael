@@ -663,6 +663,33 @@ CREATE TABLE subscription_allowances (
 PRAGMA user_version = 26;
 COMMIT;
 """
+_MIGRATIONS[27] = """
+BEGIN;
+ALTER TABLE room_messages ADD COLUMN reply_to_member INTEGER;
+ALTER TABLE room_messages ADD COLUMN kind TEXT NOT NULL DEFAULT 'message' CHECK(kind IN ('message','wrapup'));
+ALTER TABLE room_messages ADD COLUMN origin_message_id INTEGER REFERENCES room_messages(id) ON DELETE CASCADE;
+ALTER TABLE room_messages ADD COLUMN exchange_settled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rooms ADD COLUMN default_responder TEXT NOT NULL DEFAULT 'auto';
+CREATE TABLE room_exchanges (
+    origin_message_id INTEGER PRIMARY KEY REFERENCES room_messages(id) ON DELETE CASCADE,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK(state IN ('queued','running','done','stopped')),
+    language TEXT NOT NULL,
+    pending TEXT,
+    active_turn INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    turns_taken INTEGER NOT NULL DEFAULT 0,
+    spoken TEXT NOT NULL DEFAULT '[]',
+    hops INTEGER NOT NULL DEFAULT 0,
+    chime_ins INTEGER NOT NULL DEFAULT 0,
+    cost REAL NOT NULL DEFAULT 0,
+    stop_requested INTEGER NOT NULL DEFAULT 0,
+    wrapup_sent INTEGER NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX room_exchanges_room ON room_exchanges(room_id, origin_message_id);
+PRAGMA user_version = 27;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

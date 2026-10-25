@@ -2,13 +2,19 @@ import { scene, click, hover, type, wait, member, room, search, check, key, wait
 
 const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
+const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
 export default [
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
-    { action: "dictation-paste", selector: ".cmp-input", text: "Please use Open Mouse Bot" },
-    type(".cmp-input", "Please use OpenMausBot"), click(".cmp-send"),
-    wait(".toast"), check("composer-learn"),
-  ]),
+    { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
+    type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),
+    wait(".toast"), check("composer-learn"), check("composer-pair"),
+  ], { dictationText }),
+  scene("members-expanded", "Original Raphael emblem and expanded member column", [{ action: "member-column", collapsed: false }, check("member-column")]),
+  scene("members-collapsed", "Remembered member face strip with active and waiting markers", [{ action: "member-column", collapsed: true }, click('.mb-col [data-member="1"]'), check("member-column")], { waitingMember: 3 }),
+  scene("members-collapsed-hover", "Member name tooltip over the collapsed face strip", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="2"]'), check("member-column"), wait('.message-tooltip:not([hidden])')], { waitingMember: 3 }),
+  scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
+  scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
   scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
   scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
@@ -22,7 +28,7 @@ export default [
   scene("new-conversation", "Create a conversation", [...details, click(".mb-det [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
   scene("details", "Title opens member details", [...details, { action: "icon-interactions", selector: '.mb-det [data-det="close"]' }]),
   scene("raphael-details", "Title opens Raphael details", [{ action: "open-details" }, check("member-details")]),
-  scene("details-closed", "Title closes details", [...details, click(".conversation-trigger"), wait('.conversation-trigger[aria-expanded="false"]')]),
+  scene("details-closed", "Title closes details after expanding the member column", [{ action: "member-column", collapsed: false }, ...details, click(".conversation-trigger"), wait('.conversation-trigger[aria-expanded="false"]')]),
   scene("conversation-filter", "Search conversations in details", [...details, type(".mb-det .conversation-tools input", "no matching conversation"), wait(".mb-det .conversation-empty")]),
   ...["routines", "memory", "skills", "commands", "voice"].map(tab => scene(`details-${tab}`, `Member ${tab} pane`, [...details, click(`[data-det="tab"][data-tab="${tab}"]`)])),
   scene("member-avatar", "Member avatar picker above details", [...details, click('[data-det="avatar"]'), wait("#app-popover")]),
@@ -40,8 +46,8 @@ export default [
     const base = context === "member" ? [member(1)] : context === "room" ? [room(1)] : [click('[data-go="team"]')];
     const form = context === "member" ? ".mb-chat:not(.au-room-pane) .composer" : context === "room" ? ".au-room-pane .composer" : ".team-composer .composer";
     return [scene(`${context}-composer-learn`, `${context} dictated name correction reaches the dictionary`, [...base,
-      { action: "dictation-paste", selector: `${form} textarea`, text: "Please use Open Mouse Bot" },
-      type(`${form} textarea`, "Please use OpenMausBot"), click(`${form} .cmp-send`), wait(".toast"), check("composer-learn")]),
+      { action: "dictation-paste", selector: `${form} textarea`, text: dictationText.before },
+      type(`${form} textarea`, dictationText.after), check("composer-pair"), click(`${form} .cmp-send`), wait(".toast"), check("composer-learn"), check("composer-pair")], { dictationText }),
       scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
       scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), check("composer-pair")]),
       scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), check("composer-pair")])];

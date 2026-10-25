@@ -259,6 +259,7 @@ class TaskRun:
         # One call at a time: the worker may send several at once. A call waits for the one before it and checks the
         # limits only when its turn comes.
         self._turn = asyncio.Lock()
+        self.room_budget = None
 
     # --- cancelling -----------------------------------------------------------------------------
 
@@ -292,6 +293,11 @@ class TaskRun:
             raise stopped("cancelled")
         if self._clock() >= self.deadline:
             raise stopped("limit_time")
+        if self.room_budget is not None:
+            if self.ledger.total >= self.room_budget():
+                raise stopped("limit_cost")
+            if self._spend.is_over(self._monthly_limit()):
+                raise stopped("limit_month")
         if model and self.model_calls >= self.limits.model_calls:
             raise stopped("limit_model")
         if tool and self.tool_calls >= self.limits.tool_calls:
