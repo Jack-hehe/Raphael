@@ -536,10 +536,10 @@ export function createAgent(app: AppContext): Page {
 
   /**
    * The face of who the thread is with, where the composer, the card and the empty page show it:
-   * Raphael's or the member's. Every thread's voice button is Raphael's emblem (拉斐爾大師).
+   * Raphael's or the member's. Every thread's voice button is the gold emblem (拉斐爾大師), never a picture.
    */
   function drawFaces(): void {
-    voiceButton.innerHTML = avatarHTML({ size: 32 });
+    voiceButton.innerHTML = avatarHTML({ size: 32, avatar: null });
     if (inRaphael()) {
       askFace.innerHTML = avatarHTML({ size: 30 });
       hero.innerHTML = avatarHTML({ size: 132, loop: true });

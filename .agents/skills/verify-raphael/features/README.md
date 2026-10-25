@@ -1,7 +1,7 @@
 # Raphael feature map
 
 Use [the verification workflow](../SKILL.md) first. Commands run from `app/` and
-request both themes and both widths. Scene definitions in `app/scripts/look/scenes/`
+request both themes and each feature's documented widths; Home/calendar/dictation/members/conversation/team also require 1920x1080. Scene definitions in `app/scripts/look/scenes/`
 are the executable source. Native journeys cover behavior the fixture cannot prove.
 
 | Feature | User-facing scope |
@@ -9,7 +9,7 @@ are the executable source. Native journeys cover behavior the fixture cannot pro
 | [Home](home.md) | Startup overview, pending work, reports, calendar, usage and dictation totals |
 | [Conversation](conversation.md) | Threads, details panel, replies, public progress, search and composer |
 | [Members](members.md) | Identity, resources, voice and Raphael's approved team administration |
-| [Automations](automations.md) | List/calendar, schedules, advanced options and deletion |
+| [Automations](automations.md) | Home-owned day/week calendar, schedules, advanced options and deletion |
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |
 | [Dictation](dictation.md) | Overview, history, dictionary, shortcuts, microphone and paste |
 | [Settings and appearance](settings-appearance.md) | Profile/preferences, skins, languages, models and app information |

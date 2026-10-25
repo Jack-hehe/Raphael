@@ -3,6 +3,31 @@ import { describe, expect, it } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 
 describe("rendered look checks", () => {
+  it("does not translate user-entered textarea data but still audits its UI attributes", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Message">C:/Work/Team notes</textarea><textarea aria-label="名稱">User supplied text</textarea>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], []).mixedLanguage.map(item => item.word)).toEqual(["Message"]);
+  });
+  it("allows complete product names without allowing their ordinary English words", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<p>Claude Code</p><p>claude code</p><p>Code required</p><p>Claude Coder</p><p>KEY=value</p><p>value required</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], ["claude", "claude code", "key=value"]).mixedLanguage.map(item => item.word)).toEqual(["Code", "required", "Coder", "value"]);
+  });
+  it("allows the exact command-template token while rejecting input used as English prose", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="指令範本；以 {input} 代入後續文字"></textarea><p>input required</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], []).mixedLanguage.map(item => item.word)).toEqual(["input", "required"]);
+  });
+  it("allows protocol names while still rejecting English prose beside technical examples", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Authorization=Bearer ..."></textarea><textarea placeholder=\'{"mcpServers": {}}\'></textarea><p>Send request</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], ["authorization", "bearer", "mcpservers"]);
+    expect(result.mixedLanguage.map(item => item.word)).toEqual(["Send", "request"]);
+  });
   it("rejects interface copy left in English in a Chinese window, allowing data and product names", () => {
     const window = new Window();
     window.document.body.innerHTML = '<textarea placeholder="Message 紫苑"></textarea><button aria-label="問拉斐爾">Google Calendar</button><p>Finance 已建立</p><a href="#">研究訪談摘要.pdf</a>';

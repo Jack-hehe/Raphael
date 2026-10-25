@@ -27,7 +27,7 @@ describe("maintained verification feature map", () => {
       for (const [, command] of commands) {
         const options = parseOptions(command.trim().split(/\s+/), scenes);
         expect(options.themes, `${name}: ${command}`).toEqual(["light", "dark"]);
-        expect(options.widths, `${name}: ${command}`).toEqual([1120, 720]);
+        expect(options.widths, `${name}: ${command}`).toEqual(["home", "automations", "dictation", "members", "conversation", "team-and-rooms"].includes(name) ? [1120, 720, 1920] : [1120, 720]);
       }
     }
     const staged = resolve(root, ".fold/.agents/skills/verify-raphael/features");
@@ -35,7 +35,7 @@ describe("maintained verification feature map", () => {
     expect(files.filter(file => file !== "README.md").sort()).toEqual(names.map(name => `${name}.md`).sort());
   });
   it("retires deliberately removed owner controls", () => {
-    for (const name of ["owner-menu", "owner-keyboard-menu", "owner-photo"])
+    for (const name of ["owner-menu", "owner-keyboard-menu", "owner-photo", "home-expand", "automations-list", "automation-example"])
       expect(() => parseOptions([name], scenes)).toThrow(/Unknown/);
   });
 });

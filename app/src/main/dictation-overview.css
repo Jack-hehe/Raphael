@@ -1,40 +1,28 @@
-/* Dictation usage and shortcuts, using the app palette. */
-
-/* ---------- the two columns ---------- */
-.page-overview .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); align-items: start; margin-top: var(--sp-4); }
-.page-overview .home-main { min-width: 0; container: homemain / inline-size; }
-.page-overview .home-main > .usage { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
-/* An implicit grid column is as wide as its widest unbroken line (a long question on the right). minmax(0, 1fr) lets it shrink and the line truncate. */
-.page-overview .home-side { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); }
-/* The shortcuts stay on the right in a window of middling size too: narrower there, at full width
-   from 860 px. */
-@container main (min-width: 640px) {
-  .page-overview .home { grid-template-columns: minmax(0, 1fr) 220px; gap: var(--sp-4); }
-  .page-overview .home-side { position: sticky; top: calc(var(--window-controls-height) + 8px); }
+/* Four independent totals above activity, with shortcuts alongside on desktop. */
+.page-overview .home { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-5); align-items: start; }
+.page-overview .home-main, .page-overview .home-main > .usage { display: contents; }
+.page-overview .home-side { min-width: 0; }
+@container dictation (min-width: 760px) {
+  .page-overview .home { grid-template-columns: minmax(0, 1fr) 232px; }
+  .page-overview .home-side { grid-column: 2; grid-row: 2; }
 }
-@container main (min-width: 860px) {
-  .page-overview .home { grid-template-columns: minmax(0, 1fr) 252px; gap: var(--sp-4); }
+@container dictation (min-width: 1200px) {
+  .page-overview .home { grid-template-columns: minmax(0, 1fr) 288px; gap: var(--sp-6); }
 }
-
-.page-overview .card { padding: var(--sp-4) 0; }
-.page-overview .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-1) var(--sp-3); flex-wrap: wrap; min-height: var(--h-ctl-sm); margin-bottom: var(--sp-2); }
-.page-overview .card-head h2 { margin: 0; font: 600 var(--fs-md)/1.4 var(--ui); color: var(--text); }
-
-/* ---------- the four numbers ---------- */
-.page-overview .icards { background: var(--side); padding: var(--sp-3); display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); }
-@container homemain (min-width: 520px) {
+.page-overview .card { min-width: 0; padding: var(--sp-5); border: 1px solid var(--edge); border-radius: var(--r-lg); background: var(--panel); }
+.page-overview .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); min-height: var(--h-ctl-sm); margin-bottom: var(--sp-3); }
+.page-overview .card-head h2, .page-overview .activity-head h2 { margin: 0; font: 600 var(--fs-md)/1.4 var(--ui); color: var(--text); }
+.page-overview .icards { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
+@container dictation (min-width: 760px) {
   .page-overview .icards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
-.page-overview .icard { min-width: 0; padding: var(--sp-3) var(--sp-3); background: transparent; border: 0; border-radius: 0; }
-.page-overview .icard .v { font: 600 var(--fs-h1)/1.25 var(--display); font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.page-overview .icard .v small { margin: 0 var(--sp-1) 0 var(--sp-1); font: 500 var(--fs-xs)/1 var(--ui); letter-spacing: 0; color: var(--text-2); }
+.page-overview .icard { min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: var(--sp-2); min-height: 120px; padding: var(--sp-4); background: var(--panel); border: 1px solid var(--edge); border-radius: var(--r-lg); }
+.page-overview .icard .v { font: 600 var(--fs-h1)/1.3 var(--display); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.page-overview .icard .v small { margin-inline: var(--sp-1); font: 500 var(--fs-xs)/1.5 var(--ui); letter-spacing: 0; color: var(--text-2); white-space: nowrap; }
 .page-overview .icard .v small:last-child { margin-right: 0; }
 .page-overview .icard .v.none { font: 400 var(--fs-md)/1.6 var(--ui); color: var(--text-3); }
-.page-overview .icard .k { margin-top: var(--sp-1); font-size: var(--fs-xs); color: var(--text-3); }
-
-/* ---------- the activity ---------- */
-.page-overview .activity-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin-bottom: var(--sp-3); }
-.page-overview .activity-head h2 { margin: 0; font: 600 var(--fs-md)/1.4 var(--ui); color: var(--text); }
+.page-overview .icard .k { font-size: var(--fs-xs); color: var(--text-3); }
+.page-overview .activity-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-5); }
 .page-overview .activity-sum { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-xs); color: var(--text-2); }
 .page-overview .activity-nav { display: flex; gap: var(--sp-1); margin-left: auto; }
 .page-overview .activity-nav .btn.icon.row { width: 24px; }
@@ -45,7 +33,7 @@
 .heat .h1 { fill: var(--heat-1); } .heat .h2 { fill: var(--heat-2); } .heat .h3 { fill: var(--heat-3); } .heat .h4 { fill: var(--heat-4); }
 .heat .nodata { fill: url(#hatch); }
 .heat .hatch-bg { fill: transparent; }
-.heat .hatch-line { stroke: var(--hatch); stroke-width: 1.6; }
+.heat .hatch-line { stroke: color-mix(in srgb, var(--hatch) 45%, transparent); stroke-width: 0.65; }
 .heat .future { fill: none; stroke: var(--line); stroke-width: 1; }
 .heat rect:hover { stroke: var(--text-2); stroke-width: 1; }
 /* A day with a dictation opens the history at that day. */
@@ -69,31 +57,13 @@
 /* The version, in the corner of the window (main.ts moves it out of the page). */
 .home-version { position: fixed; right: 20px; bottom: 12px; z-index: 1; margin: 0; text-align: right; font-size: var(--fs-xs); color: var(--text-3); pointer-events: none; }
 
-/* Wide, tall windows give the same page more room. */
 @media (min-width: 1440px) and (min-height: 800px) {
-  @container main (min-width: 760px) {
-    .page-overview .home { grid-template-columns: minmax(0, 1fr) 288px; gap: var(--sp-5); }
-  }
-  .page-overview .home { gap: var(--sp-5); margin-top: var(--sp-5); }
-  .page-overview .home-main > .usage, .page-overview .home-side { gap: var(--sp-4); }
-  .page-overview .card { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
-  .page-overview .card-head h2, .page-overview .activity-head h2 { font-size: var(--fs-md); }
-  .page-overview .icards { gap: var(--sp-3); }
-  .page-overview .icard { padding: var(--sp-4) var(--sp-4); }
-  .page-overview .icard .v { font-size: var(--fs-h1); }
-  .page-overview .icard .v small { font-size: var(--fs-md); }
-  .page-overview .icard .k { font-size: var(--fs-md); }
-  .page-overview .activity-sum { font-size: var(--fs-sm); }
-  .page-overview .kc-name { font-size: var(--fs-md); }
-  .page-overview .mini-a { font-size: var(--fs-md); }
-  .page-overview .mini-q, .page-overview .mini-time { font-size: var(--fs-sm); }
+  .page-overview .icard { min-height: 156px; padding: var(--sp-5); }
+  .page-overview .icard .v { font-size: calc(var(--fs-h1) * 1.45); }
+  .page-overview .card { min-width: 0; padding: var(--sp-6); }
+  .page-overview .kc-row { padding-block: var(--sp-3); }
 }
 
-/* Short windows: the page just scrolls, and the columns stack. */
-@media (max-height: 700px), (max-width: 960px) and (max-height: 820px) {
-  .page-overview .home { gap: var(--sp-3); margin-top: var(--sp-3); }
-  .page-overview .home-side { position: static; }
-  .page-overview .home-main > .usage { gap: var(--sp-3); }
-  .page-overview .icard { padding: var(--sp-2) var(--sp-3); }
+@media (max-width: 1439px) {
   .home-version { display: none; }
 }

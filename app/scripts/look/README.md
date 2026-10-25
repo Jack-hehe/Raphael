@@ -34,7 +34,7 @@ MCP servers, providers/models and dictation data. Browser dates are fixed to the
 
 The normal entry opens Home and waits for Raphael's status strip. Existing non-home
 journeys then click the real Raphael rail destination before driving their steps.
-Home scenes cover rich/empty data, the lower strip, expansion, reports and routines.
+Home scenes cover rich/empty data, reports, routines and calendar navigation.
 
 Add a `scene(name, description, steps, fixtureOverrides)` to a module in `scenes/` and
 export it from `scenes/index.mjs`. Steps include click, type, hover, key, wait, scroll,
@@ -45,9 +45,9 @@ and `onboarding` select boundary variants. `overlayEvents` replays the native ov
 channel contract; `advance-time` advances the shared fixed clock for production timers. All scenarios appear in `--list`.
 
 Use `check(name)` for browser assertions that need rendered geometry. The shared
-`checks.mjs` guards title/panel state, conversation-list overflow, equal 32px
-composer buttons, percentage captions, complete calendar-chip times, conversation
-design and vertical dictation navigation. Successful measurements are saved in each
+`checks.mjs` guards title/panel state, conversation-list overflow, the single composer
+action slot, percentage captions, complete calendar-chip times and 20px faces,
+conversation design and horizontal dictation navigation. Successful measurements are saved in each
 result's `assertions`. Every settings journey checks the dialog radius and close-control
 hit target, then waits for the requested navigation entry to become current. Keep prerequisite
 data in the shared fixture: usage expansion needs more than five historical member
@@ -57,7 +57,7 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 139 current scenes (556 combinations for both themes and widths).
+scenes. There are 147 current scenes (882 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;

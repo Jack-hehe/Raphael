@@ -26,11 +26,18 @@ describe("real app entry with the shared look fixture", () => {
     const reply = document.querySelector(scenes.find(scene => scene.name === "chat").steps[0].selector);
     expect(reply?.querySelector(".message-text")?.textContent).toContain("這週的研究有三個重點");
     expect(reply?.closest("[hidden]")).toBeNull();
-    for (const destination of ["home", "automations", "team", "dictation", "agent"]) {
+    for (const destination of ["home", "team", "dictation", "agent"]) {
       document.querySelector(`#nav .nav[data-go="${destination}"]`).click();
       await flush();
       expect(document.querySelector(`#nav .nav[data-go="${destination}"]`).getAttribute("aria-current"), destination).toBe("page");
     }
+    document.querySelector('#nav .nav[data-go="home"]').click();
+    await flush();
+    expect(document.querySelector('#nav .nav[data-go="automations"]')).toBeNull();
+    document.querySelector('.ho-today [data-home-go="calendar"]').click();
+    await flush();
+    expect(document.querySelector('.au-page:not([hidden]) .au-calendar-scroll')).not.toBeNull();
+    expect(document.querySelector('#nav .nav[aria-current="page"]').dataset.go).toBe("home");
     document.querySelector('#nav .nav[data-go="settings"]').click();
     await flush();
     for (const pane of ["general", "appearance", "dictation", "agent", "connections", "messaging", "models", "data", "about"]) {

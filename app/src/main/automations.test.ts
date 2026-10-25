@@ -7,7 +7,7 @@ import { openRoutineDialog } from "./routine-dialog";
 import { occurrences } from "./automation-calendar";
 import { createAutomationsPage } from "./pages/automations";
 import { createTeamPage } from "./pages/team";
-import { dateKey, localDay, shiftDay } from "./schedule-picker";
+import { dateKey, localDay, monthGrid, shiftDay } from "./schedule-picker";
 import { setLocale } from "./i18n";
 import { closeMenu } from "./ui";
 const person = (id:number,name:string):Member => ({id,name,role:"Research",instructions:"",avatar:"",group_id:id?1:null,model:"",tools:null,position:id,created:0,unread:false,waiting:false,preview:"",last_at:null});
@@ -68,6 +68,37 @@ test("live routine notifications refresh the list, and hide invalidates pending 
   const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();api.routinesList.mockResolvedValue({routines:[{...plan,title:"Changed"}]});events.forEach(fn=>fn({type:"RoutinesChanged",member_id:1}));await flush();expect(page.el.textContent).toContain("Changed");page.hide();
 });
 
+test("calendar tools retain month navigation and awake state, close on date selection and hide",async()=>{
+  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
+  click('[data-au="tools"]');
+  const month=document.querySelector('.au-calendar-tools .au-month-head b')!.textContent;
+  click('.au-calendar-tools [data-au="month-next"]');
+  expect(document.querySelector('.au-calendar-tools .au-month-head b')!.textContent).not.toBe(month);
+  click('.au-calendar-tools [data-au="awake"]');await flush();
+  expect(api.keepAwakeSet).toHaveBeenCalledWith(true);
+  expect(document.querySelector('.au-calendar-tools [data-au="awake"]')!.getAttribute('aria-checked')).toBe('true');
+  const key=document.querySelector<HTMLElement>('.au-calendar-tools [data-mini-date]')!.dataset.miniDate!;
+  click('.au-calendar-tools [data-mini-date]');
+  expect(document.querySelector('.au-calendar-tools')).toBeNull();
+  expect(page.el.querySelector(`[data-day="${key}"]`)).not.toBeNull();
+  click('[data-au="tools"]');page.hide();expect(document.querySelector('.au-calendar-tools')).toBeNull();
+});
+
+test("dragging a member from calendar tools supplies the member and dismisses the popover",async()=>{
+  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-au="tools"]');
+  const transfer={setData:vi.fn()},event=new Event('dragstart',{bubbles:true});Object.defineProperty(event,'dataTransfer',{value:transfer});
+  document.querySelector('.au-calendar-tools [data-drag-member="2"]')!.dispatchEvent(event);
+  expect(transfer.setData).toHaveBeenCalledWith('application/x-raphael-member','2');
+  expect(document.querySelector('.au-calendar-tools')).toBeNull();page.hide();
+});
+
+test("mini month uses single Chinese weekday characters and retains full weekday tooltips",()=>{
+  setLocale('zh-TW');const host=document.createElement('div');host.innerHTML=monthGrid(localDay('2026-10-24'),'2026-10-24','data-mini-date');
+  const weekdays=[...host.querySelectorAll('.au-month-grid > span')];
+  expect(weekdays.map(day=>day.textContent)).toEqual(['一','二','三','四','五','六','日']);
+  expect(weekdays[0].getAttribute('title')).toBe('週一');
+});
+
 test("calendar switches between day and week and mini dates navigate",async()=>{
   const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(7);click('[data-period="day"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);click('[data-mini-date]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);page.hide();
 });
@@ -117,6 +148,7 @@ test("team mention autocomplete keeps typing focus and inserts the chosen member
  const page=createTeamPage(app());document.body.append(page.el);page.show();await flush();
  const input=page.el.querySelector<HTMLTextAreaElement>("textarea")!;input.focus();input.value="Review @Al";input.dispatchEvent(new Event("input"));
  expect(document.activeElement).toBe(input);expect(document.querySelector('#app-popover')!.textContent).toContain("@Alice");
+ expect(document.querySelector('#app-popover .ck')).toBeNull();
  click('#app-popover [data-value="Alice"]');expect(input.value).toBe("Review @Alice ");expect(document.activeElement).toBe(input);page.hide();
 });
 

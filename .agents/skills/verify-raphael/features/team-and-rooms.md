@@ -7,20 +7,20 @@ room creation/group assignment, membership and conversation actions.
 
 ## How to get to it (user POV)
 
-Choose Team for the board/creation menu. Conversation's sidebar lists rooms and a
+Choose Team for the board/creation menu. The padded header puts the title and Add on the same row without an attached member count. Conversation's sidebar lists rooms and a
 plus button. At compact width open the member picker, then Rooms. Open a room and
-use its header menu for rename/membership/delete.
+use its header menu for rename/membership/delete. Team's mention menu follows the typed @ character, including text before it and newlines. A mirror copies the field's font, wrapping, padding and scroll offsets; the menu prefers above the text line and flips below when space is limited. Other menus retain their existing alignment. Room composers currently have no mention autocomplete menu.
 
 ## Driving it with look
 
 ```powershell
-npm run look -- team team-group-menu team-rename team-delete team-new-menu team-new-group team-mentions team-empty team-drop-target team-zoom --theme both --width 1120,720
-npm run look -- sidebar compact-rooms new-room room-group-menu room room-draft room-menu room-rename room-members room-delete room-hover --theme both --width 1120,720
-npm run look -- room-composer-empty room-text room-composer-hover team-composer-empty team-text team-composer-hover --theme both --width 1120,720
+npm run look -- team team-group-menu team-rename team-delete team-new-menu team-new-group team-mentions team-empty team-drop-target team-zoom --theme both --width 1120,720,1920x1080
+npm run look -- sidebar compact-rooms new-room room-group-menu room room-draft room-menu room-rename room-members room-delete room-hover --theme both --width 1120,720,1920x1080
+npm run look -- room-composer-empty room-text room-composer-hover team-composer-empty team-text team-composer-hover --theme both --width 1120,720,1920x1080
 ```
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
-composer and overlay clearance. For mutation work extend scenes through create,
+composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention/slash items start at normal row padding and reserve no empty icon/check column. For mutation work extend scenes through create,
 send, rename and membership changes; assert UI and mock boundary records. Native
 proof needs a harmless room message, actual recipient responses and persistence
 after reopening the isolated dev instance. Record recipients, states and cleanup.

@@ -48,15 +48,15 @@ describe("the column, drawn", () => {
     expect(el.querySelectorAll(".mb-row")).toHaveLength(1);
     expect(el.querySelector(".mb-none")).toBeNull();
   });
-  test("Raphael is the first pinned row with a bare 40 px emblem", () => {
+  test("Raphael retains his original first row with a bare 64 px emblem", () => {
     const el = dom(columnHTML(view()));
     const chief = el.querySelector<HTMLElement>(".mb-chief")!;
-    expect(el.firstElementChild).toBe(chief.parentElement);
+    expect(el.firstElementChild).toBe(chief);
     expect(chief.classList.contains("mb-row")).toBe(true);
-    expect(chief.querySelector(".mb-pin")).not.toBeNull();
+    expect(chief.querySelector(".mb-pin, time, .mb-row-p")).toBeNull();
     expect(chief.dataset.member).toBe("0");
     expect(chief.textContent).toBe("拉斐爾");
-    expect(chief.querySelector(".av")!.getAttribute("style")).toBe("--av:40px");
+    expect(chief.querySelector(".av")!.getAttribute("style")).toBe("--av:64px");
     expect(chief.innerHTML).not.toMatch(/管理員|mb-av|badge/);
     expect(chief.getAttribute("aria-current")).toBe("true");
   });
@@ -127,6 +127,7 @@ describe("the column, used", () => {
   let host: ColumnHost & Record<string, ReturnType<typeof vi.fn>>;
   beforeEach(() => {
     document.body.innerHTML = "";
+    localStorage.clear();
     host = {
       view: () => ({ list: LIST, current: 0, previews, fresh: new Set() }),
       select: vi.fn(), newMember: vi.fn(), newGroup: vi.fn(), moveMember: vi.fn(), deleteMember: vi.fn(),
@@ -139,6 +140,39 @@ describe("the column, used", () => {
     column.draw();
     return column;
   };
+
+  test("collapse retains every face, state and selection and persists across recreation", () => {
+    const column = mount();
+    column.el.querySelector<HTMLElement>('[data-group-fold="10"]')!.click();
+    const toggle = column.el.querySelector<HTMLElement>('[data-col="collapse"]')!;
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(localStorage.getItem("raphael.members.collapsed")).toBe("true");
+    expect(column.el.classList.contains("is-collapsed")).toBe(true);
+    expect([...column.el.querySelectorAll<HTMLElement>("[data-member]")].map(row => row.dataset.member)).toEqual(["0", "1", "2", "3", "4"]);
+    expect(column.el.querySelector('[data-member="2"] .is-wait')).not.toBeNull();
+    expect(column.el.querySelector('[data-member="4"] .is-unread')).not.toBeNull();
+    const face = column.el.querySelector<HTMLElement>('[data-member="3"]')!;
+    expect(face.dataset.tooltip).toBe(LIST.members[3].name);
+    face.click();
+    expect(host.select).toHaveBeenCalledWith(3);
+    const restored = mount();
+    expect(restored.el.classList.contains("is-collapsed")).toBe(true);
+    toggle.click();
+    expect(localStorage.getItem("raphael.members.collapsed")).toBe("false");
+    expect(column.el.querySelector('[data-group="10"]')?.getAttribute("data-open")).toBe("false");
+  });
+
+  test("column toggle remains usable when storage reads and writes throw", () => {
+    const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage unavailable"); });
+    try {
+      const column = mount();
+      const before = column.el.classList.contains("is-collapsed");
+      column.el.querySelector<HTMLElement>('[data-col="collapse"]')!.click();
+      expect(column.el.classList.contains("is-collapsed")).toBe(!before);
+    } finally { read.mockRestore(); write.mockRestore(); }
+  });
 
   test("a click on a row opens that member's thread", () => {
     const column = mount();

@@ -366,17 +366,17 @@ describe("the page of one service", () => {
     expect(d).toContain(`id="${keyInputId("fish")}" type="password"`);
     expect(d).toContain(`id="svc-voice-id" type="text" value="${VOICE_ID}" placeholder="聲音模型 ID"`);
     expect(d.indexOf('data-svc-line="fish"')).toBeLessThan(d.indexOf('data-svc-line="voice"'));
-    expect(d).toContain('<button type="button" class="btn" data-svc="try" data-service="fish" data-k="svc-try">Try it</button>');
+    expect(d).toContain('<button type="button" class="btn" data-svc="try" data-service="fish" data-k="svc-try">試用</button>');
     expect(d).toMatch(/<button type="button" class="btn pri" data-svc="use" data-service="fish" data-k="svc-use"[^>]*>使用<\/button>/);
     expect(d).toContain('class="action-row svc-acts is-sticky"');
     expect(d.indexOf('data-svc="try"')).toBeLessThan(d.indexOf('data-svc="use"'));
     expect(d).not.toMatch(/data-svc="try"[^>]*><svg/);
   });
 
-  test("Try it is English in every language; 「使用」 is Use in English", () => {
+  test("the try action is localized in Chinese; 「使用」 is Use in English", () => {
     for (const locale of ["en", "ja", "zh-TW"] as const) {
       setLocale(locale);
-      expect(inDialog(dialog("voice", "fish"))).toContain(">Try it</button>");
+      expect(inDialog(dialog("voice", "fish"))).toContain(locale === "zh-TW" ? ">試用</button>" : ">Try it</button>");
     }
     setLocale("en");
     expect(inDialog(dialog("search", "brave"))).toContain(">Use</button>");

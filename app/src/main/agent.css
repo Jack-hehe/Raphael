@@ -316,11 +316,15 @@
 .cmp-input.is-tall { overflow-y: auto; }
 .cmp-input::placeholder { color: var(--text-3); }
 .cmp-input:focus-visible { outline: 0; }
-/* Send: a filled round button, the accent once there is something to send. */
-.composer .cmp-pair .btn.cmp-send { border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); }
-.composer .cmp-pair .btn.cmp-send:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
-.composer .cmp-pair .btn.cmp-send:active:not(:disabled) { background: var(--accent-pressed); color: var(--on-accent); }
-.composer .cmp-pair .btn.cmp-send:disabled { background: var(--surface-2); color: var(--text-3); opacity: 1; cursor: default; }
+/* One slot: 拉斐爾大師 (voice) while the draft is empty; once there is something to send he turns
+   into a bare send icon (a level paper plane, no background), as Telegram does. */
+.composer .cmp-pair:has(.cmp-send:disabled) .cmp-send, .composer .cmp-pair:has(.cmp-send:not(:disabled)) .cmp-voice { display: none; }
+.composer .cmp-pair .btn.cmp-send { background: transparent; color: var(--accent-icon); animation: cmp-turn 140ms ease-out; }
+.composer .cmp-pair .btn.cmp-send:hover:not(:disabled), .composer .cmp-pair .btn.cmp-send:active:not(:disabled) { background: transparent; color: var(--accent-text); }
+.composer .cmp-pair .cmp-voice { animation: cmp-turn 140ms ease-out; }
+.cmp-plane { width: 24px; height: 24px; fill: currentColor; stroke: none; }
+@keyframes cmp-turn { from { transform: scale(.7); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .composer .cmp-pair .btn.cmp-send, .composer .cmp-pair .cmp-voice { animation: none; } }
 /* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
 .vm-away > * { visibility: hidden; }
 .cmp-file { display: flex; flex-wrap: nowrap; gap: var(--sp-2); min-width: 0; overflow-x: auto; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2); }
@@ -448,6 +452,7 @@
 .bubble .message-quote, .bubble .quote-author, .bubble .message-link { color: var(--on-accent); border-color: currentColor; }
 /* Send and Raphael voice form one quiet, equal-sized pair in every composer. */
 .cmp-pair { display: inline-flex; flex: none; align-items: center; gap: var(--sp-1); }
+/* The row sits at the bottom of a growing draft; the 32px slot centres on its last line. */
+.cmp-row > .cmp-pair { margin-bottom: calc((var(--pa-cmp-lh) + 2 * var(--pa-cmp-py) - 32px) / 2); }
 .composer .cmp-pair .btn { width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; }
-.composer .cmp-pair .cmp-send .i { width: 16px; height: 16px; }
 .composer .cmp-pair .cmp-voice:is(:hover, :active) { transform: none; }

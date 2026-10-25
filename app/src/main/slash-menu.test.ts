@@ -75,8 +75,8 @@ test('menu placement is recalculated after applying the composer width on a narr
   try {
     type(input, '/'); await flush();
     const panel = document.querySelector<HTMLElement>('.slash-menu')!;
-    expect(panel.style.minWidth).toBe('480px');
-    expect(Number.parseFloat(panel.style.left) + 480).toBeLessThanOrEqual(712);
+    expect(panel.style.minWidth).toBe('360px');
+    expect(Number.parseFloat(panel.style.left) + 360).toBeLessThanOrEqual(712);
   } finally {
     menu.destroy();
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: beforeViewport });
