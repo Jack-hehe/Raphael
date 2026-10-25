@@ -112,7 +112,7 @@ async def test_the_tools_name_what_the_owner_turned_off(services_rig):
     services_rig.settings.set("vision_enabled", False)
     assert "read_attachment" not in tools.turned_off()  # PDFs can still be read
     services_rig.settings.set("pdf_enabled", False)
-    assert tools.turned_off() == {"web_search", "web_read", "read_attachment"}
+    assert tools.turned_off() == {"web_search", "web_read"}  # Local text remains readable.
 
 
 def test_without_the_services_nothing_is_turned_off_and_the_search_is_openrouters():

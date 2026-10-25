@@ -6,6 +6,7 @@ export function installMock(fixture, config = {}, target = window) {
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
+  if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
   if (adminQuestion) {

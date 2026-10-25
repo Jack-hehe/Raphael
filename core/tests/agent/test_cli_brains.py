@@ -43,6 +43,216 @@ def test_unknown_shim_fails_closed(tmp_path):
         resolve_command(shim, {})
 
 
+async def test_codex_child_is_isolated_and_borrows_only_nonrefreshable_login(tmp_path):
+    from pathlib import Path
+    from raphael_core.agent.cli.drivers import Driver
+
+    owner = tmp_path / ".codex"
+    owner.mkdir()
+    credentials = owner / "auth.json"
+    original = json.dumps({"auth_mode": "chatgpt", "OPENAI_API_KEY": "private-key",
+        "tokens": {"id_token": "synthetic-id", "access_token": "synthetic-access",
+                   "refresh_token": "owner-refresh", "account_id": "account"}, "last_refresh": "2020-01-01T00:00:00Z"})
+    credentials.write_text(original, encoding="utf-8")
+    (owner / "config.toml").write_text('[mcp_servers.personal]\ncommand="private-plugin"', encoding="utf-8")
+    (owner / "AGENTS.md").write_text("private-instructions", encoding="utf-8")
+    record = tmp_path / "record.json"
+    script = tmp_path / "isolated.py"
+    script.write_text('''import json, os, sys
+from pathlib import Path
+def send(value): print(json.dumps(value), flush=True)
+record = {"command": sys.argv[2:], "environment": dict(os.environ), "cwd": os.getcwd()}
+home = Path(os.environ["CODEX_HOME"])
+record["auth"] = json.loads((home / "auth.json").read_text(encoding="utf-8"))
+record["home_files"] = sorted(p.name for p in home.iterdir())
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize": send({"id":msg["id"], "result":{}})
+    elif msg.get("method") in ("thread/start", "thread/resume"):
+        record["thread"] = msg
+        send({"id":msg["id"], "result":{"thread":{"id":"isolated-thread"}}})
+    elif msg.get("method") == "turn/start":
+        Path(sys.argv[1]).write_text(json.dumps(record), encoding="utf-8")
+        send({"method":"item/completed", "params":{"item":{"type":"agentMessage", "text":"Done"}}})
+        send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
+        break
+''', encoding="utf-8")
+    environment = {**os.environ, "CODEX_HOME": str(owner), "CODEX_PROFILE": "personal",
+        "CODEX_INTERNAL_ORIGINATOR_OVERRIDE": "personal-app", "OPENAI_BASE_URL": "https://personal.invalid",
+        "OPENAI_API_KEY": "private-key", "CODEX_API_KEY": "private-key", "CODEX_ACCESS_TOKEN": "private-token"}
+    (tmp_path / "workspace").mkdir()
+    driver = Driver("codex", [sys.executable, str(script), str(record)], environ=environment)
+    events = [event async for event in driver.run(user="Create COO and PM", system="Raphael persona",
+        endpoint="http://127.0.0.1:1/mcp", token="ephemeral", session="owner-thread", permission=None,
+        cwd=str(tmp_path / "workspace"))]
+    assert events[-1].kind == "final", events
+    result = json.loads(record.read_text(encoding="utf-8"))
+    child_env = result["environment"]
+    home = Path(child_env["CODEX_HOME"])
+    assert home != owner and home.is_relative_to(tmp_path / ".raphael")
+    assert child_env["HOME"] == child_env["USERPROFILE"] == str(home / "profile")
+    assert {key for key in child_env if key.startswith("CODEX_")} == {"CODEX_HOME"}
+    assert not any(key.startswith("OPENAI_") for key in child_env)
+    assert child_env["RAPHAEL_MCP_TOKEN"] == "ephemeral"
+    assert result["cwd"] == str(home / "workspace")
+    command = result["command"]
+    assert command[:2] == ["app-server", "--strict-config"]
+    overrides = dict(item.split("=", 1) for item in command[3::2])
+    assert command[2::2] == ["-c"] * len(overrides)
+    assert overrides["mcp_servers.raphael.url"] == '"http://127.0.0.1:1/mcp"'
+    assert overrides["mcp_servers.raphael.bearer_token_env_var"] == '"RAPHAEL_MCP_TOKEN"'
+    assert overrides["mcp_servers.raphael.omit_tools_from"] == '["deferred", "code_mode"]'
+    assert overrides["mcp_servers.raphael.required"] == "true"
+    assert overrides["mcp_servers.raphael.startup_readiness"] == '"catalog"'
+    assert overrides["project_doc_max_bytes"] == "0"
+    assert overrides["skills.include_instructions"] == "false"
+    assert overrides["features.skip_host_skill_discovery"] == "true"
+    for feature in ("apps", "plugins", "remote_plugin", "hooks", "memories", "shell_tool", "multi_agent",
+                    "browser_use", "computer_use", "code_mode", "view_image", "image_generation", "skill_search"):
+        assert overrides[f"features.{feature}"] == "false"
+    assert overrides["memories.generate_memories"] == overrides["memories.use_memories"] == "false"
+    assert overrides["web_search"] == '"disabled"'
+    assert overrides["history.persistence"] == '"none"'
+    assert overrides["tools.update_plan.enabled"] == overrides["tools.experimental_request_user_input.enabled"] == "false"
+    assert set(overrides) == {
+        "project_doc_max_bytes", "skills.include_instructions", "features.skip_host_skill_discovery",
+        "features.apps", "features.plugins", "features.remote_plugin", "features.hooks", "features.memories",
+        "features.shell_tool", "features.multi_agent", "features.browser_use", "features.computer_use",
+        "features.code_mode", "features.code_mode_host", "features.view_image", "features.image_generation",
+        "features.skill_search", "features.skill_mcp_dependency_install", "features.tool_suggest",
+        "features.workspace_dependencies", "features.goals", "features.sleep_tool", "memories.generate_memories",
+        "memories.use_memories", "include_apps_instructions", "tools.update_plan.enabled",
+        "tools.experimental_request_user_input.enabled", "web_search", "history.persistence",
+        "cli_auth_credentials_store",
+        "mcp_servers.raphael.omit_tools_from", "mcp_servers.raphael.url",
+        "mcp_servers.raphael.bearer_token_env_var",
+        "mcp_servers.raphael.required", "mcp_servers.raphael.startup_readiness",
+    }
+    assert result["auth"]["tokens"] == {"id_token": "synthetic-id", "access_token": "synthetic-access",
+                                        "refresh_token": "", "account_id": "account"}
+    assert "OPENAI_API_KEY" not in result["auth"]
+    assert result["auth"]["last_refresh"] != "2020-01-01T00:00:00Z"
+    assert "config.toml" not in result["home_files"] and "AGENTS.md" not in result["home_files"]
+    assert not (home / "auth.json").exists()
+    assert credentials.read_text(encoding="utf-8") == original
+    assert result["thread"]["method"] == "thread/start"
+    assert result["thread"]["params"]["cwd"] == result["cwd"]
+    assert result["thread"]["params"]["developerInstructions"] == "Raphael persona"
+    assert "ephemeral" not in json.dumps(result["thread"])
+    assert next(event.text for event in events if event.kind == "session") == "raphael-codex-v1:isolated-thread"
+    assert "owner-refresh" not in json.dumps(result)
+    assert "synthetic-access" not in json.dumps(command) + json.dumps(child_env)
+    for key in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        assert child_env[key] == str(home / "profile" / key.lower())
+    updated = json.loads(original)
+    updated["tokens"]["access_token"] = "next-access"
+    credentials.write_text(json.dumps(updated), encoding="utf-8")
+    resumed = Driver("codex", [sys.executable, str(script), str(record)], environ=environment)
+    events = [event async for event in resumed.run(user="Continue", system="Raphael persona",
+        endpoint="http://127.0.0.1:1/mcp", token="next-ephemeral", session="raphael-codex-v1:isolated-thread",
+        permission=None, cwd=str(tmp_path / "workspace"))]
+    assert events[-1].kind == "final"
+    result = json.loads(record.read_text(encoding="utf-8"))
+    assert result["environment"]["CODEX_HOME"] == str(home)
+    assert result["auth"]["tokens"]["access_token"] == "next-access"
+    assert result["thread"]["method"] == "thread/resume"
+    assert result["thread"]["params"]["threadId"] == "isolated-thread"
+    assert not (home / "auth.json").exists()
+    assert json.loads(credentials.read_text(encoding="utf-8")) == updated
+
+
+async def test_codex_missing_isolated_session_restarts_once_without_owner_history(tmp_path):
+    from raphael_core.agent.cli.drivers import Driver
+
+    script = tmp_path / "missing.py"
+    script.write_text('''import json, sys
+def send(value): print(json.dumps(value), flush=True)
+resumed = False
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize": send({"id":msg["id"], "result":{}})
+    elif method == "thread/resume":
+        assert not resumed and msg["params"]["threadId"] == "missing"
+        resumed = True
+        send({"id":msg["id"], "error":{"code":-32600,"message":"Rollout not found"}})
+    elif method == "thread/start":
+        assert resumed and "threadId" not in msg["params"]
+        send({"id":msg["id"], "result":{"thread":{"id":"new"}}})
+    elif method == "turn/start":
+        send({"method":"item/completed", "params":{"item":{"type":"agentMessage", "text":"Fresh"}}})
+        send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
+        break
+''', encoding="utf-8")
+    events = [event async for event in Driver("codex", [sys.executable, str(script)]).run(
+        user="Continue", system="Persona", endpoint="http://127.0.0.1:1/mcp", token="ephemeral",
+        session="raphael-codex-v1:missing", cwd=str(tmp_path), permission=None)]
+    assert events[-1].kind == "final" and events[-1].text == "Fresh"
+    assert next(event.text for event in events if event.kind == "session") == "raphael-codex-v1:new"
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_codex_auth_snapshot_is_removed_on_exit_or_cancellation(tmp_path, cancel):
+    from pathlib import Path
+    from raphael_core.agent.cli.drivers import Driver
+
+    owner = tmp_path / ".codex"
+    owner.mkdir()
+    credentials = owner / "auth.json"
+    original = json.dumps({"tokens": {"id_token": "synthetic-id", "access_token": "synthetic-access",
+                                     "refresh_token": "owner-refresh", "account_id": "account"}})
+    credentials.write_text(original, encoding="utf-8")
+    marker = tmp_path / "auth-path.txt"
+    script = tmp_path / "auth_cleanup.py"
+    script.write_text('''import os, sys, time
+from pathlib import Path
+auth = Path(os.environ["CODEX_HOME"]) / "auth.json"
+assert auth.is_file()
+Path(sys.argv[1]).write_text(str(auth), encoding="utf-8")
+if sys.argv[2] == "True": time.sleep(300)
+''', encoding="utf-8")
+    driver = Driver("codex", [sys.executable, str(script), str(marker), str(cancel)])
+    async def consume():
+        return [event async for event in driver.run(user="Hi", system="Persona", endpoint="http://127.0.0.1:1/mcp",
+            token="ephemeral", cwd=str(tmp_path), permission=None)]
+    task = asyncio.create_task(consume())
+    try:
+        async with asyncio.timeout(10):
+            while not marker.is_file():
+                await asyncio.sleep(.01)
+        if cancel:
+            assert Path(marker.read_text(encoding="utf-8")).is_file()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            events = await asyncio.wait_for(task, 10)
+            assert events[-1].kind == "error"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert not Path(marker.read_text(encoding="utf-8")).exists()
+    assert credentials.read_text(encoding="utf-8") == original
+    assert driver.child.process.returncode is not None
+
+
+@pytest.mark.parametrize("content", ["not-json", "[]", '{"tokens":{"access_token":"secret"}}'])
+async def test_codex_malformed_login_fails_without_launching_child_or_logging_content(tmp_path, caplog, content):
+    from raphael_core.agent.cli.drivers import Driver
+
+    owner = tmp_path / ".codex"
+    owner.mkdir()
+    auth = owner / "auth.json"
+    auth.write_text(content, encoding="utf-8")
+    driver = Driver("codex", ["must-not-start"])
+    events = [event async for event in driver.run(user="Hi", system="Persona", endpoint="http://127.0.0.1:1/mcp",
+        token="ephemeral", cwd=str(tmp_path), permission=None)]
+    assert driver.child is None
+    assert events[-1].kind == "error" and events[-1].text == "protocol_or_process_error"
+    assert "secret" not in caplog.text
+    assert auth.read_text(encoding="utf-8") == content
+
+
 @pytest.mark.parametrize("name", ["claude", "codex", "gemini"])
 async def test_driver_subscription_events_permissions_and_resume(tmp_path, name):
     from raphael_core.agent.cli.drivers import Driver
@@ -118,7 +328,8 @@ else:
         return "once"
 
     driver = Driver(name, [sys.executable, str(script), name], model="chosen-model", effort="high", environ={**os.environ, "OPENAI_API_KEY": "never-child"})
-    events = [event async for event in driver.run(user="question", system="persona", endpoint="http://127.0.0.1:1/mcp", token="ephemeral", session="previous", permission=permission)]
+    session = "raphael-codex-v1:previous" if name == "codex" else "previous"
+    events = [event async for event in driver.run(user="question", system="persona", endpoint="http://127.0.0.1:1/mcp", token="ephemeral", session=session, permission=permission)]
     assert any(event.kind == "text_delta" and event.text == "Hello" for event in events)
     assert any(event.kind == "final" and event.text == "Hello" for event in events)
     assert any(event.kind == "session" for event in events)

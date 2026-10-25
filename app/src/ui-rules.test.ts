@@ -94,6 +94,8 @@ describe("buttons", () => {
     expect(styles).toMatch(/\.btn\.icon\s*\{[^}]*background:\s*transparent/);
     expect(styles).toMatch(/\.btn\.icon:focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus\)/);
     const classes = new Set(["icon", "cmp-attach", "cmp-send", "cmp-voice", "mp-star", "lm-del", "chip-x", "window-button", "window-close"]);
+    const composer = strip(read(join(MAIN, "agent.css")));
+    expect(composer).toMatch(/\.composer \.cmp-pair \.btn\.cmp-send \{[^}]*background: transparent; color: var\(--accent-icon\)/);
     // Read the optional class argument of every iconButton/iconBtn call, balancing nested calls.
     for (const file of sources) {
       const source = read(file);
@@ -124,7 +126,7 @@ describe("buttons", () => {
     });
     // Guard the guard: both the shared class and a helper's custom class must be caught.
     expect(violations(".btn.icon:hover { background: var(--hover); }")).toEqual([".btn.icon:hover"]);
-    expect(violations(".cmp-send:active { background-color: var(--pressed); }")).toEqual([".cmp-send:active"]);
+    expect(violations(".cmp-voice:active { background-color: var(--pressed); }")).toEqual([".cmp-voice:active"]);
     const bad = mainFiles.filter(file => file.endsWith(".css")).flatMap(file =>
       violations(read(file)).map(selector => `${rel(file)}: ${selector}`).filter(rule => !allowlist.includes(rule)));
     expect(bad).toEqual([]);

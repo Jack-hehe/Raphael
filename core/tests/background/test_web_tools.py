@@ -146,7 +146,7 @@ async def test_a_task_handed_over_with_files_is_told_of_them_and_offered_the_too
     await rig.wait_for_reports()
     (first,) = rig.client.chat_calls
     user = first["messages"][1]["content"]
-    assert "<files>\n1. an image: receipt.png\n</files>" in user
+    assert "<files>\n1. image/png: receipt.png\n</files>" in user
     assert "read_attachment" in [t["function"]["name"] for t in first["tools"]]
     assert rig.service._attachments == {}  # gone with the task, never written down
     row = rig.conn.execute("SELECT * FROM worker_tasks WHERE id = ?", (task_id,)).fetchone()

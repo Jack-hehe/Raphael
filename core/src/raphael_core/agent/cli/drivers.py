@@ -6,17 +6,44 @@ reasoning blocks, command output and provider credentials never become UI messag
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
-from .process import Child, PrivateFiles
+from .process import Child, PrivateFiles, secure_directory
 from ..quota import parse_quota
 from ...clock import wall_clock_ms
 
 logger = logging.getLogger(__name__)
+
+CODEX_SESSION_PREFIX = "raphael-codex-v1:"
+# Verified against the installed Codex 0.159.3 config types and strict-config parser.
+CODEX_ISOLATION = {
+    "project_doc_max_bytes": 0,
+    "skills.include_instructions": False,
+    "features.skip_host_skill_discovery": True,
+    **{f"features.{name}": False for name in (
+        "apps", "plugins", "remote_plugin", "hooks", "memories", "shell_tool", "multi_agent",
+        "browser_use", "computer_use", "code_mode", "code_mode_host", "view_image", "image_generation",
+        "skill_search", "skill_mcp_dependency_install", "tool_suggest", "workspace_dependencies", "goals", "sleep_tool",
+    )},
+    "memories.generate_memories": False,
+    "memories.use_memories": False,
+    "include_apps_instructions": False,
+    "tools.update_plan.enabled": False,
+    "tools.experimental_request_user_input.enabled": False,
+    "web_search": "disabled",
+    "history.persistence": "none",
+    "cli_auth_credentials_store": "file",
+    # Deferral feature flags are removed in this release; use the supported exposure surfaces.
+    "mcp_servers.raphael.omit_tools_from": ["deferred", "code_mode"],
+    "mcp_servers.raphael.required": True,
+    "mcp_servers.raphael.startup_readiness": "catalog",
+}
 
 
 @dataclass(frozen=True)
@@ -27,10 +54,11 @@ class Event:
 
 
 class Driver:
-    def __init__(self, name, command, *, model=None, effort=None, environ=None, quota=None):
+    def __init__(self, name, command, *, model=None, effort=None, environ=None, quota=None, home=None):
         self.name, self.command, self.model = name, list(command), model
         self.effort = effort
         self.environ = environ
+        self.home = home
         self.child = None
         self.session = None
         self.turn = None
@@ -58,6 +86,7 @@ class Driver:
 
     async def run(self, *, user, system, endpoint, token, session=None, permission, cwd=None, images=()):
         files = PrivateFiles()
+        codex_auth = None
         try:
             await files.secure()
             prompt_file = files.write("system.txt", system)
@@ -65,6 +94,8 @@ class Driver:
                                               "headers": {"Authorization": f"Bearer {token}"}}}}
             config = files.write("mcp.json", json.dumps(mcp))
             command = list(self.command)
+            environ = dict(os.environ if self.environ is None else self.environ)
+            child_cwd = cwd or str(files.path)
             if self.name == "claude":
                 command += ["-p", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
                             "--include-partial-messages", "--append-system-prompt-file", prompt_file,
@@ -80,8 +111,20 @@ class Driver:
             elif self.name == "codex":
                 # The thread's `config` is not applied to MCP servers: they are set when the server
                 # starts, the token passed through the environment, never on the command line.
-                command += ["app-server", "-c", f"mcp_servers.raphael.url={json.dumps(endpoint)}",
-                            "-c", 'mcp_servers.raphael.bearer_token_env_var="RAPHAEL_MCP_TOKEN"']
+                home, environ, auth = await codex_home(child_cwd, environ, owner=self.home)
+                codex_auth = home / "auth.json"
+                if auth is not None:
+                    descriptor = os.open(codex_auth, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                        json.dump(auth, stream)
+                child_cwd = str(home / "workspace")
+                # Only sessions issued by the isolated driver may cross this boundary.
+                session = session.removeprefix(CODEX_SESSION_PREFIX) if session and session.startswith(CODEX_SESSION_PREFIX) else None
+                overrides = {**CODEX_ISOLATION, "mcp_servers.raphael.url": endpoint,
+                             "mcp_servers.raphael.bearer_token_env_var": "RAPHAEL_MCP_TOKEN"}
+                command += ["app-server", "--strict-config"]
+                for key, value in overrides.items():
+                    command += ["-c", f"{key}={json.dumps(value)}"]
             elif self.name == "gemini":
                 # Google's Antigravity CLI (`agy`; Gemini CLI was retired). It reads MCP servers and
                 # rules only from its home folder, so it runs with a private home inside the
@@ -95,12 +138,11 @@ class Driver:
                     command += ["--conversation", session]
             else:
                 raise ValueError("unknown_cli")
-            environ = dict(os.environ if self.environ is None else self.environ)
             if self.name == "codex":
                 environ["RAPHAEL_MCP_TOKEN"] = token
             elif self.name == "gemini":
                 environ["USERPROFILE"] = environ["HOME"] = str(home)
-            self.child = Child(command, environ=environ, cwd=cwd or str(files.path))
+            self.child = Child(command, environ=environ, cwd=child_cwd)
             await self.child.start()
             if self.name == "claude":
                 content = ([{"type": "text", "text": user}] + [
@@ -125,7 +167,7 @@ class Driver:
                     path.write_bytes(image.data)
                     image_paths.append(str(path.resolve()))
                 async for event in self._rpc(user, system, endpoint, token, session, permission, image_paths):
-                    yield event
+                    yield Event("session", CODEX_SESSION_PREFIX + event.text) if event.kind == "session" else event
         except (OSError, ValueError, TimeoutError, EOFError, asyncio.IncompleteReadError) as error:
             logger.warning("CLI transport failed: %s", type(error).__name__)
             yield self._event("error", "protocol_or_process_error")
@@ -133,6 +175,8 @@ class Driver:
             try:
                 await self.interrupt()
             finally:
+                if codex_auth is not None:
+                    codex_auth.unlink(missing_ok=True)
                 files.close()
                 if self.name == "gemini":
                     forget_antigravity_server(cwd or str(files.path))
@@ -258,15 +302,19 @@ class Driver:
             if not method and packet.get("id") in pending:
                 label = pending.pop(packet["id"])
                 if "error" in packet:
+                    if label == "session" and session:
+                        # A removed private home must not send us looking in the owner's sessions.
+                        session = None
+                        arguments.pop("threadId", None)
+                        await request("thread/start", arguments, "session")
+                        continue
                     yield self._event("error", "cli_request_failed")
                     return
                 result = packet.get("result") or {}
                 if label == "initialize":
                     await self.child.send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
-                    config = {"mcp_servers": {"raphael": {"url": endpoint,
-                              "http_headers": {"Authorization": f"Bearer {token}"}}}}
                     arguments = {"developerInstructions": system, "approvalPolicy": "untrusted",
-                                 "sandbox": "read-only", "config": config, "cwd": self.child.cwd}
+                                 "sandbox": "read-only", "cwd": self.child.cwd}
                     if self.model:
                         arguments["model"] = self.model
                     if session:
@@ -329,6 +377,44 @@ class Driver:
             elif method == "error":
                 yield self._event("error", "cli_error")
                 return
+
+async def codex_home(workspace, environ, *, owner=None):
+    """Private persistent state outside the workspace; borrow login without refresh authority.
+
+    Never copy the owner's config, instructions, skills, history or refresh token. An expired
+    access token requires the owner's Codex to refresh its login before the next Raphael turn.
+    """
+    owner = Path(owner or environ.get("USERPROFILE") or environ.get("HOME") or Path.home())
+    source = Path(environ.get("CODEX_HOME") or owner / ".codex") / "auth.json"
+    identity = hashlib.sha256(os.path.normcase(str(Path(workspace).resolve())).encode()).hexdigest()[:24]
+    home = owner / ".raphael" / "codex-brains" / identity
+    home.mkdir(parents=True, exist_ok=True)
+    await secure_directory(home)
+    (home / "auth.json").unlink(missing_ok=True)
+    for name in ("profile", "workspace"):
+        (home / name).mkdir(exist_ok=True)
+    auth = None
+    try:
+        stored = json.loads(source.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        stored = {}
+    if not isinstance(stored, dict):
+        raise ValueError("invalid_codex_auth")
+    tokens = stored.get("tokens")
+    if tokens:
+        if not isinstance(tokens, dict) or any(not isinstance(tokens.get(key), str) or not tokens[key]
+                for key in ("access_token", "id_token")):
+            raise ValueError("invalid_codex_auth")
+        auth = {"auth_mode": "chatgpt", "tokens": {key: tokens.get(key) for key in
+                ("access_token", "id_token", "account_id")}, "last_refresh": datetime.now(timezone.utc).isoformat()}
+        auth["tokens"]["refresh_token"] = ""
+    environ = {key: value for key, value in environ.items() if not key.upper().startswith(("CODEX_", "OPENAI_"))}
+    environ["CODEX_HOME"] = str(home)
+    environ["HOME"] = environ["USERPROFILE"] = str(home / "profile")
+    for key in ("APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        environ[key] = str(home / "profile" / key.lower())
+    return home, environ, auth
+
 
 def antigravity_home(workspace, endpoint, token, system):
     """The private home Antigravity runs with, inside the member's private workspace: Raphael's MCP

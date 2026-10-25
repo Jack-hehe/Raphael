@@ -3,6 +3,7 @@
 import { membersCommandsList } from "./api";
 import { t } from "./i18n";
 import type { MemberCommand } from "./types";
+import { textPositionRect } from "./text-position";
 import { closeMenu, esc, menuIsOpenFor, openPopover, placeMenu } from "./ui";
 
 export interface SlashMenuOptions { memberId(): number }
@@ -44,8 +45,8 @@ export function mountSlashMenu(input: HTMLTextAreaElement | HTMLInputElement, op
     shown = matchingCommands(commands, input.value);
     if (!shown.length) { close(); return; }
     selected = Math.min(selected, shown.length - 1);
-    panel = openPopover(input, shown.map((command, index) => `<button type="button" role="option" tabindex="-1" id="slash-command-${command.id}" data-slash="${index}" aria-selected="${selected === index}"><span class="mtd"><span class="mt">/${esc(command.name)}</span><span class="mdesc">${esc(command.description)}</span></span></button>`).join(""), { className: "menu slash-menu", role: "listbox", label: t("members.profile.slashCommands") });
-    panel.style.minWidth = `${Math.min(input.getBoundingClientRect().width, innerWidth - 16)}px`;
+    panel = openPopover(input, shown.map((command, index) => `<button type="button" role="option" tabindex="-1" id="slash-command-${command.id}" data-slash="${index}" aria-selected="${selected === index}"><span class="mtd"><span class="mt">/${esc(command.name)}</span><span class="mdesc">${esc(command.description)}</span></span></button>`).join(""), { className: "menu slash-menu", role: "listbox", label: t("members.profile.slashCommands"), placement: "start", anchorRect: () => textPositionRect(input, 0) });
+    panel.style.minWidth = `${Math.min(360, input.getBoundingClientRect().width, innerWidth - 16)}px`;
     placeMenu();
     panel.addEventListener("pointerdown", event => event.preventDefault());
     panel.addEventListener("click", event => {

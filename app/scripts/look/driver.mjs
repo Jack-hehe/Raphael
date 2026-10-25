@@ -30,6 +30,19 @@ export async function perform(page, step) {
     else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
   };
   switch (step.action) {
+    case "calendar-tools": {
+      if (await page.evaluate(() => document.querySelector('[data-au="tools"]').getBoundingClientRect().width > 0)) await click('[data-au="tools"]');
+      break;
+    }
+    case "member-column": {
+      const collapsed = await page.$eval('.mb-col', column => column.classList.contains('is-collapsed'));
+      if (collapsed !== step.collapsed) await click('[data-col="collapse"]');
+      else if (await page.evaluate(() => localStorage.getItem('raphael.members.collapsed')) !== String(collapsed)) {
+        await click('[data-col="collapse"]');
+        await click('[data-col="collapse"]');
+      }
+      break;
+    }
     case "advance-time":
       // Advance the shared fixed clock, then let production timers observe it.
       await page.evaluate(ms => { window.__look.now = Date.now() + ms; }, step.ms);

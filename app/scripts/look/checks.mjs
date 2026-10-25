@@ -62,6 +62,30 @@ export function checkRendered(name) {
     for (const action of ["rename", "members", "delete"]) require(visible(menu?.querySelector(`[data-pick="${action}"]`)), `${action} is available from the room menu`);
     return { check: name, actions: 3 };
   }
+  if (name === "team-mentions" || name === "slash-commands") {
+    const input = [...document.querySelectorAll('.composer textarea')].find(visible);
+    const menu = document.querySelector('#app-popover');
+    require(visible(input) && visible(menu), "the completion menu and its field are visible");
+    const at = name === "team-mentions" ? input.value.lastIndexOf('@', input.selectionStart) : 0;
+    require(at >= 0, "a completion character is present");
+    const before = input.value.slice(0, at), prefix = before.split('\n').at(-1);
+    const style = getComputedStyle(input), field = input.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    const context = document.createElement('canvas').getContext('2d');
+    context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const spacing = parseFloat(style.letterSpacing) || 0;
+    const expected = field.left + parseFloat(style.borderLeftWidth) + parseFloat(style.paddingLeft) + context.measureText(prefix).width + prefix.length * spacing - input.scrollLeft;
+    require(Math.abs(box.left - expected) <= 24, `menu starts beside the completion character: ${box.left} versus ${expected}`);
+    const lineHeight = parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.2;
+    const lineTop = field.top + parseFloat(style.borderTopWidth) + parseFloat(style.paddingTop) + (before.split('\n').length - 1) * lineHeight - input.scrollTop;
+    require(box.bottom <= lineTop + 4 || box.top >= lineTop + lineHeight - 4, "the menu sits above or below its text line");
+    require(box.left >= 8 && box.right <= innerWidth - 8, "the menu stays inside the viewport");
+    for (const item of menu.querySelectorAll('button')) {
+      require(!item.querySelector('.ck'), "text completions do not reserve an empty icon/check column");
+      const label = item.querySelector('.mt'), itemBox = item.getBoundingClientRect();
+      require(label && label.getBoundingClientRect().left - itemBox.left <= 12, "completion text starts at the row padding");
+    }
+    return { check: name, menuLeft: box.left, characterX: expected, delta: Math.abs(box.left - expected) };
+  }
   if (name === "home-overview") {
     const home = document.querySelector('.page-home:not([hidden])');
     const emblem = home?.querySelector('.ho-hero > .av');
@@ -85,11 +109,52 @@ export function checkRendered(name) {
   if (name === "calendar-shell") {
     const grid = document.querySelector('.au-page:not([hidden]) .au-calendar-scroll'), side = document.querySelector('.au-page:not([hidden]) .au-calendar-side');
     require(visible(grid), "the calendar grid is visible");
+    require(grid.scrollWidth <= grid.clientWidth + 1, "the calendar never scrolls horizontally");
+    const box = grid.getBoundingClientRect(), columns = [...grid.querySelectorAll('.au-day-col')];
+    for (const column of columns) {
+      const day = column.getBoundingClientRect();
+      require(day.left >= box.left && day.right <= box.left + grid.clientWidth + 1, "every day fits inside the calendar viewport");
+    }
     require(!document.querySelector('.au-page [data-view]'), "the calendar has no list view");
     require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "the calendar belongs to Home in the rail");
     require(!document.querySelector('#nav .nav[data-go="automations"]'), "the rail has no automations entry");
-    if (visible(side)) require(side.getBoundingClientRect().left >= grid.getBoundingClientRect().right - 1, "the month and members sit on the right");
-    return { check: name, side: visible(side) };
+    const compact = grid.closest('.au-page').clientWidth <= 960;
+    require(visible(side) !== compact, "the side panel is hidden below 960px of content width");
+    require(visible(document.querySelector('[data-au="tools"]')) === compact, "compact calendar tools have a toolbar icon");
+    if (visible(side)) {
+      require(side.getBoundingClientRect().left >= grid.getBoundingClientRect().right - 1, "the month and members sit on the right");
+      for (const day of side.querySelectorAll('.au-month-grid > span')) {
+        require(getComputedStyle(day).whiteSpace === "nowrap" && day.scrollWidth <= day.clientWidth + 1, "month weekday labels fit on one line");
+      }
+    }
+    return { check: name, side: visible(side), days: columns.length, clientWidth: grid.clientWidth, scrollWidth: grid.scrollWidth };
+  }
+  if (name === "calendar-tools" || name === "calendar-tools-awake") {
+    const panel = [...document.querySelectorAll('.au-calendar-side')].find(visible);
+    require(panel && visible(panel.querySelector('[data-au="awake"]')) && visible(panel.querySelector('[data-drag-member]')), "month, members and keep-awake remain available");
+    const weekdays = [...panel.querySelectorAll('.au-month-grid > span')];
+    require(weekdays.map(day => day.textContent).join(' ') === '一 二 三 四 五 六 日', "mini month uses single-character weekdays");
+    for (const day of weekdays) require(day.scrollWidth <= day.clientWidth + 1, "mini month weekdays fit");
+    const popover = document.querySelector('.au-calendar-tools');
+    if (popover) {
+      const box = popover.getBoundingClientRect();
+      require(box.left >= 8 && box.right <= innerWidth - 8 && box.bottom <= innerHeight - 8, "calendar tools fit inside the viewport");
+    }
+    if (name === "calendar-tools-awake") {
+      require(panel.querySelector('[data-au="awake"]').getAttribute('aria-checked') === 'true', "keep-awake persists after redrawing the tools");
+      require(window.__look.calls.some(call => call.command === 'schedule_keep_awake_set' && call.enabled), "keep-awake reaches the native boundary");
+    }
+    return { check: name, popover: !!popover, weekdays: weekdays.map(day => day.textContent) };
+  }
+  if (name === "team-header") {
+    const page = document.querySelector('.team-page'), header = page.querySelector('.page-head');
+    const title = header?.querySelector('h1'), add = header?.querySelector('[data-team="new"]');
+    require(visible(title) && visible(add), "team title and creation action are visible");
+    const pageBox = page.getBoundingClientRect(), titleBox = title.getBoundingClientRect(), addBox = add.getBoundingClientRect();
+    require(titleBox.left - pageBox.left >= 24 && pageBox.right - addBox.right >= 24, "team header uses the page's horizontal padding");
+    require(Math.abs((titleBox.top + titleBox.bottom) / 2 - (addBox.top + addBox.bottom) / 2) <= 2 && titleBox.right < addBox.left, "title and Add share a header row");
+    require(title.textContent === '團隊', "the member count is not glued to the title");
+    return { check: name, padding: titleBox.left - pageBox.left };
   }
   if (name === "admin-approval" || name === "admin-approval-long" || name === "admin-approval-batch") {
     const card = [...document.querySelectorAll('.ask-card')].find(visible);
@@ -162,6 +227,20 @@ export function checkRendered(name) {
     require(panel.scrollWidth <= panel.clientWidth + 1, "selected content fits its column");
     return { check: name, selected: active[0].dataset.dictationTab, panelWidth: panel.clientWidth };
   }
+  if (name === "dictation-overview") {
+    const cards = [...document.querySelectorAll('.page-overview .icard')];
+    require(cards.length === 4, "four independent totals are visible");
+    const boxes = cards.map(card => card.getBoundingClientRect());
+    const desktop = document.querySelector('.dictation-content').clientWidth >= 760;
+    require(desktop ? boxes.every(box => box.top === boxes[0].top) : boxes[2].top > boxes[0].bottom, "totals use one desktop row and two compact rows");
+    for (const card of cards) require(getComputedStyle(card).borderTopWidth === '1px' && getComputedStyle(card).backgroundColor !== 'rgba(0, 0, 0, 0)', "each total has its own card surface");
+    const activity = document.querySelector('.page-overview .activity').getBoundingClientRect();
+    const shortcuts = document.querySelector('.page-overview .keys-card').getBoundingClientRect();
+    require(activity.top >= boxes[3].bottom, "activity follows the totals");
+    require(desktop ? shortcuts.left >= activity.right : shortcuts.top >= activity.bottom, "shortcuts sit alongside activity on desktop and below in compact windows");
+    require(document.querySelector('.heat rect.h1, .heat rect.h2, .heat rect.h3, .heat rect.h4').getBoundingClientRect().width >= 17, "activity days retain larger readable cells");
+    return { check: name, desktop, cardWidth: boxes[0].width };
+  }
   if (name === "conversation-design") {
     const bubble = document.querySelector(".bubble"), answer = document.querySelector('[data-expandable] > .ans');
     for (const element of [bubble, answer]) {
@@ -174,10 +253,33 @@ export function checkRendered(name) {
     const column = document.querySelector(".mb-col");
     if (visible(column)) {
       const rows = [...column.querySelectorAll(".mb-row")], first = rows[0];
-      require(first.dataset.member === "0" && first.querySelector(".mb-pin"), "Raphael is pinned first");
-      for (const row of rows) require(Math.abs(row.querySelector(".av").getBoundingClientRect().width - 40) < 1, "members share 40px faces");
+      require(first.dataset.member === "0", "Raphael is first");
+      if (!column.classList.contains("is-collapsed")) {
+        require(first.querySelector(".av").getBoundingClientRect().width >= 64, "Raphael retains his original large emblem");
+        for (const row of rows.slice(1)) require(Math.abs(row.querySelector(".av").getBoundingClientRect().width - 40) < 1, "other members retain 40px faces");
+      }
     }
     return { check: name, sidebarVisible: visible(column), fontSize: getComputedStyle(bubble).fontSize };
+  }
+  if (name === "member-column") {
+    const column = document.querySelector('.mb-col'), toggle = column.querySelector('[data-col="collapse"]');
+    const collapsed = column.classList.contains('is-collapsed');
+    require(visible(column) && visible(toggle), "member column and toggle are visible at every width");
+    require(toggle.getAttribute('aria-expanded') === String(!collapsed), "toggle reflects the column state");
+    const rows = [...column.querySelectorAll('[data-member]')];
+    require(rows[0].dataset.member === "0", "Raphael remains first");
+    require(rows.filter(row => row.getAttribute('aria-current') === 'true').length === 1, "one active member is marked");
+    if (collapsed) {
+      require(Math.abs(column.getBoundingClientRect().width - 56) < 1, "collapsed column is 56px wide");
+      require(localStorage.getItem('raphael.members.collapsed') === 'true', "collapsed choice is remembered");
+      require(!visible(column.querySelector('.mb-chief b')), "only faces remain in the strip");
+      for (const row of rows) require(row.dataset.tooltip === row.getAttribute('aria-label') && row.dataset.tooltip, "faces have localized name tooltips");
+      require(visible(column.querySelector('.mb-dot.is-wait')), "waiting dot survives collapse");
+    } else {
+      require(rows[0].querySelector('.av').getBoundingClientRect().width >= 64, "expanded Raphael emblem retains its original size");
+      require(!rows[0].querySelector('.mb-pin, time, .mb-row-p'), "Raphael retains the original emblem and name only");
+    }
+    return { check: name, collapsed, width: column.getBoundingClientRect().width, members: rows.length };
   }
   if (name === "usage-summary") {
     require(document.querySelectorAll(".run-tile").length === 6, "overview totals remain available");
@@ -210,14 +312,14 @@ export function checkRendered(name) {
   if (name === "composer-pair") {
     const form = [...document.querySelectorAll(".composer")].find(visible);
     const send = form.querySelector(".cmp-send"), voice = form.querySelector(".cmp-voice");
-    const a = send.getBoundingClientRect(), b = voice.getBoundingClientRect();
-    require(a.width === 32 && a.height === 32 && b.width === 32 && b.height === 32, "send and voice are equal 32px controls");
-    require(Math.abs(a.top - b.top) < 1, "paired buttons share a baseline");
-    require(getComputedStyle(voice).backgroundColor === "rgba(0, 0, 0, 0)", "the emblem voice button has no fill");
-    require(getComputedStyle(send).backgroundColor !== "rgba(0, 0, 0, 0)" && getComputedStyle(send).borderRadius === "999px", "send is a filled round button");
     const hasDraft = !!form.querySelector("textarea").value.trim();
+    const shown = hasDraft ? send : voice, gone = hasDraft ? voice : send, a = shown.getBoundingClientRect();
+    require(a.width === 32 && a.height === 32, "the one right-hand control is 32px");
+    require(gone.getBoundingClientRect().width === 0, "send and the emblem share one slot: only one shows");
+    require(!!voice.querySelector('img[src*="app-emblem"], .av') && !voice.querySelector('.av-custom'), "the voice button is the gold emblem, never a picture");
+    require(getComputedStyle(shown).backgroundColor === "rgba(0, 0, 0, 0)", "the slot is a bare icon with no background");
     require(send.disabled === !hasDraft, "send state follows draft text");
-    return { check: name, send: a.width, voice: b.width, hasDraft, color: getComputedStyle(send).color };
+    return { check: name, shown: a.width, hasDraft, color: getComputedStyle(send).color };
   }
   if (name === "calendar-chips") {
     const chips = [...document.querySelectorAll(".au-occurrence")];
@@ -226,6 +328,10 @@ export function checkRendered(name) {
       const time = chip.querySelector("time, small"), face = chip.querySelector(".av"), label = chip.querySelector("b");
       const bounds = chip.getBoundingClientRect();
       if (bounds.width >= 110) require(visible(face), "member face is visible in a wide chip");
+      if (visible(face)) {
+        const picture = face.getBoundingClientRect();
+        require(Math.abs(picture.width - 20) < 1 && Math.abs(picture.height - 20) < 1, "event faces retain their 20px square rather than flexing with the copy");
+      }
       require(visible(time) && /^\d{2}:\d{2}$/.test(time.textContent), `complete compact time: ${time?.textContent}`);
       const range = document.createRange(); range.selectNodeContents(time);
       const text = range.getBoundingClientRect();
@@ -233,6 +339,7 @@ export function checkRendered(name) {
         `time ${time.textContent} fits chip (${Math.round(text.width)}px text, ${Math.round(bounds.width)}px chip)`);
       require(chip.title.includes(label.textContent) && chip.title.includes(time.textContent), "tooltip preserves full title and time");
       if (visible(label)) require(getComputedStyle(label).textOverflow === "ellipsis", "long visible title uses ellipsis");
+      if (bounds.width <= 92) require(getComputedStyle(label).whiteSpace === "nowrap", "narrow calendar titles truncate on one line");
     }
     return { check: name, chips: chips.length };
   }

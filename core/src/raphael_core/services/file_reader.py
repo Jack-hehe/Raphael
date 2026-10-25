@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import re
 import shutil
 import subprocess
 import tempfile
@@ -12,7 +13,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from .attachments import Attachment
-from .common import fit
+from .common import TEXT_BUDGET, fit
 
 MAX_EXTRACT_BYTES = 8 * 1024 * 1024
 MAX_MEDIA_SECONDS = 300
@@ -27,23 +28,57 @@ TEXT_EXTENSIONS = {
 
 
 class ReadableHTML(HTMLParser):
+    BLOCKS = {"p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "blockquote", "pre", "ul", "ol"}
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hidden = 0
+        self.rp_depth = 0
+        self.ruby_readings: list[bool] = []
         self.parts: list[str] = []
 
     def handle_starttag(self, tag, attrs):
         if tag in ("script", "style", "template", "noscript"):
             self.hidden += 1
-        if not self.hidden and tag in ("p", "div", "br", "li", "tr", "h1", "h2", "h3"):
-            self.parts.append("\n")
+        if not self.hidden:
+            if tag == "rp":
+                self.rp_depth += 1
+            elif self.rp_depth:
+                return
+            elif tag == "ruby":
+                self.ruby_readings.append(False)
+            elif tag == "rt" and self.ruby_readings:
+                self._end_reading()
+                self.parts.append("（")
+                self.ruby_readings[-1] = True
+            elif tag in self.BLOCKS:
+                self.parts.append("\n\n")
+            elif tag == "br":
+                self.parts.append("\n")
 
     def handle_endtag(self, tag):
         if tag in ("script", "style", "template", "noscript"):
             self.hidden = max(0, self.hidden - 1)
+        if not self.hidden:
+            if tag == "rp":
+                self.rp_depth = max(0, self.rp_depth - 1)
+            elif self.rp_depth:
+                return
+            elif tag == "rt":
+                self._end_reading()
+            elif tag == "ruby" and self.ruby_readings:
+                self._end_reading()
+                self.ruby_readings.pop()
+            elif tag in self.BLOCKS:
+                self.parts.append("\n\n")
+
+    def _end_reading(self):
+        if self.ruby_readings and self.ruby_readings[-1]:
+            self.parts.append("）")
+            self.ruby_readings[-1] = False
 
     def handle_data(self, data):
-        if not self.hidden:
+        if not self.hidden and not self.rp_depth:
             self.parts.append(data)
 
 
@@ -56,6 +91,33 @@ def decode(data: bytes) -> str | None:
         if not text or sum(c < " " and c not in "\n\r\t" for c in text) / len(text) < 0.02:
             return text
     return None
+
+
+def read_text(attachment: Attachment, *, budget: int = TEXT_BUDGET) -> dict | None:
+    """Extract known text locally. Inline callers can override the ordinary reader's budget."""
+    if attachment.is_image or attachment.is_pdf:
+        return None
+    extension = Path(attachment.name).suffix.lower()
+    known = extension in TEXT_EXTENSIONS or attachment.mime.startswith("text/") or attachment.mime in (
+        "application/json", "application/xml", "application/xhtml+xml", "application/yaml", "application/javascript",
+    )
+    if not known:
+        return None
+    data = attachment.data[:MAX_EXTRACT_BYTES]
+    text = decode(data)
+    facts = {"name": attachment.name, "mime": attachment.mime, "size": len(attachment.data)}
+    if text is None:
+        return {**facts, "limitation": "The text encoding could not be decoded."}
+    if extension in (".html", ".htm") or attachment.mime in ("text/html", "application/xhtml+xml"):
+        html = ReadableHTML()
+        html.feed(text)
+        html.close()
+        text = re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "".join(html.parts)).strip()
+    text, cut = fit(text, budget)
+    truncated = cut or len(data) < len(attachment.data)
+    if len(data) < len(attachment.data):
+        text += "\n[Cut short: remaining file bytes exceed the extraction limit.]"
+    return {**facts, "text": text, "truncated": truncated}
 
 
 def office_text(data: bytes, extension: str) -> str:
@@ -132,6 +194,8 @@ def convert_media(attachment: Attachment) -> tuple[bytes, float | None, bool]:
 
 
 async def read_file(attachment: Attachment, transcribe: Transcribe | None = None) -> tuple[str, dict]:
+    if (text := read_text(attachment)) is not None:
+        return "text", text
     extension = Path(attachment.name).suffix.lower()
     facts = {"name": attachment.name, "mime": attachment.mime, "size": len(attachment.data)}
     video = attachment.mime.startswith("video/") or extension in (".mp4", ".mov", ".mkv")
@@ -169,16 +233,8 @@ async def read_file(attachment: Attachment, transcribe: Transcribe | None = None
             return "document", {**facts, "limitation": "The Office document could not be read."}
         text, cut = fit(text)
         return "document", {**facts, "text": text, "truncated": cut}
-    known_text = extension in TEXT_EXTENSIONS or attachment.mime.startswith("text/") or attachment.mime in ("application/json", "application/xml", "application/yaml", "application/javascript")
-    data = attachment.data[:MAX_EXTRACT_BYTES if known_text else 512]
+    data = attachment.data[:512]
     text = decode(data)
     if text is not None:
-        if extension in (".html", ".htm") or attachment.mime == "text/html":
-            html = ReadableHTML()
-            html.feed(text)
-            text = "".join(html.parts)
-        text, cut = fit(text)
-        if not known_text:
-            return "file", {**facts, "sniff": text, "truncated": len(data) < len(attachment.data), "limitation": "Unknown format; only a short text sample was read."}
-        return "text", {**facts, "text": text, "truncated": cut or len(data) < len(attachment.data)}
+        return "file", {**facts, "sniff": text, "truncated": len(data) < len(attachment.data), "limitation": "Unknown format; only a short text sample was read."}
     return "file", {**facts, "limitation": "Binary format: only file metadata is available."}

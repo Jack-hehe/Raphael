@@ -208,6 +208,9 @@ export function actionRow(o: ActionRowOptions): string {
 export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
   `<button type="button" class="btn icon${name === "trash" ? " danger" : ""}${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
 
+/** The filled primary send glyph shares the icon source with the line drawings. */
+export const sendGlyph = (): string => `<svg class="cmp-plane" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 20.85 12.92a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91Z"/></svg>`;
+
 /** The small icon button on a row (copy, delete, close): `iconButton` at the row's size, borderless too. */
 export const iconBtn = (name: IconName, label: string, attrs = "", cls = ""): string => iconButton(name, label, attrs, `row${cls ? " " + cls : ""}`);
 
@@ -340,7 +343,7 @@ export function swapHTML(host: HTMLElement, html: string): void {
 interface MenuState {
   el: HTMLElement; anchor: HTMLElement; rect: DOMRect; stopOutside(): void;
   onKey?: (e: KeyboardEvent) => boolean; onClose?: () => void;
-  parent: MenuState | null; placement?: "beside";
+  parent: MenuState | null; placement?: "beside" | "start"; anchorRect?: () => DOMRect;
 }
 let menu: MenuState | null = null;
 let menuListening = false;
@@ -445,9 +448,10 @@ export function openMenuOnArrow(e: KeyboardEvent): boolean {
 
 /** Keep anchored menus inside the usable viewport, below any custom window controls. */
 export function menuPlacement(
-  anchor: Pick<DOMRect, "top" | "bottom" | "right">,
+  anchor: Pick<DOMRect, "top" | "bottom" | "right"> & Partial<Pick<DOMRect, "left">>,
   size: { width: number; height: number },
   viewport: { width: number; height: number; headerBottom: number },
+  alignment: "end" | "start" = "end",
 ): { left: number; top: number; maxHeight: number } {
   const upper = viewport.headerBottom + 8;
   const lower = Math.max(upper, viewport.height - 8);
@@ -455,10 +459,12 @@ export function menuPlacement(
   const aboveBottom = Math.min(lower, Math.max(upper, anchor.top - 4));
   const below = lower - belowTop;
   const above = aboveBottom - upper;
-  const useBelow = size.height <= below || (size.height > above && below >= above);
+  const useBelow = alignment === "start"
+    ? !(size.height <= above || (size.height > below && above >= below))
+    : size.height <= below || (size.height > above && below >= above);
   const maxHeight = useBelow ? below : above;
   return {
-    left: Math.max(8, Math.min(anchor.right - size.width, viewport.width - size.width - 8)),
+    left: Math.max(8, Math.min(alignment === "start" ? anchor.left ?? anchor.right : anchor.right - size.width, viewport.width - size.width - 8)),
     top: useBelow ? belowTop : aboveBottom - Math.min(size.height, maxHeight),
     maxHeight,
   };
@@ -479,27 +485,28 @@ export function submenuPlacement(
   };
 }
 
-/** Prefer below the trigger, then above it; long lists scroll on the roomier side. */
+/** Dropdowns prefer below; start-aligned text completions prefer above their character. */
 export function placeMenu(): void {
   if (!menu) return;
   const { el, anchor } = menu;
-  const r = anchor.isConnected ? anchor.getBoundingClientRect() : menu.rect;
+  const r = anchor.isConnected ? menu.anchorRect?.() ?? anchor.getBoundingClientRect() : menu.rect;
   const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
   // A dropdown's menu is at least as wide as the dropdown itself (owner, 2026-10-24).
   if (anchor.classList?.contains("sel")) el.style.minWidth = `${Math.round(r.width)}px`;
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
-  const placement = (menu.placement === "beside" ? submenuPlacement : menuPlacement)(r, { width: el.offsetWidth, height: el.offsetHeight }, {
-    width: innerWidth, height: innerHeight, headerBottom,
-  });
+  const size = { width: el.offsetWidth, height: el.offsetHeight }, viewport = { width: innerWidth, height: innerHeight, headerBottom };
+  const placement = menu.placement === "beside" ? submenuPlacement(r, size, viewport) : menuPlacement(r, size, viewport, menu.placement === "start" ? "start" : "end");
   el.style.maxHeight = `${placement.maxHeight}px`;
   el.style.left = `${placement.left}px`;
   el.style.top = `${placement.top}px`;
 }
 
 export interface PopoverOptions {
-  /** Preserve the parent menu and anchor this panel beside one of its rows. */
-  placement?: "beside";
+  /** Beside preserves its parent menu; start aligns text completions above their character. */
+  placement?: "beside" | "start";
+  /** A live text/caret rectangle; the field remains the dismissal and focus anchor. */
+  anchorRect?: () => DOMRect;
   onClose?: () => void;
   /** The classes of the panel, `menu` among them. */
   className: string;
@@ -515,7 +522,7 @@ export interface PopoverOptions {
  */
 export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions): HTMLElement {
   listenForMenuEvents();
-  const rect = anchor.getBoundingClientRect();
+  const rect = o.anchorRect?.() ?? anchor.getBoundingClientRect();
   const parent = o.placement === "beside" && menu?.el.contains(anchor) ? menu : null;
   if (!parent) closeMenu();
   const el = document.createElement("div");
@@ -526,7 +533,7 @@ export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
-  menu = { el, anchor, rect, parent, placement: o.placement,
+  menu = { el, anchor, rect, parent, placement: o.placement, anchorRect: o.anchorRect,
     stopOutside: registerDismissal(el, () => { const root = menuRootAnchor(); closeMenu(); root?.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey, onClose: o.onClose };
   anchor.setAttribute("aria-expanded", "true");
   anchor.setAttribute("aria-controls", el.id);
@@ -564,7 +571,7 @@ export function openMenu(
   onPick: (value: string) => void,
   head?: string,
   actions: readonly MenuAction[] = [],
-  placement?: Pick<PopoverOptions, "placement">,
+  placement?: Pick<PopoverOptions, "placement" | "anchorRect"> & { selectionIndicator?: boolean },
 ): void {
   const active = document.activeElement as HTMLElement | null;
   const again = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
@@ -578,7 +585,7 @@ export function openMenu(
         (o) =>
           `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}"` +
           `${o.title ? ` title="${esc(o.title)}"` : ""}>` +
-          `<span class="ck">${o.value === current ? CHECK : ""}</span>` +
+          (placement?.selectionIndicator === false ? "" : `<span class="ck">${o.value === current ? CHECK : ""}</span>`) +
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
             : `<span class="mt">${esc(o.label)}</span>`) +

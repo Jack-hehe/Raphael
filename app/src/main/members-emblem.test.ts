@@ -68,7 +68,7 @@ describe("Raphael's emblem stands bare", () => {
     column.innerHTML = columnHTML({ list: null, current: 0, previews: new Map(), query: "", folded: new Set(), fresh: new Set() });
     const face = column.querySelector(".mb-chief > .av")!;
     expect(face.className).toBe("av");
-    expect(face.getAttribute("style")).toBe("--av:40px");
+    expect(face.getAttribute("style")).toBe("--av:64px");
   });
 
   test("on the line of an exchange with him, too", () => {

@@ -1,5 +1,5 @@
 // Self-contained so the same checks run in Chromium and in the DOM contract tests.
-// `latinAllowed` (lower-case words) turns on the one-language check for a Chinese window: any other
+// `latinAllowed` (lower-case words, names or syntax) enables the Chinese window's language check: any other
 // Latin word in visible text, a placeholder, an aria-label or a title is interface copy left in English.
 export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = [], latinAllowed = null) {
   const win = doc.defaultView;
@@ -42,6 +42,8 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
   };
   if (visible(doc.body) && onScreen(doc.body)) checkMarkdown(doc.body);
   const allowed = latinAllowed && new Set(latinAllowed), seenWords = new Set();
+  const phrases = latinAllowed?.filter(name => /\s|=/.test(name)) ?? [];
+  const productPattern = phrases.length ? new RegExp(`\\b(?:${phrases.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "gi") : null;
   const keyPattern = /\b([a-z][A-Za-z0-9]*\.[A-Za-z0-9_.-]+)\b/g;
   const seenKeys = new Set();
   for (const element of doc.body.querySelectorAll("*")) {
@@ -56,15 +58,20 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     checkMarkdown(element);
     if (element.matches('.work-time, .work-toggle, .step-ms') && /\b(?:NaN|Infinity)\b/.test(element.textContent)) invalidDurations.push(description);
     if (element.matches('select,input[type="time"]')) nativeControls.push(description);
-    const strings = [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent);
+    // Textarea values are user data, like input.value; their labels and placeholders remain UI copy.
+    const strings = element.matches("textarea") ? [] : [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent);
     for (const attribute of ["aria-label", "title", "placeholder"]) if (element.hasAttribute(attribute)) strings.push(element.getAttribute(attribute));
     for (const value of strings) for (const match of value.matchAll(keyPattern)) {
       if (!namespaces.includes(match[1].split(".")[0]) || seenKeys.has(match[1])) continue;
       seenKeys.add(match[1]); missingI18nKeys.push({ ...description, key: match[1] });
     }
-    if (allowed) for (const value of strings) for (const [word] of value.replace(keyPattern, "").replace(/https?:\/\/\S+|\S+\.(?:pdf|png|jpe?g|txt|md|csv|exe|com|dev|io)\b/gi, "").matchAll(/[A-Za-z]{2,}/g)) {
-      if (allowed.has(word.toLowerCase()) || seenWords.has(word)) continue;
-      seenWords.add(word); mixedLanguage.push({ ...description, word });
+    // The literal command-template token is syntax in every locale, not English copy.
+    if (allowed) for (const value of strings) {
+      const copy = productPattern ? value.replace(productPattern, "") : value;
+      for (const [word] of copy.replace(/\{input\}/g, "").replace(keyPattern, "").replace(/https?:\/\/\S+|\S+\.(?:pdf|png|jpe?g|txt|md|csv|exe|com|dev|io)\b/gi, "").matchAll(/[A-Za-z]{2,}/g)) {
+        if (allowed.has(word.toLowerCase()) || seenWords.has(word)) continue;
+        seenWords.add(word); mixedLanguage.push({ ...description, word });
+      }
     }
   }
   const documentWidth = Math.max(doc.documentElement.scrollWidth, doc.body.scrollWidth);

@@ -92,8 +92,8 @@ export function monthLabels(weeks: Cell[][]): { column: number; text: string }[]
 }
 
 const DAY_NAMES = () => [t("heatmap.002"), t("heatmap.003"), t("heatmap.004"), t("heatmap.005"), t("heatmap.006"), t("heatmap.007"), t("heatmap.008")];
-export const CELL = 13;
-export const GAP = 3;
+export const CELL = 18;
+export const GAP = 4;
 const PITCH = CELL + GAP;
 const LEFT = 20;
 const BOTTOM = 18;

@@ -9,7 +9,7 @@ import { buildReport } from "../report";
 import { durationParts, formatCount } from "../stats";
 import { openMemberThread } from "../team-navigation";
 import type { AppContext, Page } from "../types";
-import { btn, esc, ico, iconButton } from "../ui";
+import { esc, ico, iconButton } from "../ui";
 import "../home.css";
 
 const money = (value: number): string => value.toFixed(2);
@@ -42,7 +42,7 @@ function ringSVG(share: number): string {
 
 function scheduleHTML(data: HomeOverview): string {
   const now = data.generated_at_ms, items = data.calendar.filter(item => sameDay(item.at_ms, now));
-  if (!items.length) return `<p class="ho-quiet">${ico("calendar")}${esc(t("overview.noSchedule"))}</p>`;
+  if (!items.length) return `<p class="ho-empty">${ico("calendar")}${esc(t("overview.noSchedule"))}</p>`;
   let nowShown = false;
   const rows = items.map(item => {
     const marker = !nowShown && item.at_ms > now ? (nowShown = true, `<div class="ho-now" aria-hidden="true"><time>${esc(clock(now))}</time></div>`) : "";
@@ -54,7 +54,7 @@ function scheduleHTML(data: HomeOverview): string {
 }
 
 function rowsHTML(items: HomeItem[], empty: string, report: boolean): string {
-  if (!items.length) return `<p class="ho-quiet">${ico("check")}${esc(empty)}</p>`;
+  if (!items.length) return `<p class="ho-empty">${ico("check")}${esc(empty)}</p>`;
   return items.slice(0, 4).map(item => `<button type="button" class="btn ho-row" data-home-item="${esc(item.id)}">${faceHTML(item, 32)}` +
     `<span class="ho-row-copy"><strong>${esc(report ? item.name : item.title)}</strong><span>${esc(report ? item.summary : item.name)}</span></span>` +
     `<time datetime="${new Date(item.at_ms).toISOString()}">${esc(clock(item.at_ms))}</time></button>`).join("");
@@ -69,7 +69,7 @@ function spendHTML(data: HomeOverview): string {
 
 function allowanceHTML(data: HomeOverview): string {
   const brains = data.usage.allowances.brains;
-  if (!brains.length) return `<p class="ho-quiet">${esc(t("overview.emptyAllowances"))}</p>`;
+  if (!brains.length) return `<p class="ho-empty">${esc(t("overview.emptyAllowances"))}</p>`;
   return `<div class="ho-allowances">` + brains.map(brain => `<div class="ho-brain"><strong>${esc(brain.name.replace(/\s+CLI$/, ""))}</strong>` +
     brain.windows.map(w => { const left = w.remaining_percent; const tip = w.resets_at ? t("overview.reset", { p0: new Date(w.resets_at * 1000).toLocaleString(getLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }) }) : "";
       return `<span class="ho-meter-row" title="${esc(tip)}"><small>${esc(t(`overview.${w.period}`))}</small><span class="ho-meter${left !== null && left < 20 ? " is-low" : ""}"><i style="width:${left ?? 0}%"></i></span><b>${left === null ? "—" : `${left}%`}</b></span>`; }).join("") + `</div>`).join("") + `</div>`;
@@ -85,7 +85,7 @@ function dictationHTML(data: HomeOverview): string {
 export function homeHTML(data: HomeOverview): string {
   const report = buildReport(data.report, data.generated_at_ms);
   const hero = `<section class="ho-hero">${avatarHTML({ size: 96, avatar: null })}<p class="ho-said">${esc(report.text)}</p>` +
-    (report.action ? btn(esc(report.action.label), "sm", ' data-home-go="report"') : "") +
+    (report.action ? iconButton(report.action.target === "retry" ? "refresh" : "info", report.action.label, ' data-home-go="report"') : "") +
     iconButton("chat", t("home.askRaphael"), ' data-home-go="agent"', "ho-ask") + `</section>`;
   const date = new Date(data.generated_at_ms).toLocaleDateString(getLocale(), { month: "numeric", day: "numeric", weekday: "short" });
   const pending = data.today.filter(item => item.kind !== "routine");
@@ -118,7 +118,7 @@ export function createHome(app: AppContext): Page {
       paint();
     } catch {
       if (!visible || mine !== generation) return;
-      el.innerHTML = `<p class="ho-quiet" role="status">${esc(t("overview.error"))}</p><button type="button" class="btn" data-home-go="reload">${esc(t("overview.retry"))}</button>`;
+      el.innerHTML = `<p class="ho-empty" role="status">${esc(t("overview.error"))}</p><button type="button" class="btn" data-home-go="reload">${esc(t("overview.retry"))}</button>`;
     }
   }
   el.addEventListener("click", event => {

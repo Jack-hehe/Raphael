@@ -455,7 +455,7 @@ describe("Raphael's thread", () => {
   test("the member column lists the members, each with the last line of its thread from the list", async () => {
     mount();
     await flush();
-    expect([...document.querySelectorAll(".mb-col .mb-row-t b")].map((b) => b.textContent)).toEqual(["拉斐爾", "日文老師", "行程管家"]);
+    expect([...document.querySelectorAll(".mb-col .mb-row b")].map((b) => b.textContent)).toEqual(["拉斐爾", "日文老師", "行程管家"]);
     expect($('.mb-col [data-member="3"] .mb-row-p').textContent).toBe("今天的單字");
     // no thread but the open one is read
     expect(api.agentHistoryList.mock.calls.every(([q]) => q.member_id === undefined)).toBe(true);

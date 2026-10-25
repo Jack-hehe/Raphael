@@ -8,21 +8,21 @@
 .ho-hero .ho-ask { flex-shrink: 0; }
 
 .ho-board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--sp-5); align-items: start; }
-.ho-today { grid-column: span 7; }
+.ho-today { grid-column: span 7; align-self: stretch; }
 .ho-side { grid-column: span 5; display: flex; flex-direction: column; gap: var(--sp-5); min-width: 0; }
 .ho-spend, .ho-allowance, .ho-dictation { grid-column: span 4; align-self: stretch; }
 
 .ho-card { min-width: 0; background: var(--panel); border: 1px solid var(--edge); border-radius: var(--r-lg); padding: var(--sp-4) var(--sp-5) var(--sp-5); }
 .ho-card > header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .ho-card h2 { display: flex; align-items: center; gap: var(--sp-2); margin: 0; font-size: var(--fs-md); font-weight: 600; min-width: 0; }
-.ho-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ho-count { display: inline-grid; grid-template-columns: minmax(0, 1fr); place-items: center; min-width: 20px; height: 20px; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-2xs); font-weight: 600; font-variant-numeric: tabular-nums; }
 .ho-card .ho-open { color: var(--text-3); }
 .ho-card .ho-open:hover { color: var(--text); }
-.ho-quiet { display: flex; align-items: center; gap: var(--sp-2); margin: 0; padding: var(--sp-3) 0; color: var(--text-3); font-size: var(--fs-sm); }
-.ho-quiet .i { color: var(--ok); }
+.ho-empty { display: flex; align-items: center; gap: var(--sp-2); margin: 0; padding: var(--sp-3) 0; color: var(--text-3); font-size: var(--fs-sm); }
+.ho-empty .i { color: var(--ok); }
 
 /* Today: a short timeline with the time on the left and a line for now. */
-.ho-schedule { display: flex; flex-direction: column; }
+.ho-schedule { display: flex; flex-direction: column; gap: var(--sp-3); }
 .ho-slot.btn { display: grid; grid-template-columns: 52px 3px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); width: 100%; min-height: 48px; padding: var(--sp-2) var(--sp-2) var(--sp-2) 0; border: 0; border-radius: var(--r-sm); background: transparent; text-align: left; }
 .ho-slot.btn::before { content: ""; grid-column: 2; grid-row: 1; align-self: stretch; border-radius: var(--r-pill); background: var(--accent-icon); }
 .ho-slot.btn.is-event::before { background: var(--ok); }
@@ -44,7 +44,7 @@
 .ho-row-copy span { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ho-row time { flex-shrink: 0; font-size: var(--fs-2xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .ho-face { width: var(--face); height: var(--face); flex-shrink: 0; border-radius: var(--r-pill); object-fit: cover; }
-.ho-face-none { display: grid; place-items: center; background: var(--surface-2); color: var(--text-3); }
+.ho-face-none { display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; background: var(--surface-2); color: var(--text-3); }
 
 /* The three charts. */
 .ho-metric { position: relative; display: flex; align-items: center; gap: var(--sp-4); min-height: 64px; }
@@ -69,12 +69,12 @@
 .ho-meter i { display: block; height: 100%; border-radius: var(--r-pill); background: var(--accent-icon); }
 .ho-meter.is-low i { background: var(--warn); }
 
-@container home (max-width: 1000px) {
+@container home (max-width: 760px) {
   .ho-today, .ho-side { grid-column: span 12; }
   .ho-spend, .ho-allowance { grid-column: span 6; }
   .ho-dictation { grid-column: span 12; }
 }
-@container home (max-width: 640px) {
+@container home (max-width: 560px) {
   .ho-board, .ho-side { gap: var(--sp-4); }
   .ho-spend, .ho-allowance, .ho-dictation { grid-column: span 12; }
   .ho-hero { gap: var(--sp-4); padding: var(--sp-4); }
@@ -82,4 +82,13 @@
 }
 @media (max-width: 900px) {
   .page-home { padding: var(--sp-5) var(--sp-4); }
+}
+
+@media (min-width: 1440px) and (min-height: 800px) {
+  .page.page-home { max-width: 1600px; }
+  .ho-hero { padding-block: var(--sp-6); }
+  .ho-slot.btn { min-height: 64px; }
+  .ho-spend, .ho-dictation { display: flex; flex-direction: column; }
+  .ho-spend .ho-bars, .ho-dictation .ho-bars { height: 80px; margin-top: auto; padding-top: var(--sp-4); }
+  .ho-metric { margin-block: var(--sp-3); }
 }

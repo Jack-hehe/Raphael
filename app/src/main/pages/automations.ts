@@ -8,7 +8,7 @@ import { dayName, faceHTML } from "../members";
 import { openRoutineDialog } from "../routine-dialog";
 import { dateKey, localDay, shiftDay, monthLabel, monthGrid } from "../schedule-picker";
 import type { AppContext, Member, Page, Routine, RoutineRun } from "../types";
-import { btn, esc, ico, iconButton, tg, toaster } from "../ui";
+import { btn, closeMenu, esc, ico, iconButton, openPopover, tg, toaster } from "../ui";
 import "../members.css";
 import "../automations.css";
 
@@ -22,6 +22,7 @@ export function createAutomationsPage(app: AppContext): Page {
   let logs = new Map<number, RoutineRun[]>(), period = "week", date = new Date(), mini = new Date();
   let visible = false, awake = false, loads = 0, pending = true;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let tools: HTMLElement | null = null;
   const member = (id: number): Member | undefined => members.find(m => m.id === id);
   const edit = (routine?: Routine, memberId?: number, day?: string, time?: string): void => {
     openRoutineDialog({ members, routine, memberId, date: day, time, onSaved: () => void load(), onDeleted: () => void load() });
@@ -45,6 +46,7 @@ export function createAutomationsPage(app: AppContext): Page {
       `<div class="au-step">${iconButton("left", t("auto.previous"), ' data-au="prev"')}${iconButton("right", t("auto.following"), ' data-au="next"')}</div>` +
       `<h1>${esc(rangeLabel(start, end))}</h1><span class="au-spacer"></span>` +
       `<div class="au-segment" role="group">${["day", "week"].map(p => btn(esc(t(p === "day" ? "auto.day" : "auto.week")), "sm", ` data-au="period" data-period="${p}" aria-pressed="${period === p}"`)).join("")}</div>` +
+      iconButton("calendar", t("auto.tools"), ' data-au="tools" aria-haspopup="dialog"', "au-tools-toggle") +
       btn(ico("plus") + esc(t("auto.new")), "pri sm", ' data-au="new"') + `</header>`;
   }
   function sideHTML(): string {
@@ -74,26 +76,41 @@ export function createAutomationsPage(app: AppContext): Page {
       }).join("") + `</div></div>`;
   }
   function draw(): void {
+    const reopenTools = tools?.isConnected;
+    if (reopenTools) closeMenu();
     const scroll = el.querySelector(".au-calendar-scroll"), top = scroll?.scrollTop ?? 8 * HOUR_PX;
     const start = period === "day" ? localDay(dateKey(date)) : shiftDay(localDay(dateKey(date)), -((date.getDay() + 6) % 7));
     const n = period === "day" ? 1 : 7, end = shiftDay(start, n);
     el.innerHTML = toolbarHTML(start, end) + (pending ? `<div class="au-empty" role="status">${esc(t("common.loading"))}</div>`
       : `<div class="au-calendar">${gridHTML(start, n, end)}${sideHTML()}</div>`);
     const grid = el.querySelector(".au-calendar-scroll"); if (grid) grid.scrollTop = top;
+    if (reopenTools) openTools();
   }
-  el.addEventListener("click", e => {
+  function openTools(): void {
+    const anchor = el.querySelector<HTMLElement>('[data-au="tools"]'); if (!anchor) return;
+    tools = openPopover(anchor, sideHTML(), { className: "au-calendar-tools", role: "dialog", label: t("auto.tools"), onClose: () => { tools = null; } });
+    tools.addEventListener("click", onClick);
+    tools.addEventListener("dragstart", onDragStart);
+  }
+  function onClick(e: Event): void {
     const target = (e.target as Element).closest<HTMLElement>("[data-au], [data-mini-date]"); if (!target) return;
-    if (target.dataset.miniDate) { date = localDay(target.dataset.miniDate); draw(); return; }
+    if (target.dataset.miniDate) { if (tools?.isConnected) closeMenu(); date = localDay(target.dataset.miniDate); draw(); return; }
     const act = target.dataset.au, r = routines.find(r => r.id === Number(target.dataset.id));
-    if (act === "new") edit();
+    if (act === "tools") { if (tools?.isConnected) closeMenu(); else openTools(); }
+    else if (act === "new") edit();
     else if (act === "edit" && r) edit(r);
     else if (act === "awake") { e.preventDefault(); (target as HTMLButtonElement).disabled = true; void api.keepAwakeSet(!awake).then(value => { awake = value; draw(); }).catch(error => { (target as HTMLButtonElement).disabled = false; toaster.info(describeError(error)); }); }
     else if (act === "period") { period = target.dataset.period!; draw(); }
     else if (act === "today") { date = new Date(); mini = date; draw(); }
     else if (act === "prev" || act === "next") { date = shiftDay(date, (act === "prev" ? -1 : 1) * (period === "day" ? 1 : 7)); mini = date; draw(); }
     else if (act === "month-prev" || act === "month-next") { mini = new Date(mini.getFullYear(), mini.getMonth() + (act === "month-prev" ? -1 : 1), 1); draw(); }
-  });
-  el.addEventListener("dragstart", e => { const m = (e.target as Element).closest<HTMLElement>("[data-drag-member]"); if (m) e.dataTransfer?.setData("application/x-raphael-member", m.dataset.dragMember!); });
+  }
+  function onDragStart(e: DragEvent): void {
+    const m = (e.target as Element).closest<HTMLElement>("[data-drag-member]");
+    if (m) { e.dataTransfer?.setData("application/x-raphael-member", m.dataset.dragMember!); if (tools?.isConnected) closeMenu(); }
+  }
+  el.addEventListener("click", onClick);
+  el.addEventListener("dragstart", onDragStart);
   el.addEventListener("dragover", e => { if ((e.target as Element).closest("[data-slot]") && e.dataTransfer?.types.includes("application/x-raphael-member")) e.preventDefault(); });
   el.addEventListener("drop", e => { const slot = (e.target as Element).closest<HTMLElement>("[data-slot]"); if (!slot) return; e.preventDefault(); const value = e.dataTransfer?.getData("application/x-raphael-member"); if (!value) return; const id = Number(value); if (members.some(m => m.id === id)) edit(undefined, id, slot.dataset.slot, `${slot.dataset.hour!.padStart(2, "0")}:00`); });
   app.onEvent(event => { if (visible && ["RoutinesChanged", "MembersChanged", "CoreReady"].includes(event.type)) void load(); });
@@ -106,6 +123,6 @@ export function createAutomationsPage(app: AppContext): Page {
       void api.keepAwakeGet().then(v => { awake = v; if (visible) draw(); }).catch(() => {});
       clearInterval(timer); timer = setInterval(() => { if (visible) draw(); }, 60000);
     },
-    hide() { visible = false; loads++; clearInterval(timer); },
+    hide() { visible = false; loads++; clearInterval(timer); if (tools?.isConnected) closeMenu(); },
   };
 }
