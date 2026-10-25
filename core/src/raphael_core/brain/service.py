@@ -616,6 +616,8 @@ class Brain:
                 self._check_model(role, value)
             if key == "vision_model":
                 self._check_vision_model(value)
+            if key == "quick_model" and isinstance(value, str) and value.strip():
+                self._check_model(replace(ROLE_OF_SETTING["agent_model"], setting="quick_model"), value)
             self._settings.set(key, value)
         if key == "action_mode":
             self._notify_action_mode()
@@ -630,7 +632,7 @@ class Brain:
         settings page showed (catalog.choice_problem)."""
         from ..agent.cli.discovery import brain_ref
         _, model_id = checked(role.setting, value)
-        if role.setting == "agent_model" and brain_ref(model_id):
+        if role.setting in ("agent_model", "quick_model") and brain_ref(model_id):
             return
         current = self._settings.get(role.setting)
         known = self.known_models()

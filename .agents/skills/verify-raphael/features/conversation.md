@@ -4,6 +4,10 @@
 
 Named conversations per member; new/rename/delete; public work/event chips; answers,
 attachments, reply quoting, message actions, search and composer menus.
+Raphael's single persistent quick-question conversation is created on the first global
+voice question, pinned above formal conversations as 快速提問 / Quick questions / クイック質問.
+Its fixed title and permanent identity have no rename/delete menu; individual messages
+can still be deleted. Opening it and typing continues with the quick model and effort.
 
 ## How to get to it (user POV)
 
@@ -17,6 +21,7 @@ the compact picker's search action, for messages.
 
 ```powershell
 npm run look -- chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
+npm run look -- quick-conversation-list quick-conversation --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
 npm run look -- member-composer-empty member-text member-composer-hover conversation-notice --theme both --width 1120,720,1920x1080
 npm run look -- composer-learn member-composer-learn room-composer-learn team-composer-learn --theme both --width 1120,720,1920x1080

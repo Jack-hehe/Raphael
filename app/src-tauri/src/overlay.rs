@@ -163,6 +163,8 @@ pub enum OverlayEvent {
     Level { value: f32 },
     /// How far the dictation has come since the key was released, shown beside the glyph ring.
     Progress(Progress),
+    /// The latest public narration from the same turn stream as the conversation.
+    Step { text: String, language: String },
     /// Raphael's report: the emblem appears with `text` as its subtitle, then vanishes.
     Notice { text: String },
     /// Learned words are reported like a notice, but they never take the emblem from a dictation
@@ -220,6 +222,9 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// interface language) every second or so, until the answer or something else replaces them.
     /// No default, for the same reason as [`Self::greet`].
     fn think_quietly(&self, lines: &[&str]);
+    fn step(&self, text: &str, _language: &str) {
+        self.think_quietly(&[text]);
+    }
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
     /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
@@ -359,6 +364,7 @@ pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
         // The loudness and progress are about the emblem, learned words wait behind whatever is
         // on the stage, and the settings are no scene.
         OverlayEvent::Mode { .. }
+        | OverlayEvent::Step { .. }
         | OverlayEvent::Level { .. }
         | OverlayEvent::Progress(_)
         | OverlayEvent::Learned { .. }
@@ -396,6 +402,7 @@ impl OverlayEvent {
             OverlayEvent::Mode { .. } => "mode",
             OverlayEvent::Level { .. } => "level",
             OverlayEvent::Progress(_) => "progress",
+            OverlayEvent::Step { .. } => "step",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Learned { .. } => "learned",
             OverlayEvent::Say { .. } => "say",
@@ -731,6 +738,12 @@ impl OverlayApi for Overlay {
             quiet: true,
             lines: lines.iter().map(|&line| line.to_owned()).collect(),
         });
+    }
+
+    fn step(&self, text: &str, language: &str) {
+        self.publish(OverlayEvent::Show { mode: Mode::Thinking, line: None });
+        self.publish(OverlayEvent::Mode { mode: Mode::Thinking, quiet: true, lines: Vec::new() });
+        self.publish(OverlayEvent::Step { text: text.to_owned(), language: language.to_owned() });
     }
 
     fn level(&self, value: f32) {

@@ -15,9 +15,10 @@ export interface ConversationInfo {
   created_at_ms: number;
   updated_at_ms: number;
   is_default?: number;
+  kind?: "standard" | "quick";
 }
 
-export const conversationTitle = (conversation?: ConversationInfo): string => conversation?.title || t("conversations.untitled");
+export const conversationTitle = (conversation?: ConversationInfo): string => conversation?.kind === "quick" ? t("conversations.quick") : conversation?.title || t("conversations.untitled");
 export const conversationChange = (memberId: number): void => {
   window.dispatchEvent(new CustomEvent("conversations-changed", { detail: memberId }));
 };
@@ -47,14 +48,14 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
     const found = conversations.filter(c => conversationTitle(c).toLocaleLowerCase().includes(input.value.trim().toLocaleLowerCase()));
     rows.innerHTML = found.length ? found.map(c => `<div class="conversation-row">` +
       btn(`<span>${esc(conversationTitle(c))}</span><small>${esc(relativeTime(c.updated_at_ms))}</small>`, "conversation-open", ` data-conversation-open="${c.id}"`) +
-      (iconButton("more", t("chat.more"), ` data-conversation-more="${c.id}" aria-haspopup="menu"`, "conversation-more")) + `</div>`).join("") : `<p class="conversation-empty">${esc(t("conversations.empty"))}</p>`;
+      (c.kind === "quick" ? "" : iconButton("more", t("chat.more"), ` data-conversation-more="${c.id}" aria-haspopup="menu"`, "conversation-more")) + `</div>`).join("") : `<p class="conversation-empty">${esc(t("conversations.empty"))}</p>`;
   }
 
   async function refresh(): Promise<void> {
     const mine = ++epoch;
     try {
       const result = await api.core<{ conversations: ConversationInfo[] }>("conversations.list", { member_id: options.memberId });
-      if (!destroyed && mine === epoch) { conversations = Array.isArray(result?.conversations) ? result.conversations : []; draw(); }
+      if (!destroyed && mine === epoch) { conversations = Array.isArray(result?.conversations) ? [...result.conversations].sort((a, b) => Number(b.kind === "quick") - Number(a.kind === "quick")) : []; draw(); }
     } catch (error) {
       if (!destroyed && mine === epoch) rows.textContent = describeError(error);
     }

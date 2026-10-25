@@ -8,6 +8,21 @@ from raphael_core.agent.cli.models import claude_models, agy_models, codex_model
 from raphael_core.agent.cli.discovery import brain_ref, brain_effort
 
 
+def test_quick_effort_uses_cached_supported_levels_and_driver_mapping(tmp_path):
+    from raphael_core.agent.cli.discovery import CliBrains
+    brains = CliBrains(home=tmp_path, environ={})
+    brains._models["codex"] = [
+        {"id": "cli:codex:fast", "is_default": True, "reasoning_efforts": ["low", "medium"]},
+        {"id": "cli:codex:plain", "reasoning_efforts": []},
+    ]
+    brains._models["gemini"] = [{"id": "cli:gemini:argon", "reasoning_efforts": ["low", "high"],
+        "effort_models": {"low": "cli:gemini:argon-low", "high": "cli:gemini:argon-high"}}]
+    assert brains.with_effort("cli:codex", "high") == "cli:codex:fast?effort=low"
+    assert brains.with_effort("cli:codex:fast?effort=high", "medium") == "cli:codex:fast?effort=medium"
+    assert brains.with_effort("cli:codex:plain", "low") == "cli:codex:plain"
+    assert brains.with_effort("cli:gemini:argon-high", "low") == "cli:gemini:argon-low"
+
+
 def test_claude_config_resolves_alias_default(tmp_path):
     folder = tmp_path / ".claude"
     folder.mkdir()

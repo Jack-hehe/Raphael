@@ -157,15 +157,21 @@ class Rig:
         return await self.call("agent.confirm", {"id": confirm_id, "approved": approved})
 
     async def turns(self, **params):
+        # Voice history now lives in the persistent quick conversation. Typed-only rigs
+        # continue to inspect their formal default unless the test names a conversation.
+        quick = self.conn.execute("SELECT id FROM conversations WHERE kind='quick'").fetchone()
+        if quick and "conversation_id" not in params:
+            params["conversation_id"] = quick[0]
         return (await self.call("agent.history.list", params))["turns"]
 
     def spent(self):
         return [tuple(r) for r in self.conn.execute("SELECT purpose, model, cost_usd FROM spend")]
 
-    def seed(self, question, text, *, detail=None, route="answer", prefix="答", status="done"):
+    def seed(self, question, text, *, detail=None, route="answer", prefix="答", status="done", conversation_id=None):
         return self.history.add(
             session_id="old", question=question, route=route, prefix=prefix, text=text,
             detail=detail, status=status,
+            conversation_id=conversation_id or self.service.conversations.quick(),
         )  # fmt: skip
 
     async def aclose(self):
@@ -278,7 +284,7 @@ async def test_a_command_is_done_at_once_and_answered_with_the_fixed_reply(rig, 
         "cost_usd": 0.00004,
         "model": "typesafe/jev-1.14",
         "member_id": 0,
-        "conversation_id": 1,
+        "conversation_id": rig.service.conversations.quick(),
         "peer_id": None,
         "attachments": [],
         "steps": [
@@ -374,14 +380,15 @@ async def test_a_site_nobody_listed_is_found_by_the_model_opened_and_learned(rig
     assert "open reddit" in client.json_calls[0]["user"]
 
 
-async def test_cli_brain_open_target_resolution_uses_auxiliary_api_model(rig, client, actions):
+async def test_quick_api_open_uses_quick_model_when_formal_brain_is_cli(rig, client, actions):
     rig.settings.set("agent_model", "cli:codex")
+    rig.settings.set("quick_model", "openai/gpt-6-luna")
     rig.settings.set("assistant_model", "anthropic/claude-haiku-5.5")
     client.decisions.append(decision("command", "open"))
     client.replies.append(site("https://www.reddit.com/", "Reddit"))
     await rig.ask("open reddit", language="en")
     assert did(actions) == [("open_url", "https://www.reddit.com/")]
-    assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
+    assert client.json_calls[0]["model"] == "openai/gpt-6-luna"
 
 
 async def test_a_name_that_opened_once_opens_the_next_time_with_no_model(rig, client, actions):
@@ -678,7 +685,7 @@ async def test_an_answer_with_the_weather_looks_it_up_for_the_city_and_asks_the_
     assert forecast.url.host == "api.open-meteo.com"
     assert len(client.json_calls) == 1
     call = client.json_calls[0]
-    assert call["reasoning_effort"] == "none" and call["schema_name"] == "raphael_reply"
+    assert call["reasoning_effort"] == "low" and call["schema_name"] == "raphael_reply"
     assert 'weather: {"city": "Taipei", "asked_for": "台北"' in call["user"]
     assert "<question>\n台北天氣如何\n</question>" in call["user"]
     assert actions.calls == []
@@ -833,7 +840,7 @@ async def test_an_answer_is_given_the_last_six_turns_as_context(rig, client):
 # --- discussion and small talk -----------------------------------------------------------------------
 
 
-async def test_a_discussion_is_given_every_turn_after_the_summary_as_context(rig, client):
+async def test_a_quick_discussion_is_given_only_recent_turns_as_context(rig, client):
     for n in range(32):
         rig.seed(f"question {n}", f"answer {n}")
     client.decisions.append(decision("discuss"))
@@ -843,9 +850,9 @@ async def test_a_discussion_is_given_every_turn_after_the_summary_as_context(rig
     call = client.json_calls[0]
     assert "think something through" in call["system"]
     user = call["user"]
-    # With no summary, the last 30 turns (the most the context holds), oldest first.
-    assert "question 2\n" in user and "question 31" in user and "question 1\n" not in user
-    assert user.index("question 2\n") < user.index("question 31")
+    # Quick questions keep only the last six turns, even for a discussion.
+    assert "question 26\n" in user and "question 31" in user and "question 25\n" not in user
+    assert user.index("question 26\n") < user.index("question 31")
     assert client.text_calls == [] and rig.meteo.requests == []
     assert (await rig.turns())[0]["route"] == "discuss"
 
@@ -1473,22 +1480,24 @@ async def test_the_history_search_finds_turns_of_the_whole_history_in_the_shape_
     for n in range(80):
         rig.seed(f"q{n}", "a")
     rig.seed("出差要帶什麼", "護照。")
-    found = (await rig.call("agent.history.search", {"query": "出差", "limit": 100}))["turns"]
+    conversation = rig.service.conversations.quick()
+    found = (await rig.call("agent.history.search", {"query": "出差", "limit": 100, "conversation_id": conversation}))["turns"]
     assert {t["question"] for t in found} == {"下週的出差行程", "出差要帶什麼"}
     assert old in {t["id"] for t in found}
     listed = (await rig.turns(limit=1))[0]
     assert set(found[0]) == set(listed)  # the page draws and opens them like any turn
     # A long run of Chinese that is not found as it is written is looked for by its pairs.
-    assert [t["id"] for t in (await rig.call("agent.history.search", {"query": "上次說的出差行程"}))["turns"]][:1] == [old]
-    assert (await rig.call("agent.history.search", {"query": "找不到的字串"}))["turns"] == []
+    assert [t["id"] for t in (await rig.call("agent.history.search", {"query": "上次說的出差行程", "conversation_id": conversation}))["turns"]][:1] == [old]
+    assert (await rig.call("agent.history.search", {"query": "找不到的字串", "conversation_id": conversation}))["turns"] == []
 
 
 async def test_the_history_search_gives_up_to_a_hundred_turns(rig):
     for n in range(120):
         rig.seed(f"會議 {n}", "好。")
-    assert len((await rig.call("agent.history.search", {"query": "會議"}))["turns"]) == 50
-    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 1000}))["turns"]) == 100
-    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 0}))["turns"]) == 1
+    conversation = rig.service.conversations.quick()
+    assert len((await rig.call("agent.history.search", {"query": "會議", "conversation_id": conversation}))["turns"]) == 50
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 1000, "conversation_id": conversation}))["turns"]) == 100
+    assert len((await rig.call("agent.history.search", {"query": "會議", "limit": 0, "conversation_id": conversation}))["turns"]) == 1
 
 
 @pytest.mark.parametrize(
@@ -1651,9 +1660,9 @@ async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces
     )
     assert reply["text"] == "好。"
     assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "否"
-    turns = await rig.turns()
-    assert turns[0]["source"] == "app" and turns[0]["question"] == "你好"
-    assert any(t["status"] == "denied" for t in turns)
+    formal = await rig.turns(conversation_id=rig.service.conversations.main())
+    assert formal[0]["source"] == "app" and formal[0]["question"] == "你好"
+    assert any(t["status"] == "denied" for t in await rig.turns())
 
 
 async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(rig, client, actions):

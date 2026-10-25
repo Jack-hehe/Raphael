@@ -354,7 +354,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 111] = [
+const ALLOWED_METHODS: [&str; 112] = [
     "home.overview",
     "connectors.catalog",
     "connectors.categories",

@@ -50,6 +50,7 @@ import logging
 import queue
 import re
 import threading
+from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -152,6 +153,7 @@ class Speaker:
         self._late_drop_s = late_drop_s
         self._current: _Utterance | None = None
         self._notify: Notifier | None = None
+        self.on_state: Callable[[int | None, str], None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         # The kind of the latest failure, so that a service that is down is logged once in a row.
         self._last_failure: str | None = None
@@ -230,6 +232,8 @@ class Speaker:
         return utterance
 
     def _state(self, utterance: _Utterance, state: str) -> None:
+        if self.on_state is not None:
+            self.on_state(utterance.turn_id, state)
         if self._notify is not None:
             params: dict[str, Any] = {"state": state}
             if utterance.turn_id is not None:

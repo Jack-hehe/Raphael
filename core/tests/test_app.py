@@ -2031,7 +2031,7 @@ async def test_the_assistant_answers_through_the_whole_app_with_the_fake_llm(mak
     assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": "你好"}
     en = await app.call("agent.ask", ask_params("hello", language="en", session="a2"))
     assert (en["prefix"], en["text"]) == ("Answer", "hello")
-    turns = (await app.call("agent.history.list", {}))["turns"]
+    turns = (await app.call("agent.history.list", {"conversation_id": app.agent.conversations.quick()}))["turns"]
     assert [(t["question"], t["route"], t["status"]) for t in turns] == [
         ("hello", "chat", "done"),
         ("你好", "chat", "done"),
@@ -2132,7 +2132,7 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
         "done", "Notice", "The scripted task saw 1 results.",
     )  # fmt: skip
     # The turn that handed it over was completed with the report, at no cost.
-    (turn,) = (await app.call("agent.history.list", {}))["turns"]
+    (turn,) = (await app.call("agent.history.list", {"conversation_id": app.agent.conversations.quick()}))["turns"]
     assert (turn["route"], turn["prefix"], turn["text"], turn["status"]) == (
         "delegate", "Notice", "The scripted task saw 1 results.", "done",
     )  # fmt: skip

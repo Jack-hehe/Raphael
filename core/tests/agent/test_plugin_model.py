@@ -222,7 +222,7 @@ async def test_changing_the_model_changes_what_is_known_about_it(
 async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
     rig, plugins, client, catalog
 ):
-    # Small talk, a discussion and a command never ask whether a model takes tools...
+    # Small talk and discussion read effort support; a command needs no catalog.
     await plugins.connect(look="T0")
     for kind in ("chat", "discuss"):
         client.decisions.append(decision(kind))
@@ -230,14 +230,14 @@ async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
         await rig.ask("你好嗎")
     client.decisions.append(decision("command", "volume_up"))
     await rig.ask("大聲一點")
-    assert catalog.reads == 0
+    assert catalog.reads == 2
     # ...and neither does an answer when every plugin tool is off: nothing would be offered.
     [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     await plugins.set_on(server["id"], "look", False)
     route(client)
     client.replies.append(spoken("答", "好。"))
     await rig.ask("你好嗎")
-    assert catalog.reads == 0 and client.plan_calls == []
+    assert catalog.reads == 3 and client.plan_calls == []
 
 
 # --- a model that refuses tools although the catalog said it takes them ------------------------

@@ -1,5 +1,22 @@
 # Dictation
 
+Global questions use Raphael's persistent quick conversation. Public progress/thinking
+comes from the same stored turn stream as the conversation, newest line only, in the
+existing 14px caption position. No rotating placeholder status is sent. The API fast
+router remains available; CLI quick questions skip auxiliary routing and native session
+resume, consuming only the recent quick context and that conversation's own summary.
+Native acceptance must check stale-session rejection, foreground suppression,
+hotkey/transcript timing and actual first audio.
+
+```powershell
+npm run look -- overlay-step --theme both --width 1120,720,1920x1080
+```
+
+Offline latency plumbing: `uv run python -m raphael_core.tools.quick_latency --fake --count 9` from core/.
+Fake timings do not establish live speed. The owner runs without `--fake` for model
+timings using recording execution and silent first-audio simulation, then compares
+real hotkey/STT/audio logs. Only native logs prove actual transcription/playback speed.
+
 ## Sub-features
 
 Four separate totals, activity/shortcuts, horizontal tabs, dated history, dictionary and connection notices; native

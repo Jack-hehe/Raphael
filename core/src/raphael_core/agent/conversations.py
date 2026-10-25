@@ -42,6 +42,20 @@ class Conversations:
     def resolve(self, member_id: int, conversation_id: int | None = None) -> int:
         return self.main(member_id) if conversation_id is None else self.get(conversation_id, member_id)["id"]
 
+    def quick(self) -> int:
+        """The single, lazy, persistent hotkey conversation; never the formal default."""
+        row = self.conn.execute("SELECT id FROM conversations WHERE kind = 'quick'").fetchone()
+        if row is not None:
+            return row[0]
+        now = self.now_ms()
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO conversations"
+                " (member_id, title, created_at_ms, updated_at_ms, is_default, kind)"
+                " VALUES (0, '', ?, ?, 0, 'quick')", (now, now),
+            )
+        return self.conn.execute("SELECT id FROM conversations WHERE kind = 'quick'").fetchone()[0]
+
     def create(self, member_id: int, *, default: bool = False) -> dict:
         now = self.now_ms()
         with self.conn:
@@ -54,7 +68,7 @@ class Conversations:
     def list(self, member_id: int, query: str = "") -> list[dict]:
         self.main(member_id)
         rows = self.conn.execute(
-            "SELECT * FROM conversations WHERE member_id = ? ORDER BY updated_at_ms DESC, id DESC", (member_id,),
+            "SELECT * FROM conversations WHERE member_id = ? ORDER BY (kind = 'quick') DESC, updated_at_ms DESC, id DESC", (member_id,),
         )
         return [dict(row) for row in rows if query.casefold() in row["title"].casefold()]
 
@@ -65,7 +79,8 @@ class Conversations:
         )
 
     def rename(self, conversation_id: int, title: str) -> dict:
-        self.get(conversation_id)
+        if self.get(conversation_id)["kind"] == "quick":
+            raise invalid_params("the quick conversation has a fixed localized title")
         if not isinstance(title, str) or not title.strip() or len(title.strip()) > TITLE_MAX:
             raise invalid_params(f"title must be 1 to {TITLE_MAX} characters")
         with self.conn:

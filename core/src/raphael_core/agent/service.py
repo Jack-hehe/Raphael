@@ -261,7 +261,8 @@ _SOURCE = re.compile(r"[a-z]{1,20}")
 # A question typed in the app's conversation page: asked at this computer, like a spoken one.
 TYPED = "app"
 # The sources of the requests made at this computer: a new one replaces every question that waits.
-_AT_THIS_COMPUTER = frozenset({VOICE, TYPED})
+_QUICK_SOURCES = (VOICE, "overlay")
+_AT_THIS_COMPUTER = frozenset({*_QUICK_SOURCES, TYPED})
 # Routing and answering share this deadline while the voice overlay waits.
 VOICE_TURN_TIMEOUT_S = 45.0
 # The statuses of a turn that ended with a denial or a question that ran out: Raphael does not say
@@ -426,6 +427,10 @@ class _Ask:
     # The turn whose announcement to the app is held until the voice is ready (`_turn_changed`).
     held: int | None = None
     member_creates: int = 0
+    quick: bool = False
+    latency: dict[str, float | None] = field(default_factory=dict)
+    began: float = field(default_factory=time.perf_counter)
+    trace_logged: bool = False
     admin_pending: list[PlannedCall] = field(default_factory=list)
     admin_screenings: list[Screening] = field(default_factory=list)
 
@@ -445,6 +450,8 @@ class _Settings:
     model: str
     city: str
     limit_usd: float
+    effort: str = "none"
+    quick: bool = False
 
 
 @dataclass
@@ -526,6 +533,9 @@ class AgentService:
         # silent. (Not `_speaker`: that is the lookup of who answers a `member_id`.)
         self._speaking = speaker
         self._client = client
+        self._speech_traces: dict[int, _Ask] = {}
+        if speaker is not None and hasattr(speaker, "on_state"):
+            speaker.on_state = self._speech_state
         # The owner's team (raphael_core.members): who a `member_id` is, and the team tools. Without
         # one there is only Raphael.
         self._team = team
@@ -722,7 +732,8 @@ class AgentService:
         text = _str(params, "text", blank=True)
         language = _str(params, "ui_language")
         quote = quote_from_wire(params.get("quote"))
-        conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
+        conversation_id = (self.conversations.quick() if member_id == 0 and (params.get("source") is None or params.get("source") in _QUICK_SOURCES)
+                           else self.conversations.resolve(member_id, _opt_int(params, "conversation_id")))
         if quote is not None and params.get("source") != "app":
             raise invalid_params("quotes are supported for composer requests")
         replacement = _opt_int(params, "replace_turn_id")
@@ -745,6 +756,7 @@ class AgentService:
             member_id=member_id,
             quote=quote,
             conversation_id=conversation_id,
+            transcript_ms=params.get("transcript_ms"),
         )
 
     def _speaker(self, member_id: int) -> Speaker | None:
@@ -770,6 +782,7 @@ class AgentService:
         member_id: int = 0,
         quote: dict[str, str] | None = None,
         conversation_id: int | None = None,
+        transcript_ms: float | None = None,
     ) -> dict:
         """One request, as `agent.ask` answers it. `attachments` are the files handed with it
         (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
@@ -779,6 +792,10 @@ class AgentService:
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
+        if member_id == 0 and (source is None or source in _QUICK_SOURCES):
+            conversation_id = self.conversations.quick()
+        else:
+            conversation_id = self.conversations.resolve(member_id, conversation_id)
         original_text = None
         expand = getattr(self._team, "expand_command", None)
         if expand is not None:
@@ -796,6 +813,10 @@ class AgentService:
             speaker=speaker,
             conversation_id=self.conversations.resolve(member_id, conversation_id),
         )
+        ask.quick = self.conversations.get(ask.conversation_id)["kind"] == "quick"
+        if ask.quick:
+            elapsed = float(transcript_ms) if type(transcript_ms) in (int, float) and 0 <= transcript_ms < 3_600_000 else 0.0
+            ask.latency = dict(hotkey_end=0.0, transcript=elapsed, routing=None, first_step=None, final_answer=None, speech_start=None)
         if source is not None:
             if not isinstance(source, str) or not _SOURCE.fullmatch(source):
                 raise invalid_params("source must be a short lower-case word")
@@ -829,12 +850,21 @@ class AgentService:
         if earlier is not None:
             earlier.cancel()
         await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
-        task = asyncio.ensure_future(self._voice_answer(ask) if ask.source == VOICE else self._answer(ask))
+        task = asyncio.ensure_future(self._voice_answer(ask) if ask.source in _QUICK_SOURCES else self._answer(ask))
         self._inflight[ask.session_id] = task
         self._inflight_members[ask.session_id] = ask.speaker.id
         try:
             result = await task
-            return await self._said(result, ask.source, ask.speaker.id, ask.language)
+            if ask.quick and result.get("status") == "confirm":
+                result["conversation_id"] = ask.conversation_id
+            if ask.quick and ask.turn_id and result.get("status") in ("done", "confirm"):
+                self._speech_traces[ask.turn_id] = ask
+                while len(self._speech_traces) > 64:
+                    self._speech_traces.pop(next(iter(self._speech_traces)))
+            result = await self._said(result, ask.source, ask.speaker.id, ask.language)
+            if result.get("status") == "done" and not result.get("voiced"):
+                self._speech_traces.pop(ask.turn_id, None)
+            return result
         except asyncio.CancelledError:
             current = asyncio.current_task()
             if task.cancelled() and (current is None or not current.cancelling()):
@@ -850,6 +880,9 @@ class AgentService:
             if self._inflight.get(ask.session_id) is task:
                 del self._inflight[ask.session_id]
                 self._inflight_members.pop(ask.session_id, None)
+            if ask.quick:
+                logger.info("Quick latency ms: %s", json.dumps(ask.latency, sort_keys=True))
+                ask.trace_logged = True
             self._release(ask.held)  # a turn announced late must never be left unannounced
 
     async def _voice_answer(self, ask: _Ask) -> dict:
@@ -870,11 +903,12 @@ class AgentService:
         if off is not None:
             # A file of a kind the owner turned off is refused in one line, before any model is asked.
             return self._finish(ask, "chat", "negative", phrase(ask.language, off), ledger)
-        settings = self._read_settings(ask.speaker)
+        settings = self._read_settings(ask.speaker, ask.conversation_id)
         blocked = self._blocked(settings)
-        if ask.source != VOICE or not ask.speaker.is_raphael:
+        if (ask.quick and brain_ref(settings.model)) or ask.source != VOICE or not ask.speaker.is_raphael:
             if blocked is not None:
                 return self._failed(ask, "answer", blocked, ledger)
+            self._mark_latency(ask, "routing")
             self._record(ask, "answer", "", "", "running", None, ledger)
             try:
                 return await self._narrated(ask, settings, ledger)
@@ -904,6 +938,7 @@ class AgentService:
                 return self._failed(ask, "unclear", blocked, ledger)
             if decision is not None:
                 logger.info("A command was found by its words: no model could route (%s)", failure)
+        self._mark_latency(ask, "routing")
         route = "answer" if decision is None or decision.route == "unclear" else decision.route
         source = decision.source if decision is not None else "harness"
         try:
@@ -984,7 +1019,7 @@ class AgentService:
         with what was found. AgentFailure as `Voice.reply` raises it. A member of the team reads
         its own conversation and memory, and speaks as itself."""
         member_id = ask.speaker.id
-        context = self._conversation_of(member_id, ask.conversation_id).context(quick=route not in _FULL_CONTEXT_ROUTES)
+        context = self._conversation_of(member_id, ask.conversation_id).context(quick=ask.quick or route not in _FULL_CONTEXT_ROUTES)
         index = None if self._memory is None else self._memory.index(member_id)
 
         async def word(results: list[ToolResult], looked_up: bool) -> Reply:
@@ -1004,6 +1039,7 @@ class AgentService:
                 speaker=ask.speaker,
                 say_ja=ask.voiced and ask.language != "ja",
                 roster=roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings),
+                reasoning_effort=self._effort(settings),
             )
 
         reply = await word(tools, False)
@@ -1363,6 +1399,20 @@ class AgentService:
     def _moment(self) -> Mapping[str, str]:
         return self._tools.local_time().data or {}
 
+    @staticmethod
+    def _mark_latency(ask: _Ask, stage: str) -> None:
+        if ask.quick and ask.latency.get(stage) is None:
+            ask.latency[stage] = round(float(ask.latency.get("transcript") or 0) + (time.perf_counter() - ask.began) * 1000, 3)
+
+    def _speech_state(self, turn_id: int | None, state: str) -> None:
+        ask = self._speech_traces.get(turn_id)
+        if ask is not None and state == "playing":
+            self._mark_latency(ask, "speech_start")
+            if ask.trace_logged:
+                logger.info("Quick latency ms: %s", json.dumps(ask.latency, sort_keys=True))
+        if state == "done":
+            self._speech_traces.pop(turn_id, None)
+
     def _message(self, ask: _Ask, kind: str, text: str, prefix: str = "", *, first: bool = True, last: bool = True) -> None:
         """Publish only public words; each commit is visible before the next model/tool call."""
         if not ask.turn_id or not text.strip():
@@ -1374,6 +1424,11 @@ class AgentService:
             if not last:
                 line = line[:-1]
         self._write(lambda: self._history.add_message(ask.turn_id, kind, line))
+        if kind in ("progress", "thinking"):
+            self._mark_latency(ask, "first_step")
+            if self._notify and ask.quick:
+                self._notify("agent.progress", {"session_id": ask.session_id, "turn_id": ask.turn_id,
+                    "member_id": ask.speaker.id, "text": line, "language": ask.language})
         # Only the spoken final waits for its voice; progress and events remain live.
         self._turn_changed(ask.turn_id, ask.speaker.id,
                            hold=kind == "reply" and ask.held == ask.turn_id)
@@ -1394,7 +1449,7 @@ class AgentService:
     ) -> dict:
         """A narrated turn, sharing the fast tier's safety gate and permission cards."""
         if loop is None:
-            context = self._conversation_of(ask.speaker.id, ask.conversation_id).context(quick=False)
+            context = self._conversation_of(ask.speaker.id, ask.conversation_id).context(quick=ask.quick)
             index = None if self._memory is None else self._memory.index(ask.speaker.id)
             say_ja = ask.voiced and ask.language != "ja"
             if brain_ref(settings.model):
@@ -1592,7 +1647,7 @@ class AgentService:
             if brain_ref(settings.model):
                 common["execute"] = cli_execute
                 loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
-                    attachments=ask.attachments,
+                    attachments=ask.attachments, resume_session=not ask.quick,
                     conversation_id=ask.conversation_id, quota=self.quotas.record,
                     member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
                     expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)
@@ -1601,7 +1656,7 @@ class AgentService:
                 self._cli_loops.add(loop)
                 loop.on_done = self._cli_loops.discard
             else:
-                loop = NarratedLoop(client=self._client, **common)
+                loop = NarratedLoop(client=self._client, reasoning_effort=self._effort(settings), **common)
         try:
             outcome = await loop.run()
         finally:
@@ -2296,7 +2351,7 @@ class AgentService:
             cost_base=ledger.total,
             call_base=len(ledger.calls),
         )
-        settings = self._read_settings(ask.speaker)
+        settings = self._read_settings(ask.speaker, ask.conversation_id)
         failure = self._blocked(settings)
         result: dict | None = None
         if failure is None:
@@ -2453,7 +2508,7 @@ class AgentService:
             self._record(followup.ask, "answer", "", "", "running", None, ledger)
             try:
                 return await self._narrated(
-                    followup.ask, self._read_settings(followup.ask.speaker), ledger, loop
+                    followup.ask, self._read_settings(followup.ask.speaker, followup.ask.conversation_id), ledger, loop
                 )
             except AgentFailure as error:
                 return self._failed(followup.ask, "answer", error.kind, ledger)
@@ -2468,7 +2523,7 @@ class AgentService:
             return self._outcome(pending, "negative", text, "error")
         if not result.ok and result.error != "tool_error":
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
-        settings = self._read_settings(followup.ask.speaker)
+        settings = self._read_settings(followup.ask.speaker, followup.ask.conversation_id)
         try:
             if self._blocked(settings) is not None:
                 raise AgentFailure("error")
@@ -2779,7 +2834,7 @@ class AgentService:
             loop.continue_with(self._computer_result(loop, result))
             self._record(ask, "answer", "", "", "running", None, run.ledger)
             try:
-                return await self._narrated(ask, self._read_settings(ask.speaker), run.ledger, loop)
+                return await self._narrated(ask, self._read_settings(ask.speaker, ask.conversation_id), run.ledger, loop)
             except AgentFailure as error:
                 return self._failed(ask, "answer", error.kind, run.ledger)
             except Exception as error:
@@ -3007,6 +3062,8 @@ class AgentService:
 
     async def _conversations_delete(self, params: dict) -> dict:
         conversation = self.conversations.get(_opt_int(params, "id"))
+        if conversation["kind"] == "quick":
+            raise invalid_params("the quick conversation is permanent; delete individual turns instead")
         member = conversation["member_id"]
         conversation_id = conversation["id"]
         # Stop writers before removing their rows, including background reports and pending yeses.
@@ -3233,15 +3290,37 @@ class AgentService:
 
     # --- the parts every reply uses -------------------------------------------------------------
 
-    def _read_settings(self, speaker: Speaker = RAPHAEL) -> _Settings:
+    def _read_settings(self, speaker: Speaker = RAPHAEL, conversation_id: int | None = None) -> _Settings:
         """Global assistant settings, including for legacy profiles with a stored model."""
         model = self._settings.get("agent_model")
+        effort = "none"
+        quick = bool(conversation_id and self.conversations.get(conversation_id, speaker.id)["kind"] == "quick")
+        if quick:
+            model = self._settings.get("quick_model") or model
+            effort = self._settings.get("quick_effort")
+            if brain_ref(model):
+                model = self._cli_brains.with_effort(model, effort)
         city = self._settings.get("agent_city")
         return _Settings(
+            quick=quick,
+            effort=effort,
             model=_text_or(model, DEFAULTS["agent_model"]),
             city=_text_or(city, DEFAULTS["agent_city"]),
             limit_usd=self._settings.get("monthly_limit_usd"),
         )
+
+    def _effort(self, settings: _Settings) -> str:
+        if settings.effort == "none" and not settings.quick:
+            return "none"
+        entries = self._tool_support._catalog() or []
+        entry = next((m for m in entries if m.id == settings.model), None)
+        if entry is None:
+            return settings.effort
+        levels = entry.reasoning_efforts
+        if levels is None:
+            return settings.effort if "reasoning" in entry.capabilities else "none"
+        return settings.effort if settings.effort in levels else next(
+            (e for e in ("low", "medium", "none", "minimal") if e in levels), levels[0] if levels else "none")
 
     def _files_off(self, ask: _Ask) -> str | None:
         """The phrase that refuses the files of `ask` when one is an image and reading images is
@@ -3371,6 +3450,11 @@ class AgentService:
         wrote with it; a line with none is not spoken. The longer `detail` and the `notice` are
         not spoken. A turn held back for the voice is announced at the end, whatever happened."""
         turn_id = reply.get("turn_id")
+        trace = self._speech_traces.get(turn_id) if type(turn_id) is int else None
+        report_trace = trace is not None and trace.trace_logged and reply.get("status") == "done"
+        if trace is not None and reply.get("status") == "done":
+            trace.trace_logged = False
+            self._mark_latency(trace, "final_answer")
         try:
             if (
                 self._voiced(source, member_id)
@@ -3401,6 +3485,12 @@ class AgentService:
                                 "Raphael could not start to speak: %s", type(exc).__name__
                             )
         finally:
+            if trace is not None and reply.get("status") == "done":
+                if report_trace:
+                    logger.info("Quick latency ms: %s", json.dumps(trace.latency, sort_keys=True))
+                    trace.trace_logged = True
+                if not reply.get("voiced"):
+                    self._speech_traces.pop(turn_id, None)
             if type(turn_id) is int:
                 self._japanese.pop(turn_id, None)
             self._release(turn_id)
@@ -3468,7 +3558,7 @@ class AgentService:
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.
                 if ask.conversation_id != self.conversations.main(member_id) and self._memory.may_spend():
-                    self._conversation_of(member_id, ask.conversation_id).schedule_fold(self._read_settings(ask.speaker).model, self._memory.ledger)
+                    self._conversation_of(member_id, ask.conversation_id).schedule_fold(self._read_settings(ask.speaker, ask.conversation_id).model, self._memory.ledger)
                 if member_id:
                     self._memory.after_turn(member_id)
                 else:

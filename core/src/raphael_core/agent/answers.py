@@ -425,6 +425,7 @@ class Voice:
         speaker: Speaker = RAPHAEL,
         say_ja: bool = False,
         roster: str = "",
+        reasoning_effort: str = "none",
     ) -> Reply:
         """What Raphael says to `question` on `route` ("answer", "discuss" or "chat"), in
         `language`. `summary` is the summary of the earlier conversation and `context` its latest
@@ -468,7 +469,7 @@ class Voice:
                     schema_name="raphael_reply",
                     timeout_s=self._timeout_s,
                     max_tokens=REPLY_MAX_TOKENS,
-                    reasoning_effort="none",
+                    reasoning_effort=reasoning_effort,
                 ),
                 self._timeout_s,
             )

@@ -261,9 +261,7 @@ async def test_rpc_detection_is_registered_without_exposing_process_details(setu
     assert str(tmp_path) not in json.dumps(result)
 
 
-@pytest.mark.parametrize("fallback", [False, True])
-async def test_raphaels_voice_keeps_fast_routing_and_uses_cli_for_the_answer(setup, tmp_path, client, fallback):
-    from agent.conftest import classification, completion, decision
+async def test_raphaels_quick_cli_answer_skips_auxiliary_api_routing(setup, tmp_path, client):
     rig, _ = setup
     rig.settings.set("agent_model", "cli:claude")
     rig.settings.set("assistant_model", "anthropic/claude-haiku-5.5")
@@ -271,17 +269,11 @@ async def test_raphaels_voice_keeps_fast_routing_and_uses_cli_for_the_answer(set
 json.loads(sys.stdin.readline())
 print(json.dumps({"type":"result","subtype":"success","result":"Answer from subscription."}),flush=True)
 ''')
-    client.decisions.append(decision("chat", route_confidence=0.1 if fallback else 0.93))
-    if fallback:
-        client.replies.append(completion(classification()))
     result = await rig.ask("Explain it")
     assert result["text"] == "Answer from subscription."
-    assert len(client.decide_calls) == 1 and client.decide_calls[0]["model"] == "typesafe/jev-1.14"
+    assert not client.decide_calls
     assert not client.chat_calls
-    if fallback:
-        assert client.json_calls[0]["model"] == "anthropic/claude-haiku-5.5"
-    else:
-        assert not client.json_calls
+    assert not client.json_calls
 
 
 async def test_not_logged_in_never_starts_the_fake_cli(setup, tmp_path):

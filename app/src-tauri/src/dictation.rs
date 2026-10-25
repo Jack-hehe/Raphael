@@ -662,11 +662,21 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
             }
             "dictation.progress" => self.on_progress(&notification.params),
+            "agent.progress" => self.on_agent_progress(&notification.params),
             "dictation.silence" => drop(self.on_silence(&notification.params, now_ms)),
             "speech.state" => self.on_speech_state(&notification.params),
             CORE_RESTARTED => self.on_core_restarted(),
             CORE_DOWN => self.on_core_down(),
             _ => {}
+        }
+    }
+
+    fn on_agent_progress(&self, params: &Value) {
+        let Some(session) = params.get("session_id").and_then(Value::as_str) else { return; };
+        let Some(text) = params.get("text").and_then(Value::as_str).filter(|text| !text.trim().is_empty()) else { return; };
+        let language = params.get("language").and_then(Value::as_str).unwrap_or("zh-TW");
+        if self.is_current(session) && lock(&self.state).agent == Some(AgentStage::Thinking) {
+            self.question_on_overlay(|overlay| overlay.step(text, language));
         }
     }
 
@@ -1399,20 +1409,20 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // No percentage: nothing reports how far an answer has come. Raphael's reports on the
         // analysis, in the interface language, change in its place until the answer. (The 拉斐爾
         // page in front shows its own.)
-        let lines = notices::WAITING.lines(&self.language.get());
-        self.question_on_overlay(|overlay| overlay.think_quietly(lines));
+        self.question_on_overlay(|overlay| overlay.think_quietly(&[]));
         self.tell(DictationPhase::Processing, true);
 
+        let released = std::time::Instant::now();
         let this = self.clone();
         Some(tokio::spawn(async move {
-            this.agent_turn(session, target, wait).await;
+            this.agent_turn(session, target, wait, released).await;
         }))
     }
 
     /// The rest of a question after the key was released (or the core heard nothing more): the
     /// core transcribes it, within `wait`, the agent answers it, the overlay shows the answer.
     /// Never logs the words of the question or the answer.
-    async fn agent_turn(&self, session: Session, target: Option<Target>, wait: Duration) {
+    async fn agent_turn(&self, session: Session, target: Option<Target>, wait: Duration, released: std::time::Instant) {
         // Released before the core answered the start? Then wait, like a dictation does.
         if !session.start_succeeded().await {
             log::info!("dictation.start failed; no dictation.stop to send");
@@ -1473,7 +1483,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         if !self.set_stage(&id, AgentStage::Thinking) {
             return;
         }
-        self.converse(&id, question, target_app, None, Vec::new(), session.member, None, None, None)
+        let transcript_ms = released.elapsed().as_secs_f64() * 1000.0;
+        self.converse_with_timing(&id, question, target_app, None, Vec::new(), session.member, None, None, None, Some(transcript_ms))
             .await;
     }
 
@@ -1573,12 +1584,23 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         quote: Option<Value>,
         conversation_id: Option<u64>,
     ) {
+        self.converse_with_timing(id, question, target_app, source, attachments, member, replace_turn_id, quote, conversation_id, None).await;
+    }
+
+    async fn converse_with_timing(
+        &self, id: &str, question: &str, target_app: Option<String>, source: Option<&str>,
+        attachments: Vec<Value>, member: u64, replace_turn_id: Option<u64>, quote: Option<Value>,
+        conversation_id: Option<u64>, transcript_ms: Option<f64>,
+    ) {
         let mut params = json!({
             "session_id": id,
             "text": question,
             "ui_language": self.language.get(),
             "target_app": target_app,
         });
+        if let Some(ms) = transcript_ms {
+            params["transcript_ms"] = json!(ms);
+        }
         if let Some(source) = source {
             params["source"] = json!(source);
         }
@@ -1703,7 +1725,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             Ok(Reply::Ask(mut prompt)) => {
                 prompt.member_id = (member != 0).then_some(member);
-                prompt.conversation_id = conversation_id;
+                prompt.conversation_id = reply.get("conversation_id").and_then(Value::as_u64).or(conversation_id);
                 let (answer, wait) = oneshot::channel();
                 {
                     let mut state = lock(&self.state);
@@ -2290,6 +2312,12 @@ mod app {
         fn think_quietly(&self, lines: &[&str]) {
             if let Some(overlay) = &self.0 {
                 overlay.think_quietly(lines);
+            }
+        }
+
+        fn step(&self, text: &str, language: &str) {
+            if let Some(overlay) = &self.0 {
+                overlay.step(text, language);
             }
         }
         fn level(&self, value: f32) {
@@ -5515,8 +5543,11 @@ mod tests {
             c.core().call_params("dictation.stop"),
             json!({"session_id": id, "target_app": "chrome.exe"})
         );
+        let mut ask = c.core().call_params("agent.ask");
+        assert!(ask["transcript_ms"].as_f64().is_some_and(|ms| ms >= 0.0));
+        ask.as_object_mut().unwrap().remove("transcript_ms");
         assert_eq!(
-            c.core().call_params("agent.ask"),
+            ask,
             json!({
                 "session_id": id, "text": "幫我複製這句話", "ui_language": "zh-TW",
                 "target_app": "chrome.exe",
@@ -5623,20 +5654,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_question_is_thought_about_with_the_waiting_lines_of_the_interface_language() {
-        for (language, book) in [
-            ("zh-TW", WAITING.zh),
-            ("en", WAITING.en),
-            ("ja", WAITING.ja),
-        ] {
+    async fn a_question_waits_for_real_public_progress_in_every_language() {
+        for language in ["zh-TW", "en", "ja"] {
             let c = agent(answer("答", "好"));
             c.language().set(language);
             ask_aloud(&c).await;
             let lines = c.overlay().quiet_lines.lock().unwrap().clone();
             assert_eq!(
                 lines,
-                vec![book.to_vec()],
-                "{language}: one book, one language"
+                vec![Vec::<String>::new()],
+                "{language}: no fabricated waiting captions"
             );
         }
 
@@ -5646,8 +5673,26 @@ mod tests {
         ask_aloud(&c).await;
         assert_eq!(
             *c.overlay().quiet_lines.lock().unwrap(),
-            vec![WAITING.zh.to_vec()]
+            vec![Vec::<String>::new()]
         );
+    }
+
+    #[tokio::test]
+    async fn public_progress_is_scoped_to_the_current_question_and_foreground() {
+        let (core, gate) = agent_core(answer("Answer", "Ready")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("chrome.exe"));
+        let turn = start_turn(&c).await;
+        until_stage(&c, AgentStage::Thinking).await;
+        let id = c.core().call_params("agent.ask")["session_id"].clone();
+        c.on_agent_progress(&json!({"session_id": "stale", "text": "Stale", "language": "en"}));
+        assert_eq!(c.overlay().quiet_lines.lock().unwrap().len(), 1);
+        c.on_agent_progress(&json!({"session_id": id, "text": "Checking the schedule.", "language": "en"}));
+        assert_eq!(c.overlay().quiet_lines.lock().unwrap().last().unwrap(), &vec!["Checking the schedule.".to_owned()]);
+        gate.notify_one();
+        turn.await.unwrap();
+        let count = c.overlay().quiet_lines.lock().unwrap().len();
+        c.on_agent_progress(&json!({"session_id": id, "text": "Late", "language": "en"}));
+        assert_eq!(c.overlay().quiet_lines.lock().unwrap().len(), count);
     }
 
     #[tokio::test]

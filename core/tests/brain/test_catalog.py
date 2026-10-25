@@ -452,6 +452,7 @@ def test_an_entry_has_what_the_picker_shows():
             "cleanup": {"usable": True, "reason": None},
             "answer": {"usable": True, "reason": None},
         },
+        "reasoning_efforts": ["max", "xhigh", "high", "medium", "low", "none"],
     }
     scribe = by_id(view["stt"])["elevenlabs/scribe-v2"]
     assert scribe["context_length"] is None

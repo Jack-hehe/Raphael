@@ -107,8 +107,10 @@ class NarratedLoop:
         execute: Callable[[str, str, dict], Awaitable[ToolOutcome]],
         thinking: Callable[[str], None] = lambda text: None,
         fallbacks: Sequence[str] | None = None,
+        reasoning_effort: str = "none",
     ) -> None:
         self.client, self.model, self.ledger = client, model, ledger
+        self.reasoning_effort = reasoning_effort
         self.language, self.plain = language, plain
         self.system, self.user, self.tools = system + NARRATION_RULES, user, list(tools)
         self.progress, self.execute = progress, execute
@@ -128,7 +130,7 @@ class NarratedLoop:
             answer = await asyncio.wait_for(self.client.chat_tools(
                 model=self.model, fallbacks=self.fallbacks,
                 messages=list(messages), tools=list(tools), timeout_s=60,
-                max_tokens=4000, reasoning_effort="none",
+                max_tokens=4000, reasoning_effort=self.reasoning_effort,
             ), 60)
         except OpenRouterError as error:
             self.ledger.add(model=self.model, cost_usd=0, ms=int((time.perf_counter()-began)*1000), outcome="error")

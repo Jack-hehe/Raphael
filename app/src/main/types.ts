@@ -410,6 +410,8 @@ export interface BrainSettings {
   stt_cloud_model: string;
   /** The model that writes Raphael's answers. */
   agent_model?: string;
+  quick_model?: string;
+  quick_effort?: string;
   /** The city Raphael looks the weather up for. */
   agent_city?: string;
   /** The most one background task may spend, in US$: 0.1, 0.2, 0.5 or 1. */

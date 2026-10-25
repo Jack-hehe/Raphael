@@ -114,7 +114,10 @@ async def test_relaying_a_lesson_preserves_the_owner_as_the_japanese_quotes_spea
     assert f"紫苑: {answer.splitlines()[0]}" in str(tool)
     assert f"owner: {question}" in str(tool)
     for member_id in (0, teacher.id):
-        turns = (await rig.call("agent.history.list", {"member_id": member_id}))["turns"]
+        scope = {"member_id": member_id}
+        if source == "voice" and member_id == 0:
+            scope["conversation_id"] = rig.service.conversations.quick()
+        turns = (await rig.call("agent.history.list", scope))["turns"]
         exchange = next(t for t in turns if t["route"] == "exchange")
         assert exchange["question"] == f"Raphael: {request}"
         assert f"紫苑: {answer.splitlines()[0]}" in exchange["text"]

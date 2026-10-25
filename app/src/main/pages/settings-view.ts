@@ -30,7 +30,7 @@ import type { LocalView } from "../local-models";
 import { type ModelPickerLook, modelPickerHTML, modelsFor, priceDescription } from "../model-picker";
 import { type ServicesView, servicesHTML } from "../services";
 import { type ProvidersView, providersHTML, providersAddHTML, emptyProvidersView } from "../providers";
-import { type CliBrainsView, cliBrainsHTML, emptyCliBrainsView } from "../cli-brains";
+import { type CliBrainsView, cliBrainsHTML, cliModels, emptyCliBrainsView } from "../cli-brains";
 import { pricingNote } from "../pricing";
 import type { HotkeyField } from "../hotkey-recording";
 import type { AudioDevices, BrainSettings, DeviceSettings, LocalModel, ModelCatalog, ModelRole, SettingsPane, Status } from "../types";
@@ -168,6 +168,7 @@ export const SEARCH_INDEX: readonly SearchEntry[] = [
   { pane: "models", label: "settings.031", also: "settings.searchModel" },
   { pane: "models", label: "settings.035", also: "settings.searchModel" },
   { pane: "models", label: "settings.agentModel", also: "settings.searchModel" },
+  { pane: "models", label: "conversations.quick", words: ["Alt", "Space"] },
   { pane: "data", label: "data.retention", also: "settings.searchHistory" },
   { pane: "data", label: "data.clearDictation", also: "settings.searchHistory" },
   { pane: "data", label: "data.clearConversation" },
@@ -327,6 +328,39 @@ export const localView = (v: SettingsView): LocalView => ({
 });
 export const cleanupModel = (v: SettingsView): string => v.brain?.cleanup_model ?? DEFAULT_MODELS.cleanup;
 export const agentModel = (v: SettingsView): string => v.brain?.agent_model ?? DEFAULT_MODELS.answer;
+export const quickModels = (v: SettingsView) => [
+  ...(catalogOf(v) ? modelsFor(catalogOf(v)!, "answer").filter(m => m.roles.answer?.usable &&
+    v.providers?.providers.find(p => p.id === m.provider_id)?.enabled !== false) : []),
+  ...cliModels(v.cliBrains?.clis ?? []),
+];
+export const quickPickerLook = (v: SettingsView): ModelPickerLook => ({
+  ...modelPickerLook(v, "answer"), key: "quick-model", label: t("conversations.quick"),
+  current: v.brain?.quick_model ?? "", inheritFrom: agentModel(v), separateEffort: true,
+  lead: { id: "", name: t("services.sameAsAnswer") },
+});
+export const quickEffortChoices = (v: SettingsView): Choice[] => {
+  const base = (v.brain?.quick_model || agentModel(v)).split("?effort=")[0];
+  const models = quickModels(v);
+  const model = models.find(m => m.id === base || Object.values(m.effort_models ?? {}).includes(base)) ??
+    models.find(m => m.provider_id === base && m.is_default);
+  const keys = { none: "chooser.none", minimal: "chooser.minimal", low: "chooser.low", medium: "chooser.medium", high: "chooser.high", xhigh: "chooser.xhigh", max: "chooser.max" } as const;
+  const levels = model?.reasoning_efforts ?? (base.startsWith("cli:") ? [] :
+    model && "capabilities" in model && !(model as import("../types").CatalogModel).capabilities.reasoning ? [] : ["none", "low", "medium", "high"]);
+  return levels.map(value => ({ value, label: value in keys ? t(keys[value as keyof typeof keys]) : value }));
+};
+export const quickEffort = (v: SettingsView): string => {
+  const choices = quickEffortChoices(v);
+  const saved = v.brain?.quick_effort ?? "low";
+  return choices.some(c => c.value === saved) ? saved : choices.find(c => c.value === "low")?.value ?? choices[0]?.value ?? "none";
+};
+const quickRow = (v: SettingsView): string => {
+  const efforts = quickEffortChoices(v);
+  const disabled = v.brain === null ? " disabled" : "";
+  return row(t("conversations.quick"), `<span class="models-purpose-note">${esc(t("models.quickNote"))}</span>${priceSpan(v, "quick-model", "price num")}`, `<div class="quick-model-controls">` +
+    modelPickerHTML(quickPickerLook(v)) + `<label class="quick-effort"><span>${esc(t("chooser.effort"))}</span>` +
+    sel(efforts.length ? efforts : [{ value: "none", label: t("chooser.none") }], quickEffort(v), t("chooser.effort"),
+      ` data-k="quick-effort"${disabled || (!efforts.length ? " disabled" : "")}`) + `</label></div>`, { cls: "row-model", attrs: ' data-row="quick-model"' });
+};
 export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
 /** What one background task may spend, as the value of its dropdown (the core's default is 0.2). */
 export const workerCostCap = (v: SettingsView): string => String(v.brain?.worker_cost_cap_usd ?? 0.2);
@@ -352,11 +386,14 @@ export function priceTexts(v: SettingsView): Record<string, string> {
   const catalog = catalogOf(v);
   const local = sttIsLocal(v) ? t("settings.sttLocalPrice") : null;
   const subscription = agentModel(v).startsWith("cli:") ? t("brains.subscription") : null;
-  if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": subscription ?? PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
-  if (!catalog) return { model: "", "agent-model": subscription ?? "", "stt-model": local ?? "", note: t("settings.030") };
+  const quick = v.brain?.quick_model || agentModel(v);
+  const quickSubscription = quick.startsWith("cli:") ? t("brains.subscription") : null;
+  if (v.catalog === "loading") return { model: PRICES_LOADING(), "agent-model": subscription ?? PRICES_LOADING(), "quick-model": quickSubscription ?? PRICES_LOADING(), "stt-model": local ?? PRICES_LOADING(), note: "" };
+  if (!catalog) return { model: "", "agent-model": subscription ?? "", "quick-model": quickSubscription ?? "", "stt-model": local ?? "", note: t("settings.030") };
   return {
     model: chosenPrice(catalog, "cleanup", cleanupModel(v)),
     "agent-model": subscription ?? chosenPrice(catalog, "answer", agentModel(v)),
+    "quick-model": quickSubscription ?? chosenPrice(catalog, "answer", quick),
     "stt-model": local ?? chosenPrice(catalog, "stt", sttModel(v)),
     note: pricingNote(catalog, v.now),
   };
@@ -697,7 +734,7 @@ function dataHTML(v: SettingsView): string {
 function modelsHTML(v: SettingsView): string {
   const providers = v.providers ?? emptyProvidersView();
   const selected = v.modelsTab ?? (v.pane === "usage" ? "usage" : "models");
-  const content = selected === "models" ? section(t("models.used"), MODEL_ROWS.map((r) => modelRow(v, r)), priceSpan(v, "note")) +
+  const content = selected === "models" ? section(t("models.used"), [modelRow(v, MODEL_ROWS[0]), quickRow(v), ...MODEL_ROWS.slice(1).map(r => modelRow(v, r))], priceSpan(v, "note")) +
     cliBrainsHTML(v.cliBrains ?? emptyCliBrainsView()) + providersHTML(providers) + providersAddHTML(providers) :
     `<div data-usage-host></div><section class="sgroup" aria-label="${esc(t("models.usage"))}"><div class="slist">` + [
       keyRow(v),

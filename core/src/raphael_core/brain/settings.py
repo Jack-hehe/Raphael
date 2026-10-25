@@ -68,6 +68,8 @@ DEFAULTS: dict[str, Any] = {
     # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
     # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",
+    "quick_model": "",
+    "quick_effort": "low",
     # API-only work when the conversational brain is a subscription CLI or local model.
     "assistant_model": "",
     # Empty purpose-specific primaries inherit the answer/vision model, as before.
@@ -171,7 +173,7 @@ _CHOICES: dict[str, tuple[Any, ...]] = {
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
-OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model", "assistant_model")
+OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model", "assistant_model", "quick_model")
 FALLBACK_SETTINGS = tuple(purpose + "_fallbacks" for purpose in
                           ("agent", "cleanup", "router", "vision", "pdf", "stt", "memory"))
 _TRIMMED = (*MODEL_SETTINGS, "agent_city")
@@ -197,7 +199,7 @@ _NULLABLE = ("stt_local_model",)
 
 def _allowed(key: str, value: Any) -> Any:
     """`value`, or ValueError if the key has a list of choices and `value` is not on it."""
-    choices = _CHOICES.get(key)
+    choices = ("none", "minimal", "low", "medium", "high", "xhigh", "max") if key == "quick_effort" else _CHOICES.get(key)
     if choices is not None and value not in choices:
         raise ValueError(f"Setting {key!r} must be one of {', '.join(str(c) for c in choices)}")
     return value

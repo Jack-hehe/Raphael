@@ -141,7 +141,8 @@ def test_a_task_is_handed_over_carried_out_by_the_worker_and_reported(spawn):
 
     # The conversation shows the report where the handoff was, with the worker's steps; nothing
     # was spent.
-    [turn] = result(core, "agent.history.list")["turns"]
+    quick = next(c["id"] for c in result(core, "conversations.list")["conversations"] if c["kind"] == "quick")
+    [turn] = result(core, "agent.history.list", {"conversation_id": quick})["turns"]
     assert (turn["route"], turn["prefix"], turn["text"]) == ("delegate", "Notice", report["text"])
     assert [(s["kind"], s["tool"], s["server"], s["outcome"]) for s in turn["steps"]] == [
         ("model", None, None, "ok"),

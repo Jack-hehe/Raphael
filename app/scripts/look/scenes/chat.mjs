@@ -4,6 +4,8 @@ const details = [member(1), { action: "open-details" }, check("member-details")]
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
 export default [
+  scene("quick-conversation-list", "Persistent quick questions at the top of Raphael conversations", [{ action: "open-details" }, check("quick-conversation-list")]),
+  scene("quick-conversation", "Open and continue the persistent quick conversation", [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.ra .chat-message[data-expandable]'), check("quick-conversation")]),
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
     { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
     type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),
