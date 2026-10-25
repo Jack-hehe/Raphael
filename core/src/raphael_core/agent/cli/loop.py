@@ -238,7 +238,7 @@ class CliLoop:
                 workspace.mkdir(parents=True, exist_ok=True)
                 await secure_directory(workspace)
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
-                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota)
+                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota, home=self.brains.home)
                     async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
                             token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id), permission=self._native_permission,
                             cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:

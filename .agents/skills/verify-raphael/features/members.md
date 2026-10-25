@@ -61,3 +61,17 @@ back without publishing partial roster changes. Deletions retain per-member T3 c
 Chinese and Japanese labels use full-width colons; English uses colon-space.
 The admin-approval-batch scene checks all eight entries, internal keyboard scrolling
 and the one pair of actions in both themes and widths.
+
+## Codex subscription isolation
+
+Codex brains use a private home and empty working directory for each conversation.
+Only Raphael's MCP server is configured; its tools are direct, with personal apps,
+plugins, hooks, skill discovery, memories and project documents disabled. Existing
+personal Codex rollouts are not imported. Isolated sessions resume independently.
+
+Offline proof: core/tests/agent/test_cli_brains.py checks the actual fake child's
+command, environment, login snapshot, cleanup and session migration. The login
+snapshot has no refresh token; an expired access token requires the owner's Codex
+to refresh its login before the next Raphael turn. Browser fixtures cannot prove
+this boundary. For live acceptance on a Codex brain, ask Raphael to create members
+and check the turn's MCP steps show team_overview and member_create, not other tools.
