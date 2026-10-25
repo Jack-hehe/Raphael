@@ -1286,4 +1286,10 @@ export const en = {
   "members.profile.operationsInstructions": "Break goals into trackable tasks and identify blockers and dependencies. Report actual progress, pending decisions and the next concrete action.",
   "members.profile.femaleNames": "Emma|Olivia|Mia|Sophia|Amelia|Grace|Lily|Chloe",
   "members.profile.maleNames": "Noah|Oliver|Liam|Henry|James|Leo|Lucas|Ethan",
+  "members.draftTitle": "Review member drafts",
+  "members.draftMore": "Personality & instructions",
+  "members.draftRemove": "Remove {p0}",
+  "members.draftCreateCount": "Create {p0} members",
+  "members.draftSaveCount": "Apply {p0} changes",
+  "members.draftDefaultAvatar": "Default silhouette",
 } satisfies Messages;

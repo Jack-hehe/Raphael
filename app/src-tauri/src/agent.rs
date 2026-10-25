@@ -113,6 +113,8 @@ fn parse_ask(confirm: Option<&Value>) -> Result<Reply, Malformed> {
         no: no.to_owned(),
         timeout_ms: ask_timeout_ms(confirm.get("timeout_ms")),
         always: words("always").map(str::to_owned),
+        drafts: confirm.get("drafts").and_then(Value::as_array).cloned(),
+        groups: confirm.get("groups").and_then(Value::as_array).cloned(),
     }))
 }
 
@@ -238,6 +240,8 @@ mod tests {
                 no: "否".into(),
                 timeout_ms: 30_000,
                 always: None,
+                drafts: None,
+                groups: None,
             }))
         );
         let Ok(Reply::Ask(prompt)) = parse_reply(&confirm(json!({"tier": "T3"}))) else {

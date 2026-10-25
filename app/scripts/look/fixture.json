@@ -31,6 +31,60 @@
       "text": "永久刪除成員及其所有資料：小晴\nID：1\n允許這項變更嗎？",
       "tier": "T3",
       "timeout_ms": 30000
+    },
+    "draft": {
+      "id": "look-admin-draft",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立群組\n名稱：個人公司\n\n建立成員\n名稱：COO\n職責：營運長\n簡介：負責公司日常營運與進度追蹤。\n群組：個人公司\n\n建立成員\n名稱：PM\n職責：專案經理\n簡介：負責產品規劃與需求拆解。\n群組：個人公司\n\n建立成員\n名稱：RD\n職責：研發工程師\n簡介：負責系統架構與程式實作。\n群組：個人公司\n\n允許以上所有變更嗎？",
+      "tier": "T2",
+      "timeout_ms": 30000,
+      "groups": [
+        { "id": "group-1", "name": "個人公司", "group_id": null }
+      ],
+      "drafts": [
+        {
+          "id": "draft-1",
+          "name": "COO",
+          "role": "營運長",
+          "blurb": "負責公司日常營運與進度追蹤。",
+          "personality": "可靠、有條理，清楚交代負責人與期限。",
+          "instructions": "追蹤目標、整理進度，並提出具體下一步。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        },
+        {
+          "id": "draft-2",
+          "name": "PM",
+          "role": "專案經理",
+          "blurb": "負責產品規劃與需求拆解。",
+          "personality": "細心、擅長溝通，先釐清目標再拆解任務。",
+          "instructions": "整理需求規格、追蹤里程碑與跨部門協作。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        },
+        {
+          "id": "draft-3",
+          "name": "RD",
+          "role": "研發工程師",
+          "blurb": "負責系統架構與程式實作。",
+          "personality": "務實、嚴謹，重視程式碼品質與驗證。",
+          "instructions": "先理解現有設計再做變更，執行測試並回報驗證結果。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        }
+      ]
+    },
+    "delete_orig": {
+      "id": "look-admin-delete",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "永久刪除成員及其所有資料：小晴\nID：1\n允許這項變更嗎？",
+      "tier": "T3",
+      "timeout_ms": 30000
     }
   },
   "adminGroup": {

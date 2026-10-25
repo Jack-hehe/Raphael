@@ -329,6 +329,7 @@ struct State {
     speech_done: Vec<u64>,
     /// The question on screen, while there is one.
     ask: Option<PendingAsk>,
+    drafts: Option<Vec<Value>>,
     /// When the current recording started, on the clock of [`DictationController::on_hotkey`].
     started_ms: u64,
     /// When the dictation key last ended a question, on the same clock: the agent key pressed a
@@ -367,6 +368,7 @@ impl State {
         self.speaking_turn = None;
         self.speech_done.clear();
         self.on_overlay = false;
+        self.drafts = None;
         self.take_ask();
         self.session.take()
     }
@@ -471,6 +473,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 speaking_turn: None,
                 speech_done: Vec::new(),
                 ask: None,
+                drafts: None,
                 started_ms: 0,
                 question_stopped_ms: None,
                 shown: Vec::new(),
@@ -1610,6 +1613,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             if answer.approved && answer.always && prompt.always.is_some() {
                 params["always"] = json!(true);
             }
+            if let Some(drafts) = lock(&self.state).drafts.take()
+                && answer.approved
+            {
+                params["drafts"] = Value::Array(drafts);
+            }
             reply = self.core.call("agent.confirm", params).await;
         }
     }
@@ -1837,7 +1845,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// a question that is gone) is dropped. (The app answers through [`Self::on_answer`].)
     #[cfg(test)]
     pub fn on_confirm(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, false, false);
+        self.confirm(id, approved, false, false, None);
     }
 
     /// The main window's answer to the question on screen: a button of the card that mirrors the
@@ -1845,17 +1853,36 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// the long press of a `T3` YES included; the focus the window has is left with it.
     #[cfg(test)]
     pub fn on_confirm_in_app(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, true, false);
+        self.confirm(id, approved, true, false, None);
     }
 
     /// An answer of either page, the third answer of a question that has one (`always`)
     /// included: a YES that is kept for next time. An `always` for a question without that
     /// answer is a plain YES.
+    #[cfg(test)]
     pub fn on_answer(&self, id: &str, approved: bool, always: bool, in_app: bool) {
-        self.confirm(id, approved, in_app, always);
+        self.confirm(id, approved, in_app, always, None);
     }
 
-    fn confirm(&self, id: &str, approved: bool, in_app: bool, always: bool) {
+    pub fn on_answer_with_drafts(
+        &self,
+        id: &str,
+        approved: bool,
+        always: bool,
+        in_app: bool,
+        drafts: Option<Vec<Value>>,
+    ) {
+        self.confirm(id, approved, in_app, always, drafts);
+    }
+
+    fn confirm(
+        &self,
+        id: &str,
+        approved: bool,
+        in_app: bool,
+        always: bool,
+        drafts: Option<Vec<Value>>,
+    ) {
         let pending = {
             let mut state = lock(&self.state);
             let Some(ask) = state.ask.as_ref().filter(|ask| ask.prompt.id == id) else {
@@ -1872,6 +1899,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 log::warn!("agent: a YES to a question that cannot be undone came too early");
                 return;
             }
+            state.drafts = if approved { drafts } else { None };
             state.take_ask()
         };
         if let Some(pending) = pending {
@@ -2532,8 +2560,9 @@ mod app {
                     }
                 }
                 answer = next(&mut confirmations) => match answer {
-                    Some(Confirmation { id, approved, in_app, always }) => match &controller {
-                        Some(controller) => controller.on_answer(&id, approved, always, in_app),
+                    Some(Confirmation { id, approved, in_app, always, drafts }) => match &controller {
+                        Some(controller) => controller.on_answer_with_drafts(&id, approved, always, in_app, drafts),
+
                         None => log::info!("an answer to a question is dropped: the core is not running"),
                     },
                     None => confirmations = None,
@@ -5685,6 +5714,8 @@ mod tests {
             member_id: None,
             conversation_id: None,
             always: None,
+            drafts: None,
+            groups: None,
             id: id.to_owned(),
             tier: Tier::T2,
             prefix: "問".to_owned(),

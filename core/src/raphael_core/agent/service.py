@@ -1603,8 +1603,11 @@ class AgentService:
             text = "\n\n".join(asked_with(ask.language, screening, self._team.admin_confirmation(op["name"], op["arguments"], ask.language, question=False))
                                   for op, screening in zip(operations, ask.admin_screenings))
             text += {"en": "\n\nAllow all these changes?", "zh-TW": "\n\n允許以上所有變更嗎？", "ja": "\n\nすべての変更を許可しますか？"}[ask.language]
-            action = Action("team_admin_batch", {"operations": operations})
+            drafts, groups = await self._team.admin_drafts(operations)
+            action = Action("team_admin_batch", {"operations": operations, "drafts": drafts, "groups": groups})
             result = self._open_question(ask, action, "answer", text, ledger)
+            result["confirm"]["drafts"] = drafts
+            result["confirm"]["groups"] = groups
             self._followups[result["confirm"]["id"]] = _Followup(ask, ask.admin_pending[0], loop.seen, admin_batch=True)
             return result
         return self._finish_reply(ask, "exchange" if ask.nested else "answer", reply, loop.seen, ledger)
@@ -2323,7 +2326,13 @@ class AgentService:
                 followup.loop.cancel()
 
     async def _confirm_plugin(
-        self, pending: Pending, approval: Approval | None, followup: _Followup
+        self,
+        pending: Pending,
+        approval: Approval | None,
+        followup: _Followup,
+        *,
+        drafts: list[dict] | None = None,
+        groups: list[dict] | None = None,
     ) -> dict:
         """The yes came: make the call, then word what came of it."""
         language = pending.language
@@ -2333,22 +2342,62 @@ class AgentService:
             began = time.perf_counter()
             try:
                 self._gate.check_admin_batch(pending.action, approval)
-                results = await self._team.admin_batch(followup.ask.speaker.id, operations)
+                planned = self._team.plan_admin_batch(operations, drafts=drafts, groups=groups)
+                results = await self._team.admin_batch(
+                    followup.ask.speaker.id, operations, drafts=drafts, groups=groups
+                )
             except (RpcError, ValueError, NotApproved, UnknownTool):
                 self._gate.record_unrun("team_admin_batch", outcome="error")
                 step = self._step("tool", "team_admin_batch", BUILTIN_SERVER, "error", began, "bad_arguments")
                 self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
                 return self._outcome(pending, "negative", phrase(language, "failed"), "error", cost_usd=ledger.total)
+            if not results:
+                followup.ask.admin_pending.clear()
+                return self._outcome(pending, "understood", phrase(language, "denied"), "done", cost_usd=ledger.total)
             names = []
-            for operation, result in zip(operations, results):
+            created_names = []
+            updated_names = []
+            detail_lines = []
+            groups_by_id = {g.id: g.name for g in self._team.store.groups()} if hasattr(self._team, "store") else {}
+            for operation, result in zip(planned, results):
                 self._gate.record_builtin(operation["name"], outcome="ok", approver="user")
                 item = result.get("member") or result.get("group") or {}
-                names.append(item.get("name", "") + (" (" + item["role"] + ")" if item.get("role") else ""))
+                name = item.get("name", "")
+                role = item.get("role", "")
+                names.append(name + (" (" + role + ")" if role else ""))
+                if "member" in result:
+                    if operation["name"] == "member_update":
+                        updated_names.append(name)
+                    else:
+                        created_names.append(name)
+                    group_name = groups_by_id.get(item.get("group_id"), "")
+                    blurb = item.get("blurb", "")
+                    parts = [p for p in (name, role, group_name) if p]
+                    line = " · ".join(parts) + (f" — {blurb}" if blurb else "")
+                    if line:
+                        detail_lines.append(line)
+                elif "group" in result and name:
+                    detail_lines.append(name)
             step = self._step("tool", "team_admin_batch", BUILTIN_SERVER, "ok", began, None)
             self._write(lambda: self._history.add_steps(pending.turn_id, [step]))
             followup.ask.admin_pending.clear()
-            text = {"en": "Applied: ", "zh-TW": "已套用：", "ja": "適用済み："}[language] + ", ".join(names)
-            return self._outcome(pending, "understood", text, "done", cost_usd=ledger.total)
+            if created_names and not updated_names:
+                text = {
+                    "en": "Created " + ", ".join(created_names),
+                    "zh-TW": "已建立 " + "、".join(created_names),
+                    "ja": "、".join(created_names) + " を作成しました",
+                }[language]
+            elif updated_names and not created_names:
+                text = {
+                    "en": "Updated " + ", ".join(updated_names),
+                    "zh-TW": "已更新 " + "、".join(updated_names),
+                    "ja": "、".join(updated_names) + " を更新しました",
+                }[language]
+            else:
+                text = {"en": "Applied: ", "zh-TW": "已套用：", "ja": "適用済み："}[language] + ", ".join(names)
+            detail = "\n".join(detail_lines) if detail_lines else None
+            return self._outcome(pending, "understood", text, "done", detail=detail, cost_usd=ledger.total)
+
         if followup.memory_reply is not None:
             route, reply, ledger = followup.memory_reply
             applied = self._remember(followup.ask, replace(reply, memory=reply.memory[:1]), followup.results, approval=approval, action=pending.action)
@@ -2399,6 +2448,7 @@ class AgentService:
             created = str((result.data or {}).get("created", ""))
             text = phrase(language, "member_created", member=created)
             return self._outcome(pending, "understood", text, "done", cost_usd=ledger.total)
+
         if not result.ok and result.error == "timeout":
             text = phrase(language, "plugin_unsure", server=call.tool.server)
             return self._outcome(pending, "negative", text, "error")
@@ -2646,6 +2696,12 @@ class AgentService:
         always = params.get("always", False)
         if type(always) is not bool:
             raise invalid_params("always must be true or false")
+        drafts = params.get("drafts")
+        if drafts is not None and (not isinstance(drafts, list) or not all(isinstance(item, dict) for item in drafts)):
+            raise invalid_params("drafts must be a list of objects")
+        groups = params.get("groups")
+        if groups is not None and (not isinstance(groups, list) or not all(isinstance(item, dict) for item in groups)):
+            raise invalid_params("groups must be a list of objects")
         run = None if self._computer is None else self._computer.for_question(confirm_id)
         if run is not None:
             # A question of a run on the desktop: the run goes on, and says what comes next.
@@ -2679,7 +2735,7 @@ class AgentService:
                 followup.loop.permission_always = bool(approved and always)
             if followup.loop is not None:
                 return await self._resume_narrated(pending, resolution.approval, followup)
-            return await self._confirm_plugin(pending, resolution.approval, followup)
+            return await self._confirm_plugin(pending, resolution.approval, followup, drafts=drafts, groups=groups)
         command = COMMANDS.get(pending.action.tool)
         if command is None:
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
@@ -2733,10 +2789,18 @@ class AgentService:
                 self._inflight_members.pop(ask.session_id, None)
 
     async def _resume_narrated(
-        self, pending: Pending, approval: Approval | None, followup: _Followup
+        self,
+        pending: Pending,
+        approval: Approval | None,
+        followup: _Followup,
+        *,
+        drafts: list[dict] | None = None,
+        groups: list[dict] | None = None,
     ) -> dict:
         """Keep the approved call and all later rounds cancellable as one live request."""
-        task = asyncio.ensure_future(self._confirm_plugin(pending, approval, followup))
+        task = asyncio.ensure_future(
+            self._confirm_plugin(pending, approval, followup, drafts=drafts, groups=groups)
+        )
         session_id = followup.ask.session_id
         self._inflight[session_id] = task
         self._inflight_members[session_id] = followup.ask.speaker.id

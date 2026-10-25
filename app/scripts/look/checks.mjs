@@ -197,6 +197,62 @@ export function checkRendered(name) {
     }
     return { check: name, height: box.height, detailsHeight: details.clientHeight, contentHeight: details.scrollHeight };
   }
+  if (name === "member-draft" || name === "member-draft-edit") {
+    const panel = [...document.querySelectorAll('.draft-panel')].find(visible);
+    require(panel, "draft panel is visible");
+    require(!document.querySelector('.ask-card:not([hidden])'), "plain ask card is hidden when draft panel is shown");
+    const box = panel.getBoundingClientRect();
+    require(box.top >= 0 && box.bottom <= innerHeight, "draft panel fits the viewport");
+    const cards = [...panel.querySelectorAll('.draft-card')].filter(visible);
+    const confirmBtn = panel.querySelector('[data-draft-act="confirm"]');
+    const cancelBtn = panel.querySelector('[data-draft-act="cancel"]');
+    require(visible(confirmBtn) && visible(cancelBtn), "confirm and cancel buttons are visible");
+    require(cancelBtn.getBoundingClientRect().right <= confirmBtn.getBoundingClientRect().left, "primary action stays rightmost");
+    for (const card of cards) {
+      const roleInput = card.querySelector('[data-draft-field="role"]');
+      const nameInput = card.querySelector('[data-draft-field="name"]');
+      const groupBtn = card.querySelector('[data-draft-act="group"]');
+      const roleStyle = getComputedStyle(roleInput);
+      const roleContentWidth = roleInput.clientWidth - parseFloat(roleStyle.paddingLeft) - parseFloat(roleStyle.paddingRight);
+      const roleFontSize = parseFloat(roleStyle.fontSize);
+      require(roleContentWidth >= roleFontSize * 8, `role field fits at least 8 CJK characters (${roleContentWidth}px vs ${roleFontSize * 8}px)`);
+      require(roleInput.scrollWidth <= roleInput.clientWidth + 1, `role value is not clipped (${roleInput.value})`);
+      require(nameInput.clientWidth >= roleFontSize * 4.5, "name field has enough width");
+      require(groupBtn.getBoundingClientRect().width < roleInput.getBoundingClientRect().width, "group dropdown is narrower than role field");
+    }
+    if (name === "member-draft") {
+      require(cards.length === 3, "three member draft cards are shown");
+      require(confirmBtn.textContent.trim() === "建立 3 位成員", "primary button shows three members to create");
+      const names = cards.map(c => c.querySelector('[data-draft-field="name"]')?.value);
+      require(names.join(",") === "COO,PM,RD", "all three member draft names are populated");
+    } else {
+      require(cards.length === 2, "removing one draft leaves two cards");
+      require(confirmBtn.textContent.trim() === "建立 2 位成員", "primary button updates count to two members");
+      require(cards[0].querySelector('[data-draft-field="role"]')?.value === "首席營運長", "edited role field is preserved");
+    }
+    return { check: name, cards: cards.length, confirmLabel: confirmBtn.textContent.trim() };
+  }
+  if (name === "member-draft-done") {
+    const done = [...document.querySelectorAll('.draft-done')].find(visible);
+    require(done, "settled one-line summary is visible");
+    require(!document.querySelector('.draft-panel:not([hidden])'), "draft panel is closed after confirmation");
+    const sumBtn = done.querySelector('[data-act="draft-done"]');
+    require(visible(sumBtn) && sumBtn.textContent.includes("已建立 COO、PM、RD"), "settled summary lists created members");
+    const list = done.querySelector('.draft-done-list');
+    require(visible(list) && list.querySelectorAll('.draft-done-item').length === 3, "expanded summary shows created member details");
+    const members = window.__look.data.members;
+    for (const createdName of ["COO", "PM", "RD"]) {
+      require(members.some(m => m.name === createdName), `${createdName} was added to members`);
+    }
+    const column = document.querySelector(".mb-col");
+    if (visible(column)) {
+      const colText = column.textContent + " " + [...column.querySelectorAll("[aria-label]")].map(el => el.getAttribute("aria-label")).join(" ");
+      for (const createdName of ["COO", "PM", "RD"]) {
+        require(colText.includes(createdName), `${createdName} appears in the left member column`);
+      }
+    }
+    return { check: name, summary: sumBtn.textContent.trim(), members: members.length };
+  }
   if (name === "admin-created" || name === "admin-denied") {
     const calls = window.__look.calls, members = window.__look.data.members;
     require(calls.some(call => call.command === "agent_question_answer" && call.approved === (name === "admin-created")), "owner answer reaches the native boundary");

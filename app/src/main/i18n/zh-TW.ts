@@ -1285,6 +1285,12 @@ export const zhTW = {
   "members.profile.operationsInstructions": "將目標拆成可追蹤事項，辨識阻礙與依賴。回報實際狀態、待決定事項與下一個具體行動。",
   "members.profile.femaleNames": "婉晴|雅涵|詩涵|佳穎|欣妤|語彤|子晴|怡安",
   "members.profile.maleNames": "柏宇|承恩|冠宇|宇軒|哲睿|彥廷|品睿|俊傑",
+  "members.draftTitle": "確認新成員設定",
+  "members.draftMore": "個性與工作指示",
+  "members.draftRemove": "移除 {p0}",
+  "members.draftCreateCount": "建立 {p0} 位成員",
+  "members.draftSaveCount": "套用 {p0} 項變更",
+  "members.draftDefaultAvatar": "預設剪影",
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

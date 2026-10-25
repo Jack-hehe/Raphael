@@ -873,6 +873,7 @@ pub fn agent_question_answer(
     id: String,
     approved: bool,
     always: Option<bool>,
+    drafts: Option<Vec<Value>>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if !is_question_id(&id) {
@@ -889,6 +890,7 @@ pub fn agent_question_answer(
             approved,
             in_app: true,
             always: approved && always == Some(true),
+            drafts: if approved { drafts } else { None },
         })
         .map_err(|_| AGENT_OFF.to_owned())
 }
@@ -2046,6 +2048,8 @@ mod tests {
             member_id: None,
             conversation_id: None,
             always: None,
+            drafts: None,
+            groups: None,
             id: "c-1".to_owned(),
             tier: crate::overlay::Tier::T3,
             prefix: "問".to_owned(),

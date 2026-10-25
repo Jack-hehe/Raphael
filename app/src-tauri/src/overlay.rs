@@ -128,6 +128,10 @@ pub struct AskPrompt {
     pub timeout_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub always: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drafts: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<serde_json::Value>>,
 }
 
 /// What the overlay page is told. Every text in it is in the interface language and in that one
@@ -823,6 +827,7 @@ pub struct Confirmation {
     pub in_app: bool,
     /// The third answer of a question that has one (「一律允許」): a YES, kept for next time.
     pub always: bool,
+    pub drafts: Option<Vec<serde_json::Value>>,
 }
 
 /// Where the page's answers go: the dictation controller's task takes them from the other end.
@@ -856,6 +861,7 @@ pub fn overlay_confirm(
             approved,
             in_app: false,
             always: approved && always == Some(true),
+            drafts: None,
         })
         .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }
@@ -1293,6 +1299,8 @@ mod tests {
             member_id: None,
             conversation_id: None,
             always: None,
+            drafts: None,
+            groups: None,
             id: "c-7".into(),
             tier,
             prefix: "問".into(),

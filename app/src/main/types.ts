@@ -610,9 +610,33 @@ export interface AgentQuestion {
    * Raphael operate an app has it. Such a question is always T2.
    */
   always?: string;
+  /** Structured member drafts for `team_admin_batch` confirmations. */
+  drafts?: MemberDraft[];
+  /** Proposed group drafts for `team_admin_batch` confirmations. */
+  groups?: GroupDraft[];
 }
 
 // ---------- members (members.*, groups.*, routines.*) ----------
+
+/** One proposed member create/update in an inline team-admin confirmation. */
+export interface MemberDraft {
+  id: string;
+  name: string;
+  role: string;
+  blurb: string;
+  personality: string;
+  instructions: string;
+  group: string;
+  avatar_preset: string;
+  member_id?: number | null;
+}
+
+/** One proposed group create/rename in an inline team-admin confirmation. */
+export interface GroupDraft {
+  id: string;
+  name: string;
+  group_id?: number | null;
+}
 
 /**
  * A member as `members.list` lists it, Raphael first as member 0 (he is no row of the core).

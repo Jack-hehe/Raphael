@@ -167,6 +167,50 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "agent_question_open") return copy(adminQuestion);
       if (command === "agent_question_answer" && adminQuestion) {
         if (args.id !== adminQuestion.id) throw new Error("Unknown approval question");
+        if (Array.isArray(args.drafts)) {
+          if (args.approved) {
+            if (data.adminGroup && !data.groups.some(g => g.name === data.adminGroup.name)) {
+              data.groups.push(copy(data.adminGroup));
+            }
+            let nextMemberId = 8;
+            for (const draft of args.drafts) {
+              const group = data.groups.find(g => g.name === draft.group) ?? null;
+              const id = nextMemberId++;
+              data.members.push({
+                ...data.members[1],
+                ...data.adminMember,
+                id,
+                name: draft.name,
+                role: draft.role,
+                blurb: draft.blurb,
+                personality: draft.personality ?? "",
+                instructions: draft.instructions ?? "",
+                group_id: group ? group.id : null,
+                avatar: draft.avatar_preset ? (draft.avatar_preset.startsWith("preset:") ? draft.avatar_preset : `preset:${draft.avatar_preset}`) : "",
+                avatar_url: null,
+                position: data.members.length,
+              });
+              data.conversations.push({ id: 80 + id, member_id: id, title: "", is_default: true, created_at_ms: data.now, updated_at_ms: data.now });
+            }
+            notify("MembersChanged", { member_id: 8 });
+            const names = args.drafts.map(d => d.name).join("、");
+            data.turns[0].status = "done";
+            data.turns[0].text = `已建立 ${names}`;
+            data.turns[0].detail = args.drafts.map(d => {
+              const head = [d.name, d.role, d.group].filter(Boolean).join(" · ");
+              return d.blurb ? `${head} — ${d.blurb}` : head;
+            }).join("\n");
+            data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+          } else {
+            data.turns[0].status = "denied";
+            data.turns[0].text = "已取消建立成員。";
+            data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+          }
+          notify("AgentQuestionClosed", { id: adminQuestion.id });
+          notify("AgentTurn", { turn_id: data.turns[0].id, member_id: 0 });
+          adminQuestion = null;
+          return;
+        }
         if (args.approved && adminQuestion.tier !== "T3") {
           data.groups.push(copy(data.adminGroup));
           data.members.push({ ...data.members[1], ...data.adminMember });

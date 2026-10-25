@@ -365,3 +365,148 @@ async def test_roster_readers_never_observe_a_partially_applied_batch(setup, cli
             await asyncio.gather(applying, return_exceptions=True)
     assert observed <= {(0, 0), (8, 1)}
     assert len((await rig.call("members.list", {}))["members"]) == 9
+
+
+async def test_batch_confirmation_exposes_structured_member_and_group_drafts(setup, client, tmp_path):
+    rig, team = setup
+    rig.settings.set("action_mode", "ask")
+    folder = tmp_path / "avatars/presets"
+    folder.mkdir(parents=True)
+    for name in ("alpha", "beta", "gamma"):
+        (folder / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    client.chats = [
+        chat(
+            "Planning the team.",
+            ("member_create", {"name": "COO", "role": "營運長", "blurb": "營運管理", "personality": "果斷", "instructions": "追蹤OKR", "group": "核心團隊"}),
+            ("member_create", {"name": "PM", "role": "產品經理", "blurb": "產品規劃", "group": "核心團隊"}),
+            ("member_create", {"name": "RD", "role": "研發工程師", "blurb": "系統開發", "group": "工程部"}),
+        ),
+        live_said("Ready."),
+    ]
+    asked = await typed(rig, "建立 COO、PM、RD", 0, language="zh-TW")
+    assert asked["status"] == "confirm"
+    drafts = asked["confirm"]["drafts"]
+    groups = asked["confirm"]["groups"]
+    assert len(drafts) == 3
+    assert [d["id"] for d in drafts] == ["draft-1", "draft-2", "draft-3"]
+    assert [d["name"] for d in drafts] == ["COO", "PM", "RD"]
+    assert [d["role"] for d in drafts] == ["營運長", "產品經理", "研發工程師"]
+    assert [d["blurb"] for d in drafts] == ["營運管理", "產品規劃", "系統開發"]
+    assert drafts[0]["personality"] == "果斷" and drafts[0]["instructions"] == "追蹤OKR"
+    assert [d["group"] for d in drafts] == ["核心團隊", "核心團隊", "工程部"]
+    assert [d["avatar_preset"] for d in drafts] == ["preset:alpha", "preset:beta", "preset:gamma"]
+    assert [g["name"] for g in groups] == ["核心團隊", "工程部"]
+
+
+async def test_owner_edits_and_removals_in_drafts_apply_to_created_and_updated_members(setup, client, tmp_path):
+    rig, team = setup
+    rig.settings.set("action_mode", "ask")
+    folder = tmp_path / "avatars/presets"
+    folder.mkdir(parents=True)
+    for name in ("alpha", "beta", "gamma"):
+        (folder / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    client.chats = [
+        chat(
+            "Planning the team.",
+            ("group_create", {"name": "OldGroup"}),
+            ("member_create", {"name": "COO", "role": "營運", "blurb": "舊簡介", "group": "OldGroup"}),
+            ("member_create", {"name": "PM", "role": "產品", "blurb": "產品簡介", "group": "OldGroup"}),
+            ("member_create", {"name": "RD", "role": "研發", "blurb": "研發簡介", "group": "OldGroup"}),
+        ),
+        live_said("Ready."),
+    ]
+    asked = await typed(rig, "建立三位成員", 0, language="zh-TW")
+    assert asked["status"] == "confirm"
+    edited = [
+        {
+            **asked["confirm"]["drafts"][0],
+            "name": "營運長",
+            "role": "跨部門營運",
+            "blurb": "負責日常營運與跨部門協調",
+            "personality": "務實清晰",
+            "instructions": "每週整理營運週報",
+            "group": "核心團隊",
+            "avatar_preset": "preset:gamma",
+        },
+        {
+            **asked["confirm"]["drafts"][2],
+            "group": "核心團隊",
+            "avatar_preset": "preset:alpha",
+        },
+    ]
+    done = await rig.call("agent.confirm", {"id": asked["confirm"]["id"], "approved": True, "drafts": edited})
+    assert done["status"] == "done"
+    assert done["text"] == "已建立 營運長、RD"
+    roster = await rig.call("members.list", {})
+    created = roster["members"][1:]
+    assert [(m["name"], m["role"], m["blurb"], m["personality"], m["instructions"], m["avatar"]) for m in created] == [
+        ("營運長", "跨部門營運", "負責日常營運與跨部門協調", "務實清晰", "每週整理營運週報", "preset:gamma"),
+        ("RD", "研發", "研發簡介", "", "", "preset:alpha"),
+    ]
+    assert [g["name"] for g in roster["groups"]] == ["核心團隊"]
+    assert all(m["group_id"] == roster["groups"][0]["id"] for m in created)
+    [turn] = await rig.turns()
+    assert turn["text"] == "已建立 營運長、RD"
+    assert "營運長 · 跨部門營運 · 核心團隊 — 負責日常營運與跨部門協調" in (turn["detail"] or "")
+    assert "RD · 研發 · 核心團隊 — 研發簡介" in (turn["detail"] or "")
+
+
+async def test_removing_all_drafts_creates_nothing_and_finishes_cleanly(setup, client):
+    rig, team = setup
+    rig.settings.set("action_mode", "ask")
+    client.chats = [
+        chat(
+            "Planning the team.",
+            ("group_create", {"name": "Company"}),
+            ("member_create", {"name": "COO", "role": "COO", "group": "Company"}),
+        ),
+        live_said("Ready."),
+    ]
+    asked = await typed(rig, "Create COO", 0, language="zh-TW")
+    assert asked["status"] == "confirm"
+    done = await rig.call("agent.confirm", {"id": asked["confirm"]["id"], "approved": True, "drafts": []})
+    assert done["status"] == "done"
+    roster = await rig.call("members.list", {})
+    assert roster["members"][1:] == [] and roster["groups"] == []
+
+
+@pytest.mark.parametrize(
+    "bad_drafts",
+    [
+        [{"name": "Same", "role": "COO"}, {"name": "Same", "role": "PM"}],
+        [{"name": "Existing", "role": "COO"}],
+        [{"name": "", "role": "COO"}],
+        [{"name": "拉斐爾", "role": "COO"}],
+        [{"name": "X" * 17, "role": "COO"}],
+        [{"name": "Valid", "role": "X" * 25}],
+        [{"name": "Valid", "role": "COO", "blurb": "X" * 201}],
+        [{"name": "Valid", "role": "COO", "personality": "X" * 2001}],
+        [{"name": "Valid", "role": "COO", "instructions": "X" * 2001}],
+        [{"name": "Valid", "role": "COO", "group": "X" * 25}],
+        [{"name": "Valid", "role": "COO", "avatar_preset": "preset:missing"}],
+        [{"name": f"M{i}", "role": "RD"} for i in range(11)],
+    ],
+)
+async def test_invalid_edited_drafts_validate_like_create_and_roll_back_atomically(setup, client, bad_drafts):
+    rig, team = setup
+    member(team, name="Existing", role="Ops")
+    notes = []
+    team.members._notify = lambda method, data: notes.append((method, data))
+    rig.settings.set("action_mode", "ask")
+    before = await rig.call("members.list", {})
+    client.chats = [
+        chat(
+            "Planning changes.",
+            ("member_create", {"name": "COO", "role": "COO", "group": "Company"}),
+            ("member_create", {"name": "PM", "role": "PM", "group": "Company"}),
+        ),
+        live_said("Ready."),
+    ]
+    asked = await typed(rig, "Create COO and PM", 0, language="en")
+    assert asked["status"] == "confirm"
+    drafts = [{"name": "FirstOk", "role": "RD", "group": "Company"}, *bad_drafts] if len(bad_drafts) == 1 else bad_drafts
+    await rig.call("agent.confirm", {"id": asked["confirm"]["id"], "approved": True, "drafts": drafts})
+    after = await rig.call("members.list", {})
+    assert after["members"][1:] == before["members"][1:] and after["groups"] == []
+    assert not notes
+    assert (await rig.turns())[0]["status"] == "error"

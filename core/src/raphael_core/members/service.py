@@ -965,12 +965,161 @@ class MembersService:
                          "blurb": current.blurb if current else "", "group": group.name if group else "", **arguments}
         return confirmation(name, arguments, language, target, question=question)
 
-    async def admin_batch(self, member_id: int, operations: list[dict]) -> list[dict]:
+    async def admin_drafts(self, operations: list[dict]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Build structured member and group drafts for a pending team administration batch."""
+        from ..agent.team_admin import GroupDraft, MemberDraft
+
+        presets = (await self._presets({}))["presets"]
+        available = [preset["avatar"] for preset in presets]
+        used = {member.avatar for member in self.store.members() if member.avatar}
+        existing_groups = {group.name.casefold() for group in self.store.groups()}
+        drafts: list[dict[str, Any]] = []
+        groups: list[dict[str, Any]] = []
+        seen_groups: set[str] = set()
+        for op in operations:
+            name = op.get("name")
+            arguments = dict(op.get("arguments") or {})
+            if name in ("member_create", "create_member", "member_update"):
+                is_update = name == "member_update"
+                target_id = arguments.get("id") if is_update else None
+                current = self.store.member(target_id) if is_update and type(target_id) is int else None
+                current_group = self.store.group(current.group_id) if current and current.group_id else None
+                group_val = arguments.get("group", current_group.name if current_group else "")
+                group_name = group_val.strip() if isinstance(group_val, str) else ""
+                if "avatar_preset" in arguments:
+                    raw_preset = arguments["avatar_preset"]
+                    avatar_preset = (
+                        ("preset:" + raw_preset if raw_preset and not raw_preset.startswith("preset:") else raw_preset)
+                        if isinstance(raw_preset, str)
+                        else ""
+                    )
+                elif is_update:
+                    avatar_preset = current.avatar if current and current.avatar.startswith("preset:") else ""
+                else:
+                    avatar_preset = next((p for p in available if p not in used), "")
+                if avatar_preset:
+                    used.add(avatar_preset)
+                draft = MemberDraft(
+                    id=f"draft-{len(drafts) + 1}",
+                    name=str(arguments.get("name", current.name if current else "") or ""),
+                    role=str(arguments.get("role", current.role if current else "") or ""),
+                    blurb=str(arguments.get("blurb", current.blurb if current else "") or ""),
+                    personality=str(arguments.get("personality", current.personality if current else "") or ""),
+                    instructions=str(arguments.get("instructions", current.instructions if current else "") or ""),
+                    group=group_name,
+                    avatar_preset=avatar_preset,
+                    member_id=target_id if is_update and type(target_id) is int else None,
+                )
+                drafts.append(draft.to_json())
+                if group_name and group_name.casefold() not in existing_groups and group_name.casefold() not in seen_groups:
+                    seen_groups.add(group_name.casefold())
+                    groups.append(GroupDraft(id=f"group-{len(groups) + 1}", name=group_name).to_json())
+            elif name == "group_create":
+                raw_gname = arguments.get("name")
+                group_name = raw_gname.strip() if isinstance(raw_gname, str) else ""
+                if group_name and group_name.casefold() not in seen_groups:
+                    seen_groups.add(group_name.casefold())
+                    groups.append(GroupDraft(id=f"group-{len(groups) + 1}", name=group_name).to_json())
+            elif name == "group_rename":
+                raw_gname = arguments.get("name")
+                group_name = raw_gname.strip() if isinstance(raw_gname, str) else ""
+                gid = arguments.get("id")
+                groups.append(
+                    GroupDraft(
+                        id=f"group-{len(groups) + 1}",
+                        name=group_name,
+                        group_id=gid if type(gid) is int else None,
+                    ).to_json()
+                )
+        return drafts, groups
+
+    def plan_admin_batch(
+        self,
+        operations: list[dict],
+        *,
+        drafts: list[dict] | None = None,
+        groups: list[dict] | None = None,
+    ) -> list[dict]:
+        """Resolve a batch into the operations to execute, applying any owner edits to drafts."""
+        if drafts is None and groups is None:
+            return list(operations)
+        planned: list[dict] = []
+        if groups is not None:
+            if not isinstance(groups, list):
+                raise invalid_params("groups must be a list")
+            for item in groups:
+                if not isinstance(item, dict):
+                    raise invalid_params("invalid group draft")
+                raw = dict(item)
+                raw_id = raw.pop("id", None)
+                gid = raw.pop("group_id", raw_id if type(raw_id) is int else None)
+                if gid is not None:
+                    raw["id"] = gid
+                    planned.append({"name": "group_rename", "arguments": raw})
+                else:
+                    planned.append({"name": "group_create", "arguments": raw})
+        else:
+            had_member_ops = any(
+                op["name"] in ("member_create", "create_member", "member_update") for op in operations
+            )
+            member_groups = {
+                op["arguments"].get("group", "").strip().casefold()
+                for op in operations
+                if op["name"] in ("member_create", "create_member", "member_update")
+                and isinstance(op["arguments"].get("group"), str)
+            }
+            for op in operations:
+                if op["name"] == "group_rename" and (drafts or not had_member_ops):
+                    planned.append(op)
+                elif op["name"] == "group_create":
+                    raw_name = op["arguments"].get("name")
+                    gname = raw_name.strip().casefold() if isinstance(raw_name, str) else ""
+                    if gname not in member_groups and (drafts or not had_member_ops):
+                        planned.append(op)
+        if drafts is not None:
+            if not isinstance(drafts, list):
+                raise invalid_params("drafts must be a list")
+            creates = sum(
+                1
+                for item in drafts
+                if isinstance(item, dict) and item.get("member_id") is None and type(item.get("id")) is not int
+            )
+            if creates > 10:
+                raise invalid_params("member_create_limit")
+            for item in drafts:
+                if not isinstance(item, dict):
+                    raise invalid_params("invalid member draft")
+                raw = dict(item)
+                raw_id = raw.pop("id", None)
+                target_id = raw.pop("member_id", raw_id if type(raw_id) is int else None)
+                if target_id is not None:
+                    raw["id"] = target_id
+                    planned.append({"name": "member_update", "arguments": raw})
+                else:
+                    raw.setdefault("role", "")
+                    planned.append({"name": "member_create", "arguments": raw})
+        else:
+            planned.extend(
+                op for op in operations if op["name"] in ("member_create", "create_member", "member_update")
+            )
+        return planned
+
+    async def admin_batch(
+        self,
+        member_id: int,
+        operations: list[dict],
+        *,
+        drafts: list[dict] | None = None,
+        groups: list[dict] | None = None,
+    ) -> list[dict]:
         """Apply the approved list atomically and publish only committed roster changes."""
         from ..agent.team_admin import BATCH_TOOLS
 
         if member_id != 0 or not operations or any(op["name"] not in BATCH_TOOLS for op in operations):
             raise invalid_params("invalid team administration batch")
+        planned = self.plan_admin_batch(operations, drafts=drafts, groups=groups)
+        if not planned:
+            return []
         # Finish filesystem work before opening the transaction; its handlers must not yield.
         presets = (await self._presets({}))["presets"]
         notifications, pictures = [], []
@@ -980,7 +1129,7 @@ class MembersService:
         try:
             with self.store.transaction():
                 results = [await self.admin_tool(member_id, "member_create" if op["name"] == "create_member" else op["name"], op["arguments"], presets=presets)
-                           for op in operations]
+                           for op in planned]
         finally:
             self._notify, self._remove_picture = notify, remove_picture
         for picture in pictures:
