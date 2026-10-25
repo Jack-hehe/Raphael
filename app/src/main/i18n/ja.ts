@@ -532,6 +532,7 @@ export const ja = {
   "dictionary.019": "<div class=\"say\">《告。一致する単語がありません。》</div>絞り込みや検索語を変えてみてください。",
   "dictionary.020": "辞書を読み込めません：{p0}",
   "learnHint.body": "{p0} のアクセシビリティ対応がオフのため、そこでの修正を学習できません。{p0} の設定に \"editor.accessibilitySupport\": \"on\" を追加して再読み込みしてください。この設定を Raphael が変更することはありません。",
+  "dictionary.learned": "「{p0}」を辞書に追加しました。",
   "learnHint.dismiss": "了解",
   "dictionary.021": "追加できません：{p0}",
   "dictionary.022": "「{p0}」を追加しました",

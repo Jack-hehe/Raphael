@@ -27,7 +27,7 @@ describe("maintained verification feature map", () => {
       for (const [, command] of commands) {
         const options = parseOptions(command.trim().split(/\s+/), scenes);
         expect(options.themes, `${name}: ${command}`).toEqual(["light", "dark"]);
-        expect(options.widths, `${name}: ${command}`).toEqual([1120, 720]);
+        expect(options.widths, `${name}: ${command}`).toEqual(expect.arrayContaining([1120, 720]));
       }
     }
     const staged = resolve(root, ".fold/.agents/skills/verify-raphael/features");

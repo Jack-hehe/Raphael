@@ -55,10 +55,12 @@ export async function run(options) {
     const origin = `http://127.0.0.1:${address.port}`;
     browser = await puppeteer.launch({ executablePath, headless: true, userDataDir: join(directory, "browser-profile"), args: BROWSER_ARGS, timeout: 60000 });
     report.browser = await browser.version();
-    for (const scene of options.selected) for (const theme of options.themes) for (const width of options.widths) {
+    const viewports = options.viewports ?? options.widths.map(width => ({ width, height: 900 }));
+    report.options.viewports = viewports;
+    for (const scene of options.selected) for (const theme of options.themes) for (const { width, height } of viewports) {
       const page = await browser.newPage();
       const runtimeErrors = [];
-      const result = { scene: scene.name, theme, width, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
+      const result = { scene: scene.name, theme, width, height, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
       report.results.push(result);
       const error = (kind, message) => runtimeErrors.push({ kind, message });
       page.on("pageerror", value => error("exception", value.message));
@@ -67,7 +69,7 @@ export async function run(options) {
       page.on("requestfailed", request => { if (!favicon(request.url())) error("request", `${request.url()}: ${request.failure()?.errorText}`); });
       page.on("response", response => { if (response.status() >= 400 && !favicon(response.url())) error("http", `${response.status()} ${response.url()}`); });
       try {
-        await page.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+        await page.setViewport({ width, height, deviceScaleFactor: 1 });
         await page.emulateTimezone("Asia/Taipei");
         await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }, { name: "prefers-color-scheme", value: theme }]);
         await page.setRequestInterception(true);
@@ -105,10 +107,10 @@ export async function run(options) {
         result.diagnostics = await page.evaluate(() => ({ messages: [...document.querySelectorAll('.message-text, .ans, .ra')].map(el => ({ tag: el.tagName, class: el.className, parent: el.parentElement?.outerHTML.slice(0, 500) })) })).catch(() => null);
       }
       try {
-        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: 900 }, namespaces));
+        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height }, namespaces));
         const mockErrors = await page.evaluate(() => window.__look?.errors ?? ["Mock boundary was not installed"]);
         for (const message of mockErrors) error("ipc", message);
-        const image = `${scene.name}-${theme}-${width}.png`;
+        const image = `${scene.name}-${theme}-${height === 900 ? width : `${width}x${height}`}.png`;
         await page.screenshot({ path: join(directory, image), type: "png" });
         result.image = image;
         result.failed = failedChecks(result);

@@ -6,6 +6,7 @@ From `app/`:
 npm run look -- --list
 npm run look -- chat details --theme both --width 1120,720
 npm run look -- --all --theme both --width 1120,720
+npm run look -- composer-learn member-composer-learn room-composer-learn team-composer-learn --theme both --width 1120,720,1920x1080
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
 npm run verify -- --out ../.fold/app/.look
@@ -17,6 +18,7 @@ Look needs an installed Edge/Chrome and the pinned **puppeteer-core@25.13.0** de
 It never downloads a browser or installs packages. Preserve the package/lockfile pin.
 `LOOK_BROWSER` optionally selects an executable. Node 22 or later is required.
 
+`--width` accepts widths (900px height) and explicit `widthxheight` viewports.
 Each run creates `.look/run-*/` with viewport PNGs, paginated PNG contact sheets,
 `contacts.json` and `report.json`. `--out` changes the parent directory. A nonzero exit
 means a scene, runtime, layout, raw translation key, non-finite work duration, or visible native select/time-input
@@ -57,7 +59,7 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 139 current scenes (556 combinations for both themes and widths).
+scenes. There are 143 current scenes (572 combinations for both themes and widths).
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;

@@ -3,6 +3,11 @@ import { scene, click, hover, type, wait, member, room, search, check, key, wait
 const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 export default [
+  scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
+    { action: "dictation-paste", selector: ".cmp-input", text: "Please use Open Mouse Bot" },
+    type(".cmp-input", "Please use OpenMausBot"), click(".cmp-send"),
+    wait(".toast"), check("composer-learn"),
+  ]),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
   scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
@@ -34,7 +39,10 @@ export default [
   ...["member", "room", "team"].flatMap(context => {
     const base = context === "member" ? [member(1)] : context === "room" ? [room(1)] : [click('[data-go="team"]')];
     const form = context === "member" ? ".mb-chat:not(.au-room-pane) .composer" : context === "room" ? ".au-room-pane .composer" : ".team-composer .composer";
-    return [scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
+    return [scene(`${context}-composer-learn`, `${context} dictated name correction reaches the dictionary`, [...base,
+      { action: "dictation-paste", selector: `${form} textarea`, text: "Please use Open Mouse Bot" },
+      type(`${form} textarea`, "Please use OpenMausBot"), click(`${form} .cmp-send`), wait(".toast"), check("composer-learn")]),
+      scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
       scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), check("composer-pair")]),
       scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), check("composer-pair")])];
   }),

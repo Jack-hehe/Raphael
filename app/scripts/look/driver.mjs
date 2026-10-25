@@ -30,6 +30,13 @@ export async function perform(page, step) {
     else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
   };
   switch (step.action) {
+    case "dictation-paste": {
+      await page.focus(step.selector);
+      await page.keyboard.type(step.text);
+      // Only the existing native event boundary is synthetic; the composer is real.
+      await page.evaluate(text => window.__look.emit({ type: "DictationPasted", text }), step.text);
+      break;
+    }
     case "advance-time":
       // Advance the shared fixed clock, then let production timers observe it.
       await page.evaluate(ms => { window.__look.now = Date.now() + ms; }, step.ms);

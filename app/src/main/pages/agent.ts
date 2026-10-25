@@ -79,6 +79,8 @@ import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Pa
 import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
+import { bindComposerLearning, learnComposerCorrections } from "../composer-learning";
+import type { DictationBaseline } from "../composer-learning";
 import { createProblemNotice } from "../problem-notice";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
@@ -216,6 +218,7 @@ interface Outgoing {
 }
 
 interface ComposerDraft {
+  dictation?: DictationBaseline;
   text: string;
   files: ComposerFile[];
   missing: TurnAttachment[];
@@ -392,6 +395,7 @@ export function createAgent(app: AppContext): Page {
   composer.noValidate = true;
   composer.innerHTML = composerHTML();
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
+  const correctionLearning = bindComposerLearning(input);
   const slashMenu = mountSlashMenu(input, { memberId });
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
@@ -978,10 +982,12 @@ export function createAgent(app: AppContext): Page {
       return;
     }
     const sending = files;
+    const dictation = correctionLearning.snapshot();
+    const corrections = correctionLearning.take(input.value);
     const member = memberId();
     const sentConversation = conversationId();
     const requestId = crypto.randomUUID();
-    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote };
+    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote, dictation };
     rememberDraft(requestId, draft);
     const mine: Outgoing = { key: `out:${++sent}`, requestId, member, conversationId: sentConversation, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
     outgoing.push(mine);
@@ -996,6 +1002,7 @@ export function createAgent(app: AppContext): Page {
     askingMember = member;
     try {
       await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
+      void learnComposerCorrections(corrections);
     } catch (err) {
       if (retracted.has(requestId)) return;
       if (askingMember === member) askingMember = null;
@@ -1030,6 +1037,7 @@ export function createAgent(app: AppContext): Page {
    * composer is where it stays (`focusComposer`).
    */
   function putDraft(words: string): void {
+    correctionLearning.clear();
     input.value = words;
     fit();
     focusComposer();
@@ -1332,6 +1340,7 @@ export function createAgent(app: AppContext): Page {
     thread.replaceChildren();
     if (voice.isUp) voice.drop();
     input.value = "";
+    correctionLearning.clear();
     files = [];
     missingFiles = [];
     replacing = undefined;
@@ -1573,6 +1582,7 @@ export function createAgent(app: AppContext): Page {
   }
 
   function restoreDraft(draft: ComposerDraft): void {
+    correctionLearning.restore(draft.dictation);
     input.value = draft.text;
     attachmentEpoch++;
     files = [...draft.files];

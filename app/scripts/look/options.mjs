@@ -13,8 +13,13 @@ export function parseOptions(args, scenes) {
       if (!["light", "dark", "both"].includes(value)) throw new Error(`Invalid theme: ${value}`);
       options.themes = value === "both" ? ["light", "dark"] : [value];
     } else if (flag === "--width") {
-      if (!/^\d+(,\d+)*$/.test(value) || value.split(",").some(n => +n < 320 || +n > 7680)) throw new Error(`Invalid width: ${value} (320..7680)`);
-      options.widths = [...new Set(value.split(",").map(Number))];
+      if (!/^\d+(x\d+)?(,\d+(x\d+)?)*$/.test(value)) throw new Error(`Invalid width: ${value}`);
+      options.viewports = [...new Set(value.split(","))].map(size => {
+        const [width, height = 900] = size.split("x").map(Number);
+        if (width < 320 || width > 7680 || height < 320 || height > 7680) throw new Error(`Invalid width/height: ${size} (320..7680)`);
+        return { width, height };
+      });
+      options.widths = [...new Set(options.viewports.map(size => size.width))];
     } else if (flag === "--locale") {
       if (!["zh-TW", "en", "ja"].includes(value)) throw new Error(`Invalid locale: ${value}`);
       options.locale = value;

@@ -554,6 +554,7 @@ export interface DeviceSettings {
 
 /** What commands.rs sends on the `main_events` channel (`MainEvent`). */
 export type MainEvent =
+  | { type: "DictationPasted"; text: string }
   | { type: "ConversationsChanged"; member_id: number }
   | { type: "QuotaChanged" }
   | { type: "ActionModeChanged" }

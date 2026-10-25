@@ -392,7 +392,12 @@ async function start(): Promise<void> {
   // The tray's menu asks for a page. Rust sends this before it shows the window.
   ctx.onEvent((event) => followTray(event, { inGuide: () => !guide.hidden, go, addWord: () => dictionary.addWord() }));
 
-  api.subscribeMainEvents((event) => listeners.forEach((handler) => handler(event))).catch((err) => {
+  api.subscribeMainEvents((event) => {
+    if (event.type === "DictationPasted" && document.activeElement instanceof HTMLTextAreaElement) {
+      document.activeElement.dispatchEvent(new CustomEvent("dictation-pasted", { detail: event.text }));
+    }
+    listeners.forEach((handler) => handler(event));
+  }).catch((err) => {
     console.warn("main: no events from the app", err);
   });
 

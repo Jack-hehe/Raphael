@@ -60,6 +60,15 @@ export function installMock(fixture, config = {}, target = window) {
       case "history.delete": data.history = data.history.filter(item => item.id !== p.id); return { deleted: true };
       case "dictionary.list": return { entries: data.dictionary };
       case "dictionary.add": { const entry = { ...p, id: nextId(data.dictionary), misheard: [], source: "manual", created_at_ms: data.now }; data.dictionary.push(entry); return { entry }; }
+      case "dictionary.learn": {
+        const learned = [];
+        for (const { word } of p.corrections) {
+          if (data.dictionary.some(entry => entry.word === word)) continue;
+          data.dictionary.push({ id: nextId(data.dictionary), word, misheard: [], source: "learned", created_at_ms: data.now });
+          learned.push(word);
+        }
+        return { learned };
+      }
       case "dictionary.delete": data.dictionary = data.dictionary.filter(item => item.id !== p.id); return { deleted: true };
       case "members.list": return { members: data.members, groups: data.groups };
       case "members.presets": return { presets: data.presets };
@@ -145,6 +154,7 @@ export function installMock(fixture, config = {}, target = window) {
       }
       if (command === "overlay_log") return;
       if (command === "main_events") { state.channel = args.channel; return; }
+      if (command === "agent_ask_text") return null;
       if (command === "core_call") return copy(await core(args.method, args.params));
       if (command === "device_settings_get") return copy(data.device);
       if (command === "device_settings_set") { Object.assign(data.device, args.patch); notify("DeviceSettings", { settings: copy(data.device) }); return copy(data.device); }

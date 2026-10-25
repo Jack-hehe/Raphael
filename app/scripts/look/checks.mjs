@@ -1,5 +1,12 @@
 // Browser assertions run against the real app after the scene's user interactions.
 export function checkRendered(name) {
+  if (name === "composer-learn") {
+    const calls = window.__look.calls.filter(call => call.method === "dictionary.learn");
+    if (calls.length !== 1 || JSON.stringify(calls[0].params.corrections) !== JSON.stringify([{ word: "OpenMausBot", misheard: "Open Mouse Bot" }])) throw new Error("The sent voice correction did not reach dictionary.learn exactly once");
+    if (!document.querySelector(".toast")?.textContent.includes("OpenMausBot")) throw new Error("The learned name is missing from the notice");
+    if (document.querySelector(".toast")?.textContent.includes("???")) throw new Error("The learned notice contains corrupted localized text");
+    return { check: name, corrections: calls[0].params.corrections };
+  }
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
   if (name === "home-overview") {

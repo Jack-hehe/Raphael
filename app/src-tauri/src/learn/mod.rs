@@ -265,7 +265,10 @@ pub fn watch(
                     continue;
                 }
                 let next = tracker.advanced(&text);
-                if next.kept() < MIN_KEPT_SHARE {
+                if next.kept() < MIN_KEPT_SHARE
+                    && field.corrections().is_none()
+                    && next.corrections().is_empty()
+                {
                     end = End::Sent;
                     break;
                 }
@@ -362,6 +365,13 @@ impl<C: CoreApi, O: OverlayApi, P: FieldProbe> Learner<C, O, P> {
             input: receipt.input,
         };
         drop(latest_delivery);
+        #[cfg(windows)]
+        if target.pid == std::process::id() {
+            crate::commands::tell_main_window(MainEvent::DictationPasted {
+                text: text.to_owned(),
+            });
+            return None;
+        }
         let timing = self.timing;
         let language = self.language.clone();
         let (text, target) = (text.to_owned(), target.clone());
@@ -678,6 +688,26 @@ mod tests {
         find_polls: 2,
         watch_polls: 10,
     };
+
+    #[test]
+    fn a_short_name_corrected_in_a_normal_field_is_kept_before_submission() {
+        let pasted = "Please use Open Mouse Bot";
+        let mut field = Script(
+            vec![
+                t(pasted),
+                t("Please use OpenMausBot"),
+                t(""),
+                t("Unrelated output"),
+            ],
+            0,
+        );
+        let corrections = watch(&mut field, pasted, QUICK, || true);
+        assert_eq!(
+            misheard_and_word(&corrections),
+            [("Open Mouse Bot", "OpenMausBot")]
+        );
+        assert_eq!(field.1, 3, "never read output after a cleared field");
+    }
 
     fn misheard_and_word(corrections: &[Correction]) -> Vec<(&str, &str)> {
         corrections

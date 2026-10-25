@@ -78,7 +78,7 @@ export function createRoomPane(app: AppContext, onClose: () => void, onRender: (
   let room:Room|undefined,list:MembersList={members:[],groups:[]},messages:RoomMessage[]=[],generation=0,opened=false,canOlder=false,loadingOlder=false;
   let requestId:string|undefined,retry="";
   const drafts=new Map<number,string>();
-  const composer=createChatComposer({placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();await api.roomSend(id,text,requestId,getLocale(),files);requestId=undefined;if(room?.id===id)await refresh();changed();}});
+  const composer=createChatComposer({placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;composer.seedDictation(text);}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();await api.roomSend(id,text,requestId,getLocale(),files);requestId=undefined;if(room?.id===id)await refresh();changed();}});
   composer.input.id="room-message";el.querySelector('.ra-dock')!.append(composer.el);
   const person=(id:number|null)=>list.members.find(m=>m.id===id);
   function draw():void {

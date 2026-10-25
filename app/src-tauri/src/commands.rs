@@ -156,6 +156,9 @@ pub enum DictationPhase {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum MainEvent {
+    /// A successful dictation delivered to our own process, for in-memory composer learning.
+    /// Never logged or replayed to a later subscriber.
+    DictationPasted { text: String },
     /// Loudness of the microphone, 0 to 1, while the microphone is being monitored.
     Level { value: f32 },
     /// A speech model is being downloaded.
@@ -266,6 +269,10 @@ impl Page {
                 return;
             }
             self.channel = None;
+        }
+        // Dictation text is only for the currently focused composer, never a later page.
+        if matches!(event, MainEvent::DictationPasted { .. }) {
+            return;
         }
         if self.waiting.len() < WAITING_MAX {
             self.waiting.push(event);
@@ -3001,6 +3008,30 @@ mod tests {
         let (second, seen_again) = page_channel(false);
         page.subscribe(second);
         assert!(seen_again.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dictated_text_reaches_only_the_current_page_and_is_never_replayed() {
+        let mut page = Page::new();
+        page.deliver(MainEvent::DictationPasted {
+            text: "disposable dictation".into(),
+        });
+        assert!(page.waiting.is_empty());
+        let (channel, seen) = page_channel(false);
+        page.subscribe(channel);
+        assert!(seen.lock().unwrap().is_empty());
+        page.deliver(MainEvent::DictationPasted {
+            text: "disposable dictation".into(),
+        });
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let (gone, _) = page_channel(true);
+        page.subscribe(gone);
+        page.deliver(MainEvent::DictationPasted {
+            text: "discard this text".into(),
+        });
+        let (next, seen) = page_channel(false);
+        page.subscribe(next);
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]

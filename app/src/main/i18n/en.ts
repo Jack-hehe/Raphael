@@ -532,6 +532,7 @@ export const en = {
   "dictionary.019": "<div class=\"say\">《Notice. No matching terms.》</div>Try a different filter or search term.",
   "dictionary.020": "Could not load dictionary: {p0}",
   "learnHint.body": "{p0} hides its text from accessibility tools, so Raphael can't learn the corrections you make there. Add \"editor.accessibilitySupport\": \"on\" to the {p0} settings and reload it. Raphael never changes this setting for you.",
+  "dictionary.learned": "Added {p0} to the dictionary.",
   "learnHint.dismiss": "Got it",
   "dictionary.021": "Could not add: {p0}",
   "dictionary.022": "Added “{p0}”",
