@@ -6,6 +6,7 @@ export function installMock(fixture, config = {}, target = window) {
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
+  if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
   if (adminQuestion) {
@@ -33,7 +34,7 @@ export function installMock(fixture, config = {}, target = window) {
     data.home.counts = { today: 0, reports: 0, calendar: 0 };
     data.home.usage = { month_usd: 0, limit_usd: 20, daily: Array(14).fill(0), allowances: { brains: [] } };
     data.status.spend = { ...data.status.spend, month_usd: 0, today_usd: 0, daily: Array(14).fill(0) };
-    data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null };
+    data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null, daily: Array(14).fill(0) };
   }
   const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
   target.__look = state;

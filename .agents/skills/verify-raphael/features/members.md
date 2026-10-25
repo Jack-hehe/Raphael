@@ -2,12 +2,14 @@
 
 ## Sub-features
 
-Identity/personality, profile editing, avatar selection, memory, routines, skills,
+Remembered member-column collapse, original Raphael emblem, identity/personality, profile editing, avatar selection, memory, routines, skills,
 commands and voice settings. Members have independent conversations.
 
 ## How to get to it (user POV)
 
-In Conversation select a member, then click the stacked header title for details.
+In Conversation the top-left arrow collapses the member column to a 56px face strip; the same arrow expands it. Raphael stays first with his original large bare emblem and name when expanded. Collapsed faces retain localized tooltips, active selection and unread/waiting dots, including members in folded groups. The choice is remembered in localStorage, with an in-memory fallback when storage is unavailable. Compact windows initially use the face strip; the member picker still exposes rooms and search. An open details overlay temporarily hides an expanded compact column so the title remains reachable; closing details restores it without changing the saved choice. The details-closed scene explicitly expands the column before testing the title.
+
+Select a member, then click the stacked header title for details.
 At compact width use the member picker to select the member first. The same title
 closes the panel; its close button updates the same remembered session state. Details has the avatar, edit pencil and resource
 panes. Team's creation menu is another entry point to member creation; verify the
@@ -16,8 +18,9 @@ complete flow for creation changes.
 ## Driving it with look
 
 ```powershell
-npm run look -- details member-avatar member-edit details-memory details-routines details-skills details-commands details-voice --theme both --width 1120,720
-npm run look -- team-new-menu member-text --theme both --width 1120,720
+npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded --theme both --width 1120,720,1920x1080
+npm run look -- details member-avatar member-edit details-memory details-routines details-skills details-commands details-voice --theme both --width 1120,720,1920x1080
+npm run look -- team-new-menu member-text --theme both --width 1120,720,1920x1080
 ```
 
 Keep details/resource-pane/avatar-menu/edit-dialog PNGs; check layering, focus and
@@ -42,7 +45,7 @@ Management tools, including the legacy create_member alias, are offered only to 
 presets, then the neutral silhouette, and the create dialog defaults.
 
 ```powershell
-npm run look -- admin-approval admin-approval-batch admin-approval-long admin-delete-approval admin-approved admin-denied --theme both --width 1120,720
+npm run look -- admin-approval admin-approval-batch admin-approval-long admin-delete-approval admin-approved admin-denied --theme both --width 1120,720,1920x1080
 ```
 
 The scenes retain full approval fields, allow long instructions to scroll by

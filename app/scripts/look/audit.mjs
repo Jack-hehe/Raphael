@@ -1,5 +1,7 @@
 // Self-contained so the same checks run in Chromium and in the DOM contract tests.
-export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = []) {
+// `latinAllowed` (lower-case words, names or syntax) enables the Chinese window's language check: any other
+// Latin word in visible text, a placeholder, an aria-label or a title is interface copy left in English.
+export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = [], latinAllowed = null) {
   const win = doc.defaultView;
   const describe = element => ({ tag: element.tagName.toLowerCase(), id: element.id, class: typeof element.className === "string" ? element.className : "", text: element.textContent?.trim().slice(0, 100) });
   const visible = element => {
@@ -32,7 +34,10 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     }
     return right > left && bottom > top;
   };
-  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [];
+  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [], mixedLanguage = [];
+  const allowed = latinAllowed && new Set(latinAllowed), seenWords = new Set();
+  const phrases = latinAllowed?.filter(name => /\s|=/.test(name)) ?? [];
+  const productPattern = phrases.length ? new RegExp(`\\b(?:${phrases.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`, "gi") : null;
   const keyPattern = /\b([a-z][A-Za-z0-9]*\.[A-Za-z0-9_.-]+)\b/g;
   const seenKeys = new Set();
   for (const element of doc.body.querySelectorAll("*")) {
@@ -46,17 +51,26 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     if (!onScreen(element)) continue;
     if (element.matches('.work-time, .work-toggle, .step-ms') && /\b(?:NaN|Infinity)\b/.test(element.textContent)) invalidDurations.push(description);
     if (element.matches('select,input[type="time"]')) nativeControls.push(description);
-    const strings = [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent);
+    // Textarea values are user data, like input.value; their labels and placeholders remain UI copy.
+    const strings = element.matches("textarea") ? [] : [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent);
     for (const attribute of ["aria-label", "title", "placeholder"]) if (element.hasAttribute(attribute)) strings.push(element.getAttribute(attribute));
     for (const value of strings) for (const match of value.matchAll(keyPattern)) {
       if (!namespaces.includes(match[1].split(".")[0]) || seenKeys.has(match[1])) continue;
       seenKeys.add(match[1]); missingI18nKeys.push({ ...description, key: match[1] });
     }
+    // The literal command-template token is syntax in every locale, not English copy.
+    if (allowed) for (const value of strings) {
+      const copy = productPattern ? value.replace(productPattern, "") : value;
+      for (const [word] of copy.replace(/\{input\}/g, "").replace(keyPattern, "").replace(/https?:\/\/\S+|\S+\.(?:pdf|png|jpe?g|txt|md|csv|exe|com|dev|io)\b/gi, "").matchAll(/[A-Za-z]{2,}/g)) {
+        if (allowed.has(word.toLowerCase()) || seenWords.has(word)) continue;
+        seenWords.add(word); mixedLanguage.push({ ...description, word });
+      }
+    }
   }
   const documentWidth = Math.max(doc.documentElement.scrollWidth, doc.body.scrollWidth);
-  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations };
+  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations, mixedLanguage };
 }
 
 export function failedChecks(result) {
-  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0;
+  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0 || (result.mixedLanguage?.length ?? 0) > 0;
 }

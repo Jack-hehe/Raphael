@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 // The 拉斐爾 page with members (pages/agent.ts and members-shell.ts): picking a member loads its own
-// thread, asks it and searches it alone; its answers are plain, its composer says "Message <name>"
+// thread, asks it and searches it alone; its answers are plain, its composer says 「傳訊息給 <name>」
 // and has the emblem voice button; the gold card shows in the thread that asked; Raphael's thread is as it
 // was; a turn of another thread does not touch the open one; the slot of the background questions
 // sits above the composer; the details panel closes and comes back from the pill.
@@ -438,12 +438,12 @@ test("memory notifications refresh the visible own and shared lists with correct
 });
 
 describe("Raphael's thread", () => {
-  test("is as it was: his turns in 《》, Ask Raphael, his voice button, asked with no member", async () => {
+  test("is as it was: his turns in 《》, 問拉斐爾, his voice button, asked with no member", async () => {
     mount();
     await flush();
     expect(api.agentHistoryList).toHaveBeenCalledWith({ limit: 50 });
     expect($(".thread").textContent).toContain("《答。回答 2》");
-    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Ask Raphael");
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("問拉斐爾");
     expect($(".cmp-voice").hidden).toBe(false);
     expect($(".mb-pill-t").textContent).toBe("拉斐爾");
     $<HTMLTextAreaElement>(".cmp-input").value = "你好";
@@ -455,7 +455,7 @@ describe("Raphael's thread", () => {
   test("the member column lists the members, each with the last line of its thread from the list", async () => {
     mount();
     await flush();
-    expect([...document.querySelectorAll(".mb-col .mb-row-t b")].map((b) => b.textContent)).toEqual(["拉斐爾", "日文老師", "行程管家"]);
+    expect([...document.querySelectorAll(".mb-col .mb-row b")].map((b) => b.textContent)).toEqual(["拉斐爾", "日文老師", "行程管家"]);
     expect($('.mb-col [data-member="3"] .mb-row-p').textContent).toBe("今天的單字");
     // no thread but the open one is read
     expect(api.agentHistoryList.mock.calls.every(([q]) => q.member_id === undefined)).toBe(true);
@@ -494,11 +494,11 @@ describe("a member's thread", () => {
     expect($('.mb-col [data-member="3"]').getAttribute("aria-current")).toBe("true");
   });
 
-  test("its composer says Message and the name, has the voice button, and asks that member", async () => {
+  test("its composer says 傳訊息給 and the name, has the voice button, and asks that member", async () => {
     mount();
     await flush();
     await pick(3);
-    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Message 日文老師");
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("傳訊息給 日文老師");
     expect($(".cmp-voice").hidden).toBe(false);
     expect($(".mb-pill-t").textContent).toBe("日文老師");
     // 清除全部 and Raphael's settings are his thread's
@@ -626,7 +626,7 @@ describe("a member's thread", () => {
     expect(api.agentHistoryList).toHaveBeenLastCalledWith({ limit: 50 });
     expect($(".thread").textContent).toContain("《答。回答 2》");
     expect($(".thread").textContent).not.toContain("今天的單字");
-    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Ask Raphael");
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("問拉斐爾");
   });
 
   test("an unread thread opened is told to the core, and its dot goes", async () => {
@@ -915,7 +915,7 @@ describe("the details panel", () => {
     name.value = "嚴格老師";
     name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     await flush();
-    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Message 嚴格老師");
+    expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("傳訊息給 嚴格老師");
     expect($(".thread .mb-av-placeholder svg")).not.toBeNull();
   });
 });

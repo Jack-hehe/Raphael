@@ -288,7 +288,7 @@ describe("a member's panel", () => {
     const form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
     const time = form.querySelector<HTMLInputElement>("#au-time")!;
     expect(time.type).toBe("text");
-    expect(time.placeholder).toBe("HH:MM");
+    expect(time.placeholder).toBe("00:00");
     form.querySelector<HTMLInputElement>("#au-title")!.value = "Review";
     form.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "Summarize progress";
     form.querySelector<HTMLElement>('[data-kind="daily"]')!.click();

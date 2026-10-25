@@ -18,6 +18,14 @@ describe("popover placement", () => {
       .toEqual({ left: 360, top: 116, maxHeight: 356 });
   });
 
+  test("text completions start at the character and prefer the space above", () => {
+    expect(menuPlacement({ left: 120, right: 120, top: 300, bottom: 320 }, { width: 240, height: 120 }, viewport, "start"))
+      .toEqual({ left: 120, top: 176, maxHeight: 256 });
+    expect(menuPlacement({ left: 120, right: 120, top: 60, bottom: 80 }, { width: 240, height: 120 }, viewport, "start"))
+      .toEqual({ left: 120, top: 84, maxHeight: 388 });
+    expect(menuPlacement({ left: 690, right: 690, top: 300, bottom: 320 }, { width: 240, height: 120 }, viewport, "start").left).toBe(472);
+  });
+
   test("an upward menu is clamped below the custom header and scrolls instead of covering it", () => {
     const placement = menuPlacement({ top: 300, bottom: 332, right: 600 }, { width: 320, height: 400 }, viewport);
     expect(placement).toEqual({ left: 280, top: 40, maxHeight: 256 });

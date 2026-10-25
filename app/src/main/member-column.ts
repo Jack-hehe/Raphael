@@ -1,5 +1,5 @@
 // The member column keeps Raphael pinned first, followed by member groups and ungrouped members.
-// Every row shares the same face, name, role, time and preview layout.
+// Raphael keeps his original large emblem; the other rows retain their message previews.
 //
 // A right click on a row, or its borderless 「more」 that shows under the pointer, gives 「移到分組 ▸」
 // and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
@@ -28,6 +28,7 @@ export interface ColumnView {
   folded: ReadonlySet<number>;
   /** The members that were not there at the last drawing: their rows fade in. */
   fresh: ReadonlySet<number>;
+  collapsed?: boolean;
 }
 
 /** A member's row: its picture, name, role, the line under them and the dot; then its 「more」. */
@@ -79,7 +80,14 @@ export function columnHTML(v: ColumnView): string {
   const pinned = all.members.filter(m => m.id !== 0 && m.pinned && !m.hidden && memberMatches(m, v.query));
   const sections = memberSections({ ...all, members: all.members.filter(m => !m.pinned) }, v.query);
   const searching = v.query.trim() !== "";
-  const chief = memberRowHTML(raphael, v);
+  const chief = `<button type="button" class="nav mb-row mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0" aria-label="${esc(raphael.name)}"${v.collapsed ? ` data-tooltip="${esc(raphael.name)}"` : ""}>` +
+    faceHTML(raphael, 64) + `<b>${esc(raphael.name)}</b>` +
+    (raphael.waiting || raphael.unread ? `<span class="mb-dot ${raphael.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(raphael.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`;
+  if (v.collapsed) {
+    const rows = [...pinned, ...sections.flatMap(section => section.members)];
+    return chief + rows.map(m => `<button type="button" class="nav mb-row mb-face" data-member="${m.id}" data-k="member:${m.id}" aria-current="${m.id === v.current}" aria-label="${esc(m.name)}" data-tooltip="${esc(m.name)}">` +
+      faceHTML(m, 40) + (m.waiting || m.unread ? `<span class="mb-dot ${m.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(m.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`).join("");
+  }
   const showChief = !searching || memberMatches(raphael, v.query);
   return (showChief ? chief : "") + (pinned.length ? `<div class="mb-pinned">${pinned.map(m => memberRowHTML(m, v)).join("")}</div>` : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && !showChief && sections.length === 0 && pinned.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
 }
@@ -142,8 +150,11 @@ export function openActions(anchor: HTMLElement, items: readonly { id: string; l
 export function createMemberColumn(host: ColumnHost): MemberColumn {
   const el = document.createElement("aside");
   el.className = "mb-col";
+  let collapsed = window.matchMedia?.("(max-width: 859px)").matches ?? false;
+  try { const saved = localStorage.getItem("raphael.members.collapsed"); if (saved !== null) collapsed = saved === "true"; } catch { /* Storage can be unavailable. */ }
   el.innerHTML =
     `<div class="mb-top">` +
+    iconButton("left", t("members.collapseColumn"), ' data-col="collapse" aria-expanded="true"', "mb-tool mb-collapse") +
     `<label class="mb-find" hidden>${ico("search")}<input type="search" class="mb-find-input" autocomplete="off" spellcheck="false" maxlength="40"></label>` +
     `<span class="mb-top-fill"></span>` +
     iconButton("search", t("members.search"), ' data-col="search" aria-expanded="false"', "mb-tool") +
@@ -151,6 +162,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     `</div>` +
     `<nav class="mb-scroll"><div class="mb-list"></div></nav>`;
   el.querySelector(".mb-scroll")!.append(createRoomsSection());
+  const collapseButton = el.querySelector<HTMLButtonElement>('[data-col="collapse"]')!;
   const find = el.querySelector<HTMLElement>(".mb-find")!;
   const findInput = el.querySelector<HTMLInputElement>(".mb-find-input")!;
   const searchButton = el.querySelector<HTMLElement>('[data-col="search"]')!;
@@ -170,6 +182,11 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   });
 
   function draw(): void {
+    el.classList.toggle("is-collapsed", collapsed);
+    const label = t(collapsed ? "members.expandColumn" : "members.collapseColumn");
+    collapseButton.setAttribute("aria-label", label); collapseButton.title = label;
+    collapseButton.setAttribute("aria-expanded", String(!collapsed));
+    collapseButton.innerHTML = ico(collapsed ? "right" : "left");
     nav.setAttribute("aria-label", t("members.title"));
     for (const [button, label] of [
       [searchButton, find.hidden ? t("members.search") : t("members.searchClose")],
@@ -182,7 +199,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     findInput.setAttribute("aria-label", t("chat.searchAll"));
     const focusKey = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>("[data-k]");
     const key = focusKey && list.contains(focusKey) ? focusKey.dataset.k : undefined;
-    search.draw(query, columnHTML({ ...host.view(), query, folded }));
+    search.draw(collapsed ? "" : query, columnHTML({ ...host.view(), query: collapsed ? "" : query, folded, collapsed }));
     if (key) list.querySelector<HTMLElement>(`[data-k="${CSS.escape(key)}"]`)?.focus({ preventScroll: true });
   }
 
@@ -236,6 +253,13 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
   el.addEventListener("click", (e) => {
     const target = e.target as Element;
     const col = target.closest<HTMLElement>("[data-col]")?.dataset.col;
+    if (col === "collapse") {
+      closeMenu();
+      collapsed = !collapsed;
+      try { localStorage.setItem("raphael.members.collapsed", String(collapsed)); } catch { /* The in-memory choice remains usable. */ }
+      draw(); collapseButton.focus({ preventScroll: true });
+      return;
+    }
     if (col === "search") return toggleSearch();
     if (col === "add") {
       return openActions(

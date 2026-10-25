@@ -27,8 +27,13 @@
 .mb-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 var(--pa-pad) 14px; }
 .mb-list { display: flex; flex-direction: column; gap: var(--sp-1); }
 
-/* Raphael is pinned first and shares every member's row layout. */
-.nav.mb-chief b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Raphael's original bare emblem and name, above the regular member rows. */
+.nav.mb-chief.mb-row { position: relative; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: var(--sp-2); min-height: 0; padding: var(--sp-3) var(--sp-2) var(--sp-5); text-align: center; }
+.nav.mb-chief.mb-row > .av { --av: var(--pa-chief-av) !important; }
+.nav.mb-chief.mb-row:hover, .nav.mb-chief.mb-row[aria-current="true"] { background: transparent; }
+.nav.mb-chief b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); font-weight: 600; }
+.nav.mb-chief[aria-current="true"] b { color: var(--accent-text); }
+.nav.mb-chief > .mb-dot { position: absolute; top: 10px; right: 12px; }
 .mb-row-time { flex: none; margin-left: auto; color: var(--text-3); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; }
 
 /* a group: its header folds it away, the body slides */
@@ -70,6 +75,19 @@
 .page-agent .mb-item:hover .btn.mb-more, .page-agent .mb-item .btn.mb-more:focus-visible, .page-agent .mb-item .btn.mb-more[aria-expanded="true"] { opacity: 1; }
 .mb-item:hover .nav.mb-row, .mb-item:has(.mb-more[aria-expanded="true"]) .nav.mb-row { padding-right: calc(var(--pa-more) + 8px); }
 .mb-item:hover .mb-row .mb-dot, .mb-item:has(.mb-more[aria-expanded="true"]) .mb-row .mb-dot { display: none; }
+
+/* The remembered face strip keeps every member reachable, including folded groups. */
+.page.page-agent:has(.mb-col.is-collapsed) { --pa-col: 56px; }
+.mb-col.is-collapsed { --pa-row-av: 36px; --pa-chief-av: 36px; }
+.mb-col.is-collapsed .mb-top { justify-content: center; padding: 0 6px 8px; }
+.mb-col.is-collapsed .mb-top > :not(.mb-collapse) { display: none; }
+.mb-col.is-collapsed .mb-collapse { width: 36px; min-height: 36px; }
+.mb-col.is-collapsed .mb-scroll { padding: 0 6px 14px; }
+.mb-col.is-collapsed .mb-list { gap: var(--sp-2); }
+.mb-col.is-collapsed .mb-row { position: relative; display: flex; justify-content: center; min-height: 48px; padding: 6px 4px; border-radius: var(--r-md); }
+.mb-col.is-collapsed .mb-chief b, .mb-col.is-collapsed .au-rooms-section { display: none; }
+.mb-col.is-collapsed .mb-row[aria-current="true"] { background: var(--selected); box-shadow: inset 2px 0 var(--accent-text); }
+.mb-col.is-collapsed .mb-dot { position: absolute; top: 4px; right: 2px; width: 7px; height: 7px; }
 
 /* ---------- the members' faces (never Raphael's: see the top) ---------- */
 .av.mb-av { overflow: hidden; border-radius: var(--r-pill); }
@@ -243,10 +261,12 @@
   .page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: var(--pa-col) minmax(0, 1fr); }
   .mb-det { position: absolute; top: 0; right: 0; bottom: 0; z-index: 20; width: var(--pa-det); max-width: calc(100% - 16px); box-shadow: var(--pop); }
 }
-/* Under 860 px the column becomes the dropdown at the left of the chat's top row. */
+/* Compact windows retain the face strip and the picker for rooms and search. */
 @media (max-width: 859px) {
-  .page.page-agent, .page.page-agent[data-det="open"]:not(.is-room) { grid-template-columns: minmax(0, 1fr); }
-  .mb-col { display: none; }
+  .page.page-agent { --pa-col: 200px; }
+  .mb-col:not(.is-collapsed) .mb-row-t i { display: none; }
+  .page.page-agent[data-det="open"]:not(.is-room):has(.mb-col:not(.is-collapsed)) { grid-template-columns: minmax(0, 1fr); }
+  .page-agent[data-det="open"] .mb-col:not(.is-collapsed) { display: none; }
   .sel.mb-pick { display: inline-flex; }
   .mb-chat { padding-inline: var(--sp-4); }
 }

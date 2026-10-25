@@ -33,7 +33,12 @@
       "timeout_ms": 30000
     }
   },
-  "adminGroup": { "id": 3, "name": "個人公司", "position": 2, "sources": [] },
+  "adminGroup": {
+    "id": 3,
+    "name": "個人公司",
+    "position": 2,
+    "sources": []
+  },
   "adminMember": {
     "id": 8,
     "name": "COO",
@@ -2032,7 +2037,23 @@
       "words": 12000,
       "audio_seconds": 3600,
       "time_saved_seconds": 5400,
-      "speed_wpm": 200
+      "speed_wpm": 200,
+      "daily": [
+        420,
+        0,
+        860,
+        1240,
+        610,
+        0,
+        0,
+        980,
+        1530,
+        720,
+        1100,
+        340,
+        0,
+        890
+      ]
     }
   }
 }

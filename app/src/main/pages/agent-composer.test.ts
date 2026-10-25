@@ -3,15 +3,11 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "../i18n";
-import { COMPOSER_PLACEHOLDER, TYPED_MAX_CHARS, draftText, greetingLine, sendsOnEnter, typedQuestion } from "./agent";
+import { TYPED_MAX_CHARS, draftText, greetingLine, sendsOnEnter, typedQuestion } from "./agent";
 
 afterEach(() => setLocale("zh-TW"));
 
 describe("the composer", () => {
-  test("the placeholder is the same words in every language of the window", () => {
-    expect(COMPOSER_PLACEHOLDER).toBe("Ask Raphael");
-  });
-
   test("Enter sends; Shift+Enter is a new line; nothing is sent while an input method composes", () => {
     const key = (over: Partial<KeyboardEvent>) => ({ key: "Enter", shiftKey: false, isComposing: false, keyCode: 13, ...over });
     expect(sendsOnEnter(key({}))).toBe(true);
