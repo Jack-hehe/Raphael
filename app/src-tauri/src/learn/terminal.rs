@@ -115,11 +115,21 @@ impl TerminalTracker {
         })
     }
 
+    pub fn unambiguous(&self) -> bool {
+        self.places.len() == 1
+    }
+
     /// Follows the pasted rows to where the new screen has them. End decisions are sticky and
     /// keep the last valid snapshot. A row that grew or shrank by a wrap is followed; rows that
     /// the program adds above or below are not part of the region. The UIA caller may supply a
     /// caret-bounded active buffer instead of the whole text.
     pub fn observe(&mut self, buffer: &str) -> TerminalDecision {
+        self.observe_input(buffer, false)
+    }
+
+    /// A physical edit was observed in this exact vetted field. This permits a temporary
+    /// deletion/replacement in the same anchored row, without adopting a different row or pane.
+    pub fn observe_input(&mut self, buffer: &str, edited: bool) -> TerminalDecision {
         if self.decision != TerminalDecision::Continue {
             return self.decision;
         }
@@ -138,7 +148,29 @@ impl TerminalTracker {
         let mut moved = Vec::new();
         let mut cleared = false;
         for place in &self.places {
-            match relocate(place, lines, width != self.width) {
+            let relocated = relocate(place, lines, width != self.width);
+            let relocated = if edited
+                && !matches!(relocated, Relocation::Moved(_))
+                && place.rows.len() == 1
+                && !place.anchor.is_empty()
+            {
+                lines
+                    .get(place.start)
+                    .filter(|row| row.starts_with(&place.anchor))
+                    .map(|row| {
+                        Relocation::Moved(Place {
+                            tracker: place.tracker.advanced(row),
+                            rows: vec![row.clone()],
+                            text: row.clone(),
+                            start: place.start,
+                            anchor: place.anchor.clone(),
+                        })
+                    })
+                    .unwrap_or(relocated)
+            } else {
+                relocated
+            };
+            match relocated {
                 Relocation::Moved(next) => {
                     // Only the pasted words count: a marker, a prompt or a status on the same
                     // rows changes without the user having edited anything.
@@ -195,6 +227,12 @@ impl TerminalTracker {
         } else {
             self.decision
         }
+    }
+
+    /// Unsafe input or lost field identity cannot retain a draft correction.
+    pub fn invalidate(&mut self) {
+        self.places.clear();
+        self.decision = TerminalDecision::Lost;
     }
 
     /// The rows of the lowest copy, which is the input once that is known.
@@ -594,6 +632,51 @@ fn relocate(place: &Place, lines: &[String], rewrapped: bool) -> Relocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observed_selection_delete_and_paste_keep_the_same_anchored_input() {
+        let mut tracker =
+            TerminalTracker::new("> Please use Open Mouse Bot", "Please use Open Mouse Bot")
+                .unwrap();
+        assert_eq!(
+            tracker.observe_input("> Please use ", true),
+            TerminalDecision::Continue
+        );
+        assert_eq!(
+            tracker.observe_input("> Please use OpenMausBot", true),
+            TerminalDecision::Continue
+        );
+        assert_eq!(
+            tracker.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into()
+            }],
+            "{tracker:?}"
+        );
+        tracker.submitted();
+        assert_eq!(
+            tracker.observe_input("> Please use WrongOutput", true),
+            TerminalDecision::Sent
+        );
+        assert_eq!(tracker.corrections()[0].word, "OpenMausBot");
+        tracker.invalidate();
+        assert!(tracker.corrections().is_empty());
+    }
+
+    #[test]
+    fn committed_chinese_and_japanese_text_is_read_from_the_same_terminal_field() {
+        for (old, new) in [("拉菲爾", "拉斐爾"), ("ラファエル", "ラフィエル")] {
+            let pasted = format!("今天請用{old}來整理昨天的會議紀錄並且寄給大家確認。");
+            let fixed = pasted.replace(old, new);
+            let mut tracker = TerminalTracker::new(&format!("> {pasted}"), &pasted).unwrap();
+            assert_eq!(
+                tracker.observe_input(&format!("> {fixed}"), true),
+                TerminalDecision::Continue
+            );
+            assert_eq!(tracker.corrections()[0].word, new);
+        }
+    }
 
     const PASTED: &str = "Use Tyeless and Open Router for the local command today";
     const FIRST: &str = "Use Typeless and Open Router for the local command today";

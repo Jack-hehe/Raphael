@@ -13,7 +13,6 @@ export interface RoutineDialogOptions {
   members: readonly Member[];
   memberId?: number;
   routine?: Routine;
-  preset?: { title: string; prompt: string; schedule: RoutineSchedule };
   date?: string;
   time?: string;
   onSaved?(routine: Routine): void;
@@ -24,7 +23,7 @@ export interface RoutineDialogOptions {
 }
 
 export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
-  const routine = o.routine, plan = routine?.schedule ?? o.preset?.schedule;
+  const routine = o.routine, plan = routine?.schedule;
   let memberId = routine?.member_id ?? o.memberId ?? 0;
   let kind: RoutineSchedule["kind"] = plan?.kind ?? "once";
   const next = new Date(Date.now() + 3600000);
@@ -35,7 +34,7 @@ export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
   let ending = plan?.max_runs ? "after" : plan?.until ? "until" : "never";
   let until = plan?.until ?? date;
   let count = String(plan?.max_runs ?? 10);
-  let title = routine?.title ?? o.preset?.title ?? "", prompt = routine?.prompt ?? o.preset?.prompt ?? "";
+  let title = routine?.title ?? "", prompt = routine?.prompt ?? "";
   let more = !!(plan?.max_runs || plan?.until), saving = false;
   let dialog: Dialog;
   const endChoices = (): { value: string; label: string }[] => [
@@ -50,7 +49,7 @@ export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
   function body(): string {
     const kinds: [RoutineSchedule["kind"], string][] = [["once", t("auto.once")], ["daily", t("members.daily")], ["weekdays", t("auto.weekdays")], ["weekly", t("members.weekly")], ["every", t("members.every")]];
     return `<input class="mb-fin au-title" id="au-title" maxlength="${ROUTINE_TITLE_MAX}" placeholder="${esc(t("auto.what"))}" aria-label="${esc(t("auto.what"))}" value="${esc(title)}">` +
-      `<section class="au-field"><h3>${esc(t("auto.when"))}</h3><div class="au-start"><span>${esc(t("auto.starts"))}</span>${btn(esc(date), "", ' data-dlg="date" aria-label="' + esc(t("auto.date")) + '"')}<input class="mb-fin au-time" id="au-time" type="text" inputmode="numeric" maxlength="5" value="${esc(time)}" aria-label="${esc(t("auto.time"))}" placeholder="HH:MM"></div>` +
+      `<section class="au-field"><h3>${esc(t("auto.when"))}</h3><div class="au-start"><span>${esc(t("auto.starts"))}</span>${btn(esc(date), "", ' data-dlg="date" aria-label="' + esc(t("auto.date")) + '"')}<input class="mb-fin au-time" id="au-time" type="text" inputmode="numeric" maxlength="5" value="${esc(time)}" aria-label="${esc(t("auto.time"))}" placeholder="00:00"></div>` +
       `<div class="au-chips">${kinds.map(([value, label]) => btn(esc(label), "sm", ` data-dlg="kind" data-kind="${value}" aria-pressed="${kind === value}"`)).join("")}</div>` +
       (kind === "weekly" ? `<div class="au-chips">${[1,2,3,4,5,6,0].map(n => btn(esc(dayName(n)), "sm", ` data-dlg="day" data-day="${n}" aria-pressed="${days.has(n)}"`)).join("")}</div>` : "") +
       (kind === "every" ? sel(HOUR_STEPS.map(n => ({ value: String(n), label: t("members.everyHours", { p0: n }) })), String(hours), t("members.hours"), ' data-dlg="hours"') : "") + `</section>` +

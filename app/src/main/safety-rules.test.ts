@@ -40,16 +40,15 @@ describe("the safety rules section", () => {
     expect(html).not.toContain('role="switch"');
   });
 
-  test("新增 is a bordered text button; the pencil and the trash can are icon buttons with their names", () => {
+  test("the add action is framed and each rule has one named overflow button", () => {
     const html = rulesHTML(view());
     const tags = buttons(html);
     expect(tags.find((b) => b.includes('data-rule="add"'))).toMatch(/^<button type="button" class="btn pri" data-rule="add"/);
     const icons = tags.filter((b) => /class="btn icon/.test(b));
-    expect(icons).toHaveLength(10);
+    expect(icons).toHaveLength(5);
     for (const tag of icons) expect(tag).toMatch(/aria-label="[^"]+" title="[^"]+"/);
-    expect(html).toContain('aria-label="編輯「刪除檔案」" title="編輯「刪除檔案」"');
-    expect(html).toContain('aria-label="刪除「刪除檔案」"');
-    expect(html).toContain('<path d="M9.75 2.75 12.75 5.75'); // the pencil
+    expect(html).toContain('aria-label="「刪除檔案」的選項" title="「刪除檔案」的選項"');
+    expect(html).not.toMatch(/data-rule="(?:edit|delete)"/);
   });
 
   test("a rule being changed is its words in a field and its dropdown, with 取消 and 儲存, in its own row", () => {
@@ -219,4 +218,3 @@ describe("the controller", () => {
     expect(c.view().hidden).toEqual([]);
   });
 });
-

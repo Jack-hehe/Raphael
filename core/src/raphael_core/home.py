@@ -37,6 +37,7 @@ class DictationNumbers(TypedDict):
     time_saved_seconds: float
     speed_wpm: float | None
     audio_seconds: float
+    daily: list[int]
 
 
 class HomeUsage(TypedDict):
@@ -204,4 +205,5 @@ class HomeOverview:
                 "calendar": calendar[:CALENDAR_LIMIT], "counts": {"today": len(today), "reports": len(reports), "calendar": len(calendar)},
                 "usage": {"month_usd": spend["month_usd"], "limit_usd": spend["limit_usd"], "daily": spend["daily"][-14:], "allowances": allowances},
                 "dictation": {"words": stats["all"]["words"], "audio_seconds": stats["all"]["audio_seconds"],
-                              "time_saved_seconds": stats["time_saved_seconds"], "speed_wpm": stats.get("speed_wpm")}}
+                              "time_saved_seconds": stats["time_saved_seconds"], "speed_wpm": stats.get("speed_wpm"),
+                              "daily": [day["words"] for day in stats.get("by_day", [])][-14:]}}

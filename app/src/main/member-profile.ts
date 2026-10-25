@@ -1,6 +1,7 @@
 // One profile dialog for creation and editing. The footer owns member fields; explicit resource
 // actions belong to the resource itself. In creation mode all subresources wait for a member id.
 import * as api from "./api";
+import { openActions } from "./member-column";
 import { cropDialog } from "./avatar-settings";
 import { describeError } from "./format";
 import { t } from "./i18n";
@@ -78,24 +79,28 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
       else if (act === "reply") openMenu(target, [{ value: "full", label: t("members.profile.full") }, { value: "conversational", label: t("members.profile.conversational") }], reply, value => { reply = value as typeof reply; drawReply(); });
       else if (act === "ask") { ask = !ask; target.setAttribute("aria-checked", String(ask)); }
       else if (act === "memory-add") void addMemory();
-      else if (act === "memory-delete") void resourceAction(async () => {
+      else if (act === "memory-menu") openActions(target, [{ id: "delete", label: t("members.profile.delete"), icon: "trash" }], () => void resourceAction(async () => {
         const index = Number(target.dataset.index);
         if (member) await api.core("memory.delete", { member_id: member.id, space: "own", name: memories[index]!.name });
         else draft.memories.splice(index, 1);
         await loadMemory();
-      });
+      }));
       else if (act === "routine-add") routineForm();
-      else if (act === "routine-edit") routineForm(routines.find(r => r.id === Number(target.dataset.id)));
+      else if (act === "routine-menu") {
+        const routine = routines.find(r => r.id === Number(target.dataset.id));
+        if (routine) openActions(target, [{ id: "edit", label: t("members.profile.editResource"), icon: "pencil" }, { id: "delete", label: t("members.profile.delete"), icon: "trash" }], choice => {
+          if (choice === "edit") routineForm(routine);
+          else void resourceAction(async () => {
+            if (member) await api.routinesDelete(routine.id);
+            else draft.routines.splice(draft.routines.findIndex(r => r.id === routine.id), 1);
+            await loadRoutines();
+          });
+        });
+      }
       else if (act === "routine-toggle") void resourceAction(async () => {
         const routine = routines.find(r => r.id === Number(target.dataset.id))!;
         if (member) await api.routinesUpdate(routine.id, { enabled: !routine.enabled });
         else routine.enabled = !routine.enabled;
-        await loadRoutines();
-      });
-      else if (act === "routine-delete") void resourceAction(async () => {
-        const id = Number(target.dataset.id);
-        if (member) await api.routinesDelete(id);
-        else draft.routines.splice(draft.routines.findIndex(r => r.id === id), 1);
         await loadRoutines();
       });
       else if (act === "memory-retry") void loadMemory();
@@ -209,7 +214,7 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
       else memories = draft.memories.map(m => ({ ...m, type: "reference", origin: "user", updated: "", expires: null }));
       if (!alive) return;
       memoryLoaded = true;
-      list.innerHTML = memories.length ? memories.map((m, index) => `<div class="mp-resource"><span>${esc(m.description)}</span>${iconButton("trash", t("members.profile.delete"), ` data-dlg="memory-delete" data-index="${index}"`, "danger")}</div>`).join("") : `<p class="mp-empty">${esc(t("members.profile.noMemory"))}</p>`;
+      list.innerHTML = memories.length ? memories.map((m, index) => `<div class="mp-resource"><span>${esc(m.description)}</span>${iconButton("more", t("members.more", { p0: m.description }), ` data-dlg="memory-menu" data-index="${index}" aria-haspopup="menu" aria-expanded="false"`)}</div>`).join("") : `<p class="mp-empty">${esc(t("members.profile.noMemory"))}</p>`;
     } catch (error) { if (alive) { list.innerHTML = btn(esc(t("members.profile.retry")), "sm", ' data-dlg="memory-retry"'); toaster.info(describeError(error)); } }
   }
   async function addMemory(): Promise<void> {
@@ -227,7 +232,7 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
       routines = member ? (await api.routinesList(member.id)).routines : draft.routines;
       if (!alive) return;
       routinesLoaded = true;
-      list.innerHTML = routines.length ? routines.map(r => `<div class="mp-resource"><div><b>${esc(r.title)}</b><p>${esc(scheduleText(r.schedule))}</p></div>${tg(r.enabled, r.title, ` data-dlg="routine-toggle" data-id="${r.id}"`)}${iconButton("pencil", t("members.profile.editResource"), ` data-dlg="routine-edit" data-id="${r.id}"`)}${iconButton("trash", t("members.profile.delete"), ` data-dlg="routine-delete" data-id="${r.id}"`, "danger")}</div>`).join("") : `<p class="mp-empty">${esc(t("members.profile.noRoutines"))}</p>`;
+      list.innerHTML = routines.length ? routines.map(r => `<div class="mp-resource"><div><b>${esc(r.title)}</b><p>${esc(scheduleText(r.schedule))}</p></div>${tg(r.enabled, r.title, ` data-dlg="routine-toggle" data-id="${r.id}"`)}${iconButton("more", t("members.more", { p0: r.title }), ` data-dlg="routine-menu" data-id="${r.id}" aria-haspopup="menu" aria-expanded="false"`)}</div>`).join("") : `<p class="mp-empty">${esc(t("members.profile.noRoutines"))}</p>`;
     } catch (error) { if (alive) { list.innerHTML = btn(esc(t("members.profile.retry")), "sm", ' data-dlg="routine-retry"'); toaster.info(describeError(error)); } }
   }
   function routineForm(existing?: Routine): void {

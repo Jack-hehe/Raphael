@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 pub enum EditEvent {
     Ascii(u8),
     Backspace,
+    WordBackspace,
+    /// A same-field edit whose committed text must be read from the vetted UIA provider.
+    Resync,
     Delete,
     Left {
         shift: bool,
@@ -323,6 +326,42 @@ pub(crate) fn submission_key(
     }
 }
 
+/// Terminal edits either reconstruct a literal US-layout edit or request authoritative UIA text.
+/// Modifier presses alone do not lose a paste; their eventual chord determines the operation.
+pub(crate) fn terminal_key(
+    vk: u16,
+    down: bool,
+    shift: bool,
+    caps: bool,
+    control: bool,
+    other_modifier: bool,
+    ascii: bool,
+) -> Option<EditEvent> {
+    if !down || matches!(vk, 0x10..=0x12 | 0xA0..=0xA5) {
+        return None;
+    }
+    if vk == 0x09 || (control && matches!(vk, 0x4D | 0x4A)) {
+        return Some(EditEvent::Invalidated);
+    }
+    // Enter never authorizes reading a post-submit echo, including on an IME layout.
+    if vk == 0x0D {
+        return Some(EditEvent::Enter);
+    }
+    if ascii && control && vk == 0x08 && !other_modifier && !shift {
+        return Some(EditEvent::WordBackspace);
+    }
+    if control || other_modifier || !ascii {
+        return Some(EditEvent::Resync);
+    }
+    edit_key(vk, down, shift, caps, false).map(|event| {
+        if event == EditEvent::Invalidated {
+            EditEvent::Resync
+        } else {
+            event
+        }
+    })
+}
+
 /// What the focused window's IME says when asked from outside its process. `ImmGetContext`
 /// cannot do that (it only answers for the calling thread's own windows), so the question goes
 /// to the thread's default IME window as `WM_IME_CONTROL` / `IMC_GETOPENSTATUS`.
@@ -353,6 +392,37 @@ pub(crate) fn ascii_capture_allowed(ime: ImeAnswer) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_chords_paste_and_ime_request_text_without_guessing_characters() {
+        assert_eq!(
+            terminal_key(0x11, true, false, false, true, false, true),
+            None
+        );
+        assert_eq!(
+            terminal_key(0x08, true, false, false, true, false, true),
+            Some(EditEvent::WordBackspace)
+        );
+        for (vk, control, ascii) in [
+            (0x56, true, true),
+            (0x2D, false, true),
+            (0x41, false, false),
+            (0x08, true, false),
+        ] {
+            assert_eq!(
+                terminal_key(vk, true, false, false, control, false, ascii),
+                Some(EditEvent::Resync)
+            );
+        }
+        assert_eq!(
+            terminal_key(0x41, true, true, false, false, false, true),
+            Some(EditEvent::Ascii(b'A'))
+        );
+        assert_eq!(
+            terminal_key(0x0D, true, false, false, false, false, false),
+            Some(EditEvent::Enter)
+        );
+    }
 
     #[test]
     fn shift_punctuation_and_caps_match_us_ascii() {

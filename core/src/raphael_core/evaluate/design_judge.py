@@ -117,6 +117,9 @@ def candidates(run):
     report = json.loads((run / "report.json").read_text(encoding="utf-8"))
     if report.get("status") != "passed" or report.get("errors") or not report.get("results"):
         raise ValueError("look_run_not_passed")
+    heights = report.get("options", {}).get("heights", {})
+    if heights.get("1920") != 1080:
+        raise ValueError("wrong_screenshot_dimensions")
     scenes = {}
     for row in report["results"]:
         if row.get("failed") or not row.get("image"):
@@ -128,7 +131,8 @@ def candidates(run):
         if data[:8] != b"\x89PNG\r\n\x1a\n" or len(data) < 24:
             raise ValueError("invalid_png")
         width, height = struct.unpack("!II", data[16:24])
-        if width != row["width"] or (width == 1920 and height != 1080):
+        expected_height = heights.get(str(row["width"]), 900)
+        if width != row["width"] or height != expected_height or row.get("height", expected_height) != expected_height:
             raise ValueError("wrong_screenshot_dimensions")
         scenes.setdefault(row["scene"], set()).add((row["theme"], width))
     required = {(theme, width) for theme in ("light", "dark") for width in (720, 1120, 1920)}
@@ -140,7 +144,7 @@ def candidates(run):
     return report["results"]
 
 
-async def run_judge(run, *, root=ROOT, model=DEFAULT_MODEL, references=(), client=None, max_cost_usd=5.0, request_ceiling=0.10, max_requests=900):
+async def run_judge(run, *, root=ROOT, model=DEFAULT_MODEL, references=(), client=None, max_cost_usd=5.0, request_ceiling=0.10, max_requests=1000):
     output = root / "app/.look"
     output.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="judge-", dir=output))
@@ -213,7 +217,7 @@ def main():
     parser.add_argument("--references", type=Path, nargs="+", default=[])
     parser.add_argument("--max-cost-usd", type=float, default=5.0)
     parser.add_argument("--request-ceiling", type=float, default=0.10)
-    parser.add_argument("--max-requests", type=int, default=900)
+    parser.add_argument("--max-requests", type=int, default=1000)
     args = parser.parse_args()
     return asyncio.run(run_judge(args.run.resolve(), model=args.model, references=args.references, max_cost_usd=args.max_cost_usd, request_ceiling=args.request_ceiling, max_requests=args.max_requests))
 

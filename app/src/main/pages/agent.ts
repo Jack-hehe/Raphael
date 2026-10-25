@@ -23,7 +23,7 @@
 // details panel on the right, and the centred pill over the chat. Each member has one thread, as
 // Raphael has: picking a member loads its turns (`agent.history.list {member_id}`), and the composer
 // asks it (`agent_ask_text {memberId}`). A member's answers are plain bubbles, with none of Raphael's
-// 《prefix。》, its composer says "Message <name>" and shares Raphael's emblem voice button,
+// 《prefix。》, its composer says 「傳訊息給 <name>」 and shares Raphael's emblem voice button,
 // and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
 // it was. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
 // is the slot of the thread's questions from the background (background-mount.ts). A member's
@@ -79,6 +79,8 @@ import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Pa
 import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
+import { bindComposerLearning, learnComposerCorrections } from "../composer-learning";
+import type { DictationBaseline } from "../composer-learning";
 import { createProblemNotice } from "../problem-notice";
 import { VoiceMode } from "../voice-mode";
 import "../agent.css";
@@ -106,8 +108,6 @@ const HEARING_MAX_MS = 120_000;
 const HOLD_MS = 600;
 /** The voice button sent the key, and the app did not start listening within this long: the picture comes back down. */
 const LISTEN_WAIT_MS = 1500;
-/** The placeholder of the composer: the same words in every language of the window. */
-export const COMPOSER_PLACEHOLDER = "Ask Raphael";
 
 /**
  * The question as the card keeps it: what the app sent, with the strictness it really has. A
@@ -216,6 +216,7 @@ interface Outgoing {
 }
 
 interface ComposerDraft {
+  dictation?: DictationBaseline;
   text: string;
   files: ComposerFile[];
   missing: TurnAttachment[];
@@ -392,6 +393,7 @@ export function createAgent(app: AppContext): Page {
   composer.noValidate = true;
   composer.innerHTML = composerHTML();
   const input = composer.querySelector<HTMLTextAreaElement>(".cmp-input")!;
+  const correctionLearning = bindComposerLearning(input);
   const slashMenu = mountSlashMenu(input, { memberId });
   const attachButton = composer.querySelector<HTMLElement>(".cmp-attach")!;
   const voiceButton = composer.querySelector<HTMLButtonElement>(".cmp-voice")!;
@@ -404,8 +406,6 @@ export function createAgent(app: AppContext): Page {
     author: message => message.matches(".bubble") ? t("chat.you") : members.nameOf(memberId()),
     onQuote: quote => { composerQuote = quote; drawQuote(); focusComposer(); },
   });
-  input.placeholder = COMPOSER_PLACEHOLDER;
-  input.setAttribute("aria-label", COMPOSER_PLACEHOLDER);
 
   const askCard = document.createElement("div");
   askCard.className = "ask-card";
@@ -540,10 +540,10 @@ export function createAgent(app: AppContext): Page {
 
   /**
    * The face of who the thread is with, where the composer, the card and the empty page show it:
-   * Raphael's or the member's. Every thread's voice button uses Raphael's emblem.
+   * Raphael's or the member's. Every thread's voice button is the gold emblem (拉斐爾大師), never a picture.
    */
   function drawFaces(): void {
-    voiceButton.innerHTML = avatarHTML({ size: 32 });
+    voiceButton.innerHTML = avatarHTML({ size: 32, avatar: null });
     if (inRaphael()) {
       askFace.innerHTML = avatarHTML({ size: 30 });
       hero.innerHTML = avatarHTML({ size: 132, loop: true });
@@ -555,9 +555,9 @@ export function createAgent(app: AppContext): Page {
     voice.redraw();
   }
 
-  /** The thread's prompt and the shared emblem voice button. */
+  /** The thread's prompt in the window's language. */
   function drawComposer(): void {
-    const words = inRaphael() ? COMPOSER_PLACEHOLDER : memberPlaceholder(members.member().name);
+    const words = inRaphael() ? t("home.askRaphael") : memberPlaceholder(members.member().name);
     input.placeholder = words;
     input.setAttribute("aria-label", words);
     settingsButton.hidden = !inRaphael();
@@ -978,10 +978,12 @@ export function createAgent(app: AppContext): Page {
       return;
     }
     const sending = files;
+    const dictation = correctionLearning.snapshot();
+    const corrections = correctionLearning.take(input.value);
     const member = memberId();
     const sentConversation = conversationId();
     const requestId = crypto.randomUUID();
-    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote };
+    const draft: ComposerDraft = { text: input.value, files: sending, missing: [], replacing, quote: composerQuote, dictation };
     rememberDraft(requestId, draft);
     const mine: Outgoing = { key: `out:${++sent}`, requestId, member, conversationId: sentConversation, text, sentAt: Date.now(), files: sending.map(({ name, mime, data, size }) => ({ name, mime, size, preview: fileKind(mime) !== "file" ? `data:${mime};base64,${data}` : undefined })), quote: composerQuote };
     outgoing.push(mine);
@@ -996,6 +998,7 @@ export function createAgent(app: AppContext): Page {
     askingMember = member;
     try {
       await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
+      void learnComposerCorrections(corrections);
     } catch (err) {
       if (retracted.has(requestId)) return;
       if (askingMember === member) askingMember = null;
@@ -1030,6 +1033,7 @@ export function createAgent(app: AppContext): Page {
    * composer is where it stays (`focusComposer`).
    */
   function putDraft(words: string): void {
+    correctionLearning.clear();
     input.value = words;
     fit();
     focusComposer();
@@ -1332,6 +1336,7 @@ export function createAgent(app: AppContext): Page {
     thread.replaceChildren();
     if (voice.isUp) voice.drop();
     input.value = "";
+    correctionLearning.clear();
     files = [];
     missingFiles = [];
     replacing = undefined;
@@ -1573,6 +1578,7 @@ export function createAgent(app: AppContext): Page {
   }
 
   function restoreDraft(draft: ComposerDraft): void {
+    correctionLearning.restore(draft.dictation);
     input.value = draft.text;
     attachmentEpoch++;
     files = [...draft.files];

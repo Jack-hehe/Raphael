@@ -606,15 +606,15 @@ function dictationHTML(v: SettingsView): string {
 export const computerApps = (device: DeviceSettings): readonly { exe: string; name: string }[] => device.computer_apps ?? [];
 
 /**
- * 電腦操作: one row per app Raphael may always operate (its name, and a borderless trash button
- * that takes it away), or a single muted row when there is none. The apps are put there by the
+ * Computer access: one row per always-allowed app, with removal in its overflow menu,
+ * or a single muted row when there is none. The apps are put there by the
  * answer 「一律允許」 of the question that asks before Raphael first uses an app.
  */
 function computerRows(v: SettingsView): string[] {
   const apps = computerApps(v.device);
   if (apps.length === 0) return [row(`<span class="val">${esc(t("settings.computerNone"))}</span>`)];
   return apps.map((app) =>
-    row(esc(app.name), "", iconBtn("trash", t("settings.computerRemove"), ` data-act="computer-remove" data-exe="${esc(app.exe)}"`)),
+    row(esc(app.name), "", iconBtn("more", t("members.more", { p0: app.name }), ` data-act="computer-menu" data-exe="${esc(app.exe)}" aria-haspopup="menu" aria-expanded="false"`)),
   );
 }
 

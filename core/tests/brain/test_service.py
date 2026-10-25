@@ -919,6 +919,24 @@ async def test_dictionary_learn_makes_a_rule_only_when_a_pair_is_seen_again(rout
     assert await learn(router, "Claude", "cloud") == {"learned": []}
 
 
+async def test_a_single_name_correction_adds_the_term_and_repeated_forms_are_not_missed(router):
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {"learned": ["OpenMausBot"]}
+    entry = (await router.call("dictionary.list", {}))["entries"][0]
+    assert entry["word"] == "OpenMausBot" and entry["source"] == "learned"
+    assert entry["misheard"] == []  # First sighting is already a term, without a risky rule.
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {
+        "learned": ["OpenMausBot"], "rules": ["OpenMausBot"]
+    }
+    assert await learn(router, "OpenMausBot", "open maus bot") == {"learned": ["OpenMausBot"]}
+    assert await learn(router, "OpenMausBot", "open maus bot") == {
+        "learned": ["OpenMausBot"], "rules": ["OpenMausBot"]
+    }
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {"learned": []}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert len(entries) == 1
+    assert entries[0]["misheard"] == ["Open Mouse Bot", "open maus bot"]
+
+
 async def test_dictionary_learn_counts_the_same_pair_once_in_a_dictation(router):
     result = await learn(router, "Claude", "cloud", ("Claude", "cloud"), ("Claude", " cloud "))
     assert result == {"learned": ["Claude"]}

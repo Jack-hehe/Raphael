@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use handy_keys::{
-    EditCancellation, EditEvent, EditObservation, observe_edits, observe_submissions,
+    EditCancellation, EditEvent, EditObservation, observe_edits, observe_terminal_edits,
 };
 use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER, HWND};
 use windows::Win32::System::Com::{
@@ -179,7 +179,7 @@ impl FieldProbe for UiaProbe {
             {
                 return probe_step(None, "terminal_checkpoint_or_subscription");
             }
-            field.set_observation(observe_submissions(
+            field.set_observation(observe_terminal_edits(
                 target.hwnd,
                 expires.saturating_duration_since(Instant::now()),
             ));
@@ -455,6 +455,7 @@ fn discover(
         keyboard_field,
         hidden_input: false,
         collapsed_pastes: 0,
+        terminal_edited: false,
         terminal_panel,
         retried: false,
         hwnd: target.hwnd,
@@ -815,6 +816,8 @@ struct UiaField {
     hidden_input: bool,
     /// The largest placeholder count already reported for this paste, never its text or ID.
     collapsed_pastes: usize,
+    /// An edit was captured since the last authoritative terminal snapshot.
+    terminal_edited: bool,
     /// Whether the focused element is the hidden input of an editor's terminal panel (xterm.js).
     terminal_panel: bool,
     /// Whether discovery took more than one attempt. A retry may have adopted another element
@@ -886,7 +889,12 @@ impl WatchedField for UiaField {
 
     fn corrections(&self) -> Option<Vec<Correction>> {
         match &self.mode {
-            ReadMode::Terminal { tracker, .. } => Some(tracker.corrections()),
+            ReadMode::Terminal { tracker, .. } => Some(
+                self.keys
+                    .as_ref()
+                    .map(Keystrokes::corrections)
+                    .unwrap_or_else(|| tracker.corrections()),
+            ),
             ReadMode::Keys => Some(
                 self.keys
                     .as_ref()
@@ -921,10 +929,26 @@ impl UiaField {
             return false;
         }
         if self.kind == AppKind::Terminal {
-            let stopped = self
+            let events = self
                 .observation
                 .as_mut()
-                .is_none_or(|observation| ends_terminal(&observation.drain()));
+                .map(EditObservation::drain)
+                .unwrap_or_else(|| vec![EditEvent::Invalidated]);
+            let stopped = ends_terminal(&events);
+            for event in events {
+                self.terminal_edited |= !matches!(event, EditEvent::Enter | EditEvent::Invalidated);
+                if event == EditEvent::Resync {
+                    // IME, clipboard and pointer edits use committed provider text, never VK guesses.
+                    self.keys.take();
+                } else if let Some(keys) = &mut self.keys {
+                    keys.apply(event);
+                }
+                if event == EditEvent::Invalidated {
+                    if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
+                        tracker.invalidate();
+                    }
+                }
+            }
             if stopped {
                 if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
                     tracker.submitted();
@@ -971,6 +995,9 @@ impl UiaField {
             }
             if terminal {
                 if let Some(tracker) = TerminalTracker::new(&text, &self.pasted) {
+                    if !tracker.unambiguous() || collapsed_pastes(&text) > 0 {
+                        self.keys.take();
+                    }
                     let region = tracker.region().to_owned();
                     self.mode = ReadMode::Terminal {
                         tracker: Box::new(tracker),
@@ -1046,13 +1073,35 @@ impl UiaField {
     /// Follows the pasted rows of a terminal. The checks around the read also drain the keyboard
     /// observer, so an Enter ends the watch before any later screen is read.
     fn read_terminal(&mut self, reader: usize) -> Snapshot {
+        if !self.read_allowed() {
+            return Snapshot::Left;
+        }
+        if let Some(keys) = &self.keys {
+            if let Some(text) = keys.text() {
+                return Snapshot::Text(text.to_owned());
+            }
+            // A caret that crossed the pasted boundary cannot be safely reconstructed.
+            // Only an explicit Resync event may switch to authoritative screen text.
+            if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
+                tracker.invalidate();
+            }
+            self.ended = true;
+            self.observation.take();
+            return Snapshot::Left;
+        }
         let Some(text) = self.read_source(reader) else {
             return Snapshot::Left;
         };
         let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
             return Snapshot::Left;
         };
-        if tracker.observe(&text) == TerminalDecision::Continue {
+        let edited = std::mem::take(&mut self.terminal_edited);
+        let decision = if edited {
+            tracker.observe_input(&text, true)
+        } else {
+            tracker.observe(&text)
+        };
+        if decision == TerminalDecision::Continue {
             Snapshot::Text(tracker.region().to_owned())
         } else {
             self.observation.take();
@@ -1496,6 +1545,31 @@ fn checked_read<S, T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logged_terminal_paste_overlay_backspaces_and_retyping_learns_the_name() {
+        let pasted = "Please use Open Mouse Bot";
+        let focus = FocusWatch::new(Some(vec![1, 2]), 7, 42);
+        let mut keys = Keystrokes::with_enter(pasted, EnterKey::Submit).unwrap();
+        // 2026-10-25 11:39:03: own unfocused Pane, target still foreground.
+        focus.changed_from(Some(&[9]), Some(false), true, Some(false), true);
+        assert!(focus.input_observation_allowed());
+        for _ in 0.."Open Mouse Bot".len() {
+            keys.apply(EditEvent::Backspace);
+        }
+        for byte in b"OpenMausBot" {
+            keys.apply(EditEvent::Ascii(*byte));
+        }
+        keys.apply(EditEvent::Enter);
+        assert_eq!(keys.text(), Some("Please use OpenMausBot"));
+        assert_eq!(
+            keys.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into(),
+            }]
+        );
+    }
 
     #[test]
     fn repeated_focus_events_for_the_same_runtime_id_do_not_cancel() {

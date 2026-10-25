@@ -156,7 +156,8 @@ test("resource editor updates existing skills and edits command fields without r
   const editor = mountMemberResources(container, { memberId: 7, tab: 'skills' }); await flush();
   click(container, '[data-res="skill-toggle"]'); await flush();
   expect(api.membersSkillsUpdate).toHaveBeenCalledWith(7, 4, false);
-  click(container, '[data-res="command-edit"]');
+  click(container, '[data-res="command-menu"]');
+  click(document, '#app-popover [data-pick="command-edit"]');
   expect(container.querySelector<HTMLInputElement>('#mp-command-name')!.value).toBe('review');
   expect(container.querySelector<HTMLTextAreaElement>('#mp-command-template')!.value).toBe('Review {input}');
   fill(container, '#mp-command-template', 'Changed {input}');
@@ -265,7 +266,7 @@ test("editing a saved routine from the profile preserves schedule end conditions
   vi.mocked(api.routinesList).mockResolvedValue({ routines: [{ ...routine, schedule: { ...routine.schedule, days: [1, 3] } }] });
   vi.mocked(api.routinesUpdate).mockResolvedValue({ routine: { ...routine, schedule: { ...routine.schedule, days: [1, 3] } } });
   const dialog = openEditMemberDialog(host(), member, "routines"); await flush();
-  click(dialog.el, '[data-dlg="routine-edit"]');
+  click(dialog.el, '[data-dlg="routine-menu"]'); click(document, '#app-popover [data-pick="edit"]');
   const form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
   expect(form.querySelector<HTMLInputElement>("#au-count")!.value).toBe("12");
   fill(form, "#au-title", "Updated review"); click(form, '[data-dlg="save"]'); await flush();
@@ -279,12 +280,12 @@ test("a profile routine draft can be edited and deleted without sending a negati
   let form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
   fill(form, "#au-title", "Draft review"); fill(form, "#au-prompt", "Review updates");
   click(form, '[data-dlg="save"]'); await flush();
-  click(dialog.el, '[data-dlg="routine-edit"]'); form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
+  click(dialog.el, '[data-dlg="routine-menu"]'); click(document, '#app-popover [data-pick="edit"]'); form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
   fill(form, "#au-title", "Updated draft"); click(form, '[data-dlg="save"]'); await flush();
   expect(dialog.el.querySelector(".mp-routine-list")!.textContent).toContain("Updated draft");
-  click(dialog.el, '[data-dlg="routine-edit"]'); form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
+  click(dialog.el, '[data-dlg="routine-menu"]'); click(document, '#app-popover [data-pick="edit"]'); form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
   click(form, '[data-dlg="delete"]'); click(document, '.mb-confirm [data-dlg="delete"]'); await flush();
-  expect(dialog.el.querySelector('[data-dlg="routine-edit"]')).toBeNull();
+  expect(dialog.el.querySelector('[data-dlg="routine-menu"]')).toBeNull();
   expect(api.routinesCreate).not.toHaveBeenCalled(); expect(api.routinesUpdate).not.toHaveBeenCalled(); expect(api.routinesDelete).not.toHaveBeenCalled();
   dialog.close();
 });

@@ -288,7 +288,7 @@ describe("a member's panel", () => {
     const form = document.querySelector<HTMLElement>(".au-routine-dialog")!;
     const time = form.querySelector<HTMLInputElement>("#au-time")!;
     expect(time.type).toBe("text");
-    expect(time.placeholder).toBe("HH:MM");
+    expect(time.placeholder).toBe("00:00");
     form.querySelector<HTMLInputElement>("#au-title")!.value = "Review";
     form.querySelector<HTMLTextAreaElement>("#au-prompt")!.value = "Summarize progress";
     form.querySelector<HTMLElement>('[data-kind="daily"]')!.click();
@@ -450,7 +450,8 @@ test("a remote deletion keeps the routine draft editable and refresh failure kee
   const panel = mount();
   await flush();
   panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
-  panel.el.querySelector<HTMLElement>('[data-det="routine-edit"]')!.click();
+  panel.el.querySelector<HTMLElement>('[data-det="routine-menu"]')!.click();
+  document.querySelector<HTMLElement>('#app-popover [data-pick="edit"]')!.click();
   const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.value = "Unsaved routine";
   title.focus();

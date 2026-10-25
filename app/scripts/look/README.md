@@ -6,6 +6,7 @@ From `app/`:
 npm run look -- --list
 npm run look -- chat details --theme both --width 1120,720
 npm run look -- --all --theme both --width 1120,720,1920x1080
+npm run look -- composer-learn member-composer-learn room-composer-learn team-composer-learn --theme both --width 1120,720,1920x1080
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
 npm run verify -- --out ../.fold/app/.look
@@ -19,14 +20,18 @@ Look needs an installed Edge/Chrome and the pinned **puppeteer-core@25.13.0** de
 It never downloads a browser or installs packages. Preserve the package/lockfile pin.
 `LOOK_BROWSER` optionally selects an executable. Node 22 or later is required.
 
+`--width` accepts widths (900px height) and explicit `WIDTHxHEIGHT` viewports.
 Each run creates `.look/run-*/` with viewport PNGs, paginated PNG contact sheets,
 `contacts.json` and `report.json`. `--out` changes the parent directory. A nonzero exit
-means a scene, runtime, layout, raw translation key, non-finite work duration, or visible native select/time-input
+means a scene, runtime, layout, raw translation key, raw Markdown text, mixed-language copy, non-finite work duration, or visible native select/time-input
 or checked product-rule violation failed; missing dependencies produce a `blocked`
 report and a nonzero exit. Product rules include duplicate tooltips, visible row
 destruction, action frames/order and known untranslated interface copy. These
 checks do not replace design review.
 Inspect contact sheets and full-size PNGs as well as the automated checks.
+The shared audit rejects visible text nodes containing Markdown heading markers,
+unchecked task markers, paired bold markers or triple backticks, including outside
+chat messages. Hidden pages and content outside scrollports are excluded.
 
 The real `index.html`, `main.ts` and CSS run through Vite. Overlay scenes select
 the production `overlay.html` entry. Only the Tauri IPC boundary is
@@ -39,7 +44,7 @@ MCP servers, providers/models and dictation data. Browser dates are fixed to the
 
 The normal entry opens Home and waits for Raphael's status strip. Existing non-home
 journeys then click the real Raphael rail destination before driving their steps.
-Home scenes cover rich/empty data, the lower strip, expansion, reports and routines.
+Home scenes cover rich/empty data, reports, routines and calendar navigation.
 
 Add a `scene(name, description, steps, fixtureOverrides)` to a module in `scenes/` and
 export it from `scenes/index.mjs`. Steps include click, type, hover, key, wait, scroll,
@@ -50,9 +55,9 @@ and `onboarding` select boundary variants. `overlayEvents` replays the native ov
 channel contract; `advance-time` advances the shared fixed clock for production timers. All scenarios appear in `--list`.
 
 Use `check(name)` for browser assertions that need rendered geometry. The shared
-`checks.mjs` guards title/panel state, conversation-list overflow, equal 32px
-composer buttons, percentage captions, complete calendar-chip times, conversation
-design and vertical dictation navigation. Successful measurements are saved in each
+`checks.mjs` guards title/panel state, conversation-list overflow, the single composer
+action slot, percentage captions, complete calendar-chip times and 20px faces,
+conversation design and horizontal dictation navigation. Successful measurements are saved in each
 result's `assertions`. Every settings journey checks the dialog radius and close-control
 hit target, then waits for the requested navigation entry to become current. Keep prerequisite
 data in the shared fixture: usage expansion needs more than five historical member
@@ -62,9 +67,7 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 139 current scenes (834 combinations for both themes and three
-sizes). Width `1920` or `1920x1080` captures a 1920x1080 viewport; other widths use
-900px height.
+scenes. There are 159 current scenes (954 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
@@ -83,6 +86,6 @@ Its rules, feature context, external reference paths, budgets and cache are
 documented in the verify-raphael skill and `GUARDIAN-NOTES.md`. The verify alias is
 `npm run verify -- --judge <look run>`; set `RAPHAEL_JUDGE_REFERENCES` to a JSON array
 of external image paths. Live matrix and judge opt into paid network requests;
-ordinary verify/look and their fake-model unit tests remain offline. Every PR runs
+ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1000 (the full matrix has 954 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
 the repo's contracts and full look matrix in CI. Missing hosted secrets produce
 an explicit SKIP notice, never live/design acceptance.

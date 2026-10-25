@@ -19,7 +19,7 @@ test("dictation mounts the existing pages, hides inactive tabs and remembers the
   const app = { go: vi.fn(), onEvent: () => () => {} } as unknown as AppContext;
   const page = createDictation(app, { overview, history, dictionary });
   document.body.append(page.el); page.show();
-  expect(page.el.querySelector('[role="tablist"]')?.getAttribute("aria-orientation")).toBe("vertical");
+  expect(page.el.querySelector('[role="tablist"]')?.getAttribute("aria-orientation")).toBe("horizontal");
   expect(page.el.querySelector(".dictation-content")?.contains(history.el)).toBe(true);
   expect(overview.el.hidden).toBe(false);
   expect(history.el.hidden).toBe(true);
@@ -32,14 +32,14 @@ test("dictation mounts the existing pages, hides inactive tabs and remembers the
   const selected = page.el.querySelector<HTMLElement>('[data-dictation-tab="history"]')!;
   selected.focus(); selected.click();
   expect(document.activeElement?.getAttribute("data-dictation-tab")).toBe("history");
-  key("ArrowDown");
+  key("ArrowRight");
   expect(page.tab()).toBe("dictionary");
   expect(document.activeElement?.getAttribute("aria-controls")).toBe(dictionary.el.id);
-  key("ArrowDown");
+  key("ArrowRight");
   expect(page.tab()).toBe("overview");
   key("End");
   expect(page.tab()).toBe("dictionary");
-  key("Home"); key("ArrowUp");
+  key("Home"); key("ArrowLeft");
   expect(page.tab()).toBe("dictionary");
   page.setTab("history");
   page.hide();

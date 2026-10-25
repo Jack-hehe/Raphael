@@ -65,9 +65,10 @@ describe("the page's responsive sizes", () => {
     }
   });
 
-  test("the breakpoints stay: the panel lies over the chat under 1120 px, the column is the dropdown under 860 px", () => {
+  test("the breakpoints stay: the panel lies over the chat under 1120 px, the face strip and picker remain usable under 860 px", () => {
     expect(members).toMatch(/@media \(max-width: 1119px\) \{[^@]*\.mb-det \{ position: absolute;[^}]*width: var\(--pa-det\)/);
-    expect(members).toMatch(/@media \(max-width: 859px\) \{[^@]*\.mb-col \{ display: none; \}[^@]*\.sel\.mb-pick \{ display: inline-flex; \}/);
+    expect(members).toContain('.page.page-agent:has(.mb-col.is-collapsed) { --pa-col: 56px; }');
+    expect(members).toMatch(/@media \(max-width: 859px\) \{[^@]*\.sel\.mb-pick \{ display: inline-flex; \}/);
   });
 
   test("icons stay at 16 or 20 px: they step at 1280 px wide instead of following the fluid sizes", () => {

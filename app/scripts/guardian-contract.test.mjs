@@ -15,6 +15,9 @@ it("CI enforces the same offline layers and real three-size UI for every PR", ()
   expect(ci).toContain("out true true true");
   expect(ci).toContain("Design judge SKIP");
   expect(ci).toContain("--max-cost-usd");
+  const requestLimit = Number(ci.match(/--max-requests (\d+)/)?.[1]);
+  expect(requestLimit).toBeGreaterThanOrEqual(scenes.length * 6);
+  expect(requestLimit).toBeLessThanOrEqual(1000);
   expect(ci).toContain("secrets.OPENROUTER_API_KEY");
   expect(ci).toContain("needs: [changes, frontend, python, windows-shell]");
   const nightly = read(".github/workflows/guardian-live.yml");
@@ -34,7 +37,10 @@ it("portable guard commands use the installed core environment without shell int
 
 it("every captured scene has feature context for the judge", () => {
   const names = ["home", "conversation", "members", "automations", "team-and-rooms", "dictation", "settings-appearance", "connections-mcp", "usage", "onboarding"];
-  const mapped = new Set(names.flatMap(name => [...read(`.agents/skills/verify-raphael/features/${name}.md`).matchAll(/^npm run look -- (.+)$/gm)].flatMap(([, command]) => command.split(/\s+/))));
+  const mapped = new Set(names.flatMap(name => {
+    const path = `.agents/skills/verify-raphael/features/${name}.md`;
+    return [...read(existsSync(resolve(root, `.fold/${path}`)) ? `.fold/${path}` : path).matchAll(/^npm run look -- (.+)$/gm)].flatMap(([, command]) => command.split(/\s+/));
+  }));
   expect(scenes.filter(scene => !mapped.has(scene.name)).map(scene => scene.name)).toEqual([]);
 });
 

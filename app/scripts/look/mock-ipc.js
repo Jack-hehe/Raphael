@@ -6,6 +6,7 @@ export function installMock(fixture, config = {}, target = window) {
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
+  if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
   if (adminQuestion) {
@@ -18,6 +19,9 @@ export function installMock(fixture, config = {}, target = window) {
     data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
     data.turns[0].text = "";
   }
+  if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
+  if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);
+  if (variant.roomWrapup) data.messages.push(data.roomWrapupMessage);
   if (variant.usageEmpty) {
     data.usage.total = 0;
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));
@@ -33,7 +37,7 @@ export function installMock(fixture, config = {}, target = window) {
     data.home.counts = { today: 0, reports: 0, calendar: 0 };
     data.home.usage = { month_usd: 0, limit_usd: 20, daily: Array(14).fill(0), allowances: { brains: [] } };
     data.status.spend = { ...data.status.spend, month_usd: 0, today_usd: 0, daily: Array(14).fill(0) };
-    data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null };
+    data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null, daily: Array(14).fill(0) };
   }
   const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
   target.__look = state;
@@ -60,6 +64,15 @@ export function installMock(fixture, config = {}, target = window) {
       case "history.delete": data.history = data.history.filter(item => item.id !== p.id); return { deleted: true };
       case "dictionary.list": return { entries: data.dictionary };
       case "dictionary.add": { const entry = { ...p, id: nextId(data.dictionary), misheard: [], source: "manual", created_at_ms: data.now }; data.dictionary.push(entry); return { entry }; }
+      case "dictionary.learn": {
+        const learned = [];
+        for (const { word } of p.corrections) {
+          if (data.dictionary.some(entry => entry.word === word)) continue;
+          data.dictionary.push({ id: nextId(data.dictionary), word, misheard: [], source: "learned", created_at_ms: data.now });
+          learned.push(word);
+        }
+        return { learned };
+      }
       case "dictionary.delete": data.dictionary = data.dictionary.filter(item => item.id !== p.id); return { deleted: true };
       case "members.list": return { members: data.members, groups: data.groups };
       case "members.presets": return { presets: data.presets };
@@ -93,11 +106,12 @@ export function installMock(fixture, config = {}, target = window) {
       case "routines.update": { const routine = update(data.routines, p.id, p); notify("RoutinesChanged", { member_id: routine.member_id }); return { routine }; }
       case "routines.delete": data.routines = data.routines.filter(item => item.id !== p.id); notify("RoutinesChanged", { member_id: 0 }); return { deleted: true };
       case "rooms.list": return { rooms: data.rooms };
-      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id) };
-      case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false) }; data.rooms.push(room); return { room }; }
+      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id), exchange: data.roomExchanges.filter(item => item.room_id === p.room_id).at(-1) ?? null };
+      case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false), default_responder: p.default_responder ?? "auto" }; data.rooms.push(room); return { room }; }
       case "rooms.update": return { room: update(data.rooms, p.room_id, p) };
       case "rooms.delete": data.rooms = data.rooms.filter(item => item.id !== p.room_id); return { deleted: true };
-      case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: null, turn_id: null }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
+      case "rooms.stop": { for (const exchange of data.roomExchanges.filter(item => item.room_id === p.room_id && ["running", "queued"].includes(item.state))) exchange.stop_requested = 1; notify("RoomsChanged", { room_id: p.room_id }); return { stopped: true }; }
+      case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: p.reply_to ?? null, turn_id: null, reply_to_member: data.messages.find(item => item.id === p.reply_to)?.member_id ?? null, origin_message_id: nextId(data.messages), kind: "message" }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
       case "brains.cli": return { clis: data.clis };
       case "models.catalog": return data.catalog;
       case "models.status": return data.modelStatus;
@@ -145,6 +159,9 @@ export function installMock(fixture, config = {}, target = window) {
       }
       if (command === "overlay_log") return;
       if (command === "main_events") { state.channel = args.channel; return; }
+      // Escape reaches the native worker even when no capture is active.
+      if (command === "window_hotkey" && args.kind === "cancel") return;
+      if (command === "agent_ask_text") return null;
       if (command === "core_call") return copy(await core(args.method, args.params));
       if (command === "device_settings_get") return copy(data.device);
       if (command === "device_settings_set") { Object.assign(data.device, args.patch); notify("DeviceSettings", { settings: copy(data.device) }); return copy(data.device); }

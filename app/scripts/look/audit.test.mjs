@@ -1,13 +1,15 @@
 import { Window } from "happy-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
+import { checkRendered } from "./checks.mjs";
+import { scenes } from "./scenes/index.mjs";
 
 describe("rendered look checks", () => {
   it("rejects known English interface labels while preserving user content and brands", () => {
     const window = new Window();
     window.document.body.innerHTML = '<button>Save</button><button>Raphael</button><p class="message-text">Save</p><button hidden>Cancel</button>';
     for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
-    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], ['Save', 'Cancel', 'Raphael']);
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], null, ['Save', 'Cancel', 'Raphael']);
     expect(result.productRules.map(item => item.rule)).toEqual(['R-UI-14']);
   });
   const productAudit = html => {
@@ -16,6 +18,27 @@ describe("rendered look checks", () => {
     for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
     return { window, audit: () => auditDocument(window.document, { width: 1120, height: 900 }, []) };
   };
+  it("rejects a small centered team board at full screen", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<div class="team-board-scroll"><div class="team-group"></div><div class="team-group"></div></div>';
+    const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height });
+    window.document.querySelector('.team-board-scroll').getBoundingClientRect = () => rect(232, 100, 1688, 894);
+    const groups = window.document.querySelectorAll('.team-group');
+    groups[0].getBoundingClientRect = () => rect(780, 273, 278, 334);
+    groups[1].getBoundingClientRect = () => rect(1082, 273, 278, 198);
+    vi.stubGlobal('document', window.document); vi.stubGlobal('innerWidth', 1920);
+    try {
+      expect(() => checkRendered('team-board-space')).toThrow(/R-UI-01/);
+      groups[0].getBoundingClientRect = () => rect(300, 340, 742, 400);
+      groups[1].getBoundingClientRect = () => rect(1090, 340, 742, 400);
+      expect(checkRendered('team-board-space').widthShare).toBeGreaterThanOrEqual(0.8);
+      groups[0].getBoundingClientRect = () => rect(300, 340, 742, 120);
+      groups[1].getBoundingClientRect = () => rect(1090, 340, 742, 120);
+      expect(() => checkRendered('team-board-space')).toThrow(/35%/);
+      vi.stubGlobal('innerWidth', 1120);
+      expect(checkRendered('team-board-space')).toEqual({ check: 'team-board-space', wide: false });
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("rejects duplicate custom and native tooltips", () => {
     const { audit } = productAudit('<button data-tooltip="Save" title="Save">Save</button><button data-tooltip="Open"><svg><title>Open</title></svg></button><button title="Native">Native</button>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-26', 'R-UI-26']);
@@ -37,6 +60,66 @@ describe("rendered look checks", () => {
   it("distinguishes date choices and navigation from ordinary text actions", () => {
     const { audit } = productAudit('<div class="au-month-grid"><button class="btn" style="border:0">25</button></div><button class="btn mb-panel-back" style="border:0">Members</button><button class="btn mc-source" style="border:0">Provider</button><button class="btn cs-main" style="border:0">Notion service details</button><button class="btn conversation-new" style="border:0">New conversation</button>');
     expect(audit().productRules.map(item => item.text)).toEqual(['New conversation']);
+  });
+  it.each(scenes.filter(scene => scene.name.endsWith("composer-learn")))("keeps $name correction data distinct from untranslated UI", scene => {
+    const window = new Window(), { before, after } = scene.fixture.dictationText;
+    expect(scene.steps.find(step => step.action === "dictation-paste").text).toBe(before);
+    expect(scene.steps.find(step => step.action === "type").text).toBe(after);
+    window.document.body.innerHTML = `<p>${after}</p><p>OpenMausBot</p><button>Message</button>`;
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const allowed = Object.values(scene.fixture.dictationText).flatMap(text => text.match(/[A-Za-z]{2,}/g) ?? []).map(word => word.toLowerCase());
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], allowed).mixedLanguage.map(item => item.word)).toEqual(["Message"]);
+  });
+  it.each(["# Heading", "## Heading", "Text\n  ### Heading", "- [ ] Pending", "**bold**", "```js\ncode\n```"])("rejects visible raw Markdown: %s", text => {
+    const window = new Window();
+    const paragraph = window.document.createElement("p");
+    paragraph.textContent = text; window.document.body.append(paragraph);
+    paragraph.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = { ...auditDocument(window.document, { width: 1120, height: 900 }), runtimeErrors: [] };
+    expect(result.rawMarkdown).toHaveLength(1);
+    expect(result.rawMarkdown[0].text).toBe(text);
+    expect(failedChecks(result)).toBe(true);
+  });
+  it("ignores rendered formatting, ordinary hashes, hidden text and Markdown outside a scrollport", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<h3>Conclusion</h3><p><strong>Owner</strong>: next step, issue #123, color #fff</p><div hidden>### Hidden</div><div style="overflow-y:auto"><p id="offscreen">**older**</p></div>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    window.document.querySelector("#offscreen").getBoundingClientRect = () => ({ left: 10, top: 200, right: 100, bottom: 230, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }).rawMarkdown).toEqual([]);
+  });
+  it("does not translate user-entered textarea data but still audits its UI attributes", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Message">C:/Work/Team notes</textarea><textarea aria-label="名稱">User supplied text</textarea>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], []).mixedLanguage.map(item => item.word)).toEqual(["Message"]);
+  });
+  it("allows complete product names without allowing their ordinary English words", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<p>Claude Code</p><p>claude code</p><p>Code required</p><p>Claude Coder</p><p>KEY=value</p><p>value required</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], ["claude", "claude code", "key=value"]).mixedLanguage.map(item => item.word)).toEqual(["Code", "required", "Coder", "value"]);
+  });
+  it("allows the exact command-template token while rejecting input used as English prose", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="指令範本；以 {input} 代入後續文字"></textarea><p>input required</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], []).mixedLanguage.map(item => item.word)).toEqual(["input", "required"]);
+  });
+  it("allows protocol names while still rejecting English prose beside technical examples", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Authorization=Bearer ..."></textarea><textarea placeholder=\'{"mcpServers": {}}\'></textarea><p>Send request</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], ["authorization", "bearer", "mcpservers"]);
+    expect(result.mixedLanguage.map(item => item.word)).toEqual(["Send", "request"]);
+  });
+  it("rejects interface copy left in English in a Chinese window, allowing data and product names", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Message 紫苑"></textarea><button aria-label="問拉斐爾">Google Calendar</button><p>Finance 已建立</p><a href="#">研究訪談摘要.pdf</a>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = { ...auditDocument(window.document, { width: 1120, height: 900 }, [], ["google", "calendar", "finance"]), runtimeErrors: [] };
+    expect(result.mixedLanguage.map(item => item.word)).toEqual(["Message"]);
+    expect(failedChecks(result)).toBe(true);
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, []).mixedLanguage).toEqual([]);
   });
   it("rejects non-finite durations in visible work summaries", () => {
     const window = new Window();

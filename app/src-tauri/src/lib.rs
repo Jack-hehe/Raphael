@@ -520,4 +520,12 @@ mod window_state_tests {
         let flags = main_window_state_flags();
         assert!(!flags.intersects(StateFlags::SIZE | StateFlags::POSITION));
     }
+
+    #[test]
+    fn ctrl_plus_and_minus_zoom_the_main_window() {
+        // The owner zooms the window with Ctrl + plus / minus (2026-10-25); WebView2 handles the keys.
+        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = config["app"]["windows"].as_array().unwrap().iter().find(|w| w["label"] == MAIN_WINDOW).unwrap();
+        assert_eq!(main["zoomHotkeysEnabled"], true);
+    }
 }

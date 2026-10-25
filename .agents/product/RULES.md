@@ -4,7 +4,7 @@ Public paraphrases of decisions dated 2026-10-20 through 2026-10-25. Later rules
 
 | ID | Date | Requirement | Check | Severity | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| R-UI-01 | 2026-10-25 | Judge hierarchy, proportions, sizes, density, flow and polish at 720, 1120 and 1920x1080, both themes; no tiny floating cards at full screen. | judge | hard | Feature map and screenshots |
+| R-UI-01 | 2026-10-25 | Judge hierarchy, proportions, sizes, density, flow and polish at 720, 1120 and 1920x1080, both themes; no tiny floating cards at full screen. At 1920x1080, default Team groups use at least 80% of workspace width and 35% of its area, within the scrollport. | look, judge | hard | app/scripts/look/audit.test.mjs::rejects a small centered team board at full screen |
 | R-UI-02 | 2026-10-25 | No filler slogans, subtitles, helper paragraphs or stage instructions; retain essential errors, codes and destructive confirmations. | judge | hard | Feature map and screenshots |
 | R-UI-03 | 2026-10-25 | Home uses obvious charts, few words and a small detail icon per card. | judge | hard | features/home.md |
 | R-UI-04 | 2026-10-25 | Home gives Raphael's emblem a prominent size. | judge | hard | features/home.md |

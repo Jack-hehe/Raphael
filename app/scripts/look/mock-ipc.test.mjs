@@ -60,6 +60,16 @@ describe("shared look IPC boundary", () => {
     await expect(target.__TAURI_INTERNALS__.invoke("core_call", { method: "new.feature.list" })).rejects.toThrow("Unmocked IPC: new.feature.list");
     expect(state.errors).toEqual(["Unmocked IPC: new.feature.list"]);
   });
+  it("models idle Escape cancellation while rejecting unsupported native hotkeys", async () => {
+    const target = {};
+    const state = installMock(fixture, {}, target);
+    await expect(target.__TAURI_INTERNALS__.invoke("window_hotkey", { kind: "cancel" })).resolves.toBeUndefined();
+    expect(state.calls).toContainEqual({ command: "window_hotkey", kind: "cancel" });
+    expect(state.errors).toEqual([]);
+    await expect(target.__TAURI_INTERNALS__.invoke("window_hotkey", { kind: "dictation_down" })).rejects.toThrow("Unmocked IPC: window_hotkey");
+    await expect(target.__TAURI_INTERNALS__.invoke("window_hotkey", { kind: "unknown" })).rejects.toThrow("Unmocked IPC: window_hotkey");
+    expect(state.errors).toEqual(["Unmocked IPC: window_hotkey", "Unmocked IPC: window_hotkey"]);
+  });
   it("starts each scene from isolated fixture data", async () => {
     const first = {}, second = {};
     installMock(fixture, { fixture: { turns: [], problem: true }, theme: "dark", locale: "ja" }, first);

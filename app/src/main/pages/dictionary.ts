@@ -10,6 +10,7 @@ import { ImportError, countKnown, decodeWordFile, parseWordFile } from "../dicti
 import { describeError } from "../format";
 import { LearnHints, editorName } from "../learn-hint";
 import { loadingHTML } from "../loading";
+import { openActions } from "../member-column";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { Deletions } from "../undo";
 import { actionRow, btn, esc, fieldHTML, ico, iconBtn, st, tabs, toaster } from "../ui";
@@ -37,7 +38,7 @@ const wordChip = (entry: DictionaryEntry): string =>
   (isAuto(entry) ? t("dictionary.004", { p0: ico("sparkle") }) : "") +
   `<div class="wtext"><span class="word">${esc(entry.word)}</span>` +
   (entry.misheard.length > 0 ? t("dictionary.005", { p0: esc(entry.misheard.join("、")) }) : "") +
-  `</div><span class="acts">${iconBtn("trash", t("dictionary.006", { p0: entry.word }), ' data-act="delete"')}</span></div>`;
+  `</div><span class="acts">${iconBtn("more", t("members.more", { p0: entry.word }), ' data-act="word-menu" aria-haspopup="menu" aria-expanded="false"')}</span></div>`;
 
 /** The dictionary, and the way in that the tray's 「將單字加入字典」 takes. */
 export interface DictionaryPage extends Page {
@@ -262,7 +263,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
       renderImport();
     }
     else if (act.dataset.act === "hint-dismiss") hints.dismiss(act.dataset.editor ?? "");
-    else if (act.dataset.act === "delete") remove(Number(act.closest<HTMLElement>(".wrow")?.dataset.id));
+    else if (act.dataset.act === "word-menu") {
+      const id = Number(act.closest<HTMLElement>(".wrow")?.dataset.id);
+      const entry = entries.find(entry => entry.id === id);
+      if (entry) openActions(act, [{ id: "delete", label: t("dictionary.006", { p0: entry.word }), icon: "trash" }], () => remove(id));
+    }
   });
   el.addEventListener("keydown", (e) => {
     const target = e.target as Element;

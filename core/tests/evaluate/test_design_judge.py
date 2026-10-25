@@ -66,7 +66,7 @@ def make_run(root):
             image = f"home-{theme}-{width}.png"
             (run / image).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack("!II", width, 1080 if width == 1920 else 900))
             rows.append(dict(scene="home", theme=theme, width=width, image=image, failed=False))
-    (run / "report.json").write_text(json.dumps(dict(status="passed", errors=[], options={"scenes": ["home"]}, results=rows)))
+    (run / "report.json").write_text(json.dumps(dict(status="passed", errors=[], options={"scenes": ["home"], "heights": {1920: 1080}}, results=rows)))
     return run
 
 
@@ -77,6 +77,24 @@ def test_candidates_require_complete_three_size_two_theme_evidence(tmp_path):
     report["results"].pop()
     (run / "report.json").write_text(json.dumps(report))
     with pytest.raises(ValueError, match="both_themes"):
+        candidates(run)
+
+
+def test_candidates_validate_declared_viewport_heights(tmp_path):
+    run = make_run(tmp_path)
+    path = run / "report.json"
+    report = json.loads(path.read_text())
+    report["options"]["heights"]["1120"] = 800
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="wrong_screenshot_dimensions"):
+        candidates(run)
+    for row in report["results"]:
+        if row["width"] == 1120:
+            (run / row["image"]).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack("!II", 1120, 800))
+    assert len(candidates(run)) == 6
+    report["options"]["heights"]["1920"] = 900
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="wrong_screenshot_dimensions"):
         candidates(run)
 
 

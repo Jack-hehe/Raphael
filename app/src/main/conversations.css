@@ -1,6 +1,6 @@
 .conversation-list { min-width: 0; }
 .mb-det .conversation-list { border: 0; border-radius: 0; overflow: hidden; }
-.mb-det .conversation-open, .mb-det .conversation-new { border: 0; background: transparent; }
+.mb-det .conversation-open { border: 0; background: transparent; }
 .mb-det .conversation-open:hover, .mb-det .conversation-new:hover { background: var(--hover); }
 .conversation-tools { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-2); }
 .conversation-tools input, .conversation-name { min-width: 0; min-height: var(--h-ctl); padding: var(--sp-1) var(--sp-2); border: 1px solid var(--edge); border-radius: var(--r-sm); background: var(--panel); color: var(--text); outline: none; }

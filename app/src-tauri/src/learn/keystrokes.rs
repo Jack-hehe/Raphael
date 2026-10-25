@@ -131,6 +131,27 @@ impl State {
                     return Step::Lost;
                 }
             }
+            EditEvent::WordBackspace => {
+                if !selected {
+                    let Some(prefix) = self.text.get(..self.caret) else {
+                        return Step::Lost;
+                    };
+                    let mut at = self.caret;
+                    let mut word = false;
+                    for (index, character) in prefix.char_indices().rev() {
+                        if character.is_whitespace() && word {
+                            break;
+                        }
+                        word |= !character.is_whitespace();
+                        at = index;
+                    }
+                    if at == self.caret {
+                        return Step::Lost;
+                    }
+                    self.anchor = at;
+                }
+                return self.apply(EditEvent::Backspace, enter);
+            }
             EditEvent::Left { shift } | EditEvent::Right { shift } => {
                 let left = matches!(event, EditEvent::Left { .. });
                 let next = if selected && !shift {
@@ -224,6 +245,35 @@ impl Keystrokes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn word_backspace_and_selection_replacement_preserve_the_original_term() {
+        let mut keys = Keystrokes::new("Please use Open Mouse Bot").unwrap();
+        for _ in 0..3 {
+            keys.apply(EditEvent::WordBackspace);
+        }
+        typed(&mut keys, "OpenMausBot");
+        keys.apply(EditEvent::Enter);
+        assert_eq!(
+            keys.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into()
+            }]
+        );
+        let mut keys = Keystrokes::new("Please use Open Mouse Bot").unwrap();
+        for _ in 0..14 {
+            keys.apply(EditEvent::Left { shift: true });
+        }
+        typed(&mut keys, "OpenMausBot");
+        assert_eq!(
+            keys.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into()
+            }]
+        );
+    }
 
     const PASTED: &str = "Please ask Allice about the release plan today.";
 
