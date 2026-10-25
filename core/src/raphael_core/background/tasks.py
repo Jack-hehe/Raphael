@@ -75,7 +75,7 @@ class Task:
     def quiet(self) -> bool:
         """Whether its report stays in its thread: a member's task, or a routine's run, is never
         said on the overlay (the owner reads it in the app)."""
-        return self.member_id != 0 or self.routine_id is not None
+        return self.member_id != 0 or self.routine_id is not None or self.session_id.startswith("room:")
 
 
 @dataclass

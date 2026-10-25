@@ -117,10 +117,11 @@ describe("the faces", () => {
 });
 
 describe("the composer of a member's thread", () => {
-  test("says Message and the name, in English in every language", () => {
+  test("speaks the window's language, as the rest of the page does", () => {
+    const said = { "zh-TW": "傳訊息給 進度官", en: "Message 進度官", ja: "進度官 にメッセージ" } as const;
     for (const locale of ["zh-TW", "en", "ja"] as const) {
       setLocale(locale);
-      expect(memberPlaceholder("進度官")).toBe("Message 進度官");
+      expect(memberPlaceholder("進度官")).toBe(said[locale]);
     }
   });
 });

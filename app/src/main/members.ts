@@ -29,7 +29,7 @@ export const ROUTINE_TITLE_MAX = 40;
 export const ROUTINE_PROMPT_MAX = 1000;
 
 /** The composer's placeholder in a member's thread: the same English words in every language, as "Ask Raphael" is. */
-export const memberPlaceholder = (name: string): string => `Message ${name}`;
+export const memberPlaceholder = (name: string): string => t("members.placeholder", { p0: name });
 
 /** A one-line field (a member's name or role, or a group's name) as the core stores it: trimmed, with inner whitespace collapsed. */
 export const cleanName = (value: string): string => value.trim().replace(/\s+/g, " ");

@@ -3,26 +3,29 @@
 ## Sub-features
 
 Startup and first-run landing, Raphael's status report, pending questions across
-conversations, today's routines, latest unread member reports, seven-day calendar,
-monthly spend/budget, fourteen-day spend series, subscription allowances and four
-dictation totals. The briefing is the selected layout. Today contains only pending
-questions/approvals and routines due today; unread reports belong only in Reports.
+conversations, today's routines, latest unread member reports, today's calendar,
+monthly spend/budget, fourteen-day spend series, subscription allowances and 
+dictation charts. The twelve-column board pairs today's timeline with pending work
+and reports; three chart cards follow. Today contains routine occurrences and connected
+calendar events for the current date. Pending contains questions/approvals; unread
+reports belong in Reports.
 
 ## How to get to it (user POV)
 
 Launch the app, complete onboarding, click Home (first in the rail), or click the
 Raphael brand. A report opens its member's conversation at that exact turn;
-routines open Automations. Spend and allowance buttons open Usage, and the small
-dictation strip opens Dictation. The status report keeps Raphael's emblem visible.
+routines open Automations. Spend and allowance buttons open Usage, and the dictation card icon opens Dictation. The Today icon and timeline items open the calendar. The status report keeps Raphael's emblem visible.
 
 ## Driving it with look
 
 ```powershell
-npm run look -- home home-empty home-720 home-report home-routine home-expand --theme both --width 1120,720
+npm run look -- home home-empty home-720 home-report home-routine home-calendar home-many --theme both --width 1120,720,1920x1080
 ```
 
+The Today card spans seven columns on desktop, pending/reports span five, and each chart spans four. Compact windows stack the board.
+
 Inspect every contact sheet and the full-size home/report images. The home-720
-scene scrolls to the lower usage and dictation area at both widths. The home-report
+scene scrolls to the lower usage and dictation area at all three widths. The home-report
 assertion checks member history, conversation 11, around_id 2 and the rendered turn.
 The after-onboarding scene also asserts that Home is selected and first in the rail.
 
@@ -36,8 +39,8 @@ calendar_list_events tool only when ACTIVE and enabled. It reads the primary cal
 expands recurring events and orders by start time, with a seven-day window, 24-result
 limit and twelve-second timeout. Unavailable, disabled, missing-scope or expired
 connections produce no events; routine occurrences remain available. Home refreshes
-on ConnectionsChanged. All-day dates use the calendar's time zone. Today never gains
-calendar events or reports. Offline connector tests exercise the real service and an
+on ConnectionsChanged. All-day dates use the calendar's time zone. Reports remain
+separate from the timeline. Offline connector tests exercise the real service and an
 HTTP double; browser fixtures prove rendered navigation, not live
 provider usage, OAuth, native persistence or scheduler execution. For native proof,
 use an authorized isolated data directory, create a harmless routine, receive a

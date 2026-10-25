@@ -400,6 +400,9 @@ class BackgroundService:
         # task id -> the files handed over with it, in memory only, until the task is taken up
         # (they then go with its run, and are gone when it ends). A task run again has none.
         self._attachments: dict[int, list[Attachment]] = {}
+        self._cli_brains = None
+        self._cli_quota = None
+        self._cli_loops = {}
         # The questions of the background: only `Confirmations.resolve` makes a yes, for one call.
         self._questions = Confirmations(clock, timeout_s=QUESTION_WAIT_S)
         # task id -> the task that waits for the owner (see the module).
@@ -412,6 +415,10 @@ class BackgroundService:
         interrupted = self._interrupt_unfinished("restart")
         if interrupted:
             logger.info("%d background tasks were left unfinished by the last run", interrupted)
+
+    def use_cli(self, brains, quota=None) -> None:
+        """Share the assistant's installed CLI brains for room member worker turns."""
+        self._cli_brains, self._cli_quota = brains, quota
 
     def use_memory(self, memory: MemoryReader) -> None:
         """Let the tasks from now on read Raphael's notes and search the past turns (never write a
@@ -754,7 +761,9 @@ class BackgroundService:
         self._store.start(task.id)
         limits = self._limits
         ledger = Ledger(self._spend)
-        model = api_model(self._settings, self._models.pop(task.id, DEFAULTS["agent_model"]))
+        selected_model = self._models.pop(task.id, DEFAULTS["agent_model"])
+        room_cli = origin is not None and origin.source == "room" and selected_model.startswith("cli:")
+        model = selected_model if room_cli else api_model(self._settings, selected_model)
         context = self._context(task)
         memory = self._memory_of(task.member_id)
         team = team_tools_for(self._team, speaker, always=True) if self._team_tool else []
@@ -768,7 +777,8 @@ class BackgroundService:
             turned_off=self._tools.turned_off(),
         )
         # With more tools than fit, the task is shown the ones it needs, not the first few.
-        await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)
+        if not room_cli:
+            await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)
         run = TaskRun(
             task_id=task.id,
             language=language,
@@ -817,6 +827,21 @@ class BackgroundService:
                 "seconds": self._limits.seconds,
             },
         }
+        if origin is not None and origin.source == "room":
+            def room_budget():
+                row = self._metrics_conn.execute("SELECT e.cost FROM room_exchanges e JOIN room_messages m "
+                    "ON m.origin_message_id = e.origin_message_id WHERE m.turn_id = ?", (task.turn_id,)).fetchone()
+                return max(0, self._cost_cap() - (row[0] if row else 0))
+            run.room_budget = room_budget
+        if room_cli:
+            if self._cli_brains is None:
+                self._conclude_run(task, run, {"status":"stopped", "kind":"failed"})
+                return
+            from .cli import member_loop
+            self._cli_loops[task.id] = member_loop(self._cli_brains, self._cli_quota, task, run, spec,
+                wait_s=QUESTION_WAIT_S, progress=lambda text: self._progress(task, text))
+            await self._carry_cli(task, run)
+            return
         await self._carry(task, run, spec, self._limits.seconds)
 
     async def _resume(self, task: Task, paused: _Paused) -> None:
@@ -836,6 +861,13 @@ class BackgroundService:
         except sqlite3.Error as exc:
             logger.warning("Could not write down that a task goes on: %s", type(exc).__name__)
         run.reopen(paused.remaining_s)
+        if task.id in self._cli_loops:
+            from .cli import tool_outcome
+            self._store.set_state(task.id, RUNNING)
+            content = await run.answer_call(paused.waiting, approval, paused.pending.action if approved else None)
+            self._cli_loops[task.id].continue_with(tool_outcome(content))
+            await self._carry_cli(task, run)
+            return
         limits = run.limits
         spec = {
             "task_id": task.id,
@@ -854,6 +886,34 @@ class BackgroundService:
 
         logger.info("Background task %d goes on: approved=%s", task.id, approved)
         await self._carry(task, run, spec, paused.remaining_s, prepare)
+
+    async def _carry_cli(self, task, run):
+        """Keep the shared CLI loop alive across the worker's existing approval cards."""
+        loop = self._cli_loops[task.id]
+        self._run = run
+        self._changed(task.id, RUNNING)
+        try:
+            outcome = await run._guarded(asyncio.wait_for(loop.run(), run.remaining_s()))
+            if outcome.kind == PAUSED_KIND and run.waiting:
+                self._pause(task, run, {"messages":[{"role":"user","content":task.text}]})
+            else:
+                reply = dataclasses.asdict(outcome)
+                if loop.failed:
+                    reply = {"status":"stopped", "kind":"failed"}
+                self._conclude_run(task, run, reply)
+        except TimeoutError:
+            self._conclude_run(task, run, {"status":"stopped", "kind":"limit_time"})
+        except RpcError:
+            self._conclude_run(task, run, {"status":"cancelled" if run.cancelled else "interrupted"})
+        except asyncio.CancelledError:
+            self._interrupt_closing(task, run)
+            raise
+        finally:
+            self._run = None
+            await run.pool.aclose()
+            if task.id not in self._paused:
+                await loop.aclose()
+                self._cli_loops.pop(task.id, None)
 
     async def _carry(
         self,
@@ -1133,6 +1193,8 @@ class BackgroundService:
     def _expire(self, paused: _Paused) -> None:
         """Nobody answered: the task ends politely, without the call and with nothing more spent."""
         self._paused.pop(paused.task_id, None)
+        if loop := self._cli_loops.pop(paused.task_id, None):
+            loop.cancel()
         try:
             self._store.close_question(paused.pending.id, "expired")
         except sqlite3.Error as exc:
@@ -1152,6 +1214,8 @@ class BackgroundService:
         """A task that waited is stopped (by the owner, or because the core closes): its question
         goes, and its call is written down as not made."""
         self._paused.pop(paused.task_id, None)
+        if loop := self._cli_loops.pop(paused.task_id, None):
+            loop.cancel()
         if paused.answer is None:
             self._questions.resolve(paused.pending.id, False)
             try:
@@ -1284,6 +1348,9 @@ class BackgroundService:
         steps = str(run.tool_calls)
         notice, negative = PREFIXES[language].notice, PREFIXES[language].negative
         if status == "done":
+            if task.session_id.startswith("room:") and not str(reply.get("final") or "").strip():
+                self._conclude(task, run, "done", "", "", None, None)
+                return
             report = report_from(str(reply.get("final") or ""), language, plain=task.member_id != 0)
             if report is None:
                 self._conclude(
@@ -1512,6 +1579,8 @@ class BackgroundService:
             self._queue.remove(task_id)
         # The tasks that wait for the owner end with the process: their conversation is gone.
         self._paused.clear()
+        await asyncio.gather(*(loop.aclose() for loop in self._cli_loops.values()), return_exceptions=True)
+        self._cli_loops.clear()
         self._questions.cancel_all()
         self._disarm_expiry()
         self._interrupt_unfinished("restart")

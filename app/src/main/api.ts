@@ -389,12 +389,13 @@ export const saveUsageCsv = (csv: string): Promise<boolean> => invoke("save_usag
 // Group threads reuse the same worker and safety gate as individual conversations.
 export const routineRuns = (routineId: number): Promise<{ runs: RoutineRun[]; total?: number }> => core("routines.runs", { routine_id: routineId });
 export const roomsList = (): Promise<{ rooms: Room[] }> => core("rooms.list");
-export const roomsCreate = (room: { name: string; member_ids: number[]; group_id?: number | null; is_team?: boolean }): Promise<{ room: Room }> => core("rooms.create", room);
+export const roomsCreate = (room: { name: string; member_ids: number[]; group_id?: number | null; is_team?: boolean; default_responder?: string }): Promise<{ room: Room }> => core("rooms.create", room);
 export const roomsDelete = (roomId: number): Promise<{ deleted: boolean }> => core("rooms.delete", { room_id: roomId });
-export const roomsUpdate = (roomId: number, patch: { name?: string; member_ids?: number[] }): Promise<{ room: Room }> => core("rooms.update", { room_id: roomId, ...patch });
+export const roomsUpdate = (roomId: number, patch: { name?: string; member_ids?: number[]; default_responder?: string }): Promise<{ room: Room }> => core("rooms.update", { room_id: roomId, ...patch });
 export const roomTranscribe = (data: string, uiLanguage: string): Promise<{ text: string }> => core("rooms.transcribe", { data, ui_language: uiLanguage });
-export const roomMessages = (roomId: number, before?: number): Promise<{ messages: RoomMessage[] }> => core("rooms.messages", { room_id: roomId, before });
-export const roomSend = (roomId: number, text: string, requestId: string, uiLanguage: string, attachments: WireAttachment[] = []): Promise<{ message_id: number; duplicate: boolean }> => core("rooms.send", { room_id: roomId, text, request_id: requestId, ui_language: uiLanguage, ...(attachments.length ? { attachments } : {}) });
+export const roomMessages = (roomId: number, before?: number): Promise<{ messages: RoomMessage[]; exchange?: import("./types").RoomExchange | null }> => core("rooms.messages", { room_id: roomId, before });
+export const roomSend = (roomId: number, text: string, requestId: string, uiLanguage: string, attachments: WireAttachment[] = [], replyTo?: number): Promise<{ message_id: number; duplicate: boolean }> => core("rooms.send", { room_id: roomId, text, request_id: requestId, ui_language: uiLanguage, ...(attachments.length ? { attachments } : {}), ...(replyTo !== undefined ? { reply_to: replyTo } : {}) });
+export const roomStop = (roomId: number): Promise<{ stopped: boolean }> => core("rooms.stop", { room_id: roomId });
 export const keepAwakeGet = (): Promise<boolean> => invoke("schedule_keep_awake_get");
 export const keepAwakeSet = (enabled: boolean): Promise<boolean> => invoke("schedule_keep_awake_set", { enabled });
 // Member profile resources use the same member boundary as conversations.

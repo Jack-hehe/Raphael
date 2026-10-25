@@ -9,6 +9,7 @@ import { openGroupChat } from "../group-chats";
 import { faceHTML } from "../members";
 import { modelMark } from "../provider-marks";
 import { openMemberThread } from "../team-navigation";
+import { textPositionRect } from "../text-position";
 import type { AppContext, Member, MemberGroup, MembersList, Page, WireAttachment } from "../types";
 import { btn, closeMenu, esc, ico, iconButton, openMenu, toaster } from "../ui";
 import "../members.css";
@@ -16,7 +17,7 @@ import "../automations.css";
 
 export function createTeamPage(app: AppContext): Page {
   const el = document.createElement("section"); el.className = "au-page team-page page-agent";
-  el.innerHTML = `<header class="au-header"></header><div class="team-board-scroll"><div class="team-board"></div></div><div class="team-bottom"><div class="team-composer"></div><div class="team-zoom"></div></div>`;
+  el.innerHTML = `<header class="page-head"></header><div class="team-board-scroll"><div class="team-board"></div></div><div class="team-bottom"><div class="team-composer"></div><div class="team-zoom"></div></div>`;
   const composer = createChatComposer({ placeholder: () => t("team.composer"), send });
   el.querySelector(".team-composer")!.append(composer.el);
   const board = el.querySelector<HTMLElement>(".team-board")!, input = composer.input;
@@ -31,7 +32,7 @@ export function createTeamPage(app: AppContext): Page {
     return `<section class="team-group" data-team-group="${group?.id ?? "none"}"><header><h2>${esc(group?.name ?? t("members.ungrouped"))}</h2><span>${people.length}</span>${group ? iconButton("more", t("members.more", { p0: group.name }), ` data-team="group-menu" data-group="${group.id}"`) : ""}</header><div class="team-group-members">${people.map(card).join("")}</div></section>`;
   }
   function draw(): void {
-    el.querySelector(".au-header")!.innerHTML = `<h1>${esc(t("team.title"))}<small>${list.members.length}</small></h1>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-team="new"')}`;
+    el.querySelector(".page-head")!.innerHTML = `<h1>${esc(t("team.title"))}</h1>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-team="new"')}`;
     board.innerHTML = `<div class="team-chief">${list.members[0] ? card(list.members[0]) : ""}</div><div class="team-groups">${list.groups.map(group).join("")}${group(null)}</div>`;
     board.style.zoom = String(zoom);
     input.placeholder = t("team.composer"); input.setAttribute("aria-label", t("team.composer"));
@@ -76,7 +77,7 @@ export function createTeamPage(app: AppContext): Page {
     const choices = [{ value: t("team.everyone"), label: "@" + t("team.everyone") }, ...list.members.map(m => ({ value: m.name, label: "@" + m.name })), ...list.groups.map(g => ({ value: g.name, label: "@" + g.name }))].filter(c => c.value.toLocaleLowerCase().includes(match[1].toLocaleLowerCase()));
     if (choices.length) {
       const caret = input.selectionStart;
-      openMenu(input, choices, "", value => { const tail = input.value.slice(caret); const prefix = before.slice(0, match.index); input.value = prefix + "@" + value + " " + tail; input.focus(); input.setSelectionRange(prefix.length + value.length + 2, prefix.length + value.length + 2); });
+      openMenu(input, choices, "", value => { const tail = input.value.slice(caret); const prefix = before.slice(0, match.index); input.value = prefix + "@" + value + " " + tail; input.focus(); input.setSelectionRange(prefix.length + value.length + 2, prefix.length + value.length + 2); }, undefined, [], { placement: "start", anchorRect: () => textPositionRect(input, match.index), selectionIndicator: false });
       input.focus();
     } else closeMenu();
   });

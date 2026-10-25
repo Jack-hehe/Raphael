@@ -755,12 +755,18 @@ export interface RoutineRun {
 }
 export interface Room {
   id: number; name: string; group_id: number | null; created: number;
-  is_team: number; member_ids: number[];
+  is_team: number; member_ids: number[]; default_responder?: string;
 }
 export interface RoomMessage {
   id: number; room_id: number; member_id: number | null; text: string; created: number;
   request_id: string | null; reply_to: number | null; turn_id: number | null;
+  reply_to_member?: number | null; origin_message_id?: number | null; kind?: "message" | "wrapup";
   status: string; cost?: number; attachments?: TurnAttachment[];
+}
+
+export interface RoomExchange {
+  origin_message_id: number; room_id: number; state: "queued" | "running" | "done" | "stopped";
+  turns_taken: number; hops: number; chime_ins: number; cost: number; stop_requested: number;
 }
 
 /** A routine of `routines.list`. Times are ms; null for never. */

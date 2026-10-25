@@ -87,7 +87,12 @@
       "timeout_ms": 30000
     }
   },
-  "adminGroup": { "id": 3, "name": "個人公司", "position": 2, "sources": [] },
+  "adminGroup": {
+    "id": 3,
+    "name": "個人公司",
+    "position": 2,
+    "sources": []
+  },
   "adminMember": {
     "id": 8,
     "name": "COO",
@@ -302,7 +307,9 @@
       "status": "done",
       "request_id": null,
       "reply_to": null,
-      "turn_id": null
+      "turn_id": null,
+      "reply_to_member": null,
+      "kind": "message"
     },
     {
       "id": 2,
@@ -313,7 +320,9 @@
       "status": "done",
       "request_id": null,
       "reply_to": null,
-      "turn_id": 1
+      "turn_id": 1,
+      "reply_to_member": null,
+      "kind": "message"
     },
     {
       "id": 3,
@@ -324,7 +333,62 @@
       "status": "done",
       "request_id": null,
       "reply_to": null,
-      "turn_id": 1
+      "turn_id": 1,
+      "reply_to_member": 1,
+      "kind": "message"
+    }
+  ],
+  "roomExchanges": [],
+  "roomActiveExchange": {
+    "origin_message_id": 1, "room_id": 1, "state": "running", "turns_taken": 2,
+    "hops": 1, "chime_ins": 0, "cost": 0.003, "stop_requested": 0
+  },
+  "roomDiscussionMessages": [
+    {
+      "id": 4, "room_id": 1, "member_id": 1,
+      "text": "@小森 我不同意今天直接上線。先完成最後兩項檢查，再請你確認時程。",
+      "created": 1792807200000, "status": "done", "request_id": null,
+      "reply_to": 3, "turn_id": 2, "reply_to_member": 2, "origin_message_id": 1, "kind": "message"
+    },
+    {
+      "id": 5, "room_id": 1, "member_id": 2,
+      "text": "同意先測試。我負責更新時程，@拉斐爾 請協助確認需要由你決定的事項。",
+      "created": 1792807230000, "status": "done", "request_id": null,
+      "reply_to": 4, "turn_id": 3, "reply_to_member": 1, "origin_message_id": 1, "kind": "message"
+    }
+  ],
+  "roomWrapupMessage": {
+    "id": 6, "room_id": 1, "member_id": 0,
+    "text": "### 結論\n先完成測試，再安排上線。\n\n### 待決定\n你希望今天完成檢查後上線，還是延到明天？\n\n### 下一步\n- 小晴：完成最後兩項文案與流程檢查。\n- 小森：更新時程，整理上線清單。\n- 拉斐爾：收到你的決定後確認交付安排。",
+    "created": 1792807260000, "status": "done", "request_id": null,
+    "reply_to": 5, "turn_id": 1, "reply_to_member": 2, "origin_message_id": 1, "kind": "wrapup"
+  },
+  "roomThinkingMessages": [
+    {
+      "id": 4,
+      "room_id": 1,
+      "member_id": 1,
+      "text": "",
+      "created": 1792807200000,
+      "status": "running",
+      "request_id": null,
+      "reply_to": 1,
+      "turn_id": 2,
+      "reply_to_member": null,
+      "kind": "message"
+    },
+    {
+      "id": 5,
+      "room_id": 1,
+      "member_id": 2,
+      "text": "",
+      "created": 1792807200000,
+      "status": "running",
+      "request_id": null,
+      "reply_to": 1,
+      "turn_id": 3,
+      "reply_to_member": null,
+      "kind": "message"
     }
   ],
   "conversations": [
@@ -2086,7 +2150,23 @@
       "words": 12000,
       "audio_seconds": 3600,
       "time_saved_seconds": 5400,
-      "speed_wpm": 200
+      "speed_wpm": 200,
+      "daily": [
+        420,
+        0,
+        860,
+        1240,
+        610,
+        0,
+        0,
+        980,
+        1530,
+        720,
+        1100,
+        340,
+        0,
+        890
+      ]
     }
   }
 }

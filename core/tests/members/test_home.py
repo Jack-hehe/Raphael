@@ -13,7 +13,8 @@ def home(rig):
         return {"spend": {"month_usd": 4, "limit_usd": 20, "daily": [0] * 14}, "openrouter": {"state": "no_key"}}
 
     async def stats(_):
-        return {"all": {"words": 30, "audio_seconds": 10}, "time_saved_seconds": 20, "speed_wpm": 180}
+        return {"all": {"words": 30, "audio_seconds": 10}, "time_saved_seconds": 20, "speed_wpm": 180,
+                "by_day": [{"date": f"2026-10-{d:02d}", "dictations": 1, "words": d} for d in range(11, 25)]}
 
     async def allowances(_):
         return {"brains": [{"id": "codex", "name": "Codex", "windows": []}]}
@@ -40,6 +41,7 @@ async def test_empty_overview_preserves_service_numbers_and_has_no_connector(hom
     assert len(value["usage"]["daily"]) == 14
     assert value["usage"]["allowances"]["brains"][0]["id"] == "codex"
     assert value["dictation"]["words"] == 30
+    assert value["dictation"]["daily"] == list(range(11, 25))
     assert value["report"]["openrouter"]["state"] == "no_key"
     assert rig.conn.total_changes == before
 
