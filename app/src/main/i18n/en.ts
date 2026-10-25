@@ -1177,6 +1177,7 @@ export const en = {
   "rooms.needs": "Enter a name and choose members",
   "rooms.empty": "Start the conversation",
   "rooms.message": "Message the group",
+  "members.placeholder": "Message {p0}",
   "rooms.team": "Team conversation",
   "rooms.older": "Earlier messages",
   "rooms.deleted": "This group was deleted",

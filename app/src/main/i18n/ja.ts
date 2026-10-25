@@ -1177,6 +1177,7 @@ export const ja = {
   "rooms.needs": "名前と参加メンバーを選択してください",
   "rooms.empty": "会話を始めましょう",
   "rooms.message": "グループにメッセージ",
+  "members.placeholder": "{p0} にメッセージ",
   "rooms.team": "チーム会話",
   "rooms.older": "以前のメッセージ",
   "rooms.deleted": "このグループは削除されました",

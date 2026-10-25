@@ -1176,6 +1176,7 @@ export const zhTW = {
   "rooms.needs": "請輸入名稱並選擇成員",
   "rooms.empty": "開始群組對話",
   "rooms.message": "傳訊息給群組",
+  "members.placeholder": "傳訊息給 {p0}",
   "rooms.team": "團隊對話",
   "rooms.older": "較早的訊息",
   "rooms.deleted": "此群組已刪除",

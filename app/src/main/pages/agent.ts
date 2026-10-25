@@ -23,7 +23,7 @@
 // details panel on the right, and the centred pill over the chat. Each member has one thread, as
 // Raphael has: picking a member loads its turns (`agent.history.list {member_id}`), and the composer
 // asks it (`agent_ask_text {memberId}`). A member's answers are plain bubbles, with none of Raphael's
-// 《prefix。》, its composer says "Message <name>" and shares Raphael's emblem voice button,
+// 《prefix。》, its composer says 「傳訊息給 <name>」 and shares the microphone voice button,
 // and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
 // it was. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
 // is the slot of the thread's questions from the background (background-mount.ts). A member's
@@ -106,8 +106,6 @@ const HEARING_MAX_MS = 120_000;
 const HOLD_MS = 600;
 /** The voice button sent the key, and the app did not start listening within this long: the picture comes back down. */
 const LISTEN_WAIT_MS = 1500;
-/** The placeholder of the composer: the same words in every language of the window. */
-export const COMPOSER_PLACEHOLDER = "Ask Raphael";
 
 /**
  * The question as the card keeps it: what the app sent, with the strictness it really has. A
@@ -404,8 +402,6 @@ export function createAgent(app: AppContext): Page {
     author: message => message.matches(".bubble") ? t("chat.you") : members.nameOf(memberId()),
     onQuote: quote => { composerQuote = quote; drawQuote(); focusComposer(); },
   });
-  input.placeholder = COMPOSER_PLACEHOLDER;
-  input.setAttribute("aria-label", COMPOSER_PLACEHOLDER);
 
   const askCard = document.createElement("div");
   askCard.className = "ask-card";
@@ -540,10 +536,10 @@ export function createAgent(app: AppContext): Page {
 
   /**
    * The face of who the thread is with, where the composer, the card and the empty page show it:
-   * Raphael's or the member's. Every thread's voice button uses Raphael's emblem.
+   * Raphael's or the member's. The voice button is a microphone; the emblem flies up from it (voice-mode.ts).
    */
   function drawFaces(): void {
-    voiceButton.innerHTML = avatarHTML({ size: 32 });
+    voiceButton.innerHTML = ico("mic");
     if (inRaphael()) {
       askFace.innerHTML = avatarHTML({ size: 30 });
       hero.innerHTML = avatarHTML({ size: 132, loop: true });
@@ -555,9 +551,9 @@ export function createAgent(app: AppContext): Page {
     voice.redraw();
   }
 
-  /** The thread's prompt and the shared emblem voice button. */
+  /** The thread's prompt in the window's language. */
   function drawComposer(): void {
-    const words = inRaphael() ? COMPOSER_PLACEHOLDER : memberPlaceholder(members.member().name);
+    const words = inRaphael() ? t("home.askRaphael") : memberPlaceholder(members.member().name);
     input.placeholder = words;
     input.setAttribute("aria-label", words);
     settingsButton.hidden = !inRaphael();

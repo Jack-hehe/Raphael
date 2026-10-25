@@ -448,5 +448,6 @@
 .composer .cmp-pair .btn { width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; }
 .composer .cmp-pair .cmp-send { color: var(--accent-icon); }
 .composer .cmp-pair .cmp-send:disabled { color: var(--text-3); opacity: 1; }
-.composer .cmp-pair .cmp-send .i { width: 32px; height: 32px; }
+.composer .cmp-pair .i { width: 20px; height: 20px; }
+.composer .cmp-pair .cmp-voice { color: var(--text-2); }
 .composer .cmp-pair .cmp-voice:is(:hover, :active) { transform: none; }
