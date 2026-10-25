@@ -30,6 +30,59 @@ export async function perform(page, step) {
     else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
   };
   switch (step.action) {
+    case "window-control": {
+      const selector = `[data-window-action="${step.control}"]`;
+      if (step.restore) {
+        await click(selector);
+        await page.waitForSelector(`${selector}[aria-pressed="true"]`);
+      }
+      await page.mouse.move(0, 100);
+      const element = await visible(selector);
+      const measure = () => element.evaluate(button => {
+        const box = button.getBoundingClientRect(), style = getComputedStyle(button);
+        const glyph = [...button.querySelectorAll('svg')].find(svg => getComputedStyle(svg).display !== 'none').getBoundingClientRect();
+        const strip = button.parentElement.getBoundingClientRect();
+        const color = token => { const probe = document.createElement('span'); probe.style.color = `var(${token})`; button.append(probe); const value = getComputedStyle(probe).color; probe.remove(); return value; };
+        return { background: style.backgroundColor, color: style.color, radius: parseFloat(style.borderRadius),
+          x: glyph.x + glyph.width / 2, y: glyph.y + glyph.height / 2,
+          centerX: box.x + box.width / 2, centerY: box.y + box.height / 2,
+          marginTop: box.top - strip.top, marginBottom: strip.bottom - box.bottom,
+          hover: color('--hover'), pressed: color('--pressed'), close: color('--close'), onClose: color('--on-close'),
+          title: button.title, label: button.getAttribute('aria-label') };
+      });
+      const rest = await measure();
+      await element.hover();
+      await new Promise(resolve => setTimeout(resolve, 160));
+      const hovered = await measure();
+      if (hovered.background !== (step.control === 'close' ? hovered.close : hovered.hover) || hovered.radius <= 0) throw new Error('Caption hover needs a rounded token surface');
+      if (Math.abs(hovered.centerX - hovered.x) > .5 || Math.abs(hovered.centerY - hovered.y) > .5 || Math.abs(rest.x - hovered.x) > .5 || Math.abs(rest.y - hovered.y) > .5) throw new Error('Caption glyph moved or is not centered');
+      if (hovered.marginTop < 3 || Math.abs(hovered.marginTop - hovered.marginBottom) > .5) throw new Error('Caption hover needs even inner margins');
+      if (!hovered.label || hovered.title !== hovered.label) throw new Error('Caption tooltip and accessible label must remain');
+      if (step.control === 'close') {
+        const rgb = value => value.match(/[\d.]+/g).slice(0, 3).map(Number).map(c => c / 255).map(c => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4);
+        const luminance = value => rgb(value).reduce((sum, c, i) => sum + c * [.2126, .7152, .0722][i], 0);
+        const a = luminance(hovered.background), b = luminance(hovered.color);
+        if ((Math.max(a, b) + .05) / (Math.min(a, b) + .05) < 4.5 || hovered.color !== hovered.onClose) throw new Error('Close glyph must contrast with its error surface');
+      }
+      if (step.hoverOnly) {
+        if (!await page.evaluate(() => document.documentElement.dataset.windowModal === 'true' && !!document.querySelector('.modal-scrim:not([hidden])'))) throw new Error('Caption hover must preserve the open settings modal');
+        await element.dispose();
+        return { check: "window-control", control: step.control, hovered, modal: true };
+      }
+      // Release away from the caption so this assertion never minimizes or closes the page.
+      await page.mouse.down();
+      let pressed;
+      try { await new Promise(resolve => setTimeout(resolve, 160)); pressed = await measure(); }
+      finally { await page.mouse.move(0, 100); await page.mouse.up(); }
+      if (pressed.background !== (step.control === 'close' ? pressed.close : pressed.pressed)) throw new Error('Caption press needs the pressed token');
+      await page.keyboard.press('Tab'); await element.focus();
+      const focus = await element.evaluate(button => { const style = getComputedStyle(button); return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) }; });
+      if (focus.style === 'none' || focus.width < 2) throw new Error('Caption keyboard focus needs a visible ring');
+      await element.evaluate(button => button.blur());
+      await element.hover(); await new Promise(resolve => setTimeout(resolve, 160));
+      await element.dispose();
+      return { check: "window-control", control: step.control, restore: !!step.restore, hovered, pressed, focus };
+    }
     case "dictation-paste": {
       await page.focus(step.selector);
       await page.keyboard.type(step.text);

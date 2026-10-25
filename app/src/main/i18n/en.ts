@@ -71,7 +71,6 @@ export const en = {
   "brains.missing": "Not installed",
   "brains.ready": "Signed in",
   "brains.signedOut": "Signed out",
-  "brains.login": "Sign in",
   "brains.install": "Install guide",
   "models.providers": "Providers",
   "models.used": "Models in use",
@@ -1286,4 +1285,7 @@ export const en = {
   "members.profile.operationsInstructions": "Break goals into trackable tasks and identify blockers and dependencies. Report actual progress, pending decisions and the next concrete action.",
   "members.profile.femaleNames": "Emma|Olivia|Mia|Sophia|Amelia|Grace|Lily|Chloe",
   "members.profile.maleNames": "Noah|Oliver|Liam|Henry|James|Leo|Lucas|Ethan",
+  "brains.connect": "Connect",
+  "brains.disconnect": "Disconnect",
+  "brains.disconnected": "Disconnected",
 } satisfies Messages;

@@ -34,6 +34,15 @@ async def test_unavailable_or_signed_out_cli_is_omitted():
     assert await allowances.read_allowances(brains) == {"brains": []}
 
 
+async def test_disconnected_clis_never_probe_live_allowances(monkeypatch):
+    brains = SimpleNamespace(command=lambda name: [name], logged_in=lambda name: True,
+                             disconnected=lambda name: True, environ={})
+    def unexpected(*args, **kwargs):
+        raise AssertionError("A disconnected CLI must not run")
+    monkeypatch.setattr(allowances, "Child", unexpected)
+    assert await allowances.read_allowances(brains) == {"brains": []}
+
+
 @pytest.mark.asyncio
 async def test_signed_in_clis_remain_visible_when_live_query_fails(monkeypatch):
     child = SimpleNamespace(start=AsyncMock(side_effect=OSError()), kill=AsyncMock())

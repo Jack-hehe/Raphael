@@ -10,7 +10,7 @@ const api = vi.hoisted(() => ({
   settingsGet: vi.fn(), settingsSet: vi.fn(), secretsStatus: vi.fn(), statusGet: vi.fn(), audioDevices: vi.fn(),
   keyboardHasAltgr: vi.fn(), languagesList: vi.fn(), modelsCatalog: vi.fn(), modelsLocal: vi.fn(), hotkeysPause: vi.fn(), audioMonitor: vi.fn(),
   providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(), usageAnalytics: vi.fn(),
-  brainsCli: vi.fn(), brainsCliLogin: vi.fn(), openExternalUrl: vi.fn(),
+  brainsCli: vi.fn(), brainsCliLogin: vi.fn(), brainsCliDisconnect: vi.fn(), openExternalUrl: vi.fn(),
   usageRuns: vi.fn(), usageExport: vi.fn(), usageAllowances: vi.fn(), saveUsageCsv: vi.fn(),
 }));
 vi.mock("../api", () => api);
@@ -99,7 +99,7 @@ test("outside gestures close the provider or chooser before settings, preserving
 });
 
 test("models in use precede subscription accounts and providers, login uses the core, and live readiness refreshes only the answer picker", async () => {
-  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: false, models: [], login_command: "claude auth login" };
+  const claude = { id: "claude", name: "Claude Code", disconnected: false, installed: true, logged_in: false, available: false, models: [], login_command: "claude auth login" };
   api.brainsCli.mockResolvedValue({ clis: [claude] });
   api.brainsCliLogin.mockResolvedValue({ started: true });
   await mount();
@@ -107,7 +107,7 @@ test("models in use precede subscription accounts and providers, login uses the 
   expect(sections.slice(0, 3)).toEqual(["Models in use", "Subscription accounts", "Providers"]);
   click('[data-cli="claude"]'); await flush();
   expect(api.brainsCliLogin).toHaveBeenCalledWith("claude");
-  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: true, version: "2.1", models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet", is_default: true }] }] });
+  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, logged_in: true, available: true, version: "2.1", models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet", is_default: true }] }] });
   send({ type: "BrainsChanged" }); await flush();
   expect(page.el.querySelector('.cli-card')!.textContent).toContain("Signed in · v2.1");
   expect(page.el.querySelector('[data-cli="claude"]')).toBeNull();
@@ -130,6 +130,26 @@ test.each(["usage", "models"] as const)("%s opens the single Models pane without
   expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
   expect(page.el.textContent).not.toContain("Fallback models");
   expect(api.settingsSet).not.toHaveBeenCalled();
+});
+
+test("settings delegates the CLI row menu and refreshes an open model chooser on disconnect", async () => {
+  const claude = { id: "claude", name: "Claude Code", installed: true, logged_in: true, available: true, disconnected: false, models: [{ id: "cli:claude:sonnet", name: "Claude Sonnet" }], login_command: "claude auth login" };
+  api.brainsCli.mockResolvedValue({ clis: [claude] });
+  await mount();
+  click('[data-cli-menu="claude"]');
+  expect(document.querySelector('#app-popover.mb-menu [data-pick="disconnect"]')?.textContent).toContain("Disconnect");
+  api.brainsCli.mockResolvedValue({ clis: [{ ...claude, available: false, disconnected: true, models: [] }] });
+  click('#app-popover [data-pick="disconnect"]'); await flush();
+  expect(api.brainsCliDisconnect).toHaveBeenCalledExactlyOnceWith("claude");
+  expect(page.el.querySelector('[data-cli="claude"]')?.textContent).toBe("Connect");
+  click('[data-model-picker="answer"] .mp-trigger');
+  click('[data-source="cli:claude"]');
+  expect(document.querySelectorAll('.mc-row')).toHaveLength(0);
+  expect(document.querySelector('.mc-pane')?.textContent).toContain("Disconnected");
+  api.brainsCli.mockResolvedValue({ clis: [claude] });
+  send({ type: "BrainsChanged" }); await flush();
+  expect(document.querySelector('.mc-row')?.textContent).toContain("Claude Sonnet");
+  expect(closeSettings).not.toHaveBeenCalled();
 });
 
 test("Models contains no spending and Usage mounts analytics once, preserving filters across tabs and redraws", async () => {

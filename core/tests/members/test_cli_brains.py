@@ -106,7 +106,7 @@ def fake_brain(rig, tmp_path, script, *, name="claude"):
     home = tmp_path / "home"
     (home / f".{name}").mkdir(parents=True)
     (home / f".{name}" / ("auth.json" if name == "codex" else ".credentials.json")).write_text("{}", encoding="utf-8")
-    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1", "CODEX_HOME": str(home / ".codex")}, commands={name: [sys.executable, str(path)]})
+    rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1", "CODEX_HOME": str(home / ".codex")}, commands={name: [sys.executable, str(path)]}, settings=rig.service._settings)
 
 
 async def test_cli_member_uses_persona_records_zero_cost_and_resumes(setup, tmp_path, client):
@@ -289,7 +289,7 @@ async def test_not_logged_in_never_starts_the_fake_cli(setup, tmp_path):
     teacher = member(team, model="cli:gemini")
     rig.service._cli_brains = CliBrains(home=tmp_path, environ={}, commands={"gemini": ["this-must-not-run"]})
     result = await typed(rig, "Hello", teacher.id)
-    assert result["text"] == "請先在設定 › 模型與用量登入 Antigravity。"
+    assert result["text"] == "請先到設定 › 模型與用量 › 訂閱帳號，為 Antigravity 按下「連線」。"
 
 
 async def test_crash_does_not_publish_diagnostics_or_private_reasoning(setup, tmp_path, caplog):
@@ -435,3 +435,61 @@ async def test_mcp_memory_write_safety_approval_is_audited_as_user(setup, tmp_pa
     assert (await rig.confirm(pending["confirm"]["id"]))["text"] == "Finished."
     [audit] = rig.conn.execute("SELECT approver FROM tool_audit WHERE tool='memory_write'").fetchall()
     assert audit[0] == "user"
+
+
+@pytest.mark.parametrize(
+    "language,expected",
+    [
+        ("zh-TW", "請先到設定 › 模型與用量 › 訂閱帳號，為 Codex CLI 按下「連線」。"),
+        ("en", "Connect Codex CLI in Settings > Models & usage > Subscription accounts."),
+        ("ja", "設定 › モデルと使用量 › サブスクリプションアカウントで Codex CLI の「接続」を押してください。"),
+    ],
+)
+async def test_disconnected_cli_refuses_turns_for_member_and_raphael_in_window_language(setup, tmp_path, language, expected):
+    rig, team = setup
+    teacher = member(team, model="cli:codex")
+    fake_brain(rig, tmp_path, "raise SystemExit('disconnected CLI must not start')", name="codex")
+    assert await rig.call("brains.cli_disconnect", {"id": "codex"}) == {"disconnected": True}
+    codex = next(c for c in (await rig.call("brains.cli", {}))["clis"] if c["id"] == "codex")
+    assert codex["disconnected"] is True and codex["available"] is False and codex["models"] == []
+
+    member_reply = await typed(rig, "Hello", teacher.id, language=language)
+    assert member_reply["text"] == expected
+    member_turn = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"][0]
+    assert member_turn["status"] == "error"
+
+    rig.settings.set("agent_model", "cli:codex")
+    raphael_reply = await typed(rig, "Hello", 0, language=language)
+    assert expected in raphael_reply["text"]
+    raphael_turn = (await rig.call("agent.history.list", {"member_id": 0}))["turns"][0]
+    assert raphael_turn["status"] == "error"
+
+    assert await rig.call("brains.cli_login", {"id": "codex"}) == {"started": False, "reconnected": True}
+    codex_after = next(c for c in (await rig.call("brains.cli", {}))["clis"] if c["id"] == "codex")
+    assert codex_after["disconnected"] is False and codex_after["available"] is True
+
+
+async def test_disconnect_stops_an_active_member_turn_and_releases_its_reply(setup, tmp_path):
+    rig, team = setup
+    teacher = member(team, model="cli:claude")
+    marker = tmp_path / "running.json"
+    fake_brain(rig, tmp_path, '''import json, os, sys, time
+from pathlib import Path
+json.loads(sys.stdin.readline())
+Path(MARKER).write_text(json.dumps({"pid": os.getpid(), "config": sys.argv[sys.argv.index("--mcp-config")+1]}))
+time.sleep(30)
+'''.replace("MARKER", repr(str(marker))))
+    task = asyncio.create_task(typed(rig, "Wait for me", teacher.id, language="en"))
+    try:
+        async with asyncio.timeout(5):
+            while not marker.exists():
+                await asyncio.sleep(.01)
+        assert await asyncio.wait_for(rig.call("brains.cli_disconnect", {"id": "claude"}), 5) == {"disconnected": True}
+        result = await asyncio.wait_for(task, 5)
+        assert "Connect Claude Code in Settings" in result["text"]
+        from pathlib import Path
+        assert not Path(json.loads(marker.read_text())["config"]).exists()
+        assert (rig.service._cli_brains.home / ".claude" / ".credentials.json").read_text() == "{}"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

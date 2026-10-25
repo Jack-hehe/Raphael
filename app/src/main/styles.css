@@ -108,15 +108,17 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 :root[data-window-layout="main"] .window-chrome { left: var(--sidebar-width); border-top-left-radius: var(--r-lg); border-top: 0; border-left: 0; }
 :root[data-window-modal="true"] .window-chrome { background: transparent; border-color: transparent; }
 .window-drag { flex: 1; min-width: 0; }
-.window-controls { display: flex; flex: none; }
-.window-button { display: grid; place-items: center; width: 46px; height: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text); cursor: default; }
+.window-controls { display: flex; flex: none; gap: 4px; padding: 4px; }
+.window-button { display: grid; place-items: center; width: 38px; height: 100%; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: default; transition: background-color 120ms ease, color 120ms ease; }
 .window-button svg { grid-area: 1 / 1; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1; }
-.window-button:hover { background: transparent; }
+.window-button:hover { background: var(--hover); }
+.window-button:active { background: var(--pressed); }
 .window-button:focus-visible { outline-offset: -3px; }
 /* Caption actions retain a visible keyboard outline inside the window. */
 .window-close:hover:focus-visible { outline-color: var(--focus); }
 :root[data-window-modal="true"] .window-button:focus-visible:not(:hover) { background: transparent; }
-.window-close:hover { background: transparent; color: var(--err); }
+.window-close:hover { background: var(--close); color: var(--on-close); }
+.window-close:active { background: var(--close); color: var(--on-close); }
 .window-restore-glyph { display: none; }
 :root[data-window-maximized="true"] .window-maximize-glyph { display: none; }
 :root[data-window-maximized="true"] .window-restore-glyph { display: block; }
@@ -1765,8 +1767,9 @@ kbd.ob-cap { white-space: nowrap; }
 }
 
 /* Custom icon controls share the same interaction policy as iconButton. */
-:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x, .window-button):is(:hover, :active) { background: transparent; color: var(--text); filter: none; }
-:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x, .window-button):is(:active, [aria-pressed="true"], [aria-expanded="true"], [aria-selected="true"]):not(:disabled) { background: transparent; color: var(--accent-icon); }
+/* Window controls use caption hover surfaces, as requested by the owner (2026-10-25). */
+:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x):is(:hover, :active) { background: transparent; color: var(--text); filter: none; }
+:is(.btn.icon, .cmp-attach, .cmp-voice, .mp-star, .lm-del, .chip-x):is(:active, [aria-pressed="true"], [aria-expanded="true"], [aria-selected="true"]):not(:disabled) { background: transparent; color: var(--accent-icon); }
 :where(:root[data-keys]) .btn.icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 :where(:root[data-keys]) .cmp-attach:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 :where(:root[data-keys]) .cmp-voice:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }

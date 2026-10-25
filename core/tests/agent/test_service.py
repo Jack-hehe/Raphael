@@ -45,6 +45,7 @@ METHODS = [
     "agent.speak",
     "agent.speech.status",
     "brains.cli",
+    "brains.cli_disconnect",
     "brains.cli_login",
     "conversations.create",
     "conversations.delete",

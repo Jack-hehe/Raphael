@@ -4,6 +4,10 @@
 
 Owner profile/preferences, themes/skins, models/providers, dictation, assistant,
 messaging, data management and About. Usage and MCP have separate maps.
+Subscription accounts share the room row-action menu: disconnect disables a CLI only
+inside Raphael, removes its models, and leaves a framed Connect action. Reconnect reuses
+an existing CLI login. Caption controls have rounded hover/pressed surfaces; Close uses
+the contrasting close/error palette in every skin.
 
 ## How to get to it (user POV)
 
@@ -17,6 +21,7 @@ were removed deliberately.
 npm run look -- profile appearance models dictation agent messaging data about skins --theme both --width 1120,720
 npm run look -- skin-default skin-paper skin-graphite skin-lagoon skin-dusk skin-midnight skin-meadow skin-ink skin-catppuccin --theme both --width 1120,720
 npm run look -- appearance --theme both --width 1120,720 --skin lagoon --locale ja
+npm run look -- cli-account-menu cli-account-disconnected cli-account-reconnected window-hover-minimize window-hover-maximize window-hover-restore window-hover-close window-hover-modal --theme both --width 1120,720,1920x1080
 ```
 
 Keep pane/skin PNGs; inspect wrapping, focus, scroll access, active selections and
@@ -24,6 +29,11 @@ preview/popover contrast. Use `--locale en` and `--locale ja` for translation wo
 raw-key checks do not prove translation quality. Extend scenes through change/reopen
 for persistence. Native provider/model, messaging, import/export, autostart and data
 deletion need isolated real journeys and observable side effects.
+CLI credential cleanup and persisted disconnection are covered by temporary-home core
+tests; look drives the real account menu through the existing IPC boundary. Check all
+caption hover images at full size and keep the driver's centering, margins, pressed,
+tooltip, focus and close-contrast assertions. Native OS minimize/maximize/close and a real
+CLI login remain separate checks; never log out the user's shared CLI account.
 
 ## Gotchas
 

@@ -70,7 +70,6 @@ export const zhTW = {
   "brains.missing": "未安裝",
   "brains.ready": "已登入",
   "brains.signedOut": "未登入",
-  "brains.login": "登入",
   "brains.install": "安裝說明",
   "models.providers": "供應商",
   "models.used": "使用的模型",
@@ -1285,6 +1284,9 @@ export const zhTW = {
   "members.profile.operationsInstructions": "將目標拆成可追蹤事項，辨識阻礙與依賴。回報實際狀態、待決定事項與下一個具體行動。",
   "members.profile.femaleNames": "婉晴|雅涵|詩涵|佳穎|欣妤|語彤|子晴|怡安",
   "members.profile.maleNames": "柏宇|承恩|冠宇|宇軒|哲睿|彥廷|品睿|俊傑",
+  "brains.connect": "連線",
+  "brains.disconnect": "中斷連線",
+  "brains.disconnected": "已中斷連線",
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

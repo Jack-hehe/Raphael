@@ -1052,6 +1052,8 @@
       "name": "Claude CLI",
       "installed": true,
       "logged_in": true,
+      "available": true,
+      "disconnected": false,
       "login_command": "claude",
       "models": [
         {
@@ -1065,6 +1067,8 @@
       "name": "Codex CLI",
       "installed": true,
       "logged_in": true,
+      "available": true,
+      "disconnected": false,
       "login_command": "codex",
       "models": [
         {
@@ -1078,6 +1082,8 @@
       "name": "Gemini CLI",
       "installed": true,
       "logged_in": true,
+      "available": true,
+      "disconnected": false,
       "login_command": "gemini",
       "models": [
         {

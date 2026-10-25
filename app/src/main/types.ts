@@ -120,6 +120,8 @@ export interface CliBrain {
   name: string;
   installed: boolean;
   logged_in: boolean | null;
+  disconnected: boolean;
+  available: boolean;
   version?: string;
   login_command: string;
   models: CliModel[];

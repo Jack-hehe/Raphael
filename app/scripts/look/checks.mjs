@@ -15,6 +15,28 @@ export function checkRendered(name) {
   }
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name.startsWith("cli-account-")) {
+    const row = document.querySelector('[data-cli-menu="codex"], [data-cli="codex"]')?.closest('.cli-card');
+    require(visible(row), "the Codex card is visible");
+    const calls = window.__look.calls;
+    if (name === "cli-account-menu") {
+      require(visible(document.querySelector('#app-popover.mb-menu [data-pick="disconnect"]')), "disconnect uses the shared row menu");
+      require(!document.querySelector('select'), "no native select is introduced");
+    } else {
+      require(calls.filter(call => call.method === 'brains.cli_disconnect' && call.params.id === 'codex').length === 1, "one menu choice disconnects exactly once without confirmation");
+      const cli = window.__look.data.clis.find(cli => cli.id === 'codex');
+      require(cli.logged_in === true, "the CLI's own login remains intact");
+      if (name === "cli-account-disconnected") {
+        require(cli.disconnected && !cli.available && cli.models.length === 0, "disconnected CLI supplies no runnable models");
+        require(visible(row.querySelector('[data-cli="codex"]')), "reconnection stays on the card");
+        require(!row.querySelector('[data-cli-menu]'), "a disconnected card has no connected menu");
+      } else {
+        require(visible(row.querySelector('[data-cli-menu="codex"]')) && cli.available && !cli.disconnected, "reconnection restores the connected card");
+        require(calls.filter(call => call.method === 'brains.cli_login' && call.params.id === 'codex').length === 1, "connect reaches the core once");
+      }
+    }
+    return { check: name, text: row.textContent };
+  }
   if (name === "room-discussion") {
     require(document.querySelectorAll('.au-room-reply').length >= 3, "multiple replies identify their colleagues");
     require(document.querySelector('.au-room-thread').textContent.includes('我不同意'), "members can disagree");

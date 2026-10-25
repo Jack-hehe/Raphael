@@ -59,6 +59,7 @@ def test_the_defaults_are_the_documented_ones():
         "worker_cost_cap_usd": 0.2,
         "stt_local_model": "qwen3-asr",
         "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+        "disconnected_clis": [],
         "web_search_service": "openrouter",
         "web_read_service": "builtin",
         "vision_model": "",
@@ -537,3 +538,21 @@ def test_the_fish_model_is_a_short_token(conn):
     for bad in ("", "  ", "has space", "s2/pro", "x" * 41, "-s1", "好"):
         with pytest.raises(ValueError):
             settings.set("tts_fish_model", bad)
+
+
+def test_disconnected_clis_deduplicates_validates_and_repairs_damaged_values(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("disconnected_clis") == []
+    settings.set("disconnected_clis", ["codex", "gemini", "codex"])
+    assert settings.get("disconnected_clis") == ["codex", "gemini"]
+    assert settings.all()["disconnected_clis"] == ["codex", "gemini"]
+    with pytest.raises(ValueError):
+        settings.set("disconnected_clis", ["nope"])
+    with pytest.raises(TypeError):
+        settings.set("disconnected_clis", [1])
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disconnected_clis', ?)", (json.dumps(["codex", "bad", 99, "codex"]),))
+    assert settings.get("disconnected_clis") == ["codex"]
+    assert settings.all()["disconnected_clis"] == ["codex"]
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disconnected_clis', ?)", (json.dumps("not-a-list"),))
+    assert settings.get("disconnected_clis") == []
+    assert settings.all()["disconnected_clis"] == []

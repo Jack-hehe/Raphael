@@ -27,6 +27,11 @@ def brain_effort(value):
     return value.partition("?effort=")[2] or None if brain_ref(value) else None
 
 
+def cli_available(installed, logged_in, disconnected=False):
+    """The single eligibility rule for discovery, catalogs, allowances and turns."""
+    return bool(installed) and logged_in is True and not bool(disconnected)
+
+
 def resolve_command(path, environ=None):
     path = Path(path).resolve()
     environ = os.environ if environ is None else environ
@@ -48,11 +53,13 @@ def resolve_command(path, environ=None):
 
 
 class CliBrains:
-    def __init__(self, *, home=None, environ=None, commands=None, notify=None):
+    def __init__(self, *, home=None, environ=None, commands=None, notify=None, settings=None):
         self.home = Path.home() if home is None else Path(home)
         self.environ = dict(os.environ if environ is None else environ)
         self.commands = commands
         self.notify = notify
+        self.settings = settings
+        self._disconnected = set()
         self._previous = None
         self._lock = asyncio.Lock()
         self._watcher = None
@@ -100,13 +107,44 @@ class CliBrains:
         # Claude also uses OS credential storage. Settings alone do not establish a Google login.
         return None if name == "claude" else False
 
+    def disconnected(self, name):
+        if self.settings is not None:
+            return name in self.settings.get("disconnected_clis")
+        return name in self._disconnected
+
+    def _set_disconnected(self, name, value):
+        if name not in NAMES:
+            raise ValueError("cli_unknown")
+        if self.settings is not None:
+            items = [item for item in self.settings.get("disconnected_clis") if item != name]
+            if value:
+                items.append(name)
+            self.settings.set("disconnected_clis", items)
+        elif value:
+            self._disconnected.add(name)
+        else:
+            self._disconnected.discard(name)
+
+    def available(self, name, *, command=None, logged_in=None):
+        if command is None:
+            command = self.command(name)
+        if logged_in is None:
+            logged_in = self.logged_in(name) if command else False
+        return cli_available(command, logged_in, self.disconnected(name))
+
     async def _one(self, name):
         command = self.command(name)
+        logged_in = self.logged_in(name) if command else False
+        disconnected = self.disconnected(name)
+        available = self.available(name, command=command, logged_in=logged_in)
+        models = (
+            claude_models(Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude")))
+            if name == "claude"
+            else self._models.get(name, [])
+        ) if available else []
         item = {"id": name, "name": NAMES[name], "installed": bool(command),
-                "logged_in": self.logged_in(name) if command else False,
-                "login_command": LOGIN[name], "models": self._models.get(name, [])}
-        if name == "claude":
-            item["models"] = claude_models(Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude")))
+                "logged_in": logged_in, "disconnected": disconnected, "available": available,
+                "login_command": LOGIN[name], "models": models}
         if command:
             child = Child([*command, "--version"], environ=self.environ)
             try:
@@ -141,7 +179,7 @@ class CliBrains:
 
     async def _refresh_one(self, name):
         command = self.command(name)
-        if not self._needs_models(name) or not command or not self.logged_in(name):
+        if not self._needs_models(name) or not self.available(name, command=command):
             return
         try:
             if name == "codex":
@@ -164,16 +202,58 @@ class CliBrains:
         finally:
             self._model_refresh = None
 
+    def _purge_raphael_credentials(self, name):
+        # Only known driver-owned copies; the CLI's own home is never removed or logged out.
+        paths = []
+        if name == "codex":
+            root = self.home / ".raphael" / "codex-brains"
+            paths = list(root.glob("*/auth.json"))
+        elif name == "gemini":
+            root = self.home / ".raphael" / "cli-workspaces"
+            paths = list(root.glob("*/*/gemini/home/.gemini/config/mcp_config.json"))
+        else:
+            # Claude uses the user's login directly and keeps no credential copy.
+            return
+        if not root.resolve().is_relative_to((self.home / ".raphael").absolute()):
+            raise ValueError("cli_credential_path")
+        for path in paths:
+            if not path.parent.resolve().is_relative_to(root.resolve()):
+                raise ValueError("cli_credential_path")
+            path.unlink(missing_ok=True)
+
+    def disconnect(self, name):
+        self._set_disconnected(name, True)
+        self._purge_raphael_credentials(name)
+        self._previous = None
+        if self.notify:
+            self.notify("brains.changed", {})
+        return {"disconnected": True}
+
     def login(self, name):
+        if name not in NAMES:
+            raise ValueError("cli_unknown")
         command = self.command(name)
-        if not command or os.name != "nt":
+        if not command:
+            raise ValueError("cli_missing")
+        if self.logged_in(name) is True:
+            self._reconnect(name)
+            if self.notify:
+                self.notify("brains.changed", {})
+            return {"started": False, "reconnected": True}
+        if os.name != "nt":
             raise ValueError("cli_missing")
         arguments = {"claude": ["auth", "login"], "codex": ["login"], "gemini": []}[name]
         subprocess.Popen([*command, *arguments], env=subscription_env(self.environ),
                          creationflags=subprocess.CREATE_NEW_CONSOLE, close_fds=True)
+        self._reconnect(name)
         if self.notify:
             self.notify("brains.changed", {})
         return {"started": True}
+
+    def _reconnect(self, name):
+        self._set_disconnected(name, False)
+        self._models_at.pop(name, None)
+        self._previous = None
 
     async def _watch(self):
         try:

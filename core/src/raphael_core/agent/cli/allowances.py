@@ -3,6 +3,7 @@
 import asyncio
 import json
 
+from .discovery import cli_available
 from .process import Child
 
 
@@ -10,10 +11,11 @@ async def read_allowances(brains):
     rows = []
     for name, label in (("codex", "Codex"), ("claude", "Claude"), ("gemini", "Antigravity")):
         command = brains.command(name)
-        signed_in = brains.logged_in(name) if command else False
-        if name == "claude" and command and signed_in is None:
+        disconnected = brains.disconnected(name) if hasattr(brains, "disconnected") else False
+        signed_in = brains.logged_in(name) if command and not disconnected else False
+        if name == "claude" and command and not disconnected and signed_in is None:
             signed_in = await _claude_signed_in(command, brains.environ)
-        if signed_in is True:
+        if cli_available(command, signed_in, disconnected):
             rows.append({"id": name, "name": label, "windows": []})
     if any(row["id"] == "codex" for row in rows):
         rows[0]["windows"] = await _codex_windows(brains)

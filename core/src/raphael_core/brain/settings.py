@@ -91,6 +91,7 @@ DEFAULTS: dict[str, Any] = {
     # they were added. The page shows the ones the catalog still has at the top of its list; the
     # others stay here, in case the catalog gets them back.
     "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+    "disconnected_clis": [],
     # The services Raphael's tools stand on (raphael_core.services), each chosen by the owner. The
     # web search: "openrouter" is the answer model with OpenRouter's `web` plugin, as it always was;
     # the others are search engines that return results for the answer model to word.
@@ -131,6 +132,7 @@ AGENT_TEXT_MAX_CHARS = 100
 # The roles that have favourites, and the most that one of them holds.
 FAVORITE_ROLES = ("cleanup", "answer", "stt")
 MAX_FAVORITES = 50
+DISCONNECTABLE_CLIS = ("claude", "codex", "gemini")
 STT_ENGINES = ("cloud", "local")
 # The services each tool may stand on (raphael_core.services.catalog says what each needs).
 WEB_SEARCH_SERVICES = ("openrouter", "brave", "tavily", "exa", "searxng")
@@ -291,6 +293,23 @@ def _read_favorites(saved: Any) -> dict[str, list[str]]:
         return _no_favorites()
 
 
+def _disconnected_clis(value: list) -> list[str]:
+    """The disconnected CLI names to save, each once and in order."""
+    if any(type(name) is not str for name in value):
+        raise TypeError("Setting 'disconnected_clis' must be a list of CLI names")
+    unknown = [name for name in value if name not in DISCONNECTABLE_CLIS]
+    if unknown:
+        raise ValueError(f"Setting 'disconnected_clis' has no CLI {unknown[0]!r}")
+    return list(dict.fromkeys(value))
+
+
+def _read_disconnected_clis(saved: Any) -> list[str]:
+    """The disconnected CLIs as saved; a damaged saved value reads as none."""
+    if type(saved) is not list:
+        return []
+    return list(dict.fromkeys(name for name in saved if type(name) is str and name in DISCONNECTABLE_CLIS))
+
+
 def checked(key: str, value: Any) -> tuple[str, Any]:
     """The key and the value that setting `key` to `value` saves, or the error `SettingsStore.set`
     raises for them (see there). Nothing is saved."""
@@ -310,6 +329,8 @@ def checked(key: str, value: Any) -> tuple[str, Any]:
         value = _trimmed(key, value)
     if key == "model_favorites":
         value = _favorites(value)
+    if key == "disconnected_clis":
+        value = _disconnected_clis(value)
     if key == "searxng_url":
         value = _url(key, value)
     if key in OPTIONAL_MODEL_SETTINGS:
@@ -387,6 +408,8 @@ class SettingsStore:
         saved = self._saved(key)
         if key == "model_favorites":
             return _read_favorites(saved)
+        if key == "disconnected_clis":
+            return _read_disconnected_clis(saved)
         if key == "tts_service":
             return saved if saved in TTS_SERVICES else default  # a saved "none" was "no voice"
         if key == "tts_enabled" and saved is None:
@@ -424,6 +447,7 @@ class SettingsStore:
             if row["key"] in values:
                 values[row["key"]] = json.loads(row["value"])
         values["model_favorites"] = _read_favorites(values["model_favorites"])
+        values["disconnected_clis"] = _read_disconnected_clis(values["disconnected_clis"])
         values["languages"] = self._languages()
         values["tts_service"] = self.get("tts_service")
         values["tts_enabled"] = self.get("tts_enabled")

@@ -71,7 +71,6 @@ export const ja = {
   "brains.missing": "未インストール",
   "brains.ready": "ログイン済み",
   "brains.signedOut": "未ログイン",
-  "brains.login": "ログイン",
   "brains.install": "インストール方法",
   "models.providers": "プロバイダー",
   "models.used": "使用するモデル",
@@ -1286,4 +1285,7 @@ export const ja = {
   "members.profile.operationsInstructions": "目標を追跡できるタスクに分け、障害と依存関係を確認します。実際の進捗、判断事項、次の具体的な行動を報告します。",
   "members.profile.femaleNames": "陽菜|葵|結衣|さくら|美月|凛|詩織|明里",
   "members.profile.maleNames": "陽翔|蓮|悠真|湊|樹|颯太|大和|朝陽",
+  "brains.connect": "接続",
+  "brains.disconnect": "接続を解除",
+  "brains.disconnected": "切断済み",
 } satisfies Messages;

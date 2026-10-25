@@ -540,12 +540,14 @@ class AgentService:
             else Conversation(conn, client, now_ms=now_ms, clock=clock)
         )
         self._notify = notify
-        self._cli_brains = cli_brains or CliBrains(notify=notify)
+        self._settings = SettingsStore(conn)
+        self._cli_brains = cli_brains or CliBrains(notify=notify, settings=self._settings)
+        if self._cli_brains.settings is None:
+            self._cli_brains.settings = self._settings
         self._cli_sessions = CliSessions(conn)
         self._cli_loops: set[CliLoop] = set()
         self._now_ms = now_ms
         self._actions = actions
-        self._settings = SettingsStore(conn)
         self._metrics_conn = conn
         self._spend = SpendTracker(conn, now_ms, tz)
         self._history = AgentHistory(conn, now_ms)
@@ -624,6 +626,7 @@ class AgentService:
             "brains.cli": self._list_clis,
             "usage.allowances": self._allowances,
             "brains.cli_login": self._login_cli,
+            "brains.cli_disconnect": self._disconnect_cli,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -641,6 +644,17 @@ class AgentService:
 
     async def _list_clis(self, params: dict) -> dict:
         return await self._cli_brains.list(params)
+
+    async def _disconnect_cli(self, params: dict) -> dict:
+        name = params.get("id")
+        if name not in ("claude", "codex", "gemini"):
+            raise invalid_params("Unknown CLI")
+        result = self._cli_brains.disconnect(name)
+        # Stop already-running turns before purging again: a driver may have been creating its copy.
+        loops = [loop for loop in self._cli_loops if brain_ref(loop.model)[0] == name]
+        await asyncio.gather(*(loop.disconnect() for loop in loops))
+        self._cli_brains._purge_raphael_credentials(name)
+        return result
 
     async def _login_cli(self, params: dict) -> dict:
         name = params.get("id")

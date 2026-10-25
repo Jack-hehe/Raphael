@@ -40,6 +40,7 @@ export function installMock(fixture, config = {}, target = window) {
     data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null, daily: Array(14).fill(0) };
   }
   const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
+  let maximized = false;
   target.__look = state;
   const copy = value => value === undefined ? undefined : structuredClone(value);
   const nextId = items => Math.max(0, ...items.map(item => item.id)) + 1;
@@ -113,6 +114,21 @@ export function installMock(fixture, config = {}, target = window) {
       case "rooms.stop": { for (const exchange of data.roomExchanges.filter(item => item.room_id === p.room_id && ["running", "queued"].includes(item.state))) exchange.stop_requested = 1; notify("RoomsChanged", { room_id: p.room_id }); return { stopped: true }; }
       case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: p.reply_to ?? null, turn_id: null, reply_to_member: data.messages.find(item => item.id === p.reply_to)?.member_id ?? null, origin_message_id: nextId(data.messages), kind: "message" }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
       case "brains.cli": return { clis: data.clis };
+      case "brains.cli_disconnect": {
+        const cli = data.clis.find(cli => cli.id === p.id);
+        cli.disconnected = true; cli.available = false;
+        cli.savedModels = cli.models; cli.models = [];
+        notify("BrainsChanged", {});
+        return { disconnected: true };
+      }
+      case "brains.cli_login": {
+        const cli = data.clis.find(cli => cli.id === p.id);
+        cli.disconnected = false;
+        cli.available = cli.installed && cli.logged_in === true;
+        if (cli.available && cli.savedModels) cli.models = cli.savedModels;
+        notify("BrainsChanged", {});
+        return { started: !cli.available, reconnected: cli.available };
+      }
       case "models.catalog": return data.catalog;
       case "models.status": return data.modelStatus;
       case "models.local": return { models: data.localModels };
@@ -184,7 +200,9 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "avatar_pick") return null;
       if (command === "plugin:app|version") return "0.2.0";
       if (command === "plugin:event|listen") return ++callbackId;
-      if (["plugin:window|is_maximized", "keyboard_has_altgr"].includes(command)) return false;
+      if (command === "plugin:window|is_maximized") return maximized;
+      if (command === "plugin:window|toggle_maximize") { maximized = !maximized; return; }
+      if (command === "keyboard_has_altgr") return false;
       if (command === "mic_access") return { allowed: true, blocked_by: null };
       if (command === "schedule_keep_awake_get") return data.awake ?? false;
       if (command === "schedule_keep_awake_set") return data.awake = args.enabled;

@@ -43,9 +43,12 @@ describe("keyboard focus and the window controls", () => {
     expect(lastOf(".window-button:focus-visible", "outline-offset")).toMatch(/^-\d+px$/);
   });
 
-  test("the close button changes glyph color and retains its focus ring without a surface", () => {
-    expect(lastOf(".window-close:hover", "background")).toBe("transparent");
-    expect(lastOf(".window-close:hover", "color")).toBe("var(--err)");
+  test("caption hover uses rounded surfaces and close retains contrasting text and its focus ring", () => {
+    expect(lastOf(".window-button", "border-radius")).toBe("var(--r-sm)");
+    expect(lastOf(".window-button:hover", "background")).toBe("var(--hover)");
+    expect(lastOf(".window-button:active", "background")).toBe("var(--pressed)");
+    expect(lastOf(".window-close:hover", "background")).toBe("var(--close)");
+    expect(lastOf(".window-close:hover", "color")).toBe("var(--on-close)");
     expect(lastOf(".window-close:hover:focus-visible", "outline-color")).toBe("var(--focus)");
   });
 

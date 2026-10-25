@@ -354,7 +354,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 110] = [
+const ALLOWED_METHODS: [&str; 111] = [
     "home.overview",
     "connectors.catalog",
     "connectors.categories",
@@ -380,6 +380,7 @@ const ALLOWED_METHODS: [&str; 110] = [
     "providers.list",
     "brains.cli",
     "brains.cli_login",
+    "brains.cli_disconnect",
     "providers.add",
     "providers.update",
     "providers.remove",
@@ -1900,7 +1901,7 @@ mod tests {
 
     #[test]
     fn cli_brains_are_main_window_methods_and_emit_no_private_payload() {
-        for method in ["brains.cli", "brains.cli_login"] {
+        for method in ["brains.cli", "brains.cli_login", "brains.cli_disconnect"] {
             assert!(is_allowed_method(method), "{method}");
         }
         assert!(!is_allowed_method("brains.execute"));

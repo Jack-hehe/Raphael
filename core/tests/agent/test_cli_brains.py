@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from raphael_core.agent.cli.discovery import CliBrains, resolve_command
+from raphael_core.agent.cli.discovery import CliBrains, cli_available, resolve_command
 
 
 async def test_discovery_uses_fake_process_and_auth_existence_only(tmp_path):
@@ -479,7 +479,8 @@ time.sleep(300)
         assert alive(parent) and alive(descendant)
     finally:
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        outcome, = await asyncio.gather(task, return_exceptions=True)
+    assert isinstance(outcome, asyncio.CancelledError), repr(outcome)
     from pathlib import Path
     assert not alive(parent) and not alive(descendant)
     assert not Path(config).parent.exists()
@@ -525,3 +526,108 @@ def test_antigravity_is_found_in_its_own_folder(tmp_path):
     (agy / "agy.exe").touch()
     brains = CliBrains(home=tmp_path, environ={"LOCALAPPDATA": str(tmp_path), "PATH": ""})
     assert brains.command("gemini") == [str((agy / "agy.exe").resolve())]
+
+
+async def test_disconnect_purges_raphael_credentials_hides_models_and_reconnects_without_login_window(tmp_path, conn, monkeypatch):
+    from raphael_core.agent.cli import discovery
+    from raphael_core.brain.settings import SettingsStore
+
+    script = tmp_path / "version.py"
+    script.write_text("print('fake 1.0.0')", encoding="utf-8")
+    home = tmp_path / "home"
+    claude_cred = home / ".claude" / ".credentials.json"
+    codex_cred = home / ".codex" / "auth.json"
+    gemini_cred = home / ".gemini" / "google_accounts.json"
+    for path, content in ((claude_cred, "user-claude"), (codex_cred, "user-codex"), (gemini_cred, "user-gemini")):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    copied_auth = home / ".raphael" / "codex-brains" / "session-1" / "auth.json"
+    copied_cfg = copied_auth.parent / "config.toml"
+    copied_auth.parent.mkdir(parents=True, exist_ok=True)
+    copied_auth.write_text("raphael-copy", encoding="utf-8")
+    copied_cfg.write_text("cli_auth_credentials_store = 'file'\n", encoding="utf-8")
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    copied_mcp = home / ".raphael" / "cli-workspaces" / "1" / "0" / "gemini" / "home" / ".gemini" / "config" / "mcp_config.json"
+    copied_mcp.parent.mkdir(parents=True, exist_ok=True)
+    copied_mcp.write_text("{}", encoding="utf-8")
+
+    events = []
+    settings = SettingsStore(conn)
+    cmd = [sys.executable, str(script)]
+    brains = CliBrains(
+        home=home,
+        environ={},
+        commands={"claude": cmd, "codex": cmd, "gemini": cmd},
+        notify=lambda method, payload: events.append((method, payload)),
+        settings=settings,
+    )
+    monkeypatch.setattr(brains, "_needs_models", lambda _name: False)
+    brains._models["codex"] = [{"id": "cli:codex:gpt-5", "name": "GPT-5", "is_default": True}]
+    brains._models["gemini"] = [{"id": "cli:gemini:pro", "name": "Gemini Pro", "is_default": True}]
+
+    try:
+        before = {c["id"]: c for c in (await brains.list())["clis"]}
+        assert all(c["available"] and not c["disconnected"] and c["models"] for c in before.values())
+
+        for name in ("codex", "claude", "gemini"):
+            assert brains.disconnect(name) == {"disconnected": True}
+        assert settings.get("disconnected_clis") == ["codex", "claude", "gemini"]
+        restarted = CliBrains(home=home, environ={}, commands={"codex": cmd}, settings=SettingsStore(conn))
+        assert restarted.disconnected("codex") and not restarted.available("codex")
+        assert not copied_auth.exists() and copied_cfg.exists()
+        assert not copied_mcp.exists()
+        assert claude_cred.read_text(encoding="utf-8") == "user-claude"
+        assert codex_cred.read_text(encoding="utf-8") == "user-codex"
+        assert gemini_cred.read_text(encoding="utf-8") == "user-gemini"
+
+        after = {c["id"]: c for c in (await brains.list())["clis"]}
+        assert all(c["logged_in"] is True and c["disconnected"] is True and c["available"] is False and c["models"] == [] for c in after.values())
+        assert ("brains.changed", {}) in events
+
+        popen_calls = []
+        monkeypatch.setattr(discovery.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+
+        events.clear()
+        assert brains.login("claude") == {"started": False, "reconnected": True}
+        assert brains.login("codex") == {"started": False, "reconnected": True}
+        assert popen_calls == []
+        assert settings.get("disconnected_clis") == ["gemini"]
+        assert events == [("brains.changed", {}), ("brains.changed", {})]
+
+        reconnected = {c["id"]: c for c in (await brains.list())["clis"]}
+        assert reconnected["claude"]["available"] is True and reconnected["claude"]["models"]
+        assert reconnected["codex"]["available"] is True
+
+        gemini_cred.unlink()
+        if os.name == "nt":
+            assert brains.login("gemini") == {"started": True}
+            assert len(popen_calls) == 1
+            assert settings.get("disconnected_clis") == []
+    finally:
+        await brains.aclose()
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize("logged_in", [False, True, None])
+@pytest.mark.parametrize("disconnected", [False, True])
+def test_cli_availability_requires_install_login_and_connection(installed, logged_in, disconnected):
+    assert cli_available(installed, logged_in, disconnected) is (installed and logged_in is True and not disconnected)
+
+
+def test_failed_login_does_not_reconnect_or_launch_an_uninstalled_cli(tmp_path, monkeypatch):
+    from raphael_core.agent.cli import discovery
+    brains = CliBrains(home=tmp_path, environ={}, commands={"codex": ["fake.exe"]})
+    brains.disconnect("codex")
+    def fail(*args, **kwargs):
+        raise OSError("login window unavailable")
+    monkeypatch.setattr(discovery.subprocess, "Popen", fail)
+    with pytest.raises((OSError, ValueError)):
+        brains.login("codex")
+    assert brains.disconnected("codex")
+    brains.commands.clear()
+    with pytest.raises(ValueError, match="cli_missing"):
+        brains.login("codex")
+    assert brains.disconnected("codex")
