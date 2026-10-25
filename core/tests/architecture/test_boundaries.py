@@ -79,7 +79,7 @@ async def test_shell_named_rpc_methods_have_registered_core_handlers(tmp_path):
     from raphael_core.app import App
 
     source = (ROOT / "app/src-tauri/src/commands.rs").read_text(encoding="utf-8")
-    block = re.search(r"const ALLOWED_METHODS:[^=]+?=\s*\[(.*?)\];", source, re.S)
+    block = re.search(r"const ALLOWED_METHODS:[^=]+?=\s*&?\[(.*?)\];", source, re.S)
     assert block
     methods = set(re.findall(r'^\s*"([a-z][a-z0-9_.]+)"', block[1], re.M))
     assert methods

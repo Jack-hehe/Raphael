@@ -60,7 +60,7 @@ it("main templates never introduce native selects", () => {
 it("literal frontend RPC calls are allowed by the shell", () => {
   const shell = read(join(root, "app/src-tauri/src/commands.rs"));
   const constants = ["ALLOWED_METHODS", "ALLOWED_PREFIXES"].map(name => {
-    const block = shell.match(new RegExp(`const ${name}:[^=]+?=\\s*\\[([\\s\\S]*?)\\];`));
+    const block = shell.match(new RegExp(`const ${name}:[^=]+?=\\s*&?\\[([\\s\\S]*?)\\];`));
     expect(block, name).not.toBeNull();
     return [...block![1]!.matchAll(/^\s*"([a-z][a-z0-9_.]+)"/gm)].map(match => match[1]!);
   });
