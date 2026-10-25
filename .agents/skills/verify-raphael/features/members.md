@@ -7,8 +7,9 @@ commands and voice settings. Members have independent conversations.
 
 ## How to get to it (user POV)
 
-In Conversation select a member, then select it again for details. At compact width
-use the member picker both times. Details has the avatar, edit pencil and resource
+In Conversation select a member, then click the stacked header title for details.
+At compact width use the member picker to select the member first. The same title
+closes the panel; its close button updates the same remembered session state. Details has the avatar, edit pencil and resource
 panes. Team's creation menu is another entry point to member creation; verify the
 complete flow for creation changes.
 

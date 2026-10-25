@@ -7,7 +7,7 @@ import type { CatalogModel } from "./types";
 import type { RunAnalyticsApi } from "./run-analytics-types";
 import { formatUsd } from "./format";
 import { onLocaleChange, t } from "./i18n";
-import { openMenu, sel, type Choice } from "./ui";
+import { iconButton, openMenu, sel, type Choice } from "./ui";
 import type { MessageKey } from "./i18n/zh-TW";
 import type { UsageAnalytics, UsageGroup, UsageRequest, UsageSeries } from "./usage-analytics-types";
 
@@ -114,7 +114,7 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
   const runsHost = document.createElement("div");
   host.prepend(runsHost);
   let modelData: CatalogModel[] = [];
-  const runs = api.usageRuns ? mountRunAnalytics(runsHost, api as RunAnalyticsApi, trace => { root.hidden = trace; }, models => { modelData=models; render(); }) : null;
+  const runs = api.usageRuns ? mountRunAnalytics(runsHost, api as RunAnalyticsApi, models => { modelData=models; render(); }) : null;
   const tooltipId = `usage-tooltip-${++nextId}`;
   let data: UsageAnalytics | null = null;
   let range: UsageRequest["range"] = "7d";
@@ -133,8 +133,8 @@ export function mountUsageAnalytics(host: HTMLElement, api: UsageAnalyticsApi): 
     root.setAttribute("aria-label", t("usage.history"));
     root.innerHTML = `<header class="ua-header"><h2>${t("usage.history")}</h2><div class="ua-period" role="group" aria-label="${t("usage.period")}">` +
       `<div class="ua-segment">${(["7d", "30d"] as const).map(key => `<button type="button" class="btn" data-control="${key}" data-range="${key}" aria-pressed="${range === key}">${t(choiceKeys[key])}</button>`).join("")}</div>` +
-      `<button type="button" class="btn" data-control="previous" aria-label="${t("usage.previous")}" ${!data || loading ? "disabled" : ""}>‹</button>` +
-      `<button type="button" class="btn" data-control="next" aria-label="${t("usage.next")}" ${!data || loading || data.end_day >= data.today_day ? "disabled" : ""}>›</button>` +
+      iconButton("left", t("usage.previous"), ` data-control="previous" ${!data || loading ? "disabled" : ""}`) +
+      iconButton("right", t("usage.next"), ` data-control="next" ${!data || loading || data.end_day >= data.today_day ? "disabled" : ""}`) +
       `</div></header>`;
     if (loading) root.innerHTML += `<p role="status" class="ua-status">${t("usage.loading")}</p>`;
     else if (failed) root.innerHTML += `<p role="alert">${t("usage.error")}</p><button type="button" class="btn" data-control="retry">${t("usage.retry")}</button>`;

@@ -1,5 +1,29 @@
-.page-dictation > div:first-child { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-bottom: 18px; }
-.page-dictation > div:first-child .page-head { margin-bottom: 0; }
-.page-dictation > .problem-notice { margin-bottom: 18px; }
-.page-dictation > .page { max-width: none; padding: 0; margin: 0; }
-.page-dictation > [data-page="overview"] .home { margin-top: 0; }
+/* Persistent in-page navigation mirrors the settings list. */
+.page-dictation { display: grid; grid-template-columns: 148px minmax(0, 1fr); gap: var(--sp-5); align-items: start; }
+.dictation-navigation { position: sticky; top: var(--sp-4); min-width: 0; }
+.dictation-navigation .page-head { margin-bottom: var(--sp-5); }
+.dictation-nav { display: flex; flex-direction: column; gap: var(--sp-1); }
+.dictation-nav .nav { gap: var(--sp-2); padding: var(--sp-3); font-size: var(--fs-sm); }
+.dictation-nav .nav[aria-selected="true"] { background: var(--selected); color: var(--text); font-weight: 600; }
+.dictation-nav .nav[aria-selected="true"] > .i { color: var(--accent-text); }
+.dictation-content { min-width: 0; container: dictation / inline-size; }
+.dictation-content > .problem-notice { margin-bottom: var(--sp-5); }
+.dictation-content > .page { max-width: none; padding: 0; margin: 0; }
+.dictation-content > [data-page="overview"] .home { margin-top: 0; }
+/* Keep vertical navigation visible while compact content wraps beside it. */
+@media (max-width: 880px) {
+  .page-dictation { grid-template-columns: 120px minmax(0, 1fr); gap: var(--sp-4); padding-inline: var(--sp-4); }
+  .dictation-nav .nav { padding: var(--sp-2); }
+}
+@container dictation (max-width: 640px) {
+  .page-overview .home { grid-template-columns: minmax(0, 1fr); }
+  .page-overview .home-side { position: static; }
+  .hrow { flex-wrap: wrap; gap: var(--sp-2); }
+  .hrow .lbl { flex-basis: calc(100% - 64px); }
+  .hrow .acts { margin-left: auto; }
+  .hdetail { padding-left: var(--sp-2); }
+  .wgrid { grid-template-columns: minmax(0, 1fr); }
+  .tools { flex-wrap: wrap; }
+  .dsearch { min-width: 0; flex-basis: 100%; }
+  .dsearch .field { max-width: none; width: 100%; }
+}

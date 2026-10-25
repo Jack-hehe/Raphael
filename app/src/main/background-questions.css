@@ -1,19 +1,19 @@
 /* The questions of the background (background-questions.ts): Raphael asks, so they are in his gold
    (the --rg-* tokens of styles.css, the approval card's), with a soft breathing glow, his face, an
    outlined 「否」 and a gold 「是」. They sit where the thread ends, as wide as one of his answers. */
-.bgq-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 6px 0 4px; }
+.bgq-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: var(--sp-1) 0 var(--sp-1); }
 .bgq-list[hidden] { display: none; }
-.bgq-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: min(92%, 640px); padding: 10px 12px; border: 1px solid var(--rg-edge); border-radius: 14px; background: var(--rg-bg); box-shadow: 0 0 0 3px var(--rg-glow); }
-.bgq-q { display: flex; align-items: flex-start; gap: 8px; margin: 0; font: 600 14px/1.6 var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
-.bgq-face { flex: none; display: block; width: 22px; height: 22px; margin-top: 1px; }
-.bgq-t { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; }
+.bgq-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); max-width: min(92%, 640px); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--rg-edge); border-radius: var(--r-lg); background: var(--rg-bg); box-shadow: 0 0 0 3px var(--rg-glow); }
+.bgq-q { display: flex; align-items: flex-start; gap: var(--sp-2); margin: 0; font: 600 var(--fs-sm)/1.6 var(--voice); color: var(--rg-ink); overflow-wrap: anywhere; }
+.bgq-face { flex: none; display: block; width: 22px; height: 22px; margin-top: var(--sp-1); }
+.bgq-t { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 /* In a member's thread: their name over their words, plain (the voice font and weight are Raphael's). */
-.bgq-name { font: 650 12px/1.4 var(--ui); color: var(--rg-ink); opacity: 0.8; }
+.bgq-name { font: 600 var(--fs-2xs)/1.4 var(--ui); color: var(--rg-ink); opacity: 0.8; }
 .bgq-name + .bgq-line { font-weight: 500; }
-.bgq-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.btn.bgq-no { min-height: 30px; padding: 4px 14px; border-color: var(--rg-edge); background: transparent; color: var(--rg-ink); font-weight: 600; }
+.bgq-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--sp-2); }
+.btn.bgq-no { min-height: 30px; padding: var(--sp-1) var(--sp-3); border-color: var(--rg-edge); background: transparent; color: var(--rg-ink); font-weight: 600; }
 .btn.bgq-no:hover:not(:disabled) { background: var(--rg-glow); border-color: var(--rg-edge); }
-.btn.bgq-yes { min-height: 30px; padding: 4px 16px; border-color: var(--rg-btn); background: var(--rg-btn); color: var(--rg-on); font-weight: 650; }
+.btn.bgq-yes { min-height: 30px; padding: var(--sp-1) var(--sp-4); border-color: var(--rg-btn); background: var(--rg-btn); color: var(--rg-on); font-weight: 600; }
 .btn.bgq-yes:hover:not(:disabled) { background: var(--rg-btn); border-color: var(--rg-btn); filter: brightness(1.05); }
 @keyframes bgq-glow { 50% { box-shadow: 0 0 0 5px var(--rg-glow), 0 8px 24px var(--rg-glow); } }
 @keyframes bgq-in { from { opacity: 0; transform: translateY(6px); } }

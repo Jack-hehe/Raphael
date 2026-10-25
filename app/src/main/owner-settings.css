@@ -1,15 +1,15 @@
-.owner-profile .slist { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px; }
-.owner-profile label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; font-size: var(--fs-sm); }
-.owner-profile .field { width: 100%; min-width: 0; padding: 8px 10px; background: var(--panel); border: 1px solid var(--btn-edge); border-radius: 8px; }
+.owner-profile .slist { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); padding: var(--sp-4); }
+.owner-profile label { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); font-size: var(--fs-sm); }
+.owner-profile .field { width: 100%; min-width: 0; padding: var(--sp-2) var(--sp-2); background: var(--panel); border: 1px solid var(--btn-edge); border-radius: var(--r-sm); }
 .owner-profile textarea { resize: vertical; min-height: 110px; }
-.skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 12px; }
-.skin-card.btn { display: flex; flex-direction: column; align-items: stretch; padding: 9px; gap: 7px; height: auto; text-align: left; white-space: normal; background: var(--panel); }
+.skin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: var(--sp-3); }
+.skin-card.btn { display: flex; flex-direction: column; align-items: stretch; padding: var(--sp-2); gap: var(--sp-2); height: auto; text-align: left; white-space: normal; background: var(--panel); }
 .skin-card[aria-pressed="true"] { outline: 2px solid var(--focus); outline-offset: 1px; }
 .skin-card strong { font-size: var(--fs-sm); }
 .skin-card small { color: var(--text-3); font-size: var(--fs-xs); line-height: 1.5; }
-.skin-preview { display: flex; width: 100%; height: 76px; border-radius: 6px; overflow: hidden; }
+.skin-preview { display: flex; width: 100%; height: 76px; border-radius: var(--r-sm); overflow: hidden; }
 .skin-sample { position: relative; flex: 1; min-width: 0; overflow: hidden; color: var(--text); background: var(--content); border: 1px solid var(--btn-edge); }
-.skin-preview i { display: block; position: absolute; border-radius: 4px; }
+.skin-preview i { display: block; position: absolute; border-radius: var(--r-sm); }
 .skin-sidebar { left: 0; top: 0; bottom: 0; width: 24%; background: var(--side); border-right: 1px solid var(--line); }
 .skin-sidebar::after { content: ''; position: absolute; left: 20%; top: 12px; width: 60%; height: 3px; background: var(--text-3); box-shadow: 0 8px var(--line), 0 16px var(--line); }
 .skin-bubble { right: 7%; top: 9px; width: 48%; height: 13px; background: var(--accent); }

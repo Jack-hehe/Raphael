@@ -222,6 +222,7 @@ class FakeBrain:
         self.finalize_calls = 0
         self.normalize_params: list[dict] = []
         self.normalize_error: RpcError | None = None
+        self.finalize_error: RpcError | None = None
         self.fail_dictionary = False
         self.entries = [{"id": 1, "word": "拉斐爾", "misheard": [], "source": "manual"}]
         self.on_finalize = None
@@ -237,6 +238,8 @@ class FakeBrain:
     async def _finalize(self, params: dict) -> dict:
         self.finalize_calls += 1
         self.finalize_params.append(params)
+        if self.finalize_error is not None:
+            raise self.finalize_error
         if self.on_finalize is not None:
             self.on_finalize()
         if self.finalize_gate is not None:
@@ -244,7 +247,7 @@ class FakeBrain:
             await self.finalize_gate.wait()
         return {
             "id": 7,
-            "text": params["raw_text"],
+            "text": params["raw_text"] + (" (polished)" if params.get("purpose") == "agent" else ""),
             "raw_text": params["raw_text"],
             "cleaned": True,
             "fallback_reason": None,
@@ -2509,15 +2512,15 @@ async def test_an_engine_that_changes_model_per_segment_is_reported_in_order(rig
 # --- the voice assistant's speech ----------------------------------------------------------------
 #
 # A session started with purpose "agent" records and transcribes like any other, but what comes
-# back is the transcript to ask the assistant, not text to paste: the brain only normalizes it (the
-# dictionary's replacements and the Chinese script), without cleanup, history or cost.
+# back is polished text to ask the assistant, not text to paste. Cleanup and spend accounting
+# share the dictation path, while agent text never enters dictation history.
 
 
 async def start_agent(router, session_id="s1"):
     return await router.call("dictation.start", {"session_id": session_id, "purpose": "agent"})
 
 
-async def test_an_agent_session_answers_with_the_normalized_transcript_and_nothing_to_paste(
+async def test_an_agent_session_answers_with_polished_text_and_nothing_to_paste(
     rig, router, brain
 ):
     rig.engine.texts = ["打開", "YouTube"]
@@ -2527,17 +2530,22 @@ async def test_an_agent_session_answers_with_the_normalized_transcript_and_nothi
     r = await stop(router, target_app="notepad.exe")
     assert r == {
         "purpose": "agent",
-        "text": "打開 YouTube（正規化）",
+        "text": "打開 YouTube (polished)",
         "stt": "fake",
         "audio_seconds": pytest.approx(2.0),
         "silent": False,
     }
-    assert brain.normalize_params == [{"raw_text": "打開 YouTube"}]
-    assert brain.finalize_calls == 0  # no cleanup, no history row, no paste
+    assert brain.normalize_params == []
+    assert brain.finalize_params == [{
+        "session_id": "s1", "raw_text": "\u6253\u958b YouTube", "stt": "fake",
+        "audio_seconds": 2.0, "target_app": None, "purpose": "agent",
+        "incomplete": False, "stt_ms": brain.finalize_params[0]["stt_ms"],
+    }]
+    assert brain.finalize_params[0]["stt_ms"] >= 0
     assert not rig.service.active
 
 
-async def test_an_agent_session_is_not_cleaned_so_its_progress_has_no_cleaning_stage(
+async def test_an_agent_session_reports_the_shared_cleaning_stage(
     rig, router, notifications
 ):
     rig.recorder.chunks = [chunk(1.0)] * 2
@@ -2545,7 +2553,7 @@ async def test_an_agent_session_is_not_cleaned_so_its_progress_has_no_cleaning_s
     await rig.recorder.fed(2)
     await stop(router)
     steps = progress(notifications)
-    assert steps and all(stage == "transcribing" for stage, _, _ in steps)
+    assert steps[-1] == ("cleaning", 2, 2)
 
 
 async def test_an_agent_session_says_which_speech_to_text_heard_it(rig, router):
@@ -2586,9 +2594,10 @@ async def test_an_agent_session_on_a_dead_microphone_is_reported_silent(rig, rou
     assert r["purpose"] == "agent" and r["text"] == "" and r["silent"] is True
 
 
-async def test_an_agent_session_whose_normalizing_fails_keeps_the_words_as_heard(
+async def test_an_agent_session_whose_cleanup_and_normalizing_fail_keeps_the_words_as_heard(
     rig, router, brain, caplog
 ):
+    brain.finalize_error = RpcError(INTERNAL_ERROR, "cleanup unavailable")
     brain.normalize_error = RpcError(INTERNAL_ERROR, "the brain is broken: 秘密")
     rig.engine.texts = ["打開 YouTube"]
     rig.recorder.chunks = [chunk(1.0)]
@@ -2640,3 +2649,18 @@ async def test_any_other_purpose_is_invalid_params_and_starts_nothing(rig, route
     assert not rig.service.active and rig.recorders_made == 0
     await start(router)  # the service is free for the next one
     assert rig.service.active
+
+
+async def test_agent_cleanup_can_be_cancelled_without_delivering_text(rig, router, brain):
+    brain.finalize_gate = asyncio.Event()
+    rig.recorder.chunks = [chunk(1.0)]
+    await start_agent(router)
+    await rig.recorder.fed(1)
+    stopping = asyncio.create_task(stop(router))
+    await brain.finalize_entered.wait()
+    await router.call("dictation.cancel", {"session_id": "s1"})
+    assert brain.cancelled == ["s1"]
+    brain.finalize_gate.set()
+    with pytest.raises(RpcError) as error:
+        await stopping
+    assert error.value.code == NOT_FOUND

@@ -30,6 +30,44 @@ export async function perform(page, step) {
     else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
   };
   switch (step.action) {
+    case "advance-time":
+      // Advance the shared fixed clock, then let production timers observe it.
+      await page.evaluate(ms => { window.__look.now = Date.now() + ms; }, step.ms);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      break;
+    case "icon-interactions": {
+      const element = await visible(step.selector);
+      const state = () => element.evaluate(button => {
+        const style = getComputedStyle(button), color = document.createElement("span").style;
+        color.color = style.getPropertyValue("--accent-icon");
+        return { background: style.backgroundColor, color: style.color, accent: color.color, outline: style.outlineStyle, outlineWidth: style.outlineWidth };
+      });
+      try {
+        await element.hover();
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const hover = await state();
+        await page.mouse.down();
+        let active;
+        try {
+          await new Promise(resolve => setTimeout(resolve, 200));
+          active = await state();
+        } finally { await page.mouse.move(0, 0); await page.mouse.up(); }
+        if ([hover, active].some(value => value.background !== "rgba(0, 0, 0, 0)")) throw new Error("Icon hover/active must remain transparent");
+        if (active.color !== active.accent) throw new Error("Pressed icon must use the accent color");
+        await page.keyboard.press("Tab");
+        await element.focus();
+        const focus = await state();
+        if (focus.outline === "none" || parseFloat(focus.outlineWidth) < 2) throw new Error("Keyboard icon focus needs a visible ring");
+        return { check: "icon-interactions", hover, active, focus };
+      } finally { await element.dispose(); }
+    }
+    case "open-details":
+      await visible(".conversation-trigger");
+      // Exercise the title from a closed state at every width, including the default wide panel.
+      if (await page.$('.conversation-trigger[aria-expanded="true"]')) await click('.mb-det [data-det="close"]');
+      await click(".conversation-trigger");
+      await visible('.mb-det:not([hidden])');
+      break;
     case "check": return page.evaluate(checkRendered, step.name);
     case "click": await click(step.selector); break;
     case "type": await fill(step.selector, step.text); break;

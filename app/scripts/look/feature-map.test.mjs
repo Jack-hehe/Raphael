@@ -8,14 +8,18 @@ const root = resolve(import.meta.dirname, "../../..");
 const deployed = resolve(root, ".agents/skills/verify-raphael");
 // Protected instruction paths can be staged at the brief's explicit fallback.
 const skill = existsSync(deployed) ? deployed : resolve(root, ".fold/.agents/skills/verify-raphael");
+const readMap = file => {
+  const staged = resolve(root, ".fold/.agents/skills/verify-raphael", file);
+  return readFileSync(existsSync(staged) ? staged : resolve(skill, file), "utf8");
+};
 const names = ["conversation", "members", "automations", "team-and-rooms", "dictation", "settings-appearance", "connections-mcp", "usage", "onboarding"];
 
 describe("maintained verification feature map", () => {
   it("documents every requested feature with executable, current scene commands", () => {
-    const index = readFileSync(resolve(skill, "features/README.md"), "utf8");
+    const index = readMap("features/README.md");
     for (const name of names) {
       expect(index).toContain(`](${name}.md)`);
-      const content = readFileSync(resolve(skill, `features/${name}.md`), "utf8");
+      const content = readMap(`features/${name}.md`);
       for (const heading of ["Sub-features", "How to get to it (user POV)", "Driving it with look", "Gotchas"])
         expect(content, name).toContain(`## ${heading}`);
       const commands = [...content.matchAll(/^npm run look -- (.+)$/gm)];

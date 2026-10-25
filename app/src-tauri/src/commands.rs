@@ -347,7 +347,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 100] = [
+const ALLOWED_METHODS: [&str; 99] = [
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -370,7 +370,6 @@ const ALLOWED_METHODS: [&str; 100] = [
     "stats.summary",
     "usage.analytics",
     "usage.runs",
-    "usage.trace",
     "usage.export",
     "usage.allowances",
     "messaging.telegram.status",
@@ -2058,7 +2057,6 @@ mod tests {
         assert!(!is_allowed_method("usage.clear"));
         assert!(is_allowed_method("usage.export"));
         assert!(is_allowed_method("usage.runs"));
-        assert!(is_allowed_method("usage.trace"));
         assert!(is_allowed_method("usage.allowances"));
         assert!(ensure_caller(crate::MAIN_WINDOW, crate::MAIN_WINDOW).is_ok());
         assert!(ensure_caller("overlay", crate::MAIN_WINDOW).is_err());

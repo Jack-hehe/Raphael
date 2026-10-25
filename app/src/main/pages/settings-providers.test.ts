@@ -11,7 +11,7 @@ const api = vi.hoisted(() => ({
   keyboardHasAltgr: vi.fn(), languagesList: vi.fn(), modelsCatalog: vi.fn(), modelsLocal: vi.fn(), hotkeysPause: vi.fn(), audioMonitor: vi.fn(),
   providersKinds: vi.fn(), providersList: vi.fn(), providersModels: vi.fn(), providersAdd: vi.fn(), servicesStatus: vi.fn(), usageAnalytics: vi.fn(),
   brainsCli: vi.fn(), brainsCliLogin: vi.fn(), openExternalUrl: vi.fn(),
-  usageRuns: vi.fn(), usageTrace: vi.fn(), usageExport: vi.fn(), usageAllowances: vi.fn(), saveUsageCsv: vi.fn(),
+  usageRuns: vi.fn(), usageExport: vi.fn(), usageAllowances: vi.fn(), saveUsageCsv: vi.fn(),
 }));
 vi.mock("../api", () => api);
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "test" }));

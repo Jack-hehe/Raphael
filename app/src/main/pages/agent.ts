@@ -30,7 +30,7 @@
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
 // the collapsed line of an exchange it had a part in.
 
-import { mountConversationList, conversationTitle, conversationChange, type ConversationInfo } from "../conversation-list";
+import { conversationTitle, conversationChange, type ConversationInfo } from "../conversation-list";
 import { openActions } from "../member-column";
 import { confirmDelete } from "../member-dialogs";
 import { createAttachmentMedia } from "../attachment-media";
@@ -76,7 +76,7 @@ import {
   wantsRefresh,
 } from "../timeline";
 import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
-import { copyText, esc, ico, iconButton, openPopover, toaster } from "../ui";
+import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
 import { createProblemNotice } from "../problem-notice";
@@ -277,6 +277,7 @@ export function createAgent(app: AppContext): Page {
     onOpenConversation: (member, conversation, turn) => openConversation(member, conversation, turn),
     visible: () => visible,
     focusHeader: () => conversationButton.focus({ preventScroll: true }),
+    onDetailsChange: open => conversationButton.setAttribute("aria-expanded", String(open)),
     onSelect: () => switchThread(),
     onUpdate: () => {
       drawComposer();
@@ -293,14 +294,15 @@ export function createAgent(app: AppContext): Page {
   const head = document.createElement("div"); head.className = "conversation-head";
   const conversationButton = document.createElement("button");
   conversationButton.type = "button"; conversationButton.className = "btn conversation-trigger";
-  conversationButton.setAttribute("aria-haspopup", "dialog"); conversationButton.setAttribute("aria-expanded", "false");
+  members.details.id = "member-details";
+  conversationButton.setAttribute("aria-controls", members.details.id);
+  conversationButton.setAttribute("aria-expanded", String(members.detailsOpen()));
   const caption = document.createElement("span"); caption.className = "conversation-caption";
   conversationButton.append(members.pill, caption);
   head.append(conversationButton);
   el.querySelector(".mb-head-c")!.append(head);
   const chosenConversations = new Map<number, number>();
   const conversationCache = new Map<number, ConversationInfo[]>();
-  let conversationList: ReturnType<typeof mountConversationList> | null = null;
   let targetTurn: number | undefined;
   const quotaHost = document.createElement("div"); quotaHost.className = "quota-chips";
   quotaHost.hidden = true;
@@ -339,12 +341,7 @@ export function createAgent(app: AppContext): Page {
     drawConversation();
   }
 
-  conversationButton.addEventListener("click", () => {
-    conversationList?.destroy();
-    const panel = openPopover(conversationButton, `<div class="conversation-menu-list"></div>`, { className: "menu conversation-picker", role: "dialog", label: t("conversations.search"), onClose() { conversationList?.destroy(); conversationList = null; } });
-    conversationList = mountConversationList(panel.querySelector<HTMLElement>(".conversation-menu-list")!, { memberId: memberId(), manage: false, onOpen: id => openConversation(memberId(), id) });
-    panel.querySelector<HTMLInputElement>("input")?.focus();
-  });
+  conversationButton.addEventListener("click", () => members.setDetails(!members.detailsOpen()));
   window.addEventListener("conversations-changed", (event) => {
     const member = (event as CustomEvent<number>).detail;
     const old = conversationId();
@@ -375,17 +372,14 @@ export function createAgent(app: AppContext): Page {
   drawConversation();
 
   const memberChat = el.querySelector<HTMLElement>(".mb-chat")!;
-  let roomDetails = members.detailsOpen();
   const roomPane = createRoomPane(app, () => {
     el.classList.remove("is-room"); memberChat.hidden = false;
     el.querySelector(".mb-head-l")!.append(members.picker);
-    members.setDetails(roomDetails);
   }, () => { if (visible) attachmentMedia.sync(); });
   el.append(roomPane.el);
   window.addEventListener("raphael:open-room", event => {
     if (!el.isConnected) return;
-    if (!roomPane.active) roomDetails = members.detailsOpen();
-    members.setDetails(false); el.classList.add("is-room"); memberChat.hidden = true;
+    el.classList.add("is-room"); memberChat.hidden = true;
     roomPane.el.querySelector(".room-picker")!.append(members.picker);
     void members.load();
     void roomPane.open((event as CustomEvent<{roomId:number}>).detail.roomId);
@@ -549,7 +543,7 @@ export function createAgent(app: AppContext): Page {
    * Raphael's or the member's. Every thread's voice button uses Raphael's emblem.
    */
   function drawFaces(): void {
-    voiceButton.innerHTML = avatarHTML({ size: 34 });
+    voiceButton.innerHTML = avatarHTML({ size: 32 });
     if (inRaphael()) {
       askFace.innerHTML = avatarHTML({ size: 30 });
       hero.innerHTML = avatarHTML({ size: 132, loop: true });

@@ -1,24 +1,24 @@
 import { scene, click, hover, type, wait, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
 
-const picker = [click(".conversation-trigger"), wait("#app-popover [data-conversation-open]"), check("conversation-picker")];
-const details = [member(1), member(1), wait(".mb-det:not([hidden])")];
+const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 export default [
-  scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]")]),
+  scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
   scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
   scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
   scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
   scene("admin-delete-approval", "Deleting a member always requires held approval", [wait('.ask-card[data-tier="T3"]:not([hidden])'), check("admin-approval")], { adminApproval: "delete" }),
-  scene("admin-approved", "Approve creation and select the live member", [wait('.ask-card:not([hidden])'), click('.ask-yes'), member(8), member(8), wait('.mb-det:not([hidden])'), check("admin-created")], { adminApproval: "create" }),
+  scene("admin-approved", "Approve creation and select the live member", [wait('.ask-card:not([hidden])'), click('.ask-yes'), member(8), { action: "open-details" }, wait('.mb-det:not([hidden])'), check("admin-created")], { adminApproval: "create" }),
   scene("admin-denied", "Declining creation leaves the team unchanged", [wait('.ask-card:not([hidden])'), click('.ask-no'), wait('.composer:not([hidden])'), check("admin-denied")], { adminApproval: "create" }),
   scene("empty", "Conversation without turns", [], { turns: [] }),
-  scene("picker", "Conversation picker", picker),
-  scene("no-conversations", "Conversation picker search without matches", [...picker, type("#app-popover .conversation-tools input", "沒有這個對話"), wait("#app-popover .conversation-empty"), check("conversation-picker")]),
   scene("row-menu", "Conversation actions in the details panel", [...details, click(".mb-det [data-conversation-more]"), wait("#app-popover [data-pick]")]),
   ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog")])),
-  scene("new-conversation", "Create a conversation", [...picker, click("#app-popover [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
-  scene("details", "Member details", details),
+  scene("new-conversation", "Create a conversation", [...details, click(".mb-det [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
+  scene("details", "Title opens member details", [...details, { action: "icon-interactions", selector: '.mb-det [data-det="close"]' }]),
+  scene("raphael-details", "Title opens Raphael details", [{ action: "open-details" }, check("member-details")]),
+  scene("details-closed", "Title closes details", [...details, click(".conversation-trigger"), wait('.conversation-trigger[aria-expanded="false"]')]),
+  scene("conversation-filter", "Search conversations in details", [...details, type(".mb-det .conversation-tools input", "no matching conversation"), wait(".mb-det .conversation-empty")]),
   ...["routines", "memory", "skills", "commands", "voice"].map(tab => scene(`details-${tab}`, `Member ${tab} pane`, [...details, click(`[data-det="tab"][data-tab="${tab}"]`)])),
   scene("member-avatar", "Member avatar picker above details", [...details, click('[data-det="avatar"]'), wait("#app-popover")]),
   scene("member-edit", "Edit member dialog", [...details, click('[data-det="edit"]'), wait(".mb-dialog")]),
@@ -34,8 +34,8 @@ export default [
   ...["member", "room", "team"].flatMap(context => {
     const base = context === "member" ? [member(1)] : context === "room" ? [room(1)] : [click('[data-go="team"]')];
     const form = context === "member" ? ".mb-chat:not(.au-room-pane) .composer" : context === "room" ? ".au-room-pane .composer" : ".team-composer .composer";
-    return [scene(`${context}-composer-empty`, `${context} empty composer`, base, { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
-      scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。")]),
-      scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`)])];
+    return [scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
+      scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), check("composer-pair")]),
+      scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), check("composer-pair")])];
   }),
 ];

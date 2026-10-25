@@ -19,7 +19,6 @@ export function installMock(fixture, config = {}, target = window) {
     data.turns[0].text = "";
   }
   if (variant.usageEmpty) {
-    data.usage.runs = [];
     data.usage.total = 0;
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));
     data.usage.groups = Object.fromEntries(Object.keys(data.usage.groups).map(key => [key, []]));
@@ -109,7 +108,6 @@ export function installMock(fixture, config = {}, target = window) {
       case "integrations.set_enabled": return { server: update(data.servers, p.id, { enabled: p.enabled, status: p.enabled ? "ready" : "disabled" }) };
       case "integrations.disconnect": update(data.servers, p.id, { enabled: false, status: "disconnected", auth: "none" }); return { disconnected: true };
       case "usage.runs": return { ...data.usage, range: p.range ?? data.usage.range };
-      case "usage.trace": { const trace = data.traces.find(trace => trace.run.id === p.id && trace.run.kind === p.kind); if (!trace) throw new Error(`Fixture trace not found: ${p.kind}/${p.id}`); return trace; }
       case "usage.allowances": return data.allowances;
       case "usage.analytics": return { ...data.analytics, range: p.range ?? data.analytics.range };
       case "usage.export": return { csv: data.usageCsv };
@@ -127,6 +125,12 @@ export function installMock(fixture, config = {}, target = window) {
     async invoke(command, args = {}) {
       state.calls.push({ command, ...copy(command === "main_events" ? {} : args) });
       // Native Channel instances contain callbacks; do not serialize them before registration.
+      if (command === "overlay_subscribe") {
+        state.overlayChannel = args.channel;
+        for (const event of variant.overlayEvents ?? []) args.channel.onmessage(copy(event));
+        return;
+      }
+      if (command === "overlay_log") return;
       if (command === "main_events") { state.channel = args.channel; return; }
       if (command === "core_call") return copy(await core(args.method, args.params));
       if (command === "device_settings_get") return copy(data.device);

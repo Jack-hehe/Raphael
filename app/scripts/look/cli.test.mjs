@@ -9,7 +9,7 @@ describe("look CLI", () => {
   it("lists scenes without starting Vite or requiring a browser package", () => {
     const result = look("--list");
     expect(result.status, result.stderr).toBe(0);
-    for (const scene of ["chat", "picker", "automations-calendar", "connections", "dictation-history"])
+    for (const scene of ["chat", "details", "automations-calendar", "connections", "dictation-history"])
       expect(result.stdout).toMatch(new RegExp(`^${scene}\\s`, "m"));
   });
   it.each([["unknown-scene"], ["chat", "--width", "0"], ["--all", "--theme", "sepia"], ["chat", "--locale", "fr"], ["chat", "--out"], ["chat", "--typo"]])("rejects invalid arguments before browser startup: %j", (...args) => {

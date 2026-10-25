@@ -5,16 +5,20 @@ import { join, resolve } from "node:path";
 
 const app = resolve(import.meta.dirname, ".."), root = resolve(app, "..");
 const args = process.argv.slice(2);
+const outIndex = args.indexOf("--out");
+const outValue = outIndex < 0 ? undefined : args[outIndex + 1];
+if (outIndex >= 0 && outValue && !outValue.startsWith("--")) args.splice(outIndex, 2);
+const output = outValue && !outValue.startsWith("--") ? resolve(outValue) : join(app, ".look");
 const allowed = ["--quick", "--core", "--rust", "--help"];
 const unknown = args.find(arg => !allowed.includes(arg));
 if (unknown || (args.includes("--quick") && (args.includes("--core") || args.includes("--rust")))) {
   console.error(unknown ? `Unknown option: ${unknown}` : "--quick cannot be combined with --core or --rust");
   process.exitCode = 1;
 } else if (args.includes("--help")) {
-  console.log("npm run verify -- [--quick] [--core] [--rust]\nDefault: tsc, vitest, contrast. --quick: tsc + vitest only.\n--core: also run offline core pytest. --rust: also run offline cargo test.\nLogs and summary: app/.look/verify-*/. No installs or network access.");
+  console.log("npm run verify -- [--quick] [--core] [--rust] [--out dir]\nDefault: tsc, vitest, contrast. --quick: tsc + vitest only.\n--core: also run offline core pytest. --rust: also run offline cargo test.\nLogs and summary: app/.look/verify-*/ (override with --out). No installs or network access.");
 } else {
-  await mkdir(join(app, ".look"), { recursive: true });
-  const directory = await mkdtemp(join(app, ".look", "verify-"));
+  await mkdir(output, { recursive: true });
+  const directory = await mkdtemp(join(output, "verify-"));
   const checks = [
     { name: "tsc", command: process.execPath, args: [join(app, "node_modules/typescript/bin/tsc"), "--noEmit"], cwd: app },
     { name: "vitest", command: process.execPath, args: [join(app, "node_modules/vitest/vitest.mjs"), "run", "--configLoader", "runner", "--maxWorkers=2", "--no-cache"], cwd: app },
@@ -38,7 +42,7 @@ if (unknown || (args.includes("--quick") && (args.includes("--core") || args.inc
     let exitCode, error;
     try {
       const result = await new Promise(resolve => {
-        activeChild = spawn(check.command, check.args, { cwd: check.cwd, windowsHide: true, shell: false, stdio: ["ignore", handle.fd, handle.fd], env: { ...process.env, NO_COLOR: "1", PYTHONDONTWRITEBYTECODE: "1", UV_CACHE_DIR: join(directory, "uv-cache"), CARGO_TARGET_DIR: join(app, ".look", "cargo-target") } });
+        activeChild = spawn(check.command, check.args, { cwd: check.cwd, windowsHide: true, shell: false, stdio: ["ignore", handle.fd, handle.fd], env: { ...process.env, NO_COLOR: "1", PYTHONDONTWRITEBYTECODE: "1", UV_CACHE_DIR: join(directory, "uv-cache"), CARGO_TARGET_DIR: join(output, "cargo-target") } });
         activeChild.once("error", value => resolve({ exitCode: 1, error: value.message }));
         activeChild.once("close", (code, signal) => resolve({ exitCode: code ?? 1, ...(signal ? { error: `Terminated by ${signal}` } : {}) }));
       });

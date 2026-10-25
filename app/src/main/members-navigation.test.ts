@@ -8,7 +8,7 @@ const member = (id: number, patch: Partial<Member> = {}): Member => ({ id, name:
 test("hidden members stay out of navigation and pinned members precede all groups", () => {
   const el = document.createElement("div");
   el.innerHTML = columnHTML({ list: { members: [member(0), member(1, { hidden: true }), member(2), member(3, { pinned: true, group_id: 4 })], groups: [{ id: 4, name: "Work", position: 0, sources: [] }] }, current: 0, previews: new Map(), query: "", folded: new Set(), fresh: new Set() });
-  expect([...el.querySelectorAll<HTMLElement>(".mb-row")].map(row => row.dataset.member)).toEqual(["3", "2"]);
+  expect([...el.querySelectorAll<HTMLElement>(".mb-row")].map(row => row.dataset.member)).toEqual(["0", "3", "2"]);
   expect(el.querySelector(".mb-pinned [data-member='3']")).not.toBeNull();
 });
 test("the sidebar exposes new conversations and member management actions", () => {

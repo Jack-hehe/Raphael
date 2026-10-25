@@ -8,7 +8,7 @@ import type { LanguageGroup } from "./languages";
 import type { TelegramStatus } from "./messaging";
 import type { AvatarCrop } from "./avatar";
 import type { UsageAnalytics, UsageRequest } from "./usage-analytics-types";
-import type { CliAllowances, RunReport, RunRequest, RunTrace, UsageRun } from "./run-analytics-types";
+import type { CliAllowances, RunReport, RunRequest } from "./run-analytics-types";
 import type {
   AgentQuestion,
   AgentTurn,
@@ -364,20 +364,12 @@ export async function subscribeMainEvents(handler: (event: MainEvent) => void): 
 export const openAttachment = (id: string): Promise<void> => invoke("open_attachment", { id });
 
 // Retained execution metrics; exporting always requests the entire selected period.
-function runPicture(run: UsageRun, members: MembersList | null): UsageRun {
-  const member = members?.members.find(member => member.id === run.member_id);
-  return { ...run, member_name: member?.name ?? run.member_name, avatar_url: member?.avatar_url };
-}
 export async function usageRuns(params: RunRequest): Promise<RunReport> {
   const [report, members] = await Promise.all([core<RunReport>("usage.runs", params), membersList().catch(() => null)]);
-  return { ...report, runs: report.runs.map(run => runPicture(run, members)), ...(report.groups ? { groups: { ...report.groups, member: report.groups.member.map(group => {
+  return { ...report, ...(report.groups ? { groups: { ...report.groups, member: report.groups.member.map(group => {
     const member = members?.members.find(member => member.name === group.label || member.id === 0 && group.label === "Raphael");
     return { ...group, member_id: member?.id ?? (group.label === "Raphael" ? 0 : undefined), avatar_url: member?.avatar_url };
   }) } } : {}) };
-}
-export async function usageTrace(params: { kind: "turn" | "task" | "routine"; id: number }): Promise<RunTrace> {
-  const [trace, members] = await Promise.all([core<RunTrace>("usage.trace", params), membersList().catch(() => null)]);
-  return { ...trace, run: runPicture(trace.run, members) };
 }
 export const usageExport = (params: RunRequest): Promise<{ csv: string }> => core("usage.export", params);
 export const usageAllowances = (): Promise<CliAllowances> => core("usage.allowances");

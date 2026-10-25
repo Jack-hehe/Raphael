@@ -7,20 +7,20 @@
   min-width: 0; font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; container: usage / inline-size;
 }
 .usage-analytics h2, .usage-analytics h3, .usage-analytics p { margin: 0; }
-.usage-analytics h2 { font-size: var(--fs-lg); font-weight: 650; }
-.usage-analytics h3 { font-size: var(--fs-md); font-weight: 650; }
+.usage-analytics h2 { font-size: var(--fs-lg); font-weight: 600; }
+.usage-analytics h3 { font-size: var(--fs-md); font-weight: 600; }
 .ua-header, .ua-period, .ua-cost-head, .ua-section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
 .ua-period { justify-content: flex-end; gap: var(--sp-1); }
 .usage-analytics button:not(.sel) {
   min-height: var(--h-ctl); border: 1px solid var(--btn-edge); border-radius: var(--r-sm);
-  padding: 4px 10px; background: var(--btn); color: var(--text); font: inherit; cursor: pointer;
+  padding: var(--sp-1) var(--sp-2); background: var(--btn); color: var(--text); font: inherit; cursor: pointer;
 }
 .usage-analytics button:hover:not(:disabled) { background: var(--hover); }
 .usage-analytics button:disabled { color: var(--text-3); cursor: default; }
 :root[data-keys] .usage-analytics button:focus-visible, :root[data-keys] .usage-analytics .ua-mark:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
-.ua-segment { display: flex; padding: 3px; border-radius: var(--r-md); background: var(--surface-2); }
+.ua-segment { display: flex; padding: var(--sp-1); border-radius: var(--r-md); background: var(--surface-2); }
 .ua-segment button { border-color: transparent; background: transparent; min-height: var(--h-ctl-sm); }
-.ua-segment button[aria-pressed="true"] { background: var(--panel); box-shadow: var(--tab-shadow); color: var(--accent-text); font-weight: 650; }
+.ua-segment button[aria-pressed="true"] { background: var(--panel); box-shadow: var(--tab-shadow); color: var(--accent-text); font-weight: 600; }
 .ua-cost-head { margin-top: var(--sp-5); }
 .usage-analytics .ua-dates { color: var(--text-2); font-size: var(--fs-xs); margin-bottom: var(--sp-2); }
 .ua-total { display: block; margin-top: var(--sp-2); font-size: var(--fs-h1); font-weight: 600; letter-spacing: -0.025em; }
@@ -36,24 +36,24 @@
 .ua-mark:hover, :root[data-keys] .ua-mark:focus { stroke: var(--text); stroke-width: 2; }
 .ua-line { fill: none; stroke: var(--ua-color); stroke-width: 2.5; stroke-linejoin: round; }
 .ua-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); list-style: none; padding: 0; margin: var(--sp-2) 0 var(--sp-4); }
-.ua-legend li { display: flex; align-items: center; gap: 6px; max-width: 100%; font-size: var(--fs-xs); color: var(--text-2); }
+.ua-legend li { display: flex; align-items: center; gap: var(--sp-1); max-width: 100%; font-size: var(--fs-xs); color: var(--text-2); }
 .ua-legend li > span { overflow-wrap: anywhere; }
-.ua-legend strong { margin-left: 3px; font-weight: 600; white-space: nowrap; }
-.ua-legend i { width: 8px; height: 8px; flex: none; border-radius: 2px; background: var(--ua-color); }
+.ua-legend strong { margin-left: var(--sp-1); font-weight: 600; white-space: nowrap; }
+.ua-legend i { width: 8px; height: 8px; flex: none; border-radius: var(--r-sm); background: var(--ua-color); }
 .usage-analytics .ua-note { font-size: var(--fs-xs); color: var(--text-3); margin-top: var(--sp-3); }
 .ua-table-scroll { margin-top: var(--sp-3); }
 .usage-analytics table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--fs-sm); }
 .usage-analytics th, .usage-analytics td { padding: var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--line); text-align: right; overflow-wrap: anywhere; }
 .usage-analytics th:first-child { width: 40%; text-align: left; }
 .usage-analytics thead th { color: var(--text-3); font-size: var(--fs-xs); font-weight: 600; }
-.usage-analytics th button { text-align: left; border: 0; padding: 0 4px; background: transparent; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
-.usage-analytics th small { display: block; color: var(--text-3); font-weight: 400; padding-left: 16px; white-space: normal; max-width: 100%; }
+.usage-analytics th button { text-align: left; border: 0; padding: 0 var(--sp-1); background: transparent; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+.usage-analytics th small { display: block; color: var(--text-3); font-weight: 400; padding-left: var(--sp-4); white-space: normal; max-width: 100%; }
 .ua-models { margin: 0; padding: 0 0 0 var(--sp-4); list-style: none; }
 .ua-models li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); text-align: left; padding: var(--sp-1) 0; }
 .ua-models li span:first-child { overflow-wrap: anywhere; white-space: normal; }
 .usage-analytics .ua-more { margin-top: var(--sp-3); }
 .usage-analytics .ua-empty, .usage-analytics .ua-status { padding: var(--sp-6) var(--sp-3); text-align: center; color: var(--text-3); }
-.ua-tooltip { position: fixed; z-index: 100; max-width: min(420px, calc(100vw - 16px)); padding: 8px 12px; border: 1px solid var(--btn-edge); border-radius: var(--r-sm); box-shadow: var(--pop); background: var(--menu); color: var(--text); font-size: var(--fs-xs); overflow-wrap: anywhere; pointer-events: none; }
+.ua-tooltip { position: fixed; z-index: 100; max-width: min(420px, calc(100vw - 16px)); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--btn-edge); border-radius: var(--r-sm); box-shadow: var(--pop); background: var(--menu); color: var(--text); font-size: var(--fs-xs); overflow-wrap: anywhere; pointer-events: none; }
 @media (prefers-reduced-motion: no-preference) { .usage-analytics button { transition: background-color 100ms; } }
 /* SVG viewBox coordinates scale with the panel; keep the axis labels readable in narrow panels. */
 @container usage (max-width: 480px) { .ua-axis { font-size: calc(var(--fs-xs) * 1.8); } }

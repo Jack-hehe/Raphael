@@ -53,6 +53,82 @@ export function checkRendered(name) {
     require(box.left >= parent.left && box.right <= parent.right + 1, "new conversation button fits inside the list");
     return { check: name, width: list.clientWidth, scrollWidth: list.scrollWidth };
   }
+  if (name === "settings-shell") {
+    const modal = document.querySelector(".modal"), close = modal?.querySelector(".modal-x");
+    require(visible(modal) && visible(close), "settings and its close control are visible");
+    require(getComputedStyle(modal).borderTopLeftRadius === "12px", "settings uses the dialog radius rather than a pill");
+    const box = close.getBoundingClientRect(), hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    require(close === hit || close.contains(hit), "rounded corners do not clip the close control");
+    return { check: name, radius: getComputedStyle(modal).borderTopLeftRadius };
+  }
+  if (name === "dictation-navigation") {
+    const nav = document.querySelector(".dictation-nav"), tabs = [...nav.querySelectorAll('[role="tab"]')];
+    const active = tabs.filter(tab => tab.getAttribute("aria-selected") === "true");
+    require(nav.getAttribute("aria-orientation") === "vertical" && active.length === 1, "one selected vertical navigation entry");
+    const panel = document.getElementById(active[0].getAttribute("aria-controls"));
+    require(visible(panel) && !panel.hidden, "selected navigation displays its panel");
+    const navBox = nav.getBoundingClientRect(), panelBox = panel.getBoundingClientRect();
+    require(navBox.right < panelBox.left, "navigation remains to the left of the content");
+    for (let i = 1; i < tabs.length; i++) require(tabs[i].getBoundingClientRect().top >= tabs[i - 1].getBoundingClientRect().bottom, "entries form a vertical list");
+    require(panel.scrollWidth <= panel.clientWidth + 1, "selected content fits its column");
+    return { check: name, selected: active[0].dataset.dictationTab, panelWidth: panel.clientWidth };
+  }
+  if (name === "conversation-design") {
+    const bubble = document.querySelector(".bubble"), answer = document.querySelector('[data-expandable] > .ans');
+    for (const element of [bubble, answer]) {
+      require(visible(element), "owner and assistant messages are visible");
+      const style = getComputedStyle(element);
+      require(style.fontSize === "15px" && style.lineHeight === "24px", "messages use 15px type at 1.6 line height");
+      require(style.borderTopLeftRadius === "12px", "messages use the shared card radius");
+    }
+    require(getComputedStyle(answer).borderTopWidth === "0px", "assistant bubble has no decorative border");
+    const column = document.querySelector(".mb-col");
+    if (visible(column)) {
+      const rows = [...column.querySelectorAll(".mb-row")], first = rows[0];
+      require(first.dataset.member === "0" && first.querySelector(".mb-pin"), "Raphael is pinned first");
+      for (const row of rows) require(Math.abs(row.querySelector(".av").getBoundingClientRect().width - 40) < 1, "members share 40px faces");
+    }
+    return { check: name, sidebarVisible: visible(column), fontSize: getComputedStyle(bubble).fontSize };
+  }
+  if (name === "usage-summary") {
+    require(document.querySelectorAll(".run-tile").length === 6, "overview totals remain available");
+    require(!document.querySelector(".run-list, .run-timeline, [data-run-id]"), "per-run navigation is absent");
+    const tracks = [...document.querySelectorAll(".run-bar-track")];
+    for (const track of tracks) {
+      const fill = track.querySelector("i"), box = track.getBoundingClientRect();
+      require(box.width > 0 && box.height === 7, "grouping and allowance tracks retain their visible height");
+      require(visible(fill) && fill.getBoundingClientRect().height === 7, "bar fills remain visible");
+    }
+    return { check: name, bars: tracks.length };
+  }
+  if (name === "overlay-percentage") {
+    const caption = document.querySelector("#progress");
+    require(visible(caption) && /^\u300a \d+ % \u300b$/.test(caption.textContent), "original percentage caption is visible");
+    require(Number(caption.textContent.match(/\d+/)[0]) > 0, "native progress advances beyond the initial zero");
+    require(!document.body.textContent.includes("Transcribing") && !document.body.textContent.includes("\u8f49\u9304\u4e2d"), "elapsed-time captions are absent");
+    return { check: name, caption: caption.textContent };
+  }
+  if (name === "member-details") {
+    const panel = document.querySelector(".mb-det"), title = document.querySelector(".conversation-trigger");
+    require(visible(panel), "details panel is visible");
+    require(title.getAttribute("aria-expanded") === "true", "title reflects the panel state");
+    require(title.getAttribute("aria-controls") === panel.id && !title.hasAttribute("aria-haspopup"), "title controls details without a popup");
+    require([...title.querySelectorAll(".i")].every(icon => icon.closest(".mb-pill-face")), "title has no dropdown glyph outside its member avatar");
+    const list = panel.querySelector(".conversation-list");
+    require(visible(list) && list.scrollWidth <= list.clientWidth + 1, "conversation management fits the panel");
+    return { check: name, width: list.clientWidth, scrollWidth: list.scrollWidth };
+  }
+  if (name === "composer-pair") {
+    const form = [...document.querySelectorAll(".composer")].find(visible);
+    const send = form.querySelector(".cmp-send"), voice = form.querySelector(".cmp-voice");
+    const a = send.getBoundingClientRect(), b = voice.getBoundingClientRect();
+    require(a.width === 32 && a.height === 32 && b.width === 32 && b.height === 32, "send and voice are equal 32px controls");
+    require(Math.abs(a.top - b.top) < 1, "paired buttons share a baseline");
+    for (const button of [send, voice]) require(getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)", "icon buttons have no fill");
+    const hasDraft = !!form.querySelector("textarea").value.trim();
+    require(send.disabled === !hasDraft, "send state follows draft text");
+    return { check: name, send: a.width, voice: b.width, hasDraft, color: getComputedStyle(send).color };
+  }
   if (name === "calendar-chips") {
     const chips = [...document.querySelectorAll(".au-occurrence")];
     require(chips.length > 0, "calendar has event chips");
