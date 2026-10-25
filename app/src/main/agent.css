@@ -31,6 +31,7 @@
   --pa-gh-btn: calc(24px + 8 * var(--pa-u));
   --pa-row-h: 64px;
   --pa-row-av: 40px;
+  --pa-chief-av: clamp(64px, 5vw, 96px);
   --pa-row-gap: var(--sp-2);
   --pa-row-name: var(--fs-sm);
   --pa-row-role: var(--fs-2xs);
@@ -315,9 +316,11 @@
 .cmp-input.is-tall { overflow-y: auto; }
 .cmp-input::placeholder { color: var(--text-3); }
 .cmp-input:focus-visible { outline: 0; }
-.composer .btn.cmp-send:hover:not(:disabled) { background: transparent; color: var(--accent-icon); }
-.composer .btn.cmp-send:active:not(:disabled) { background: transparent; color: var(--accent-icon); }
-.composer .btn.cmp-send:disabled { background: transparent; color: var(--text-3); opacity: 1; cursor: default; }
+/* Send: a filled round button, the accent once there is something to send. */
+.composer .cmp-pair .btn.cmp-send { border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); }
+.composer .cmp-pair .btn.cmp-send:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
+.composer .cmp-pair .btn.cmp-send:active:not(:disabled) { background: var(--accent-pressed); color: var(--on-accent); }
+.composer .cmp-pair .btn.cmp-send:disabled { background: var(--surface-2); color: var(--text-3); opacity: 1; cursor: default; }
 /* while its picture is up (voice-mode.ts) the button stays, and keeps the focus; only its picture is hidden */
 .vm-away > * { visibility: hidden; }
 .cmp-file { display: flex; flex-wrap: nowrap; gap: var(--sp-2); min-width: 0; overflow-x: auto; padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-2); }
@@ -446,8 +449,5 @@
 /* Send and Raphael voice form one quiet, equal-sized pair in every composer. */
 .cmp-pair { display: inline-flex; flex: none; align-items: center; gap: var(--sp-1); }
 .composer .cmp-pair .btn { width: 32px; height: 32px; min-height: 32px; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; }
-.composer .cmp-pair .cmp-send { color: var(--accent-icon); }
-.composer .cmp-pair .cmp-send:disabled { color: var(--text-3); opacity: 1; }
-.composer .cmp-pair .i { width: 20px; height: 20px; }
-.composer .cmp-pair .cmp-voice { color: var(--text-2); }
+.composer .cmp-pair .cmp-send .i { width: 16px; height: 16px; }
 .composer .cmp-pair .cmp-voice:is(:hover, :active) { transform: none; }

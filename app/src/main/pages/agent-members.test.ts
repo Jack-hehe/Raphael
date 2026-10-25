@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The 拉斐爾 page with members (pages/agent.ts and members-shell.ts): picking a member loads its own
 // thread, asks it and searches it alone; its answers are plain, its composer says 「傳訊息給 <name>」
-// and has the microphone voice button; the gold card shows in the thread that asked; Raphael's thread is as it
+// and has the emblem voice button; the gold card shows in the thread that asked; Raphael's thread is as it
 // was; a turn of another thread does not touch the open one; the slot of the background questions
 // sits above the composer; the details panel closes and comes back from the pill.
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";

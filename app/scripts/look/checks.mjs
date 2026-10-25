@@ -93,12 +93,12 @@ export function checkRendered(name) {
   if (name === "dictation-navigation") {
     const nav = document.querySelector(".dictation-nav"), tabs = [...nav.querySelectorAll('[role="tab"]')];
     const active = tabs.filter(tab => tab.getAttribute("aria-selected") === "true");
-    require(nav.getAttribute("aria-orientation") === "vertical" && active.length === 1, "one selected vertical navigation entry");
+    require(nav.getAttribute("aria-orientation") === "horizontal" && active.length === 1, "one selected horizontal tab");
     const panel = document.getElementById(active[0].getAttribute("aria-controls"));
     require(visible(panel) && !panel.hidden, "selected navigation displays its panel");
     const navBox = nav.getBoundingClientRect(), panelBox = panel.getBoundingClientRect();
-    require(navBox.right < panelBox.left, "navigation remains to the left of the content");
-    for (let i = 1; i < tabs.length; i++) require(tabs[i].getBoundingClientRect().top >= tabs[i - 1].getBoundingClientRect().bottom, "entries form a vertical list");
+    require(navBox.bottom < panelBox.top, "tabs remain above the content");
+    for (let i = 1; i < tabs.length; i++) require(tabs[i].getBoundingClientRect().left >= tabs[i - 1].getBoundingClientRect().right, "tabs form a horizontal row");
     require(panel.scrollWidth <= panel.clientWidth + 1, "selected content fits its column");
     return { check: name, selected: active[0].dataset.dictationTab, panelWidth: panel.clientWidth };
   }
@@ -153,7 +153,8 @@ export function checkRendered(name) {
     const a = send.getBoundingClientRect(), b = voice.getBoundingClientRect();
     require(a.width === 32 && a.height === 32 && b.width === 32 && b.height === 32, "send and voice are equal 32px controls");
     require(Math.abs(a.top - b.top) < 1, "paired buttons share a baseline");
-    for (const button of [send, voice]) require(getComputedStyle(button).backgroundColor === "rgba(0, 0, 0, 0)", "icon buttons have no fill");
+    require(getComputedStyle(voice).backgroundColor === "rgba(0, 0, 0, 0)", "the emblem voice button has no fill");
+    require(getComputedStyle(send).backgroundColor !== "rgba(0, 0, 0, 0)" && getComputedStyle(send).borderRadius === "999px", "send is a filled round button");
     const hasDraft = !!form.querySelector("textarea").value.trim();
     require(send.disabled === !hasDraft, "send state follows draft text");
     return { check: name, send: a.width, voice: b.width, hasDraft, color: getComputedStyle(send).color };
