@@ -1,33 +1,8 @@
 /* Shared team and automation surfaces use the app's theme tokens in both appearances. */
 .au-page { display: flex; flex-direction: column; min-width: 0; height: 100%; padding-top: var(--window-controls-height); overflow: hidden; background: var(--content); }
-.au-header { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-4) var(--sp-5); border-bottom: 0; flex-shrink: 0; }
-.au-header h1 { font-size: var(--fs-h1); margin: 0 auto 0 0; font-weight: 600; display: flex; align-items: center; gap: var(--sp-3); }
-.au-header h1 small { font-size: var(--fs-xs); color: var(--text-3); font-weight: 500; }
-.au-heading { flex: 1; min-width: 0; }
-.au-heading p { margin: var(--sp-1) 0 0; font-size: var(--fs-xs); color: var(--text-2); line-height: 1.7; }
-.au-calendar-hint { margin: 0; padding: var(--sp-2) var(--sp-4) 0; font-size: var(--fs-xs); color: var(--text-2); }
 .au-segment { display: flex; padding: var(--sp-1); border: 1px solid var(--edge); border-radius: var(--r-sm); background: var(--surface-2); gap: var(--sp-1); }
 .au-segment .btn { border-color: transparent; background: transparent; }
 .au-segment .btn[aria-pressed="true"] { background: var(--panel); border-color: var(--edge); box-shadow: var(--tab-shadow); }
-.au-list { width: 100%; max-width: 850px; margin: 0 auto; padding: var(--sp-5); overflow-y: auto; overflow-x: hidden; }
-.au-card { padding: var(--sp-4) var(--sp-4); background: transparent; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; margin-bottom: var(--sp-3); }
-.au-card-head { display: flex; gap: var(--sp-3); align-items: flex-start; }
-.au-status { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--text-3); flex-shrink: 0; margin-top: var(--sp-3); }
-.au-status.is-on { background: var(--ok); }
-.au-edit.btn { display: flex; align-items: flex-start; justify-content: flex-start; flex: 1; min-width: 0; padding: var(--sp-1); height: auto; border: 0; background: transparent; text-align: left; white-space: normal; gap: var(--sp-2); }
-.au-edit .au-sentence { color: var(--text); font-size: var(--fs-md); line-height: 1.8; overflow-wrap: anywhere; }
-.au-edit .av { flex-shrink: 0; }
-.au-card-foot a { font-size: var(--fs-xs); color: var(--accent-text); text-underline-offset: 3px; }
-.au-edit b { font-size: var(--fs-md); overflow-wrap: anywhere; }
-.au-edit span, .au-card p { color: var(--text-2); font-size: var(--fs-xs); }
-.au-card p { line-height: 1.7; margin: var(--sp-2) 0 var(--sp-3) var(--sp-5); overflow-wrap: anywhere; }
-.au-card-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-left: var(--sp-5); }
-.au-awake { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-4); padding: var(--sp-3) var(--sp-1); font-size: var(--fs-xs); color: var(--text-2); }
-.au-awake small { display: block; font-size: var(--fs-xs); color: var(--text-3); margin-top: var(--sp-1); }
-.au-empty h2 { font-size: var(--fs-lg); color: var(--text); margin: var(--sp-3) 0; }
-.au-empty p { line-height: 1.8; max-width: 54ch; margin: 0 auto var(--sp-4); }
-.au-examples { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin: var(--sp-4) auto; max-width: 480px; }
-.au-example.btn { height: auto; min-height: 48px; white-space: normal; text-align: left; justify-content: flex-start; padding: var(--sp-3); gap: var(--sp-2); }
 .au-empty { padding: 48px var(--sp-4); color: var(--text-3); text-align: center; }
 .au-empty > .i { width: 20px; height: 20px; }
 .au-routine-dialog.mb-dialog { width: min(690px, calc(100vw - 40px)); }
@@ -54,14 +29,18 @@
 .au-month-grid .btn.au-other-month { color: var(--text-3); }
 .au-month-grid .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-radius: var(--r-pill); }
 .au-month-grid .btn:hover { background: var(--hover); }
-.au-calendar-toolbar { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-4); border-bottom: 1px solid var(--line); font-size: var(--fs-xs); flex-shrink: 0; flex-wrap: wrap; }
 .au-spacer { flex: 1; }
 .au-calendar { display: flex; min-height: 0; flex: 1; }
-.au-calendar-side { width: 208px; flex-shrink: 0; padding: var(--sp-4) var(--sp-3); border-right: 0; background: var(--panel); overflow-y: auto; overflow-x: hidden; }
+.au-toolbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.au-toolbar h1 { margin: 0; font-size: var(--fs-lg); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.au-step { display: flex; gap: var(--sp-1); }
+.au-calendar-side { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; padding: var(--sp-4); border-left: 1px solid var(--line); background: var(--panel); overflow-y: auto; overflow-x: hidden; }
+.au-awake { display: flex; justify-content: space-between; align-items: center; gap: var(--sp-3); margin-top: auto; padding-top: var(--sp-4); border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--text-2); }
 .au-calendar-side h3 { border-top: 1px solid var(--line); padding-top: var(--sp-4); margin: var(--sp-4) 0 var(--sp-3); font-size: var(--fs-xs); }
 .au-calendar-side p { font-size: var(--fs-2xs); color: var(--text-3); line-height: 1.7; }
 .au-drag-members { display: flex; flex-direction: column; gap: var(--sp-1); }
-.au-drag-members .btn { border: 0; justify-content: flex-start; gap: var(--sp-2); height: auto; min-height: 40px; cursor: grab; white-space: normal; text-align: left; }
+.au-drag-members .btn { border: 0; background: transparent; justify-content: flex-start; gap: var(--sp-2); height: auto; min-height: 36px; padding: var(--sp-1) var(--sp-2); cursor: grab; white-space: normal; text-align: left; font-size: var(--fs-sm); }
+.au-drag-members .btn:hover { background: var(--hover); }
 .au-calendar-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-width: 0; }
 .au-grid { display: grid; grid-template-columns: 46px repeat(var(--au-days), minmax(0, 1fr)); position: relative; }
 .au-grid-head { grid-column: 1 / -1; position: sticky; top: 0; z-index: 3; background: var(--content); display: grid; grid-template-columns: 46px repeat(var(--au-days), minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
@@ -74,15 +53,17 @@
 .au-day-col { position: relative; min-width: 0; border-left: 1px solid var(--line); container: calendar-day / inline-size; }
 .au-slot { height: 64px; border-bottom: 1px solid var(--line); }
 .au-slot:hover { background: var(--hover); }
-.au-occurrence.btn { position: absolute; display: grid; grid-template-columns: 20px minmax(0, 1fr); height: 46px; min-width: 0; padding: var(--sp-1); gap: var(--sp-1); background: var(--selected); border-color: var(--accent-text); align-items: center; z-index: 1; overflow: hidden; }
-.au-occurrence > span { min-width: 0; text-align: left; }
-.au-occurrence b { display: block; font-size:var(--fs-2xs); overflow: hidden; text-overflow: ellipsis; }
+.au-occurrence.btn { position: absolute; display: flex; align-items: flex-start; justify-content: space-between; height: 52px; min-width: 0; padding: var(--sp-1) var(--sp-2); gap: var(--sp-1); background: var(--selected); border: 0; border-left: 3px solid var(--accent-icon); border-radius: var(--r-sm); z-index: 1; overflow: hidden; }
+.au-occurrence > span { min-width: 0; flex: 1; text-align: left; }
+.au-occurrence b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: var(--fs-xs); font-weight: 500; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere; white-space: normal; }
 .au-occurrence time { display: block; font-size: var(--fs-2xs); color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.au-history-mark { position: absolute; right: var(--sp-1); bottom: var(--sp-1); width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--err); }
+.au-history-mark[data-status="done"] { background: var(--ok); }
+.au-history-mark[data-status="skipped"] { background: var(--text-3); }
 .au-occurrence .av { flex-shrink: 0; }
-@container calendar-day (max-width: 85px) {
-  .au-occurrence.btn { grid-template-columns: minmax(0, 1fr); justify-items: center; padding: var(--sp-1) var(--sp-1); gap: var(--sp-1); }
-  .au-occurrence b { display: none; }
-  .au-occurrence .au-occurrence-copy { text-align: center; }
+@container calendar-day (max-width: 96px) {
+  .au-occurrence.btn > .av { display: none; }
+  .au-occurrence.btn { padding: var(--sp-1); }
 }
 .au-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--err); pointer-events: none; z-index: 2; }
 .team-board-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background-image: radial-gradient(var(--edge) 1px, transparent 1px); background-size: 20px 20px; }
@@ -122,7 +103,6 @@
 .au-room-thread .room-turn { white-space: nowrap; }
 .au-room-row [aria-current="true"] { background: var(--accent-soft) !important; color: var(--text); }
 .au-occurrence.is-past { opacity: 0.65; background: var(--surface-2); }
-.au-history-mark { position: absolute; top: 1px; right: 1px; font-style: normal; font-size: var(--fs-2xs); line-height: 1; }
 .team-drop-empty { border-style: dashed; }
 .au-rooms-section { border-top: 1px solid var(--line); margin-top: var(--sp-4); padding: var(--sp-2) 0; }
 .au-room-row { display: flex; gap: var(--sp-1); align-items: center; margin: var(--sp-1) 0; }
@@ -133,16 +113,12 @@
 @media (max-width: 900px) {
   .au-calendar-side { width: 170px; padding: var(--sp-3) var(--sp-2); }
   .au-calendar-side .au-month-grid { gap: 0; }
-  .au-header { padding: var(--sp-4); gap: var(--sp-2); }
-  .au-header h1 { font-size: var(--fs-h1); }
-  .au-list { padding: var(--sp-4) var(--sp-4); }
   .team-bottom { flex-wrap: wrap; padding: var(--sp-3); gap: var(--sp-2); }
   .team-zoom { margin-left: auto; }
   .team-composer { flex-basis: calc(100% - 150px); }
 }
 @media (max-width: 600px) {
   .au-calendar-side { display: none; }
-  .au-header { flex-wrap: wrap; }
   .au-more { grid-template-columns: minmax(0, 1fr); }
   .au-members { grid-template-columns: minmax(0, 1fr); }
   .team-composer { flex-basis: 100%; }

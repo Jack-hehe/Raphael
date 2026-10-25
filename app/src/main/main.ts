@@ -66,7 +66,6 @@ const RESHOW_MS = 1000;
 const NAV: { id: MainPageId; name: string; icon: IconName | "face" }[] = [
   { id: "home", get name() { return t("nav.overview"); }, icon: "home" },
   { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
-  { id: "automations", get name() { return t("nav.automations"); }, icon: "repeat" },
   { id: "team", get name() { return t("nav.team"); }, icon: "grid" },
   { id: "dictation", get name() { return t("nav.dictation"); }, icon: "mic" },
 ];
@@ -314,8 +313,10 @@ async function start(): Promise<void> {
     current = id;
     setRail(id === "agent");
     for (const page of Object.values(pages)) if (page !== settings) page.el.hidden = page.id !== id;
+    // The calendar opens from Home and has no rail entry of its own.
+    const railId = id === "automations" ? "home" : id;
     nav.querySelectorAll<HTMLElement>(".nav[data-go]").forEach((item) =>
-      item.setAttribute("aria-current", item.dataset.go === id ? "page" : "false"),
+      item.setAttribute("aria-current", item.dataset.go === railId ? "page" : "false"),
     );
     main.scrollTop = 0;
     shownAt = performance.now();

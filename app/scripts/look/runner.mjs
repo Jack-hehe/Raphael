@@ -94,7 +94,7 @@ export async function run(options) {
           window.addEventListener("unhandledrejection", event => { window.__look.errors.push(`Unhandled rejection: ${String(event.reason)}`); });
         }, fixture.now);
         await page.goto(`${origin}/${scene.entry ?? ""}`, { waitUntil: "networkidle0", timeout: 20000 });
-        await page.waitForSelector(scene.entry === "overlay.html" ? "#progress:not([hidden])" : scene.fixture.onboarding ? '#ob:not([hidden]) [data-ob="next"]' : '.page-home:not([hidden]) .ho-raphael', { visible: true, timeout: 10000 });
+        await page.waitForSelector(scene.entry === "overlay.html" ? "#progress:not([hidden])" : scene.fixture.onboarding ? '#ob:not([hidden]) [data-ob="next"]' : '.page-home:not([hidden]) .ho-hero', { visible: true, timeout: 10000 });
         // Existing conversation journeys enter through the real rail after the home is ready.
         if (scene.entry !== "overlay.html" && !scene.fixture.onboarding && !scene.name.startsWith("home")) {
           await perform(page, { action: "click", selector: '#nav .nav[data-go="agent"]' });

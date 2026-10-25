@@ -13,7 +13,6 @@ export interface RoutineDialogOptions {
   members: readonly Member[];
   memberId?: number;
   routine?: Routine;
-  preset?: { title: string; prompt: string; schedule: RoutineSchedule };
   date?: string;
   time?: string;
   onSaved?(routine: Routine): void;
@@ -24,7 +23,7 @@ export interface RoutineDialogOptions {
 }
 
 export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
-  const routine = o.routine, plan = routine?.schedule ?? o.preset?.schedule;
+  const routine = o.routine, plan = routine?.schedule;
   let memberId = routine?.member_id ?? o.memberId ?? 0;
   let kind: RoutineSchedule["kind"] = plan?.kind ?? "once";
   const next = new Date(Date.now() + 3600000);
@@ -35,7 +34,7 @@ export function openRoutineDialog(o: RoutineDialogOptions): Dialog {
   let ending = plan?.max_runs ? "after" : plan?.until ? "until" : "never";
   let until = plan?.until ?? date;
   let count = String(plan?.max_runs ?? 10);
-  let title = routine?.title ?? o.preset?.title ?? "", prompt = routine?.prompt ?? o.preset?.prompt ?? "";
+  let title = routine?.title ?? "", prompt = routine?.prompt ?? "";
   let more = !!(plan?.max_runs || plan?.until), saving = false;
   let dialog: Dialog;
   const endChoices = (): { value: string; label: string }[] => [

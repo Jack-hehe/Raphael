@@ -16,7 +16,7 @@ describe("real app entry with the shared look fixture", () => {
     const state = installMock(fixture);
     await import("../../src/main/main.ts");
     await flush();
-    expect(document.querySelector('.page-home:not([hidden]) .ho-raphael')).not.toBeNull();
+    expect(document.querySelector('.page-home:not([hidden]) .ho-hero')).not.toBeNull();
     expect(document.querySelector('#nav .nav')?.dataset.go).toBe("home");
     document.querySelector('#nav .nav[data-go="agent"]').click();
     await flush();

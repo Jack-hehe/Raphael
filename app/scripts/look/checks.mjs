@@ -4,13 +4,16 @@ export function checkRendered(name) {
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
   if (name === "home-overview") {
     const home = document.querySelector('.page-home:not([hidden])');
-    require(home && visible(home.querySelector('.ho-raphael')), "Raphael's report is visible");
-    require(window.__look.data.home.today.every(item => ["question", "routine"].includes(item.kind)), "Today contains only pending questions and routines");
-    require(!home.querySelector('[data-home-section="today"] [data-home-item^="report:"]'), "Reports appear only in the member report section");
+    const emblem = home?.querySelector('.ho-hero > .av');
+    require(visible(emblem) && emblem.getBoundingClientRect().width >= 60, "Raphael's emblem is large on Home");
+    require(!home.querySelector('h1'), "Home has no headline or slogan");
+    const ask = home.querySelector('.ho-ask');
+    require(visible(ask) && !ask.textContent.trim() && ask.getAttribute('aria-label'), "asking Raphael is a small labelled icon, not words");
+    require(!home.querySelector('.ho-pending [data-home-item^="routine:"], .ho-pending [data-home-item^="report:"]'), "Pending lists only what waits for the owner");
+    for (const card of home.querySelectorAll('.ho-card')) require(visible(card.querySelector(':scope > header .ho-open')), "every card opens its details from an icon");
     require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "Home is the selected rail destination");
     require(document.querySelector('#nav .nav')?.dataset.go === "home", "Home is first in the rail");
-    require(home.querySelector('.ho-dictation')?.tagName === "BUTTON", "Dictation totals drill into dictation");
-    require(home.querySelector('.ho-spark')?.getAttribute('aria-label'), "Spend chart has an accessible description");
+    for (const chart of home.querySelectorAll('.ho-bars')) require(chart.getAttribute('aria-label'), "charts have an accessible description");
     return { check: name, items: home.querySelectorAll('[data-home-item]').length, width: home.clientWidth };
   }
   if (name === "home-report") {
@@ -19,10 +22,14 @@ export function checkRendered(name) {
     require(window.__look.calls.some(call => call.method === "agent.history.list" && call.params.conversation_id === 11 && call.params.around_id === 2), "The reported conversation was loaded around its exact turn");
     return { check: name, turnId: 2, memberId: 1 };
   }
-  if (name === "home-expanded") {
-    const count = document.querySelectorAll('[data-home-section="today"] [data-home-item]').length;
-    require(count === window.__look.data.home.today.length, "All returned today items are reachable after expansion");
-    return { check: name, items: count };
+  if (name === "calendar-shell") {
+    const grid = document.querySelector('.au-page:not([hidden]) .au-calendar-scroll'), side = document.querySelector('.au-page:not([hidden]) .au-calendar-side');
+    require(visible(grid), "the calendar grid is visible");
+    require(!document.querySelector('.au-page [data-view]'), "the calendar has no list view");
+    require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "the calendar belongs to Home in the rail");
+    require(!document.querySelector('#nav .nav[data-go="automations"]'), "the rail has no automations entry");
+    if (visible(side)) require(side.getBoundingClientRect().left >= grid.getBoundingClientRect().right - 1, "the month and members sit on the right");
+    return { check: name, side: visible(side) };
   }
   if (name === "admin-approval" || name === "admin-approval-long" || name === "admin-approval-batch") {
     const card = [...document.querySelectorAll('.ask-card')].find(visible);
@@ -157,7 +164,7 @@ export function checkRendered(name) {
     for (const chip of chips) {
       const time = chip.querySelector("time, small"), face = chip.querySelector(".av"), label = chip.querySelector("b");
       const bounds = chip.getBoundingClientRect();
-      require(visible(face), "member face remains visible in narrow chips");
+      if (bounds.width >= 110) require(visible(face), "member face is visible in a wide chip");
       require(visible(time) && /^\d{2}:\d{2}$/.test(time.textContent), `complete compact time: ${time?.textContent}`);
       const range = document.createRange(); range.selectNodeContents(time);
       const text = range.getBoundingClientRect();

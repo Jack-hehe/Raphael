@@ -1,15 +1,14 @@
 import { scene, click, hover, type, wait, page, key, scroll, room, newRoom, check } from "./steps.mjs";
 
-const auto = [page("automations"), wait(".au-header")];
-const calendar = [...auto, click('[data-view="calendar"]'), wait(".au-occurrence"), check("calendar-chips")];
+const auto = [page("home"), click('.ho-today [data-home-go="calendar"]'), wait(".au-toolbar")];
+const calendar = [...auto, wait(".au-occurrence"), check("calendar-chips"), check("calendar-shell")];
 const dialog = [...auto, click('[data-au="new"]'), wait(".mb-dialog")];
 const more = [...dialog, click('[data-dlg="more"]')];
 const team = [page("team"), wait(".team-member")];
 const groupMenu = [...team, click('[data-team="group-menu"]')];
 export default [
-  scene("automations-list", "Automation list", auto),
-  scene("automations-hover", "Automation card hover", [...auto, hover('[data-au="edit"]')]),
-  scene("automations-empty", "Automation examples without routines", auto, { routines: [] }),
+  scene("automations-hover", "Calendar chip hover", [...calendar, hover('.au-occurrence')]),
+  scene("automations-empty", "Calendar without routines", [...auto, check("calendar-shell")], { routines: [] }),
   scene("automations-calendar", "Automation week calendar", calendar),
   scene("automations-day", "Automation day calendar", [...calendar, click('[data-period="day"]')]),
   ...["once", "daily", "weekdays", "weekly", "every"].map(kind => scene(`automation-${kind}`, `${kind} automation dialog`, [...dialog, click(`[data-kind="${kind}"]`)])),
@@ -20,7 +19,6 @@ export default [
   scene("automation-until", "Automation end date picker", [...more, click('[data-dlg="end"]'), click('[data-value="until"]'), click('[data-dlg="until"]')]),
   scene("automation-edit", "Edit an automation", [...auto, click('[data-au="edit"]')]),
   scene("automation-delete", "Delete an automation confirmation", [...auto, click('[data-au="edit"]'), click('[data-dlg="delete"]')]),
-  scene("automation-example", "Create from an automation example", [...auto, click('[data-example="0"]')], { routines: [] }),
   scene("automation-drag-prefill", "Calendar drop opens a prefilled automation", [...calendar, { action: "drop", selector: '[data-slot][data-hour="9"]', memberId: 2 }]),
   scene("automation-more-bottom", "Scrollable automation advanced fields", [...more, click('[data-dlg="end"]'), click('[data-value="after"]'), scroll(".au-more")]),
   scene("team", "Grouped team board", team),

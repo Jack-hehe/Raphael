@@ -55,15 +55,13 @@ test("Escape closes a menu first and the editor second",()=>{
   openRoutineDialog({members,date:"2030-10-24"});click('[data-dlg="more"]');click('[data-dlg="end"]');document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));expect(document.querySelector('.au-routine-dialog')).not.toBeNull();document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));expect(document.querySelector('.au-routine-dialog')).toBeNull();
 });
 
-test("list explains routines, links results and persists switches without a run log",async()=>{
+test("the calendar opens directly, without a list, and the keep-awake switch persists",async()=>{
   const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
-  expect(page.el.textContent).toContain("Review");click('[data-au="toggle"]');await flush();expect(api.routinesUpdate).toHaveBeenCalledWith(1,{enabled:false});
+  expect(page.el.querySelector('[data-view]')).toBeNull();
+  expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(7);
+  expect(page.el.querySelector('.au-calendar > .au-calendar-scroll + .au-calendar-side')).not.toBeNull();
   click('[data-au="awake"]');await flush();expect(api.keepAwakeSet).toHaveBeenCalledWith(true);expect(page.el.querySelector('[data-au="awake"]')!.getAttribute("aria-checked")).toBe("true");
-  expect(page.el.querySelector('[data-au="runs"]')).toBeNull();
-  expect(page.el.textContent).toContain("automatically");
-  expect(page.el.querySelector('.au-sentence')!.textContent).toContain("Alice");
-  expect(page.el.querySelector('.au-sentence')!.textContent).toContain("Review");
-  click('[data-au="destination"]');expect(document.querySelector('.au-runs-dialog')).toBeNull();page.hide();
+  page.hide();
 });
 
 test("live routine notifications refresh the list, and hide invalidates pending responses",async()=>{
@@ -71,11 +69,11 @@ test("live routine notifications refresh the list, and hide invalidates pending 
 });
 
 test("calendar switches between day and week and mini dates navigate",async()=>{
-  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-view="calendar"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(7);click('[data-period="day"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);click('[data-mini-date]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);page.hide();
+  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(7);click('[data-period="day"]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);click('[data-mini-date]');expect(page.el.querySelectorAll('.au-day-col')).toHaveLength(1);page.hide();
 });
 
 test("calendar chips keep complete compact times and full task details when edited",async()=>{
-  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-view="calendar"]');
+  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
   const chip=page.el.querySelector<HTMLButtonElement>('.au-occurrence')!;
   expect(chip.querySelector('time')?.textContent).toBe("09:00");
   expect(chip.title).toContain("Review");expect(chip.title).toContain("09:00");
@@ -101,7 +99,7 @@ test("interval phases and remaining run limits survive calendar boundaries",()=>
 });
 
 test("calendar accepts member drops with date and hour but ignores unrelated drags",async()=>{
- const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();click('[data-view="calendar"]');
+ const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
  const slot=page.el.querySelector<HTMLElement>('[data-slot][data-hour="9"]')!;
  const drop=(value:string):void=>{const event=new Event("drop",{bubbles:true,cancelable:true});Object.defineProperty(event,"dataTransfer",{value:{getData:()=>value}});slot.dispatchEvent(event);};
  drop("");expect(document.querySelector('.au-routine-dialog')).toBeNull();drop("2");
@@ -141,8 +139,7 @@ test("status summaries have one separator and history appears in past calendar d
  const at=new Date();at.setHours(9,0,0,0);at.setDate(at.getDate()-2);
  api.routineRuns.mockResolvedValue({runs:[{id:5,routine_id:1,scheduled:at.getTime(),started:at.getTime()+120000,finished:at.getTime()+180000,status:"done",summary:"Completed。．.",cost:0,turn_id:12}]});
  const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
- expect(page.el.querySelector('.au-card p')!.textContent).not.toMatch(/[。．.]\s*·/);
- click('[data-view="calendar"]');click('[data-mini-date="'+dateKey(at)+'"]');click('[data-period="day"]');
+ click('[data-mini-date="'+dateKey(at)+'"]');click('[data-period="day"]');
  expect(page.el.querySelector('[data-run="5"]')).not.toBeNull();page.hide();
 });
 
@@ -154,20 +151,4 @@ test("routine destination uses an app dropdown",()=>{
 test("empty ungrouped column is available only while dragging",async()=>{
  const page=createTeamPage(app());document.body.append(page.el);page.show();await flush();const target=page.el.querySelector<HTMLElement>('.team-drop-empty')!;expect(target.hidden).toBe(true);
  const card=page.el.querySelector<HTMLElement>('[data-team-member="1"]')!;card.dispatchEvent(new Event('dragstart',{bubbles:true}));expect(target.hidden).toBe(false);card.dispatchEvent(new Event('dragend',{bubbles:true}));expect(target.hidden).toBe(true);page.hide();
-});
-
-test("each empty-state example opens a prefilled routine that can be saved",async()=>{
- api.routinesList.mockResolvedValue({routines:[]});
- const page=createAutomationsPage(app());document.body.append(page.el);page.show();await flush();
- expect(page.el.querySelectorAll('[data-au="example"]')).toHaveLength(3);
- for (let i=0;i<3;i++) {
-   click(`[data-au="example"][data-example="${i}"]`);
-   expect(document.querySelector<HTMLInputElement>('#au-title')!.value.length).toBeGreaterThan(5);
-   expect(document.querySelector<HTMLTextAreaElement>('#au-prompt')!.value.length).toBeGreaterThan(5);
-   expect(document.querySelector<HTMLInputElement>('#au-time')!.value).toBe(i===2?"21:00":"08:00");
-   expect(document.querySelector('[data-kind="'+(i===1?'weekly':'daily')+'"][aria-pressed="true"]')).not.toBeNull();
-   click('[data-dlg="save"]');await flush();
- }
- expect(api.routinesCreate).toHaveBeenCalledTimes(3);
- expect(api.routinesCreate.mock.calls[1][0].schedule.days).toEqual([1]);page.hide();
 });
