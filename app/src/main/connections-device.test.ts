@@ -3,6 +3,7 @@ import { setLocale } from "./i18n";
 import type { ConnectionGroup, MainEvent, StoreService } from "./types";
 
 const api = vi.hoisted(() => ({
+  connectorsStatus: vi.fn(),
   toolsetsList: vi.fn(),
   integrationsCatalog: vi.fn(),
   integrationsAudit: vi.fn(),
@@ -50,6 +51,7 @@ beforeEach(() => {
   vi.mocked(copyText).mockReset();
   host.redraw.mockReset();
   api.toolsetsList.mockResolvedValue({ groups: [] });
+  api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
   api.integrationsCatalog.mockResolvedValue({ services: [github] });
   api.integrationsAudit.mockResolvedValue({ entries: [] });
   api.integrationsConnectCancel.mockResolvedValue({ cancelled: true });
@@ -60,8 +62,9 @@ async function waitingForCode() {
   let finish!: (value: unknown) => void;
   api.integrationsConnect.mockReturnValue(new Promise((resolve) => (finish = resolve)));
   const c = createConnections(host);
+  api.toolsetsList.mockResolvedValue({ groups: [connected] });
   await c.load();
-  c.click(button("join", { id: "github" }));
+  c.click(button("relogin", { id: "gh1" }));
   return { c, finish };
 }
 

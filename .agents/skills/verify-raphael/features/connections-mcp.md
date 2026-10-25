@@ -1,57 +1,69 @@
-# Connections and MCP
-
-Home reads the private Google primary calendar through connectors.status (without
-refreshing Composio accounts) and the enabled calendar_list_events tool. Its bounded
-read shares connector scope/tool restrictions; an unavailable calendar does not
-remove Home's routines, questions or reports. See [Home](home.md) and the offline
-test_home_calendar_uses_only_enabled_private_google_tool connector regression.
+# Plugins, connections and MCP
 
 ## Sub-features
 
-Server list/actions, command/HTTP forms, test results, edit/disconnect, JSON paste
-preview, local discovery and empty states.
+Settings > Connections contains one installed list for Composio toolkits, private
+Google and custom MCP servers. Every row has a bare service mark (or a generic plug),
+name, one-line description, service switch and detail chevron. Managed bridge
+servers are not duplicate rows. Tool switches are grouped by write/read in the
+detail. Disconnect lives in the detail overflow with a second-press confirmation.
+Custom MCP add/edit/test, command/HTTP, JSON paste and local discovery stay reachable.
+
+The Store uses connectors.catalog and connectors.categories, shared search/dropdown,
+paged cards, browser sign-in progress and already-added state. A missing Composio key
+shows only the password prompt and Save action; keys never enter view state or error
+copy. Remote logos accept only HTTPS Composio domains under the existing image CSP;
+bundled marks/generic plug cover absent artwork. The fixture uses installed marks
+and does not prove remote image availability.
 
 ## How to get to it (user POV)
 
-Open Settings > Connections. Add offers custom commands, pasted JSON and import.
-A server's overflow menu contains edit/disconnect. Switch custom form type for
-HTTP and test a draft before saving.
+Open Settings > Connections. Use Installed to open a service detail, change its
+switches or open its overflow. Add offers custom command/URL, pasted JSON and import.
+Use Store to save a Composio project key, filter the catalog and Add a service;
+complete its login in the browser, then return to Installed.
 
 ## Driving it with look
 
 ```powershell
-npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720
-npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720
+npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-connecting --theme both --width 1120,720,1920x1080
+npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
+npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
 ```
 
-Keep list/menu/form/status/preview PNGs and reports. Inspect long arguments, access
-to Test/status and dialog stacking at 720. For actual connection work use an
-authorized isolated native app and local test MCP server: add, test, save/reopen,
-invoke a harmless tool, disconnect and verify it is unavailable. Keep sanitized
-server logs/state and stop only the server you started.
+Inspect every contact sheet and detail/store/key/menu full-size image, especially
+720px scrolling, ellipsized descriptions and overflow confirmation. Browser scenes
+exercise the real entry and IPC doubles. Vitest covers asynchronous connection,
+catalog races/pagination, key privacy and managed tool decisions. Core tests cover
+default-on new tools, persisted service switches, provider failures and the shared
+API/CLI MCP definitions for Raphael and members without a restart.
 
 ## Gotchas
 
-Fixture server `notes` supplies edit flows; tests/discovery return synthetic results.
-`connections-delete` captures the disconnected server's menu, not native removal.
-Browser network is blocked except the owned Vite origin; favicon returns empty 204.
-UI success does not prove OAuth, credentials, process launch, HTTP transport, local
-config scanning or actual tools.
+Composio opens the login in the core and polls there; no frontend OAuth URL or token
+is stored. connectors.changed maps to ConnectionsChanged. Status reads here use
+refresh:false to avoid account refresh/notification loops. tools reads can notify;
+the controller keeps the in-flight tool state when reloading the list. A whole
+service switch preserves individual exclusions via connectors.set_tools.enabled.
+Google consent scopes and existing execution gates still apply independently.
 
-## Managed connectors core (UI pending)
+Fixture server notes supplies custom edit/test flows. All credentials, tools and
+catalog entries in browser evidence are synthetic. Browser network is blocked outside
+the owned Vite origin. These scenes cannot prove OAuth, OS credential persistence,
+remote logo hosting, provider schemas, account expiry/revocation or actual tools.
 
-Composio and Google (private) use connectors.* RPCs documented in CONN-NOTES.md.
-This branch adds no dialog or catalog UI. Existing look scenes are regression
-proof only. Use connectors.tools for Composio toggles; MCP meta-tools are locked.
-Generic integration mutations refuse managed entries. The connectors.changed
-notification reaches the existing ConnectionsChanged main event.
+## Native acceptance owned by the maintainer
 
-Offline verification: npm run verify -- --core --rust includes HTTP doubles,
-a real isolated loopback listener driven by a simulated browser, scope/draft policy,
-one-use approvals, privacy and Rust bridge tests. For native acceptance use an
-isolated data directory and owner-provided test project/client: save a scoped
-Composio key, connect by browser/poll, read through the agent gate, disable a tool,
-disconnect/revoke; separately configure a Desktop Google client, exercise partial
-consent/refresh and draft-only denial, approve an intentional test send or event,
-then revoke. Repeat availability for Raphael and a member. Check expiry and
-secret-free logs. These live/native steps remain pending in this core branch.
+Run the full look matrix, judge with external ChatGPT/Codex reference images and
+verify --live in the authorized environment, as reserved in .brief-plugins.md.
+Use an isolated data directory and a scoped Composio test key. Save/reopen, search
+and change categories, Add through browser sign-in, cancel/deny/expire and retry,
+disable a tool/service, verify the next API and CLI turns for Raphael and a member,
+and disconnect/revoke. Confirm new tools default on, exclusions survive restart,
+remote logos load under native CSP, and logs contain no key/token/payload.
+
+For private Google use an owner-provided Desktop client: configure through the
+existing core RPC, sign in, exercise partial consent and refresh, and verify Gmail
+and Calendar tool switches and revocation. Home calendar reads only through the
+enabled private calendar_list_events tool. Test a custom local MCP server with
+add/test/edit/paste/discover, a harmless call and removal; stop only that test server.

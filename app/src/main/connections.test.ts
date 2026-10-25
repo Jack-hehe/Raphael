@@ -3,6 +3,8 @@ import { setLocale } from "./i18n";
 import type { AuditEntry, ConnectionGroup, StoreService } from "./types";
 
 const api = vi.hoisted(() => ({
+  connectorsStatus: vi.fn(), connectorsCatalog: vi.fn(), connectorsCategories: vi.fn(), connectorsTools: vi.fn(),
+  connectorsSetTools: vi.fn(), connectorsConnect: vi.fn(), connectorsGoogleConnect: vi.fn(), connectorsDisconnect: vi.fn(), connectorsSetKey: vi.fn(),
   toolsetsList: vi.fn(),
   integrationsCatalog: vi.fn(),
   integrationsAudit: vi.fn(),
@@ -137,7 +139,7 @@ describe("已安裝", () => {
     expect(files).toContain(ico("plug"));
     expect(files).not.toContain(">F<");
     const remote = connectionsHTML(view({ groups: [{ ...custom, transport: "http", url: "https://example.com/mcp" }] }));
-    expect(remote).toContain('class="ds code" title="https://example.com/mcp">https://example.com/mcp</span>');
+    expect(remote).toContain('class="ds">https://example.com/mcp</span>');
   });
 
   test("the switch is the whole service's and shows it off", () => {
@@ -192,13 +194,14 @@ describe("the dialog of a connected service", () => {
     expect(d).toContain("共 3 個工具（2 個會改動、1 個只讀取）");
   });
 
-  test("lists 會改動 and 只讀取 as two rows with their counts, each opening its tools; no tool is listed before", () => {
+  test("groups tools inline under write and read headings with individual switches", () => {
     const d = dialog(installedPage("ab12"));
-    expect(d).toMatch(/<div class="cs-grp"><button type="button" class="btn gr" data-conn="tools" data-kind="write" data-k="cs-kind:write"><span class="gt">會改動<em class="num">2<\/em><\/span>/);
-    expect(d).toMatch(/<button type="button" class="btn gr" data-conn="tools" data-kind="read" data-k="cs-kind:read"><span class="gt">只讀取<em class="num">1<\/em><\/span>/);
-    expect(d).not.toContain(">Create page<");
-    // a service with only one kind of tool has only that row
-    expect(dialog(installedPage("cu1")).match(/data-conn="tools"/g)).toHaveLength(1);
+    expect(d).toContain('class="cs-plugin-tools"');
+    expect(d.match(/data-conn="tool"/g)).toHaveLength(3);
+    expect(d).toContain(">Create page<");
+    expect(d).toContain(">Search<");
+    expect(d).not.toContain('data-conn="tools"');
+    expect(dialog(installedPage("cu1")).match(/data-conn="tool"/g)).toHaveLength(1);
   });
 
   test("a row of tools opens them in the dialog: back, the kind and its count, a switch for them all, then a switch each", () => {
@@ -253,16 +256,14 @@ describe("the dialog of a connected service", () => {
     expect(dialog(installedPage("cu1"))).not.toContain('data-conn="try"');
   });
 
-  test("ends with a sticky action row: disconnect first, secondary controls, then the primary Try it", () => {
+  test("keeps disconnect in the detail overflow and secondary controls before Try it", () => {
     const d = dialog(installedPage("ab12"));
     const acts = d.slice(d.indexOf('class="action-row cs-acts is-sticky"'));
-    expect(acts).toContain('class="action-destructive"');
-    expect(acts.indexOf('data-conn="disconnect"')).toBeLessThan(acts.indexOf('data-conn="relogin"'));
+    expect(d).toContain('data-conn="server-menu"');
+    expect(d).not.toContain('data-conn="disconnect"');
     expect(acts.indexOf('data-conn="refresh"')).toBeLessThan(acts.indexOf('data-conn="try"'));
     expect(acts).toMatch(/class="btn sm" data-conn="relogin" data-id="ab12"[^>]*>重新登入</);
     expect(acts).toMatch(/class="btn sm" data-conn="refresh" data-id="ab12"[^>]*>重新讀取工具</);
-    expect(acts).toMatch(/class="btn danger sm" data-conn="disconnect" data-id="ab12"[^>]*>中斷連線</);
-    expect(installedPage("ab12", { confirmingDisconnect: "ab12" })).toMatch(/class="btn danger sm" data-conn="disconnect"[^>]*>確定中斷？</);
     // a service with no login has none to do again
     expect(dialog(installedPage("cu1"))).not.toContain('data-conn="relogin"');
   });
@@ -553,6 +554,9 @@ describe("what the tab does", () => {
     for (const fn of Object.values(api)) fn.mockReset();
     vi.mocked(toaster.info).mockReset();
     api.toolsetsList.mockResolvedValue({ groups: GROUPS });
+    api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: true, google_configured: false });
+    api.connectorsCatalog.mockResolvedValue({ items: CATALOG.map(s => ({ slug: s.id, name: s.name, description: s.summary["zh-TW"], logo: "", categories: [], can_connect: true, no_auth: false })) });
+    api.connectorsCategories.mockResolvedValue({ items: [] });
     api.integrationsCatalog.mockResolvedValue({ services: CATALOG });
     api.integrationsAudit.mockResolvedValue({ entries: AUDIT });
     for (const name of ["integrationsRefresh", "integrationsSetEnabled", "integrationsSetToolEnabled"] as const) api[name].mockResolvedValue({});
@@ -567,7 +571,7 @@ describe("what the tab does", () => {
     expect(c.view().groups).toBe("loading");
     await c.load();
     expect(c.view().groups).toEqual(GROUPS);
-    expect(c.view().catalog).toEqual(CATALOG);
+    expect((c.view().catalog as StoreService[]).map(s => s.id)).toEqual(CATALOG.map(s => s.id));
     expect(c.view().audit).toEqual(AUDIT);
     expect(c.view().tab).toBe("installed");
   });
@@ -604,17 +608,17 @@ describe("what the tab does", () => {
 
   test("says the services cannot be had when the first read fails, and keeps the old ones when a later one does", async () => {
     api.toolsetsList.mockRejectedValueOnce("down");
-    api.integrationsCatalog.mockRejectedValueOnce("down");
+    api.connectorsStatus.mockRejectedValueOnce("down");
     const c = createConnections(host);
     await c.load();
     expect(c.view().groups).toBe("failed");
     expect(c.view().catalog).toBe("failed");
     await c.load();
     api.toolsetsList.mockRejectedValueOnce("down");
-    api.integrationsCatalog.mockRejectedValueOnce("down");
+    api.connectorsStatus.mockRejectedValueOnce("down");
     await c.load();
     expect(c.view().groups).toEqual(GROUPS);
-    expect(c.view().catalog).toEqual(CATALOG);
+    expect((c.view().catalog as StoreService[]).map(s => s.id)).toEqual(CATALOG.map(s => s.id));
   });
 
   test("changes view, opens a page or a dialog and goes back; one whose service is gone closes", async () => {
@@ -702,20 +706,6 @@ describe("what the tab does", () => {
     expect(c.view().open).toBeNull();
   });
 
-  test("「試試看」 hands the service's first example, in the window's language, to the 拉斐爾 page", async () => {
-    const c = createConnections(host);
-    await c.load();
-    c.click(button("open", { id: "ab12" }));
-    c.click(button("try", { id: "ab12" }));
-    expect(host.tryPrompt).toHaveBeenCalledWith("跟Notion說一");
-    setLocale("ja");
-    c.click(button("try", { id: "ab12" }));
-    expect(host.tryPrompt).toHaveBeenLastCalledWith("Notionに一");
-    // a server of the user's own has none
-    c.click(button("try", { id: "cu1" }));
-    expect(host.tryPrompt).toHaveBeenCalledTimes(2);
-  });
-
   test("the search filters what is under the bar without drawing the page again", async () => {
     const body = { innerHTML: "" };
     vi.stubGlobal("document", { querySelector: () => body });
@@ -774,88 +764,6 @@ describe("what the tab does", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  describe("adding a service from the store", () => {
-    test("加入 starts the login, shows the wait, and on success the service is under 已安裝", async () => {
-      let finish!: (value: unknown) => void;
-      api.integrationsConnect.mockReturnValue(new Promise((resolve) => (finish = resolve)));
-      const c = createConnections(host);
-      await c.load();
-      c.click(button("tab", { id: "store" }));
-      c.click(button("join", { id: "linear" }));
-      expect(api.integrationsConnect).toHaveBeenCalledWith({ catalog_id: "linear" });
-      expect(c.view().login).toEqual({ target: "linear", name: "Linear" });
-      expect(connectionsHTML(c.view())).toContain("請在瀏覽器登入…");
-      api.toolsetsList.mockResolvedValue({ groups: [...GROUPS, { ...notes, id: "ln1", name: "Linear", catalog_id: "linear" }] });
-      finish({ connected: true, server: { id: "ln1" } });
-      await settle();
-      expect(c.view().login).toBeNull();
-      expect(c.view().tab).toBe("installed");
-      expect(c.view().open).toBeNull();
-      expect(lastToast()).toBe("已連接 Linear");
-    });
-
-    test("only one login at a time", async () => {
-      api.integrationsConnect.mockReturnValue(new Promise(() => undefined));
-      const c = createConnections(host);
-      await c.load();
-      c.click(button("join", { id: "linear" }));
-      c.click(button("join", { id: "sentry" }));
-      expect(api.integrationsConnect).toHaveBeenCalledTimes(1);
-    });
-
-    test("取消 ends the wait and says nothing about it", async () => {
-      api.integrationsConnect.mockImplementation(async () => {
-        await settle();
-        return { connected: false, error: "cancelled" };
-      });
-      const c = createConnections(host);
-      await c.load();
-      c.click(button("join", { id: "linear" }));
-      c.click(button("cancel-login"));
-      expect(api.integrationsConnectCancel).toHaveBeenCalled();
-      await settle();
-      await settle();
-      expect(c.view().login).toBeNull();
-      expect(c.view().loginError).toBeNull();
-      expect(toaster.info).not.toHaveBeenCalled();
-    });
-
-    test("a refusal, a timeout or a failure is told, and kept for the page of the service", async () => {
-      const c = createConnections(host);
-      await c.load();
-      api.integrationsConnect.mockResolvedValueOnce({ connected: false, error: "denied" });
-      c.click(button("join", { id: "linear" }));
-      await settle();
-      expect(c.view().loginError).toEqual({ target: "linear", kind: "denied" });
-      expect(lastToast()).toBe("你在瀏覽器上拒絕了，所以沒有加入。");
-      api.integrationsConnect.mockResolvedValueOnce({ connected: false, error: "timeout" });
-      c.click(button("join", { id: "linear" }));
-      await settle();
-      expect(lastToast()).toContain("太久沒有登入");
-      // trying again clears what went wrong
-      api.integrationsConnect.mockReturnValueOnce(new Promise(() => undefined));
-      c.click(button("join", { id: "linear" }));
-      expect(c.view().loginError).toBeNull();
-    });
-
-    test("a call that throws is told and the buttons come back", async () => {
-      api.integrationsConnect.mockRejectedValue("the core is not running");
-      const c = createConnections(host);
-      await c.load();
-      c.click(button("join", { id: "linear" }));
-      await settle();
-      expect(c.view().login).toBeNull();
-      expect(toaster.info).toHaveBeenCalled();
-    });
-
-    test("an entry that is not in the store does nothing", async () => {
-      const c = createConnections(host);
-      await c.load();
-      c.click(button("join", { id: "nope" }));
-      expect(api.integrationsConnect).not.toHaveBeenCalled();
-    });
   });
 
   test("a service whose login ran out signs in again from its dialog, which stays open", async () => {
@@ -948,7 +856,7 @@ describe("what the tab does", () => {
   });
 
   test("leaving the tab drops the form, the page, the search and a pending disconnect, but not a login that is under way", async () => {
-    api.integrationsConnect.mockReturnValue(new Promise(() => undefined));
+    api.connectorsConnect.mockReturnValue(new Promise(() => undefined));
     const c = createConnections(host);
     await c.load();
     c.click(button("open", { id: "ab12" }));

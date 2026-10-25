@@ -540,7 +540,7 @@ const altgrNote = (v: SettingsView, bindings: readonly string[]): string[] =>
 export const headingHTML = (v: SettingsView, actions = ""): string => {
   const title = `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>`;
   return (actions ? `<div class="set-head">${title}${actions}</div>` : title) +
-    `<p class="purpose">${esc(PANES.find((p) => p.id === canonicalPane(v.pane))!.purpose(v.device))}</p>`;
+    (canonicalPane(v.pane) === "connections" ? "" : `<p class="purpose">${esc(PANES.find((p) => p.id === canonicalPane(v.pane))!.purpose(v.device))}</p>`);
 };
 
 /** What the tabs that need the core say when it does not answer. */

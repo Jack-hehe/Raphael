@@ -249,7 +249,11 @@ describe("the tabs", () => {
         const title = PANES.find((p) => p.id === id)!.title();
         const head = `<h1 id="set-title" tabindex="-1">${title.replace("&", "&amp;")}</h1>`;
         // 連接 has its 「新增」 on the line of its name
-        if (id === "connections") expect(html).toMatch(new RegExp(`^<div class="set-head">${head}<button[^>]*data-k="conn-add"[^>]*>.*?</button></div><p class="purpose">`));
+        if (id === "connections") {
+          expect(html).toMatch(new RegExp(`^<div class="set-head">${head}<button[^>]*data-k="conn-add"[^>]*>.*?</button></div>`));
+          expect(html).not.toContain('class="purpose"');
+          continue;
+        }
         else expect(html.startsWith(`${head}<p class="purpose">`)).toBe(true);
         expect(html.match(/class="purpose"/g)).toHaveLength(1);
         const purpose = /<p class="purpose">(.*?)<\/p>/.exec(html)![1];

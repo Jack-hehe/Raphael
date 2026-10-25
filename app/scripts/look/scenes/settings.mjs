@@ -3,6 +3,8 @@ import { scene, click, hover, type, wait, page, settings, scroll, key, check } f
 const connections = settings("connections");
 const add = [...connections, click('[data-k="conn-add"]')];
 const custom = [...add, click('.menu [data-value="custom"]')];
+const serverDetail = [...connections, click('[data-conn="open"][data-id="notes"]')];
+const store = [...connections, click('[data-conn="tab"][data-id="store"]'), wait('.cs-card')];
 const usage = [...settings("models"), click('[data-models-tab="usage"]'), wait(".run-tile"), check("usage-summary")];
 const cliMenu = [...settings("models"), scroll(".cli-accounts"), click('[data-cli-menu="codex"]')];
 const cliDisconnected = [...cliMenu, click('#app-popover [data-pick="disconnect"]'), wait('[data-cli="codex"]')];
@@ -17,18 +19,24 @@ export default [
   ...["general", "appearance", "connections", "models", "dictation", "agent", "messaging", "data", "about"].map(pane => scene(pane === "general" ? "profile" : pane, `${pane} settings pane`, settings(pane))),
   scene("skins", "Skin preview hover", [...settings("appearance"), hover('[data-skin-choice="paper"]')]),
   ...["default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"].map(skin => scene(`skin-${skin}`, `${skin} appearance previews`, [...settings("appearance"), click(`[data-skin-choice="${skin}"]`)])),
-  scene("connections-hover", "MCP server hover", [...connections, hover('[data-conn="server-menu"]')]),
-  scene("server-menu", "MCP server actions", [...connections, click('[data-conn="server-menu"][data-id="notes"]')]),
+  scene("plugins-installed", "Unified managed, private Google and custom MCP plugins", [...connections, wait('[data-conn="open"][data-id="composio:notion"]')]),
+  scene("plugins-detail", "Managed tools grouped by write and read", [...connections, click('[data-conn="open"][data-id="composio:notion"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]')]),
+  scene("plugins-store", "Managed plugin catalog", store),
+  scene("plugins-store-category", "Plugin category dropdown", [...store, click('[data-k="conn-category"]'), wait('#app-popover [data-value="productivity"]')]),
+  scene("plugins-store-key", "Missing Composio key", [...connections, click('[data-conn="tab"][data-id="store"]'), wait('#conn-key')], { composioConfigured: false }),
+  scene("plugins-connecting", "Waiting for browser sign-in", [...store, click('[data-conn="join"][data-id="github"]'), wait('.cs-wait')], { pluginsConnecting: true }),
+  scene("connections-hover", "MCP server hover", [...connections, hover('[data-k="cs-open:notes"]')]),
+  scene("server-menu", "MCP server detail actions", [...serverDetail, click('[data-conn="server-menu"][data-id="notes"]')]),
   scene("connections-add-menu", "Add a connection menu", add),
   scene("connections-command", "Command MCP form", custom),
   scene("connections-test", "MCP test result", [...custom, type("#conn-name", "專案筆記"), type("#conn-command", "npx"), type("#conn-args", "-y\nnotes-server\nC:/Work/Team notes"), click('[data-conn="test-draft"]'), scroll(".add-grid [role=status]")]),
   scene("connections-url", "HTTP MCP form", [...custom, click('[data-conn="form-type"][data-type="http"]')]),
-  scene("connections-edit", "Edit MCP server", [...connections, click('[data-conn="server-menu"][data-id="notes"]'), click('[data-conn="edit-server"]')]),
-  scene("connections-delete", "Disconnected MCP server menu", [...connections, click('[data-conn="server-menu"][data-id="notes"]'), click('[data-conn="disconnect"]'), click('[data-conn="server-menu"][data-id="notes"]')]),
+  scene("connections-edit", "Edit MCP server", [...serverDetail, click('[data-conn="server-menu"][data-id="notes"]'), click('[data-conn="edit-server"]')]),
+  scene("connections-delete", "MCP disconnect confirmation in overflow", [...serverDetail, click('[data-conn="server-menu"][data-id="notes"]'), click('[data-conn="disconnect"]')]),
   scene("connections-paste", "Paste MCP JSON", [...add, click('.menu [data-value="paste"]')]),
   scene("connections-paste-preview", "Preview MCP JSON", [...add, click('.menu [data-value="paste"]'), type("[data-mcp-json]", '{"mcpServers":{"專案筆記":{"command":"npx","args":["notes-server"]}}}'), click('[data-dlg="preview"]')]),
   scene("connections-discover", "Discover local MCP definitions", [...add, click('.menu [data-value="import"]')]),
-  scene("connections-empty", "Connections without servers", connections, { servers: [] }),
+  scene("connections-empty", "Connections without servers", [...connections, click('[data-conn="tab"][data-id="installed"]')], { servers: [], managedConnectors: [] }),
   scene("connections-discover-empty", "Discovery without candidates", [...add, click('.menu [data-value="import"]')], { servers: [], candidates: [] }),
   scene("usage", "Usage summary and grouping", usage),
   scene("usage-members", "Expanded member usage", [...usage, click('[data-run-act="members"]'), scroll(".run-members")]),

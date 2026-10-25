@@ -1,24 +1,11 @@
-// The 「連接」 tab of the settings, drawn like Codex's page of plugins: the services Raphael can use, in
-// two views under one bar, 「已安裝」 and 「商店」, with a search. 「已安裝」 is one rounded list, a row for
-// each connected service: its mark, its name, a line about it, a switch for the whole service and a
-// chevron. A click on a row opens the service's dialog over the settings: its switch, what it is,
-// how many tools it has, a row for the tools that change something and one for those that only read
-// (each opening, in the dialog, the tools with a switch each and one for the whole list), 「試試看」,
-// and at the foot what is done less often (sign in again, read the tools again, disconnect) and the
-// latest actions, folded. 「商店」 is the services that can be added with one login in the browser,
-// as cards in two columns, each opening a page that says what it is for. A server of the user's own
-// is added from the 「新增」 menu beside the tab's name.
-//
-// `connectionsHTML` draws the tab from a snapshot (pure, so the rules of the tab can be tested
-// without a browser); `createConnections` holds the state and does what the buttons say, through the
-// core. Nothing secret is kept here: the login happens in the browser and its tokens stay in the
-// core's vault; the values of a variable or a header are typed, sent to the vault once and dropped;
-// only their names are ever shown.
-//
-// A tool is on until the user turns it off, and one that is on runs without asking. There are no
-// levels to choose: that is the whole of the permission.
+// One installed list joins managed toolkits, private Google and custom MCP servers.
+// Details group tool switches by write/read; removal stays in the overflow menu.
+// The store uses the managed catalog, shared category dropdown and browser login.
+// Existing custom MCP setup and device reauthentication stay available.
+// Secrets go directly to the core vault and never enter the render snapshot.
 
 import * as api from "./api";
+import { managedGroup, pluginLogoURL, pluginTool, storePlugin, type ManagedConnector } from "./plugins-data";
 import { openMcpImport } from "./mcp-import";
 import { isTopLayer, registerDismissal } from "./dismissals";
 import { dayLabel, describeError, formatClock } from "./format";
@@ -26,7 +13,7 @@ import { getLocale, t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 import { SERVICE_ICONS, type ServiceIconId, brandStyle, hasLogo, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
 import type { AuditEntry, ConnectionGroup, ConnectionTool, MainEvent, NewConnection, StoreService, Words } from "./types";
-import { DISCONNECT_CONFIRM_MS, type Choice, actionRow, btn, closeMenu, copyText, esc, fieldHTML, ico, iconButton, leave, openPopover, row, st, tabs, tg, toaster } from "./ui";
+import { DISCONNECT_CONFIRM_MS, type Choice, actionRow, btn, closeMenu, copyText, esc, fieldHTML, ico, iconButton, leave, openPopover, row, sel, st, tabs, tg, toaster } from "./ui";
 
 /** `t` for a key that is chosen at run time (its placeholders, if any, are none). */
 const tr = t as unknown as (key: MessageKey) => string;
@@ -89,6 +76,12 @@ export interface DeviceCode {
 }
 
 export interface ConnectionsView {
+  configured: boolean | null;
+  categories: Choice[];
+  category: string;
+  nextCursor: string | null;
+  keyBusy: boolean;
+  keyError: boolean;
   /** The connected services: being read, read, or not to be had. */
   groups: ConnectionGroup[] | "loading" | "failed";
   /** The store, the same way. */
@@ -117,6 +110,7 @@ export interface ConnectionsView {
 }
 
 export const emptyConnectionsView = (): ConnectionsView => ({
+  configured: null, categories: [], category: "", nextCursor: null, keyBusy: false, keyError: false,
   groups: "loading",
   catalog: "loading",
   audit: [],
@@ -203,13 +197,19 @@ export function iconHTML(_name: string, icon: ServiceIconId | null, size: "md" |
 }
 
 function groupIcon(g: ConnectionGroup, v: ConnectionsView, size: "md" | "xl"): string {
+  const logo = pluginLogoURL(g.logo);
+  if (logo) return remoteIcon(logo, size);
   const entry = entryOf(g, v);
   const known = isIcon(entry?.icon) ? entry.icon : serviceIconOf({ name: g.name, command: g.command, args: g.args, url: g.url });
   return iconHTML(g.name, known, size);
 }
 
 /** The picture of a service of the store (the first-run guide draws it too). */
-export const entryIcon = (s: StoreService, size: "md" | "xl"): string => iconHTML(s.name, isIcon(s.icon) ? s.icon : null, size);
+const remoteIcon = (logo: string, size: "md" | "xl"): string => `<span class="mono ${size} logo-art"><img class="logo" src="${esc(logo)}" alt="" referrerpolicy="no-referrer" loading="lazy"></span>`;
+export const entryIcon = (s: StoreService, size: "md" | "xl"): string => {
+  const logo = pluginLogoURL(s.logo);
+  return logo ? remoteIcon(logo, size) : iconHTML(s.name, isIcon(s.icon) ? s.icon : serviceIconOf({ name: s.name }), size);
+};
 
 /** The command or URL of a custom service; the row ellipsizes it and its title keeps it whole. */
 function where(g: ConnectionGroup): string {
@@ -222,7 +222,7 @@ function lineOf(g: ConnectionGroup, v: ConnectionsView): string {
   if (g.status === "error") return st("err", t("conn.status.error", { p0: failureText(g.error) }));
   if (g.status === "unchecked") return esc(t("conn.status.unchecked"));
   const entry = entryOf(g, v);
-  return esc(entry ? words(entry.summary) : where(g));
+  return esc(g.description || (entry ? words(entry.summary) : where(g)));
 }
 
 const matches = (query: string, ...texts: string[]): boolean => {
@@ -244,7 +244,7 @@ function barHTML(v: ConnectionsView): string {
   return (
     `<div class="cs-bar">` +
     tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"), store)], v.tab, { label: t("conn.tabs"), kind: "nav", plain: true }) +
-    `<div class="cs-find">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}</div></div>`
+    (v.tab === "store" && v.configured === false ? "" : `<div class="cs-find">${v.tab === "store" && v.configured ? sel([{ value: "", label: t("plugins.allCategories") }, ...v.categories], v.category, t("plugins.category"), ' data-k="conn-category"') : ""}${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}</div>`) + `</div>`
   );
 }
 
@@ -258,23 +258,21 @@ function itemHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id) || v.login?.target === g.id;
   const id = esc(g.id);
   return (
-    `<div class="cs-item${g.catalog_id ? "" : " mcp-item"}" data-conn="open" data-id="${id}">` +
+    `<div class="cs-item" data-conn="open" data-id="${id}">` +
     btn(
-      `<span class="ic">${groupIcon(g, v, "md")}</span><span class="tx"><span class="nm">${esc(g.name)}</span><span class="ds${g.catalog_id ? "" : " code"}"${g.catalog_id ? "" : ` title="${esc(where(g))}"`}>${g.catalog_id ? lineOf(g, v) : esc(where(g))}</span>` +
-      (!g.catalog_id && (needsLogin(g) || g.status === "error" || g.status === "unchecked") ? `<span class="ds">${lineOf(g, v)}</span>` : "") + `</span>`,
+      `<span class="ic">${groupIcon(g, v, "md")}</span><span class="tx"><span class="nm">${esc(g.name)}</span><span class="ds">${lineOf(g, v)}</span></span>`,
       "cs-open",
       ` data-conn="open" data-id="${id}" data-k="cs-open:${id}" aria-haspopup="dialog" title="${esc(t("conn.open", { p0: g.name }))}"`,
     ) +
     tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable" data-id="${id}" data-k="cs-enable:${id}"${busy ? " disabled" : ""}`) +
-    (g.catalog_id ? "" : iconButton("more", t("mcp.actions"), ` data-conn="server-menu" data-id="${id}" aria-haspopup="menu"${busy ? " disabled" : ""}`)) +
-    (g.catalog_id ? `<span class="chev" aria-hidden="true">${ico("right")}</span>` : "") + `</div>`
+    `<span class="chev" aria-hidden="true">${ico("right")}</span></div>`
   );
 }
 
 function installedHTML(v: ConnectionsView): string {
   if (v.groups === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
-  if (v.groups === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}</div>`;
-  const shown = v.groups.filter((g) => matches(v.search, g.name, entryOf(g, v) ? words(entryOf(g, v)!.summary) : where(g)));
+  if (v.groups === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-connections"')}</div>`;
+  const shown = v.groups.filter((g) => matches(v.search, g.name, g.description ?? "", entryOf(g, v) ? words(entryOf(g, v)!.summary) : where(g)));
   if (!v.groups.length) return `<p class="cs-none">${esc(t("conn.emptyInstalled"))}</p>`;
   if (!shown.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
   return `<div class="cs-list" data-stagger="installed">${shown.map((g) => itemHTML(g, v)).join("")}</div>`;
@@ -354,12 +352,13 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const head =
     `<div class="cs-dlg-head">${groupIcon(g, v, "xl")}<span class="sp"></span>` +
     tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable"${id} data-k="cs-dlg-enable"${busy ? " disabled" : ""}`) +
+    iconButton("more", t("mcp.actions"), ` data-conn="server-menu"${id} aria-haspopup="menu"${busy ? " disabled" : ""}`) +
     closeButton() +
     `</div><h2 class="cs-dlg-name" id="cs-dlg-title">${esc(g.name)}</h2>`;
-  const about = `<p class="cs-desc">${esc(entry ? words(entry.about) : t("conn.customServer"))}</p>`;
+  const about = `<p class="cs-desc">${esc(g.description || (entry ? words(entry.about) : t("conn.customServer")))}</p>`;
   const secrets = [...g.env, ...g.headers];
   // A server of the user's own says where it is and which secrets it was given, by name.
-  const meta = entry
+  const meta = entry || g.source
     ? ""
     : `<div class="cs-meta"><span>${ico("link")}<span class="code">${esc(g.transport === "http" ? g.url : g.command)}</span></span>` +
       (secrets.length ? `<span>${ico("lock")}<span class="code">${esc(secrets.join(", "))}</span></span>` : "") +
@@ -372,26 +371,16 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
       ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.error", { p0: failureText(g.error) }))}</span></div>`
       : "";
   const kinds = (["write", "read"] as const).filter((kind) => g.tools.some((tool) => tool.kind === kind));
-  const tools = g.tools.length
+  const tools = g.tools_state === "loading" ? `<p role="status">${esc(t("conn.loading"))}</p>`
+    : g.tools_state === "failed" ? `<div class="note" role="alert">${esc(t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="refresh"${id}`)}</div>`
+    : g.tools.length
     ? `<p class="cs-count">${esc(t("conn.tools.summary", { p0: g.tool_count, p1: g.write_count, p2: g.read_count }))}</p>` +
-      `<div class="cs-grp">${kinds
-        .map((kind) =>
-          btn(
-            `<span class="gt">${esc(kindName(kind))}<em class="num">${g.tools.filter((tool) => tool.kind === kind).length}</em></span>${ico("right")}`,
-            "gr",
-            ` data-conn="tools" data-kind="${kind}" data-k="cs-kind:${kind}"`,
-          ),
-        )
-        .join("")}</div>`
+      `<div class="cs-plugin-tools">${kinds.map(kind => `<section><h3>${esc(kindName(kind))}</h3><div class="cs-tool-list">${g.tools.filter(tool => tool.kind === kind).map(tool => toolRow(g, tool, busy)).join("")}</div></section>`).join("")}</div>`
     : `<p class="cs-count conn-empty">${esc(t("conn.noTools"))}</p>`;
   const example = examplePrompt(entry);
   const acts = actionRow({
     cls: "cs-acts", sticky: true,
     primary: example ? { label: esc(t("conn.tryIt")), attrs: ` data-conn="try"${id} data-k="cs-try"` } : undefined,
-    destructive: {
-      label: esc(v.confirmingDisconnect === g.id ? t("conn.disconnectConfirm") : t("conn.disconnect")),
-      kind: "sm", attrs: ` data-conn="disconnect"${id} data-k="cs-disconnect"${busy ? " disabled" : ""}`,
-    },
     secondary: (g.auth !== "none" && !needsLogin(g)
       ? btn(esc(loggingIn ? t("conn.loggingIn") : t("conn.relogin")), "sm", ` data-conn="relogin"${id} data-k="cs-relogin"${busy || v.login ? " disabled" : ""}`)
       : "") +
@@ -436,9 +425,9 @@ function dialogHTML(g: ConnectionGroup, v: ConnectionsView): string {
 /** The button that adds a store entry, or what takes its place: the wait for the login, or that it is added. */
 function joinControl(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
-  if (s.server_id) return `<span class="cs-state">${st("ok", t("conn.installed"))}</span>`;
-  if (here) return btn(esc(t("conn.cancel")), "sm", ' data-conn="cancel-login"');
-  return btn(`${ico("plus")}${esc(t("conn.join"))}`, "sm", ` data-conn="join" data-id="${esc(s.id)}" aria-label="${esc(t("conn.joinAria", { p0: s.name }))}"${v.login ? " disabled" : ""}`);
+  if (s.server_id) return `<span class="cs-state">${st("ok", t(s.source ? "plugins.added" : "conn.installed"))}</span>`;
+  if (here) return s.source ? `<span class="cs-wait" role="status">${esc(t("conn.connecting"))}</span>` : btn(esc(t("conn.cancel")), "sm", ' data-conn="cancel-login"');
+  return btn(`${ico("plus")}${esc(t("conn.join"))}`, s.source ? "sm pri" : "sm", ` data-conn="join" data-id="${esc(s.id)}" aria-label="${esc(t("conn.joinAria", { p0: s.name }))}"${s.can_connect === false ? ` title="${esc(t("plugins.unavailable"))}"` : ""}${v.login || s.can_connect === false ? " disabled" : ""}`);
 }
 
 function cardHTML(s: StoreService, v: ConnectionsView): string {
@@ -446,18 +435,25 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   const line = here ? t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn") : words(s.summary);
   return (
     `<div class="cs-card">` +
-    btn(
+    (s.source ? `<div class="cs-main"><span class="ic">${entryIcon(s, "md")}</span><span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub" title="${esc(line)}">${esc(line)}</span></span></div>` : btn(
       `<span class="ic">${entryIcon(s, "md")}</span><span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
       "cs-main",
       ` data-conn="open-store" data-id="${esc(s.id)}" data-k="cs-store:${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
-    ) +
+    )) +
     `${joinControl(s, v)}</div>`
   );
 }
 
 function storeHTML(v: ConnectionsView): string {
+  if (v.configured === false) return `<div class="cs-key-form"><label for="conn-key">${esc(t("plugins.keyPrompt"))}</label>` +
+    `<input class="field" type="password" id="conn-key" autocomplete="new-password" spellcheck="false"${v.keyBusy ? " disabled" : ""}>` +
+    (v.keyError ? `<p role="alert">${esc(t("plugins.keyFailed"))}</p>` : "") +
+    actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div>`;
   if (v.catalog === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
-  if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}</div>`;
+  if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-store"')}</div>`;
+  if (v.configured) return `<div class="cs-grid" data-stagger="plugins-store">${v.catalog.map(s => cardHTML(s, v)).join("")}</div>` +
+    (!v.catalog.length ? `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` : "") +
+    (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "");
   const found = v.catalog.filter((s) => matches(v.search, s.name, s.publisher, words(s.summary)));
   if (!found.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
   const section = (key: string, title: string, list: StoreService[]): string =>
@@ -614,6 +610,15 @@ export interface Connections {
 }
 
 export function createConnections(host: ConnectionsHost): Connections {
+  let configured: boolean | null = null;
+  let categories: Choice[] = [];
+  let category = "";
+  let nextCursor: string | null = null;
+  let keyBusy = false;
+  let keyError = false;
+  let managed: ManagedConnector[] = [];
+  let catalogLoads = 0;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let groups: ConnectionsView["groups"] = "loading";
   let catalog: ConnectionsView["catalog"] = "loading";
   let audit: AuditEntry[] = [];
@@ -644,6 +649,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   };
 
   const view = (): ConnectionsView => ({
+    configured, categories, category, nextCursor, keyBusy, keyError,
     groups, catalog, audit, tab, search, open, toolsKind, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
@@ -659,12 +665,21 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   async function load(): Promise<void> {
     const mine = ++loads;
-    const [list, store, recent] = await Promise.allSettled([api.toolsetsList(), api.integrationsCatalog(), api.integrationsAudit(AUDIT_READ)]);
+    const [list, status, recent] = await Promise.allSettled([api.toolsetsList(), api.connectorsStatus(), api.integrationsAudit(AUDIT_READ)]);
     if (mine !== loads) return;
-    if (list.status === "fulfilled") groups = list.value.groups;
+    if (status.status === "fulfilled") {
+      configured = status.value.composio_configured;
+      managed = status.value.connectors;
+    }
+    const previous = Array.isArray(groups) ? groups : [];
+    if (list.status === "fulfilled" && status.status === "fulfilled") groups = [
+      ...managed.map(c => managedGroup(c, previous.find(g => g.id === c.id))),
+      ...list.value.groups.filter(g => !["connectors_composio", "connectors_google"].includes(g.id)),
+    ];
     else if (!Array.isArray(groups)) groups = "failed";
-    if (store.status === "fulfilled") catalog = store.value.services;
-    else if (!Array.isArray(catalog)) catalog = "failed";
+    if (status.status === "rejected" && !Array.isArray(catalog)) catalog = "failed";
+    if (Array.isArray(catalog)) catalog = catalog.map(s => s.source ? { ...s,
+      server_id: managed.find(c => c.id === `composio:${s.id}` && c.status === "ACTIVE")?.id ?? null } : s);
     if (recent.status === "fulfilled") audit = recent.value.entries;
     // what is open is gone (removed from elsewhere): back to the list
     if (open && !(open.tab === "installed" ? groupById(open.id) : entryById(open.id))) open = null;
@@ -674,10 +689,67 @@ export function createConnections(host: ConnectionsHost): Connections {
       if (!groups.length) tab = "store";
     }
     redraw();
+    if (configured && status.status === "fulfilled" && !Array.isArray(catalog)) await loadCatalog();
+  }
+
+  async function loadCatalog(append = false): Promise<void> {
+    if (!configured) return;
+    const mine = ++catalogLoads;
+    const before = Array.isArray(catalog) ? catalog : [];
+    const cursor = append ? nextCursor ?? undefined : undefined;
+    catalog = "loading";
+    repaintBody();
+    try {
+      const result = await api.connectorsCatalog({ search, category, cursor });
+      if (mine !== catalogLoads) return;
+      const entries = result.items.map(s => storePlugin(s, managed));
+      catalog = append ? [...before, ...entries.filter(s => !before.some(b => b.id === s.id))] : entries;
+      nextCursor = result.next_cursor && result.next_cursor !== cursor ? result.next_cursor : null;
+      const resultCategories = await api.connectorsCategories();
+      if (mine !== catalogLoads) return;
+      categories = resultCategories.items.map(c => ({ value: c.id, label: c.name }));
+    } catch (error) {
+      if (mine !== catalogLoads) return;
+      if (error instanceof Error && error.message === "missing_key") { configured = false; catalog = []; }
+      else catalog = "failed";
+    }
+    redraw();
+  }
+
+  async function loadTools(id: string): Promise<void> {
+    const group = groupById(id);
+    if (!group?.source || group.tools_state === "loading") return;
+    group.tools_state = "loading"; redraw();
+    try {
+      const result = await api.connectorsTools(id);
+      const current = groupById(id);
+      if (!current) return;
+      current.tools = result.items.map(pluginTool);
+      current.tools_state = "ready";
+      current.tool_count = current.tools.length;
+      current.write_count = current.tools.filter(t => t.kind === "write").length;
+      current.read_count = current.tools.length - current.write_count;
+    } catch { const current = groupById(id); if (current) current.tools_state = "failed"; }
+    redraw();
+  }
+
+  async function saveKey(): Promise<void> {
+    const input = (host.root ?? document).querySelector<HTMLInputElement>("#conn-key");
+    if (!input?.value.trim() || keyBusy) return;
+    let key = input.value.trim();
+    input.value = "";
+    keyBusy = true; keyError = false; redraw();
+    try {
+      await api.connectorsSetKey(key);
+      configured = true;
+      await loadCatalog();
+    } catch { keyError = true; }
+    finally { key = ""; keyBusy = false; redraw(); }
   }
 
   /** Does `work` for a service (its buttons wait meanwhile), says what went wrong, and reads everything again. */
   async function act(id: string, work: () => Promise<void>): Promise<void> {
+    if (busy.has(id)) return;
     busy.add(id);
     redraw();
     try {
@@ -687,6 +759,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
     busy.delete(id);
     await load();
+    if (open?.id === id) await loadTools(id);
   }
 
   /** Opens the dialog of a connected service, at its summary, with the focus in it. */
@@ -698,6 +771,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     confirming = null;
     redraw();
     focusOn("#cs-dialog");
+    void loadTools(id);
   }
 
   /**
@@ -736,7 +810,8 @@ export function createConnections(host: ConnectionsHost): Connections {
     confirming = null;
     const group = groupById(id);
     void act(id, async () => {
-      await api.integrationsDisconnect(id);
+      if (group?.source) await api.connectorsDisconnect(id);
+      else await api.integrationsDisconnect(id);
       if (open?.id === id) open = null;
       if (group) toaster.info(t(group.auth !== "none" ? "conn.disconnectedLogin" : "conn.disconnected", { p0: group.name }));
     });
@@ -749,12 +824,14 @@ export function createConnections(host: ConnectionsHost): Connections {
     login = { target: key, name };
     loginError = null;
     redraw();
-    let result: Awaited<ReturnType<typeof api.integrationsConnect>>;
+    let result: { connected: boolean; error?: string };
     try {
-      result = await api.integrationsConnect(target);
-    } catch (err) {
-      toaster.info(describeError(err));
-      result = { connected: false, error: "cancelled" };
+      result = "id" in target && !groupById(target.id)?.source ? await api.integrationsConnect(target)
+        : "id" in target && groupById(target.id)?.source === "google"
+        ? await api.connectorsGoogleConnect()
+        : await api.connectorsConnect(key.replace(/^composio:/, ""));
+    } catch {
+      result = { connected: false, error: "error" };
     }
     login = null;
     device = null;
@@ -765,8 +842,8 @@ export function createConnections(host: ConnectionsHost): Connections {
         open = null;
       }
     } else if (result.error !== "cancelled") {
-      loginError = { target: key, kind: result.error };
-      toaster.info(loginFailure(result.error));
+      loginError = { target: key, kind: result.error ?? "error" };
+      toaster.info(t("plugins.connectFailed"));
     }
     await load();
   }
@@ -854,6 +931,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     search = "";
     tab = next;
     redraw();
+    if (tab === "store" && configured) void loadCatalog();
   }
 
   function click(target: Element): boolean {
@@ -862,9 +940,11 @@ export function createConnections(host: ConnectionsHost): Connections {
     const id = button.dataset.id ?? "";
     switch (button.dataset.conn) {
       case "server-menu": {
+        const group = groupById(id);
+        if (!group) return true;
         const panel = openPopover(button, [
-          ["test-server", t("mcp.test")], ["edit-server", t("mcp.edit")],
-          ["disconnect", t(confirming === id ? "conn.disconnectConfirm" : "mcp.delete")],
+          ...(!group.source ? [["test-server", t("mcp.test")], ["edit-server", t("mcp.edit")]] : []),
+          ["disconnect", t(confirming === id ? "conn.disconnectConfirm" : group.source ? "conn.disconnect" : "mcp.delete")],
         ].map(([act, label]) => `<button type="button" role="menuitem"${act === "disconnect" ? ' class="danger"' : ""} data-conn="${act}" data-id="${esc(id)}">${esc(label)}</button>`).join(""), { className: "menu", role: "menu", label: t("mcp.actions") });
         panel.addEventListener("click", event => {
           const action = (event.target as Element).closest("[data-conn]");
@@ -946,22 +1026,38 @@ export function createConnections(host: ConnectionsHost): Connections {
         break;
       case "enable": {
         const group = groupById(id);
-        if (group) void act(id, async () => void (await api.integrationsSetEnabled(id, !group.enabled)));
+        if (group) void act(id, async () => void (await (group.source ? api.connectorsSetTools(id, { enabled: !group.enabled }) : api.integrationsSetEnabled(id, !group.enabled))));
         break;
       }
       case "tool": {
-        const tool = groupById(id)?.tools.find((x) => x.name === button.dataset.tool);
-        if (tool) void act(id, async () => void (await api.integrationsSetToolEnabled(id, tool.name, !tool.enabled)));
+        const group = groupById(id);
+        const tool = group?.tools.find((x) => x.name === button.dataset.tool);
+        if (tool && group) void act(id, async () => {
+          if (group.source) {
+            const disabled = new Set(group.disabled_tools ?? []);
+            if (tool.enabled) disabled.add(tool.name); else disabled.delete(tool.name);
+            await api.connectorsSetTools(id, { disabled_tools: [...disabled] });
+          } else await api.integrationsSetToolEnabled(id, tool.name, !tool.enabled);
+        });
         break;
       }
       case "group": {
         const kind = button.dataset.kind === "read" ? "read" : "write";
         const tools = groupById(id)?.tools.filter((x) => x.kind === kind) ?? [];
         // all on turns all off; off or mixed turns all on
-        if (tools.length) void act(id, async () => void (await api.integrationsSetToolsEnabled(id, tools.map((x) => x.name), !tools.every((x) => x.enabled))));
+        if (tools.length) void act(id, async () => {
+          const group = groupById(id)!;
+          const on = !tools.every(t => t.enabled);
+          if (group.source) {
+            const disabled = new Set(group.disabled_tools ?? []);
+            for (const tool of tools) { if (on) disabled.delete(tool.name); else disabled.add(tool.name); }
+            await api.connectorsSetTools(id, { disabled_tools: [...disabled] });
+          } else await api.integrationsSetToolsEnabled(id, tools.map(t => t.name), on);
+        });
         break;
       }
       case "refresh":
+        if (groupById(id)?.source) { void loadTools(id); break; }
         void act(id, async () => {
           await api.integrationsRefresh(id);
           toaster.info(t("conn.refreshed"));
@@ -972,7 +1068,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         break;
       case "join": {
         const entry = entryById(id);
-        if (entry) void signIn({ catalog_id: entry.id }, entry.name, false);
+        if (entry && entry.can_connect !== false && !entry.server_id) void signIn({ catalog_id: entry.id }, entry.name, false);
         break;
       }
       case "relogin": {
@@ -998,6 +1094,10 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "connect":
         void connectCustom();
         break;
+      case "save-key": void saveKey(); break;
+      case "retry-connections": void load(); break;
+      case "retry-store": void (configured ? loadCatalog() : load()); break;
+      case "load-more": void loadCatalog(true); break;
       default:
         return false;
     }
@@ -1007,9 +1107,14 @@ export function createConnections(host: ConnectionsHost): Connections {
   function input(el: HTMLInputElement): boolean {
     if (el.id === "conn-search") {
       search = el.value;
-      repaintBody();
+      if (tab === "store" && configured) {
+        clearTimeout(searchTimer);
+        catalogLoads++;
+        searchTimer = setTimeout(() => void loadCatalog(), 250);
+      } else repaintBody();
       return true;
     }
+    if (el.id === "conn-key") return true;
     if (!form || !el.id.startsWith("conn-")) return false;
     switch (el.id) {
       case "conn-pairs": form.pairLines = el.value; break;
@@ -1033,6 +1138,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function key(e: KeyboardEvent): boolean {
+    if (e.key === "Enter" && (e.target as HTMLElement)?.id === "conn-key") { e.preventDefault(); void saveKey(); return true; }
     const tab = (e.target as Element | null)?.closest?.<HTMLElement>('[data-conn="form-type"]');
     if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && form && !form.busy) {
       e.preventDefault();
@@ -1057,6 +1163,10 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   function menuFor(k: string): ConnectionMenu | null {
     switch (k) {
+      case "conn-category": return {
+        choices: [{ value: "", label: t("plugins.allCategories") }, ...categories], current: category,
+        pick: value => { category = value; void loadCatalog(); },
+      };
       case "conn-add":
         return {
           choices: [{ value: "custom", label: t("mcp.add") }, { value: "paste", label: t("mcp.paste") }, { value: "import", label: t("mcp.fromApps") }],
@@ -1091,6 +1201,10 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function reset(): void {
+    clearTimeout(searchTimer);
+    catalogLoads++;
+    category = "";
+    keyError = false;
     stopOutside?.(); stopOutside = null;
     clearTimeout(confirmTimer);
     confirming = null;

@@ -14,6 +14,10 @@ class Connector:
     id: str
     kind: str
     status: str = "INACTIVE"
+    enabled: bool = True
+    name: str = ""
+    description: str = ""
+    logo: str = ""
     accounts: list[dict] = field(default_factory=list)
     disabled_tools: list[str] = field(default_factory=list)
     enabled_tools: list[str] = field(default_factory=list)

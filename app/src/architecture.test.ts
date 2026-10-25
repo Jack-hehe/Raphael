@@ -70,7 +70,7 @@ it("literal frontend RPC calls are allowed by the shell", () => {
   for (const path of sources) {
     const tree = ts.createSourceFile(path, read(path), ts.ScriptTarget.Latest, true);
     const visit = (node: ts.Node): void => {
-      if (ts.isCallExpression(node) && ((ts.isIdentifier(node.expression) && node.expression.text === "core") || (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "core"))) {
+      if (ts.isCallExpression(node) && ((ts.isIdentifier(node.expression) && ["core", "connectorCall"].includes(node.expression.text)) || (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "core"))) {
         const method = node.arguments[0];
         if (method && ts.isStringLiteral(method)) {
           checked++;

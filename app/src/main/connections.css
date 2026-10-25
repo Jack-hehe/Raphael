@@ -9,6 +9,9 @@
 /* The bar: 已安裝 N and 商店 N as quiet tabs, the search on the right */
 .cs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); }
 .cs-find { display: flex; margin-left: auto; min-width: 0; }
+.cs-find { gap: var(--sp-2); }
+.cs-find .sel { max-width: 180px; }
+.cs-find .sel span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-find .field { width: 220px; height: 32px; }
 .cs-find .field .i { color: var(--text-3); }
 .cs-none { margin: var(--sp-5) var(--sp-1); font-size: var(--fs-sm); line-height: 1.6; color: var(--text-3); text-align: center; text-wrap: pretty; }
@@ -58,6 +61,9 @@
 .cs-dialog .cs-meta { margin: 0; }
 .cs-dialog .ca-alert, .cs-dialog .cs-device { margin: 0; }
 .cs-count { margin: 0; font-size: var(--fs-2xs); color: var(--text-3); }
+.cs-plugin-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
+.cs-plugin-tools h3 { margin: 0 0 var(--sp-1); }
+.cs-plugin-tools .cs-tool-list { padding: 0; }
 /* 會改動 and 只讀取: two rows on one rounded card, each opening its tools */
 .cs-grp { border: 0; border-radius: 0; overflow: hidden; }
 .cs-grp > .btn.gr { width: 100%; justify-content: space-between; min-height: 44px; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: 0; background: transparent; font-size: var(--fs-xs); text-align: left; }
@@ -122,6 +128,14 @@
 .cs-card > .btn { flex: none; padding-inline: var(--sp-2); }
 .cs-card > .cs-state { flex: none; font-size: var(--fs-xs); }
 .cs-card .cs-state .st { font-size: var(--fs-xs); color: var(--text-3); }
+.cs-card:has(> div.cs-main) { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-height: 138px; padding: var(--sp-4); border: 1px solid var(--edge); border-radius: var(--r-lg); }
+.cs-card > div.cs-main { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+.cs-card > div.cs-main .nm { font-size: var(--fs-sm); }
+.cs-card > div.cs-main .sub { margin-top: var(--sp-1); }
+.cs-card:has(> div.cs-main) > :last-child { justify-self: end; align-self: end; }
+.cs-key-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); max-width: 440px; margin-top: var(--sp-5); }
+.cs-key-form label { font-size: var(--fs-sm); font-weight: 600; }
+.cs-key-form > p { margin: 0; font-size: var(--fs-xs); color: var(--err); }
 
 /* The form that connects a server of the user's own */
 .cd-help { margin: var(--sp-1) 0 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text-2); text-wrap: pretty; }
@@ -162,8 +176,6 @@
 .mcp-tabs { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
 .mcp-tabs [aria-selected="true"] { background: var(--selected); border-color: var(--focus); }
 .mcp-row-actions { display: flex; align-items: center; gap: var(--sp-1); }
-.cs-item.mcp-item { grid-template-columns: minmax(0, 1fr) auto auto; }
-.mcp-item > .chev { display:none; }
 .modal-body:has(.cs-form) { display:flex; flex-direction:column; overflow:hidden; }
 .cs-form { display:flex; flex-direction:column; flex:1; min-height:0; }
 .cs-form > h2,.cs-form > .cd-help { flex:none; }
