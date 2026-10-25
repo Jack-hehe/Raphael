@@ -13,8 +13,9 @@ export function parseOptions(args, scenes) {
       if (!["light", "dark", "both"].includes(value)) throw new Error(`Invalid theme: ${value}`);
       options.themes = value === "both" ? ["light", "dark"] : [value];
     } else if (flag === "--width") {
-      if (!/^\d+(,\d+)*$/.test(value) || value.split(",").some(n => +n < 320 || +n > 7680)) throw new Error(`Invalid width: ${value} (320..7680)`);
-      options.widths = [...new Set(value.split(",").map(Number))];
+      const widths = value.split(",").map(item => item === "1920x1080" ? "1920" : item);
+      if (widths.some(item => !/^\d+$/.test(item) || +item < 320 || +item > 7680)) throw new Error(`Invalid width: ${value} (320..7680; 1920x1080 supported)`);
+      options.widths = [...new Set(widths.map(Number))];
     } else if (flag === "--locale") {
       if (!["zh-TW", "en", "ja"].includes(value)) throw new Error(`Invalid locale: ${value}`);
       options.locale = value;

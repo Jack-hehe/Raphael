@@ -5,12 +5,14 @@ From `app/`:
 ```sh
 npm run look -- --list
 npm run look -- chat details --theme both --width 1120,720
-npm run look -- --all --theme both --width 1120,720
+npm run look -- --all --theme both --width 1120,720,1920x1080
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
 npm run verify -- --out ../.fold/app/.look
 npm run verify -- --quick
 npm run verify -- --core --rust
+npm run judge -- .look/run-EXAMPLE --references <external-reference.png>
+npm run verify -- --live
 ```
 
 Look needs an installed Edge/Chrome and the pinned **puppeteer-core@25.13.0** devDependency.
@@ -20,7 +22,10 @@ It never downloads a browser or installs packages. Preserve the package/lockfile
 Each run creates `.look/run-*/` with viewport PNGs, paginated PNG contact sheets,
 `contacts.json` and `report.json`. `--out` changes the parent directory. A nonzero exit
 means a scene, runtime, layout, raw translation key, non-finite work duration, or visible native select/time-input
-check failed; missing dependencies produce a `blocked` report and a nonzero exit.
+or checked product-rule violation failed; missing dependencies produce a `blocked`
+report and a nonzero exit. Product rules include duplicate tooltips, visible row
+destruction, action frames/order and known untranslated interface copy. These
+checks do not replace design review.
 Inspect contact sheets and full-size PNGs as well as the automated checks.
 
 The real `index.html`, `main.ts` and CSS run through Vite. Overlay scenes select
@@ -57,7 +62,9 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 139 current scenes (556 combinations for both themes and widths).
+scenes. There are 139 current scenes (834 combinations for both themes and three
+sizes). Width `1920` or `1920x1080` captures a 1920x1080 viewport; other widths use
+900px height.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
@@ -69,3 +76,13 @@ tests. Optional checks use the existing environment/cache and fail if unavailabl
 Use `--out dir` to select a writable evidence directory for look or verify.
 Logs, exit codes and a JSON summary live in `.look/verify-*/` by default; independent checks
 continue after a failure. These tools do not build, install, launch or deploy the native app.
+
+Guardian's required UI sequence is look, inspection, then judge. Judge requires
+all three sizes and both themes for every selected scene and a passed look report.
+Its rules, feature context, external reference paths, budgets and cache are
+documented in the verify-raphael skill and `GUARDIAN-NOTES.md`. The verify alias is
+`npm run verify -- --judge <look run>`; set `RAPHAEL_JUDGE_REFERENCES` to a JSON array
+of external image paths. Live matrix and judge opt into paid network requests;
+ordinary verify/look and their fake-model unit tests remain offline. Every PR runs
+the repo's contracts and full look matrix in CI. Missing hosted secrets produce
+an explicit SKIP notice, never live/design acceptance.

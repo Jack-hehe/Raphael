@@ -40,3 +40,4 @@ coverage/
 
 # Shared visual verification output
 /app/.look/
+/core/.live/

@@ -1,11 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseOptions } from "./options.mjs";
+import { scenes } from "./scenes/index.mjs";
 
 const app = resolve(import.meta.dirname, "../..");
 const look = (...args) => spawnSync(process.execPath, ["scripts/look/index.mjs", ...args], { cwd: app, encoding: "utf8" });
 
 describe("look CLI", () => {
+  it("requires the new group dialog before accepting the team journey", () => {
+    const journey = scenes.find(scene => scene.name === "team-new-group");
+    expect(journey.steps.at(-1)).toEqual({ action: "wait", selector: ".mb-dialog" });
+    expect(journey.steps).toContainEqual({ action: "wait", selector: '#app-popover [data-pick="group"]' });
+  });
+  it("accepts explicit full-screen dimensions in the shared width matrix", () => {
+    expect(parseOptions(["--all", "--theme", "both", "--width", "1120,720,1920x1080"], scenes).widths).toEqual([1120, 720, 1920]);
+    expect(() => parseOptions(["--width", "1920x900"], scenes)).toThrow(/Invalid width/);
+  });
   it("lists scenes without starting Vite or requiring a browser package", () => {
     const result = look("--list");
     expect(result.status, result.stderr).toBe(0);

@@ -2,8 +2,6 @@
 
 import asyncio
 import logging
-import os
-import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -368,28 +366,23 @@ async def test_a_command_that_does_not_exist_is_not_found(vault):
     assert failure.value.kind == "not_found"
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="counts the processes with PowerShell")
-async def test_a_job_leaves_no_server_running(vault):
-    def children_running() -> set[int]:
-        """The processes started by this test process (a parallel run has its own)."""
-        listing = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                f"(Get-CimInstance Win32_Process -Filter 'ParentProcessId={os.getpid()}'"
-                " | Where-Object { $_.Name -like 'python*' -and $_.CommandLine -like '*fake_server.py*' }).ProcessId",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        return {int(line) for line in listing.stdout.split() if line.strip().isdigit()}
+async def test_a_job_leaves_no_server_running(vault, monkeypatch):
+    import mcp.client.stdio as stdio
 
-    before = children_running()
+    # Track the actual owned process; a denied OS inventory must never look like
+    # an empty process list, and localized shell diagnostics are not PID evidence.
+    processes = []
+    create = stdio._create_platform_compatible_process
+
+    async def tracked(**kwargs):
+        process = await create(**kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(stdio, "_create_platform_compatible_process", tracked)
     await McpConnector(vault).list_tools(stdio_server(), timeout_s=30)
-    await asyncio.sleep(0.5)
-    assert children_running() == before
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
 
 
 async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(

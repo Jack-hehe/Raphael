@@ -1,10 +1,29 @@
 // @vitest-environment happy-dom
-import { afterEach, describe, expect, it } from "vitest";
-import { findVisibleElement } from "./driver.mjs";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { findVisibleElement, perform } from "./driver.mjs";
 import { requestDisposition } from "./requests.mjs";
 
 describe("look browser interaction contracts", () => {
   afterEach(() => { document.body.innerHTML = ""; });
+  it("requeries a replaced click target without replaying application errors", async () => {
+    const stale = { click: vi.fn().mockRejectedValue(new Error("Node is either not clickable or not an Element")), dispose: vi.fn() };
+    const current = { click: vi.fn().mockResolvedValue(undefined), dispose: vi.fn() };
+    const page = { waitForFunction: vi.fn().mockResolvedValueOnce({ asElement: () => stale }).mockResolvedValue({ asElement: () => current }) };
+    await perform(page, { action: "click", selector: ".target" });
+    expect(page.waitForFunction).toHaveBeenCalledTimes(2);
+    expect(stale.dispose).toHaveBeenCalledOnce();
+    expect(current.click).toHaveBeenCalledOnce();
+    current.click.mockRejectedValue(new Error("application failure"));
+    await expect(perform(page, { action: "click", selector: ".target" })).rejects.toThrow("application failure");
+    expect(page.waitForFunction).toHaveBeenCalledTimes(3);
+  });
+  it("fails after three pre-dispatch stale handles", async () => {
+    const target = { click: vi.fn().mockRejectedValue(new Error("Node is detached from document")), dispose: vi.fn() };
+    const page = { waitForFunction: vi.fn().mockResolvedValue({ asElement: () => target }) };
+    await expect(perform(page, { action: "click", selector: ".target" })).rejects.toThrow("Node is detached");
+    expect(target.click).toHaveBeenCalledTimes(3);
+    expect(target.dispose).toHaveBeenCalledTimes(3);
+  });
   it("finds the visible result when a collapsed work section matches first", () => {
     document.body.innerHTML = '<div hidden><button data-action="reply">Work</button></div><button data-action="reply">Answer</button>';
     for (const element of document.querySelectorAll("button")) element.getBoundingClientRect = () => ({ width: 28, height: 28 });

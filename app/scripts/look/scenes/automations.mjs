@@ -27,7 +27,7 @@ export default [
   scene("team-group-menu", "Team group actions", groupMenu),
   ...["rename", "delete"].map(action => scene(`team-${action}`, `Team group ${action}`, [...groupMenu, click(`[data-pick="${action}"]`)])),
   scene("team-new-menu", "Team creation menu", [...team, click('[data-team="new"]')]),
-  scene("team-new-group", "New team group", [...team, click('[data-team="new"]'), click('[data-pick="group"]')]),
+  scene("team-new-group", "New team group", [...team, click('[data-team="new"]'), wait('#app-popover [data-pick="group"]'), click('#app-popover [data-pick="group"]'), wait(".mb-dialog")]),
   scene("team-mentions", "Team composer mentions", [...team, type(".team-composer textarea", "@")]),
   scene("team-empty", "Team board with Raphael only", team, { groups: [], onlyRaphael: true }),
   scene("team-drop-target", "Team member drag destination", [...team, { action: "drag-start", selector: ".team-member[draggable]" }]),

@@ -18,7 +18,17 @@ export async function perform(page, step) {
     try { return (await page.waitForFunction(findVisibleElement, { timeout: 6000 }, selector)).asElement(); }
     catch (error) { throw new Error(`No visible match: ${selector}`, { cause: error }); }
   };
-  const click = async selector => { const element = await visible(selector); try { await element.click(); } finally { await element.dispose(); } };
+  const click = async selector => {
+    for (let attempt = 0; ; attempt++) {
+      const element = await visible(selector);
+      try { await element.click(); return; }
+      catch (error) {
+        // A production redraw can replace a menu between lookup and pointer dispatch.
+        // Retry only pre-dispatch stale/unclickable handles; never replay app errors.
+        if (attempt >= 2 || !/Node is detached|Node is either not clickable or not an Element/.test(error.message)) throw error;
+      } finally { await element.dispose(); }
+    }
+  };
   const fill = async (selector, text) => {
     const element = await visible(selector);
     await element.evaluate((input, value) => { input.focus(); input.value = value; input.dispatchEvent(new Event("input", { bubbles: true })); input.dispatchEvent(new Event("change", { bubbles: true })); }, text);

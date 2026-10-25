@@ -1,0 +1,60 @@
+name: Guardian live API matrix
+
+on:
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guardian-live
+  cancel-in-progress: false
+
+jobs:
+  api-matrix:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: core
+    steps:
+      - name: Determine live availability
+        id: enabled
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NIGHTLY: ${{ vars.GUARDIAN_LIVE_NIGHTLY }}
+        run: |
+          if ($env:OPENROUTER_API_KEY -and ($env:GITHUB_EVENT_NAME -eq 'workflow_dispatch' -or $env:NIGHTLY -eq 'true')) { 'run=true' >> $env:GITHUB_OUTPUT }
+          else {
+            'run=false' >> $env:GITHUB_OUTPUT
+            Write-Output '::notice::Live API matrix SKIP: secret absent or nightly opt-in disabled; no live acceptance claimed.'
+            'Live API matrix: SKIP; no live acceptance claimed.' >> $env:GITHUB_STEP_SUMMARY
+          }
+        working-directory: .
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.enabled.outputs.run == 'true'
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        if: steps.enabled.outputs.run == 'true'
+        with:
+          version: "0.12.11"
+          working-directory: core
+      - name: Install locked dependencies
+        if: steps.enabled.outputs.run == 'true'
+        run: uv sync --locked --dev
+      - name: Run API subset through production loops
+        if: steps.enabled.outputs.run == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: uv run --locked --no-sync python -m raphael_core.evaluate.guardian --api-only --config guardian-models.json --max-turns 120 --seconds 60
+      - name: Upload matrix reports
+        if: always() && steps.enabled.outputs.run == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guardian-live-${{ github.run_id }}
+          path: core/.live/run-*/report.json
+          if-no-files-found: error

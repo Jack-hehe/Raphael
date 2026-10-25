@@ -67,7 +67,7 @@ export async function run(options) {
       page.on("requestfailed", request => { if (!favicon(request.url())) error("request", `${request.url()}: ${request.failure()?.errorText}`); });
       page.on("response", response => { if (response.status() >= 400 && !favicon(response.url())) error("http", `${response.status()} ${response.url()}`); });
       try {
-        await page.setViewport({ width, height: 900, deviceScaleFactor: 1 });
+        await page.setViewport({ width, height: width === 1920 ? 1080 : 900, deviceScaleFactor: 1 });
         await page.emulateTimezone("Asia/Taipei");
         await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }, { name: "prefers-color-scheme", value: theme }]);
         await page.setRequestInterception(true);
@@ -105,7 +105,12 @@ export async function run(options) {
         result.diagnostics = await page.evaluate(() => ({ messages: [...document.querySelectorAll('.message-text, .ans, .ra')].map(el => ({ tag: el.tagName, class: el.className, parent: el.parentElement?.outerHTML.slice(0, 500) })) })).catch(() => null);
       }
       try {
-        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: 900 }, namespaces));
+        const englishUI = options.locale === "zh-TW" && !scene.name.startsWith("overlay-") ? await page.evaluate(async () => {
+          const [{ en }, { zhTW }] = await Promise.all([import('/src/main/i18n/en.ts'), import('/src/main/i18n/zh-TW.ts')]);
+          // Brand/key names and deliberately shared CTA decisions have identical values.
+          return [...new Set(Object.entries(en).filter(([key, value]) => typeof value === 'string' && /[A-Za-z]/.test(value) && !/[<{}]/.test(value) && /[\u3400-\u9fff]/.test(zhTW[key] ?? '') && value !== zhTW[key]).map(([, value]) => value.trim()))];
+        }) : [];
+        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: width === 1920 ? 1080 : 900 }, namespaces, englishUI));
         const mockErrors = await page.evaluate(() => window.__look?.errors ?? ["Mock boundary was not installed"]);
         for (const message of mockErrors) error("ipc", message);
         const image = `${scene.name}-${theme}-${width}.png`;

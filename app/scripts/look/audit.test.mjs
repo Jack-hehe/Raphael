@@ -3,6 +3,41 @@ import { describe, expect, it } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 
 describe("rendered look checks", () => {
+  it("rejects known English interface labels while preserving user content and brands", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<button>Save</button><button>Raphael</button><p class="message-text">Save</p><button hidden>Cancel</button>';
+    for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], ['Save', 'Cancel', 'Raphael']);
+    expect(result.productRules.map(item => item.rule)).toEqual(['R-UI-14']);
+  });
+  const productAudit = html => {
+    const window = new Window();
+    window.document.body.innerHTML = html;
+    for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    return { window, audit: () => auditDocument(window.document, { width: 1120, height: 900 }, []) };
+  };
+  it("rejects duplicate custom and native tooltips", () => {
+    const { audit } = productAudit('<button data-tooltip="Save" title="Save">Save</button><button data-tooltip="Open"><svg><title>Open</title></svg></button><button title="Native">Native</button>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-26', 'R-UI-26']);
+  });
+  it("rejects visible row destruction but permits overflow menus", () => {
+    const { audit } = productAudit('<div class="mp-resource"><button class="danger">Delete</button></div><div role="menu"><div class="mp-resource"><button class="danger">Delete</button></div></div><div class="mp-resource" hidden><button class="danger">Delete</button></div>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-11']);
+  });
+  it("checks text frames and bare icon borders", () => {
+    const { audit } = productAudit('<button class="btn" style="border: none">Save</button><button class="btn icon" style="border: 1px solid red">X</button><button class="btn" style="border: 1px solid red">Cancel</button><button class="btn brand" style="border:none">Raphael</button>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-18', 'R-UI-18']);
+  });
+  it("checks rendered primary and destructive action positions", () => {
+    const { window, audit } = productAudit('<div class="action-row"><button class="pri">Save</button><span class="action-destructive"><button>Delete</button></span></div>');
+    const primary = window.document.querySelector('.pri');
+    primary.getBoundingClientRect = () => ({ left: 0, top: 10, right: 50, bottom: 40, width: 50, height: 30 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-27', 'R-UI-27']);
+  });
+  it("distinguishes date choices and navigation from ordinary text actions", () => {
+    const { audit } = productAudit('<div class="au-month-grid"><button class="btn" style="border:0">25</button></div><button class="btn mb-panel-back" style="border:0">Members</button><button class="btn mc-source" style="border:0">Provider</button><button class="btn cs-main" style="border:0">Notion service details</button><button class="btn conversation-new" style="border:0">New conversation</button>');
+    expect(audit().productRules.map(item => item.text)).toEqual(['New conversation']);
+  });
   it("rejects non-finite durations in visible work summaries", () => {
     const window = new Window();
     window.document.body.innerHTML = '<button class="work-toggle">已處理 NaN 秒</button><div hidden><span class="step-ms">Infinity</span></div>';

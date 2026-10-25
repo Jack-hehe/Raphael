@@ -106,12 +106,14 @@ class NarratedLoop:
         progress: Callable[[str], None],
         execute: Callable[[str, str, dict], Awaitable[ToolOutcome]],
         thinking: Callable[[str], None] = lambda text: None,
+        fallbacks: Sequence[str] | None = None,
     ) -> None:
         self.client, self.model, self.ledger = client, model, ledger
         self.language, self.plain = language, plain
         self.system, self.user, self.tools = system + NARRATION_RULES, user, list(tools)
         self.progress, self.execute = progress, execute
         self.thinking = thinking
+        self.fallbacks = list(CLEANUP_FALLBACKS if fallbacks is None else fallbacks)
         self.model_calls = self.tool_calls = 0
         self.remaining_s = 1800.0
         self.messages: list[dict] | None = None
@@ -124,7 +126,7 @@ class NarratedLoop:
         began = time.perf_counter()
         try:
             answer = await asyncio.wait_for(self.client.chat_tools(
-                model=self.model, fallbacks=CLEANUP_FALLBACKS,
+                model=self.model, fallbacks=self.fallbacks,
                 messages=list(messages), tools=list(tools), timeout_s=60,
                 max_tokens=4000, reasoning_effort="none",
             ), 60)
