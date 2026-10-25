@@ -88,6 +88,8 @@ class ServerConfig:
     catalog_id: str = ""  # the entry of the store this was added from, if it was
     revocation_url: str = ""  # where the login's token is revoked when the server is disconnected
     result_size_limit: int = 8000
+    managed_by: str = ""
+    header_refs: dict[str, str] = field(default_factory=dict)
 
     def tool(self, name: str) -> ToolRecord | None:
         return next((tool for tool in self.tools if tool.name == name), None)
@@ -281,6 +283,8 @@ def _server_to_json(server: ServerConfig) -> dict[str, Any]:
         "catalog_id": server.catalog_id,
         "revocation_url": server.revocation_url,
         "result_size_limit": server.result_size_limit,
+        "managed_by": server.managed_by,
+        "header_refs": server.header_refs,
     }
 
 
@@ -311,6 +315,8 @@ def _server_from_json(raw: Any) -> ServerConfig | None:
         auth=raw["auth"] if raw.get("auth") in AUTH_KINDS else "none",
         catalog_id=raw["catalog_id"] if isinstance(raw.get("catalog_id"), str) else "",
         revocation_url=raw["revocation_url"] if isinstance(raw.get("revocation_url"), str) else "",
+        managed_by=raw.get("managed_by") if raw.get("managed_by") in ("composio", "google") else "",
+        header_refs={"x-api-key": "connectors:composio:key"} if raw.get("managed_by") == "composio" else {},
     )
     checked = raw.get("tools_checked_at_ms")
     limit = raw.get("result_size_limit", 8000)
