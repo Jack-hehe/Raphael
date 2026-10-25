@@ -1,4 +1,33 @@
 {
+  "composioConfigured": true,
+  "managedConnectors": [
+    { "id": "composio:notion", "kind": "composio", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "status": "ACTIVE", "enabled": true, "enabled_tools": ["NOTION_SEARCH", "NOTION_CREATE_PAGE", "NOTION_UPDATE_PAGE"], "disabled_tools": [] },
+    { "id": "google", "kind": "google", "status": "ACTIVE", "enabled": true, "enabled_tools": ["gmail_list_messages", "calendar_list_events"], "disabled_tools": [] }
+  ],
+  "pluginCategories": [
+    { "id": "productivity", "name": "生產力" },
+    { "id": "development", "name": "開發工具" },
+    { "id": "communication", "name": "通訊" }
+  ],
+  "pluginCatalog": [
+    { "slug": "notion", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "categories": ["productivity"], "can_connect": true, "no_auth": false },
+    { "slug": "github", "name": "GitHub", "description": "管理儲存庫、議題與程式碼審查", "logo": "", "categories": ["development"], "can_connect": true, "no_auth": false },
+    { "slug": "slack", "name": "Slack", "description": "搜尋團隊訊息、分享工作進度", "logo": "", "categories": ["communication"], "can_connect": true, "no_auth": false },
+    { "slug": "gmail", "name": "Gmail", "description": "搜尋郵件、撰寫草稿與回覆", "logo": "", "categories": ["communication"], "can_connect": true, "no_auth": false },
+    { "slug": "linear", "name": "Linear", "description": "追蹤專案與團隊議題", "logo": "", "categories": ["development"], "can_connect": true, "no_auth": false },
+    { "slug": "googledrive", "name": "Google Drive", "description": "查找檔案、整理共用文件", "logo": "", "categories": ["productivity"], "can_connect": true, "no_auth": false }
+  ],
+  "pluginTools": {
+    "composio:notion": [
+      { "slug": "NOTION_SEARCH", "name": "搜尋頁面", "description": "在工作區搜尋筆記與資料庫", "kind": "read", "enabled": true },
+      { "slug": "NOTION_CREATE_PAGE", "name": "建立頁面", "description": "在指定的位置新增頁面", "kind": "write", "enabled": true },
+      { "slug": "NOTION_UPDATE_PAGE", "name": "更新頁面", "description": "修改頁面的內容與屬性", "kind": "write", "enabled": true }
+    ],
+    "google": [
+      { "slug": "gmail_list_messages", "name": "搜尋郵件", "description": "讀取 Gmail 郵件清單", "kind": "read", "enabled": true },
+      { "slug": "calendar_list_events", "name": "讀取日曆", "description": "查看 Google 日曆行程", "kind": "read", "enabled": true }
+    ]
+  },
   "adminQuestions": {
     "create": {
       "id": "look-admin-create",

@@ -553,15 +553,80 @@ async def test_disabled_during_discovery_is_blocked_at_mcp_call_boundary(tmp_pat
                    json.loads(r.content).get("method") == "tools/call" for r in fake.requests)
 
 
-async def test_destructive_default_off_can_be_explicitly_enabled_and_stays_enabled(tmp_path, conn):
+async def test_all_tools_default_on_and_new_tools_preserve_owner_choices(tmp_path, conn):
     router, service, hub, vault, fake = await connected(tmp_path, conn)
     tools = await router.call("connectors.tools", {"id": "composio:gmail"})
-    assert not next(t for t in tools["items"] if t["slug"] == "GMAIL_DELETE_MESSAGE")["enabled"]
-    await router.call("connectors.set_tools", {"id": "composio:gmail", "disabled_tools": []})
+    assert all(t["enabled"] for t in tools["items"])
+    await router.call("connectors.set_tools", {"id": "composio:gmail", "disabled_tools": ["GMAIL_FETCH_EMAILS"]})
+    original = fake.__call__
+
+    def added_tool(request):
+        result = original(request)
+        if request.url.path.endswith("/tools"):
+            return httpx.Response(200, json={"items": result.json()["items"] + [
+                {"slug": "GMAIL_NEW_ACTION", "tags": ["destructiveHint"]}]})
+        return result
+
+    service.composio.http.transport = httpx.MockTransport(added_tool)
+    service.composio._cache.clear()
     tools = await router.call("connectors.tools", {"id": "composio:gmail"})
     assert next(t for t in tools["items"] if t["slug"] == "GMAIL_DELETE_MESSAGE")["enabled"]
+    assert next(t for t in tools["items"] if t["slug"] == "GMAIL_NEW_ACTION")["enabled"]
+    assert not next(t for t in tools["items"] if t["slug"] == "GMAIL_FETCH_EMAILS")["enabled"]
     assert service.allow_call("connectors_composio", "COMPOSIO_MULTI_EXECUTE_TOOL", {
         "tools": [{"tool_slug": "GMAIL_DELETE_MESSAGE", "arguments": {}}]}, "user")
+
+
+@pytest.mark.parametrize("kind", ["composio", "google"])
+async def test_service_switch_preserves_tools_and_updates_offers_without_restart(tmp_path, conn, kind):
+    from raphael_core.connectors.store import Connector
+    from raphael_core.agent.speaker import Speaker
+    from raphael_core.agent.mcp_server import RaphaelMcp
+    from raphael_core.background.snapshot import take_snapshot
+
+    router, service, hub, vault, fake = await connected(tmp_path, conn)
+    ident, server = "composio:gmail", "connectors_composio"
+    if kind == "google":
+        ident, server = "google", "connectors_google"
+        service.store.connectors[ident] = Connector(ident, "google", status="ACTIVE", granted_scopes=scopes_for("write", "write"))
+        await service.sync_google()
+    names = [t.name for t in hub.offered() if t.key.startswith(tool_key(server, ""))]
+    assert names
+
+    async def assert_brain_offers(available):
+        for speaker in (Speaker(), Speaker(id=7, tools=frozenset())):
+            # API and CLI receive the same fresh production snapshot on each turn.
+            snapshot = take_snapshot(hub, speaker=speaker, interactive=True, max_tier=Tier.T3)
+            refs = [ref for ref in snapshot.refs.values() if ref.key.startswith(tool_key(server, ""))]
+            assert bool(refs) is available
+            bridge = RaphaelMcp(lambda: snapshot.definitions, None)
+            listed = await bridge._dispatch({"method": "tools/list"})
+            api_names = {item["function"]["name"] for item in snapshot.definitions}
+            assert {item["name"] for item in listed["result"]["tools"]} == api_names
+
+    await assert_brain_offers(True)
+    await router.call("connectors.set_tools", {"id": ident, "disabled_tools": [], "enabled": False})
+    assert not [t for t in hub.offered() if t.key.startswith(tool_key(server, ""))]
+    assert ConnectorStore(tmp_path).connectors[ident].enabled is False
+    await assert_brain_offers(False)
+    await router.call("connectors.set_tools", {"id": ident, "enabled": True})
+    assert [t.name for t in hub.offered() if t.key.startswith(tool_key(server, ""))] == names
+    await assert_brain_offers(True)
+
+
+async def test_failed_remote_switch_never_reenables_local_service(tmp_path, conn):
+    router, service, hub, vault, fake = await connected(tmp_path, conn)
+
+    def unavailable(request):
+        if request.url.host != "app.composio.dev":
+            return httpx.Response(503, json={"message": "private-provider-text"})
+        return fake(request)
+
+    service.composio.http.transport = httpx.MockTransport(unavailable)
+    result = await router.call("connectors.set_tools", {"id": "composio:gmail", "enabled": False})
+    assert result["ok"] is False
+    assert not hub.offered()
+    assert ConnectorStore(tmp_path).connectors["composio:gmail"].enabled is False
 
 
 async def test_catalog_projection_cache_and_missing_managed_oauth(tmp_path, conn):

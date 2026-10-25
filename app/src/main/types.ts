@@ -875,6 +875,12 @@ export interface ConnectionTool {
 
 /** One connected service, as `toolsets.list` has it. Never a secret, only the names of them. */
 export interface ConnectionGroup {
+  /** Managed services share the installed list, but mutate through connectors.*. */
+  source?: "composio" | "google";
+  description?: string;
+  logo?: string;
+  disabled_tools?: string[];
+  tools_state?: "loading" | "failed" | "ready";
   result_size_limit?: number;
   id: string;
   name: string;
@@ -905,6 +911,9 @@ export type Words = Record<"zh-TW" | "en" | "ja", string>;
 
 /** A service of the store (`integrations.catalog`). */
 export interface StoreService {
+  source?: "composio";
+  logo?: string;
+  can_connect?: boolean;
   id: string;
   name: string;
   publisher: string;

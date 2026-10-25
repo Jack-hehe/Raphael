@@ -3,7 +3,7 @@
 Use [the verification workflow](../SKILL.md) first. Commands run from `app/` and
 request both themes; feature commands use 720/1120 and the full hand-off matrix
 also requires 1920x1080. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 170 scenes, 1020 combinations across both themes and
+are the executable source: 176 scenes, 1056 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.
@@ -17,7 +17,7 @@ behavior the fixture cannot prove.
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |
 | [Dictation](dictation.md) | Overview, history, dictionary, shortcuts, microphone and paste |
 | [Settings and appearance](settings-appearance.md) | Profile/preferences, skins, languages, models and app information |
-| [Connections and MCP](connections-mcp.md) | MCP setup/discovery, managed connectors core and Home's private Google calendar read |
+| [Connections and MCP](connections-mcp.md) | Unified plugins, managed store, MCP setup/discovery and Home's private Google calendar read |
 | [Usage](usage.md) | Spend overview, grouping, CSV and CLI allowances |
 | [Onboarding](onboarding.md) | First launch and entry into the usable app |
 

@@ -32,6 +32,9 @@ class FakeBrains:
     def logged_in(self, name):
         return self.installed
 
+    def available(self, name, *, command=None):
+        return self.installed
+
     async def aclose(self):
         pass
 

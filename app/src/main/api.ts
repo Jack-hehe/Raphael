@@ -274,6 +274,23 @@ export const ttsPreview = (text: string): Promise<{ ok: boolean; kind?: string }
 
 // ---------- connections (the plugins and the store) ----------
 
+type ConnectorReply<T> = T | { ok: false; error: string };
+/** Connector RPCs return typed failures; never surface provider payloads or keys. */
+async function connectorCall<T>(method: string, params: object = {}): Promise<T> {
+  const result = await core<ConnectorReply<T>>(method, params);
+  if (result && typeof result === "object" && "ok" in result && result.ok === false) throw new Error(result.error);
+  return result as T;
+}
+export const connectorsStatus = (): Promise<import("./plugins-data").ConnectorStatus> => connectorCall("connectors.status", { refresh: false });
+export const connectorsCatalog = (params: { search?: string; category?: string; cursor?: string }): Promise<{ items: import("./plugins-data").Toolkit[]; next_cursor?: string | null }> => connectorCall("connectors.catalog", { ...params, limit: 50 });
+export const connectorsCategories = (): Promise<{ items: Array<{ id: string; name: string }> }> => connectorCall("connectors.categories");
+export const connectorsTools = (id: string): Promise<{ items: import("./plugins-data").ConnectorTool[] }> => connectorCall("connectors.tools", { id });
+export const connectorsSetTools = (id: string, changes: { disabled_tools?: string[]; enabled?: boolean }): Promise<unknown> => connectorCall("connectors.set_tools", { id, ...changes });
+export const connectorsConnect = (toolkit: string): Promise<{ connected: boolean; error?: string }> => connectorCall("connectors.connect", { toolkit });
+export const connectorsGoogleConnect = (): Promise<{ connected: boolean; error?: string }> => connectorCall("connectors.google.connect");
+export const connectorsDisconnect = (id: string): Promise<unknown> => connectorCall("connectors.disconnect", { id });
+export const connectorsSetKey = (key: string): Promise<{ configured: boolean }> => connectorCall("connectors.set_key", { key });
+
 export const toolsetsList = (): Promise<{ groups: ConnectionGroup[] }> => core("toolsets.list");
 export const integrationsCatalog = (): Promise<{ services: StoreService[] }> => core("integrations.catalog");
 /** Adds a service of the store, or signs in to a connected one again (`id`). Waits for the login in the browser: minutes. */

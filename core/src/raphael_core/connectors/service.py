@@ -191,7 +191,7 @@ class ConnectorsService:
 
     def _config(self):
         active = {c.id.split(":", 1)[1]: c for c in self.store.connectors.values()
-                  if c.kind == "composio" and c.status == "ACTIVE"}
+                  if c.kind == "composio" and c.status == "ACTIVE" and c.enabled}
         return {"toolkits": {"enable": sorted(active)},
                 "tools": {slug: {"disable": c.disabled_tools} for slug, c in active.items()},
                 "manage_connections": {"enable": False}, "workbench": {"enable": False},
@@ -265,6 +265,9 @@ class ConnectorsService:
             raise ConnectorFailure("protocol")
         ident = "composio:" + slug
         entry = self.store.connectors.setdefault(ident, Connector(ident, "composio"))
+        entry.name = details.get("name", slug)
+        entry.description = (details.get("meta") or {}).get("description", "")
+        entry.logo = (details.get("meta") or {}).get("logo", "")
         prior_active = entry.status == "ACTIVE"
         entry.status = "INITIALIZING"
         entry.accounts = [a for a in entry.accounts if a["id"] != account_id] + [{"id": account_id, "status": "INITIALIZING"}]
@@ -306,10 +309,7 @@ class ConnectorsService:
             self._important[entry.id] = {t["slug"] for t in featured if isinstance(t.get("slug"), str)}
         tools = await self.composio.pages("/tools", {"toolkit_slug": slug, "limit": 1000})
         checked = [t for t in tools if isinstance(t, dict) and isinstance(t.get("slug"), str) and _TOOL.fullmatch(t["slug"])]
-        # Hint presence is [U]. Default destructive tools off when hints are actually present.
-        destructive = {t["slug"] for t in checked if "destructiveHint" in (t.get("tags") or [])}
-        seen = set(entry.enabled_tools) | set(entry.disabled_tools)
-        entry.disabled_tools = sorted(set(entry.disabled_tools) | (destructive - seen))
+        # New tools are on by default; only the owner's explicit exclusions persist.
         entry.enabled_tools = sorted({t["slug"] for t in checked} - set(entry.disabled_tools))
         self._tool_catalog[entry.id] = checked
         self._save()
@@ -318,7 +318,9 @@ class ConnectorsService:
         entry = self._entry(params)
         if entry.kind == "google":
             items = [{"slug": name, "name": name, "description": description,
-                      "enabled": self.tool_available(GOOGLE_SERVER, name), "kind": "read" if name in READ_TOOLS else "write"}
+                      "enabled": name not in entry.disabled_tools and permitted(name, entry.granted_scopes, entry.draft_only)
+                          and permitted(name, scopes_for(entry.gmail, entry.calendar), entry.draft_only),
+                      "kind": "read" if name in READ_TOOLS else "write"}
                      for name, (description, _) in TOOLS.items()]
         else:
             await self._load_tools(entry)
@@ -331,9 +333,15 @@ class ConnectorsService:
 
     async def set_tools(self, params):
         entry = self._entry(params)
-        names = _names(params.get("disabled_tools"))
+        names = _names(params.get("disabled_tools", entry.disabled_tools))
+        enabled = params.get("enabled", entry.enabled)
+        if type(enabled) is not bool:
+            raise invalid_params("enabled must be boolean")
         if entry.kind == "google":
             known = set(TOOLS)
+        elif "disabled_tools" not in params:
+            # A service switch preserves tool decisions and can narrow access offline.
+            known = set(entry.enabled_tools) | set(entry.disabled_tools)
         else:
             await self._load_tools(entry)
             known = {t["slug"] for t in self._tool_catalog[entry.id]}
@@ -345,6 +353,8 @@ class ConnectorsService:
             raise invalid_params("draft_only must be boolean")
         # This is a local policy and takes effect even if the remote PATCH is unavailable.
         entry.draft_only = draft_only
+        # A failed remote update must never undo a local switch-off.
+        entry.enabled = entry.enabled and enabled
         # Narrow locally before a network call. Broaden only after PATCH succeeds.
         entry.disabled_tools = sorted(before | set(names))
         entry.enabled_tools = sorted(known - set(entry.disabled_tools))
@@ -352,11 +362,13 @@ class ConnectorsService:
         if entry.kind == "composio":
             await self._session()
             config = self._config()
-            if entry.status == "ACTIVE":
+            if entry.status == "ACTIVE" and enabled:
+                config["toolkits"]["enable"] = sorted(set(config["toolkits"]["enable"]) | {entry.id.split(":", 1)[1]})
                 config["tools"][entry.id.split(":", 1)[1]] = {"disable": names}
             result = await self.composio.patch(self.store.session_id, config, self.store.config_version)
             self.store.config_version = result.get("config_version", self.store.config_version)
         entry.disabled_tools, entry.enabled_tools = names, sorted(known - set(names))
+        entry.enabled = enabled
         self.hub._connector.invalidate(COMPOSIO_SERVER if entry.kind == "composio" else GOOGLE_SERVER)
         self._save()
         return {"connector": self._view(entry)}
@@ -501,10 +513,10 @@ class ConnectorsService:
     def tool_available(self, server_id, name):
         if server_id == COMPOSIO_SERVER:
             return bool(self.vault.get(KEY)) and name in META and any(
-                c.kind == "composio" and c.status == "ACTIVE" for c in self.store.connectors.values())
+                c.kind == "composio" and c.status == "ACTIVE" and c.enabled and c.enabled_tools for c in self.store.connectors.values())
         if server_id == GOOGLE_SERVER:
             entry = self.store.connectors.get("google")
-            return bool(entry and entry.status == "ACTIVE" and name not in entry.disabled_tools
+            return bool(entry and entry.status == "ACTIVE" and entry.enabled and name not in entry.disabled_tools
                         and permitted(name, entry.granted_scopes, entry.draft_only)
                         and permitted(name, scopes_for(entry.gmail, entry.calendar), entry.draft_only))
         return False
@@ -533,7 +545,7 @@ class ConnectorsService:
                     or not isinstance(call.get("tool_slug"), str) or not isinstance(call.get("arguments"), dict)):
                 return False
             tool = call["tool_slug"]
-            entries = [c for c in self.store.connectors.values() if c.kind == "composio" and c.status == "ACTIVE"
+            entries = [c for c in self.store.connectors.values() if c.kind == "composio" and c.status == "ACTIVE" and c.enabled
                        and tool in c.enabled_tools and tool not in c.disabled_tools]
             if not entries or all(c.draft_only for c in entries) and re.search(r"(^|_)(SEND|POST|PUBLISH)(_|$)", tool):
                 return False

@@ -139,6 +139,32 @@ export function installMock(fixture, config = {}, target = window) {
       case "audio.devices": return data.audioDevices;
       case "audio.monitor": return {};
       case "services.status": return data.serviceStatus;
+      case "connectors.status": return { connectors: data.managedConnectors, composio_configured: data.composioConfigured, google_configured: true };
+      case "connectors.catalog": {
+        if (!data.composioConfigured) return { ok: false, error: "missing_key" };
+        return { items: data.pluginCatalog.filter(s => (!p.search || `${s.name} ${s.description}`.toLowerCase().includes(p.search.toLowerCase())) && (!p.category || s.categories.includes(p.category))), next_cursor: null };
+      }
+      case "connectors.categories": return { items: data.pluginCategories };
+      case "connectors.tools": return { items: data.pluginTools[p.id] ?? [] };
+      case "connectors.set_key": data.composioConfigured = true; return { configured: true };
+      case "connectors.set_tools": {
+        const connector = data.managedConnectors.find(c => c.id === p.id);
+        if (p.enabled !== undefined) connector.enabled = p.enabled;
+        if (p.disabled_tools) {
+          connector.disabled_tools = p.disabled_tools;
+          for (const tool of data.pluginTools[p.id] ?? []) tool.enabled = !p.disabled_tools.includes(tool.slug);
+          connector.enabled_tools = (data.pluginTools[p.id] ?? []).filter(t => t.enabled).map(t => t.slug);
+        }
+        state.emit({ type: "ConnectionsChanged" }); return { connector };
+      }
+      case "connectors.connect": {
+        if (variant.pluginsConnecting) return new Promise(() => {});
+        const entry = data.pluginCatalog.find(s => s.slug === p.toolkit);
+        data.managedConnectors.push({ id: `composio:${entry.slug}`, kind: "composio", name: entry.name, description: entry.description, status: "ACTIVE", enabled: true, enabled_tools: [], disabled_tools: [] });
+        state.emit({ type: "ConnectionsChanged" }); return { connected: true };
+      }
+      case "connectors.google.connect": return { connected: true };
+      case "connectors.disconnect": data.managedConnectors = data.managedConnectors.filter(c => c.id !== p.id); state.emit({ type: "ConnectionsChanged" }); return { disconnected: true };
       case "toolsets.list": return { groups: data.servers };
       case "integrations.catalog": return { services: data.services };
       case "integrations.audit": return { entries: [] };
@@ -149,6 +175,15 @@ export function installMock(fixture, config = {}, target = window) {
       case "integrations.add": { const server = { ...data.servers[0], ...p, id: `server-${data.servers.length + 1}` }; data.servers.push(server); return { server }; }
       case "integrations.update": return { server: update(data.servers, p.id, p) };
       case "integrations.set_enabled": return { server: update(data.servers, p.id, { enabled: p.enabled, status: p.enabled ? "ready" : "disabled" }) };
+      case "integrations.refresh": return { server: data.servers.find(s => s.id === p.id) };
+      case "integrations.set_tool_enabled": {
+        data.servers.find(s => s.id === p.id).tools.find(t => t.name === p.tool).enabled = p.enabled;
+        return {};
+      }
+      case "integrations.set_tools_enabled": {
+        for (const tool of data.servers.find(s => s.id === p.id).tools) if (p.tools.includes(tool.name)) tool.enabled = p.enabled;
+        return {};
+      }
       case "integrations.disconnect": update(data.servers, p.id, { enabled: false, status: "disconnected", auth: "none" }); return { disconnected: true };
       case "usage.runs": return { ...data.usage, range: p.range ?? data.usage.range };
       case "usage.allowances": return data.allowances;
