@@ -97,6 +97,15 @@ export async function perform(page, step) {
       if (await compact()) { await roomsMenu(); await click('#app-popover [data-action="0"]'); }
       else await click("[data-room-new]");
       break;
+    case "room-row-menu":
+      if (await compact()) {
+        await roomsMenu(); await click(`#app-popover [data-value="${step.id}"]`);
+        await click("[data-room-menu]");
+      } else {
+        const more = await visible(`[data-room-more="${step.id}"]`);
+        try { await more.hover(); await more.click(); } finally { await more.dispose(); }
+      }
+      break;
     case "rooms-menu":
       if (await compact()) await roomsMenu();
       else await page.waitForSelector(".mb-col [data-room]", { visible: true });

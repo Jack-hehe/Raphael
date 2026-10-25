@@ -67,6 +67,7 @@ from .agent.device import DeviceActions, NullActions, WindowsActions
 from .agent.gate import ToolGate
 from .agent.safety import SafetyGuard, SafetyJudge, SafetyRules
 from .agent.service import AgentService
+from .agent.routing import Router as DecisionRouter
 from .agent.tools import Tools
 from .background.service import BackgroundService
 from .background.tasks import FINAL_STATES
@@ -845,7 +846,7 @@ class App(Router):
         self.members.register(self)
         self.rooms = RoomsService(self._conn, members=self.members, background=self.background,
                                   notify=self.notify, transcribe=self._transcribe_from_messaging,
-                                  attachment_store=self.attachment_store)
+                                  attachment_store=self.attachment_store, decision=DecisionRouter(self.client))
         self.rooms.register(self)
         self.members.use_speech(self.speaker)
         self.memory.member_exists = self.members.member_exists
@@ -870,6 +871,7 @@ class App(Router):
         self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))
         self.home.register()
         self.background.use_team(self.members, self.agent.team_tool)
+        self.background.use_cli(self.agent._cli_brains, self.agent.quotas.record)
         # The questions the background waits on: a thread one waits in is `waiting` in the member
         # column, and the overlay's notice of one names the member whose thread holds it.
         self.members.add_waiting_source(self.background.waiting_members)
@@ -1063,6 +1065,7 @@ class App(Router):
             self._conn.close()
 
         steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("end room routing calls", self.rooms.aclose),
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),

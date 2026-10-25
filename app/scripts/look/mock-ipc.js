@@ -18,6 +18,9 @@ export function installMock(fixture, config = {}, target = window) {
     data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
     data.turns[0].text = "";
   }
+  if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
+  if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);
+  if (variant.roomWrapup) data.messages.push(data.roomWrapupMessage);
   if (variant.usageEmpty) {
     data.usage.total = 0;
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));
@@ -93,11 +96,12 @@ export function installMock(fixture, config = {}, target = window) {
       case "routines.update": { const routine = update(data.routines, p.id, p); notify("RoutinesChanged", { member_id: routine.member_id }); return { routine }; }
       case "routines.delete": data.routines = data.routines.filter(item => item.id !== p.id); notify("RoutinesChanged", { member_id: 0 }); return { deleted: true };
       case "rooms.list": return { rooms: data.rooms };
-      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id) };
-      case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false) }; data.rooms.push(room); return { room }; }
+      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id), exchange: data.roomExchanges.filter(item => item.room_id === p.room_id).at(-1) ?? null };
+      case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false), default_responder: p.default_responder ?? "auto" }; data.rooms.push(room); return { room }; }
       case "rooms.update": return { room: update(data.rooms, p.room_id, p) };
       case "rooms.delete": data.rooms = data.rooms.filter(item => item.id !== p.room_id); return { deleted: true };
-      case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: null, turn_id: null }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
+      case "rooms.stop": { for (const exchange of data.roomExchanges.filter(item => item.room_id === p.room_id && ["running", "queued"].includes(item.state))) exchange.stop_requested = 1; notify("RoomsChanged", { room_id: p.room_id }); return { stopped: true }; }
+      case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: p.reply_to ?? null, turn_id: null, reply_to_member: data.messages.find(item => item.id === p.reply_to)?.member_id ?? null, origin_message_id: nextId(data.messages), kind: "message" }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
       case "brains.cli": return { clis: data.clis };
       case "models.catalog": return data.catalog;
       case "models.status": return data.modelStatus;

@@ -2,6 +2,66 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "room-discussion") {
+    require(document.querySelectorAll('.au-room-reply').length >= 3, "multiple replies identify their colleagues");
+    require(document.querySelector('.au-room-thread').textContent.includes('我不同意'), "members can disagree");
+    require(visible(document.querySelector('.au-room-crown')), "Raphael has the chief badge");
+    const crown = document.querySelector('.au-room-crown').getBoundingClientRect();
+    const face = document.querySelector('.au-room-crown').parentElement.getBoundingClientRect();
+    require(crown.right <= face.right && crown.left >= face.left, "the chief badge stays inside its participant slot");
+    require(document.querySelectorAll('.au-room-role').length >= 3, "member roles remain visible");
+    return { check: name, replyChips: document.querySelectorAll('.au-room-reply').length };
+  }
+  if (name === "room-wrapup") {
+    const card = document.querySelector('.au-room-wrapup');
+    require(visible(card), "wrap-up is a distinct card");
+    require(getComputedStyle(card.querySelector('.ans')).borderLeftWidth === '3px', "the wrap-up retains its card accent");
+    require([...card.querySelectorAll('.au-room-wrapup-section h3')].map(heading => heading.textContent).join('|') === '結論|待你決定|下一步', "wrap-up has three labelled sections");
+    require(card.querySelectorAll('.au-room-wrapup-owner').length === 3, "next steps style each named owner");
+    for (const text of ['小晴：', '小森：', '拉斐爾：']) require(card.textContent.includes(text), `wrap-up preserves ${text}`);
+    require(card.getBoundingClientRect().right <= innerWidth, "the wrap-up fits the viewport");
+    return { check: name, author: 0 };
+  }
+  if (name === "room-responder") {
+    const menu = document.querySelector('#app-popover');
+    for (const value of ['auto', 'member:0', 'member:1', 'everyone']) require(visible(menu?.querySelector(`[data-value="${value}"]`)), `${value} is selectable`);
+    require(!document.querySelector('.mb-dialog select'), "responder uses the app's selector");
+    return { check: name, choices: 4 };
+  }
+  if (name === "room-reply-cancel") {
+    require(!visible(document.querySelector('.cmp-quote')), "cancel removes the reply recipient");
+    require(!window.__look.calls.some(call => call.method === 'rooms.send'), "cancel does not send a message");
+    return { check: name, cancelled: true };
+  }
+  if (name === "room-reply-send") {
+    require(window.__look.calls.some(call => call.method === 'rooms.send' && call.params.reply_to === 2), "reply reaches the core with the target message id");
+    return { check: name, replyTo: 2 };
+  }
+  if (name === "room-stop") {
+    require(window.__look.calls.some(call => call.method === 'rooms.stop' && call.params.room_id === 1), "stop reaches the core");
+    require(document.querySelector('[data-room-act="stop"]')?.disabled, "stop stays disabled until the speaker finishes");
+    return { check: name, stopRequested: true };
+  }
+  if (name === "room-replies") {
+    const chip = document.querySelector('.au-room-reply');
+    require(visible(chip) && chip.textContent === "回覆 小晴", "the reply identifies its recipient");
+    require(chip.getBoundingClientRect().right <= innerWidth, "the reply chip fits the viewport");
+    return { check: name, recipient: 1 };
+  }
+  if (name === "room-thinking") {
+    const rows = [...document.querySelectorAll('.au-room-thinking')];
+    require(rows.length === 1 && visible(rows[0]), "only one member is shown speaking");
+    require(getComputedStyle(rows[0]).flexDirection === 'row', "speaker face and status share one row");
+    require(visible(rows[0].querySelector('.av')), "the speaker's face is visible");
+    require(rows[0].textContent === "小晴 正在發言…", "the speaking row names the member");
+    return { check: name, speakingRows: rows.length };
+  }
+  if (name === "room-row-menu") {
+    require(!document.querySelector('[data-room-delete]'), "room rows have no direct delete button");
+    const menu = document.querySelector('#app-popover');
+    for (const action of ["rename", "members", "delete"]) require(visible(menu?.querySelector(`[data-pick="${action}"]`)), `${action} is available from the room menu`);
+    return { check: name, actions: 3 };
+  }
   if (name === "home-overview") {
     const home = document.querySelector('.page-home:not([hidden])');
     const emblem = home?.querySelector('.ho-hero > .av');

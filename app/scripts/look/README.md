@@ -19,9 +19,12 @@ It never downloads a browser or installs packages. Preserve the package/lockfile
 
 Each run creates `.look/run-*/` with viewport PNGs, paginated PNG contact sheets,
 `contacts.json` and `report.json`. `--out` changes the parent directory. A nonzero exit
-means a scene, runtime, layout, raw translation key, non-finite work duration, or visible native select/time-input
+means a scene, runtime, layout, raw translation key, raw Markdown text, non-finite work duration, or visible native select/time-input
 check failed; missing dependencies produce a `blocked` report and a nonzero exit.
 Inspect contact sheets and full-size PNGs as well as the automated checks.
+The shared audit rejects visible text nodes containing Markdown heading markers,
+unchecked task markers, paired bold markers or triple backticks, including outside
+chat messages. Hidden pages and content outside scrollports are excluded.
 
 The real `index.html`, `main.ts` and CSS run through Vite. Overlay scenes select
 the production `overlay.html` entry. Only the Tauri IPC boundary is

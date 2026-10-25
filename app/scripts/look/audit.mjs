@@ -34,7 +34,13 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     }
     return right > left && bottom > top;
   };
-  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [], mixedLanguage = [];
+  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [], mixedLanguage = [], rawMarkdown = [];
+  const markdownPattern = /(?:^|\r?\n)[\t ]*(?:#{1,6}(?:[\t ]|$)|-\s+\[[ xX]\])|\*\*[^*\r\n]+\*\*|`{3,}/;
+  const checkMarkdown = element => {
+    for (const node of element.childNodes) if (node.nodeType === 3 && markdownPattern.test(node.textContent))
+      rawMarkdown.push({ ...describe(element), text: node.textContent.trim().slice(0, 200) });
+  };
+  if (visible(doc.body) && onScreen(doc.body)) checkMarkdown(doc.body);
   const allowed = latinAllowed && new Set(latinAllowed), seenWords = new Set();
   const keyPattern = /\b([a-z][A-Za-z0-9]*\.[A-Za-z0-9_.-]+)\b/g;
   const seenKeys = new Set();
@@ -47,6 +53,7 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     if (element.clientWidth > 0 && element.scrollWidth > element.clientWidth + 1 && !/auto|scroll|hidden|clip/.test(style.overflowX || style.overflow))
       horizontalOverflow.push({ ...description, width: element.clientWidth, scrollWidth: element.scrollWidth });
     if (!onScreen(element)) continue;
+    checkMarkdown(element);
     if (element.matches('.work-time, .work-toggle, .step-ms') && /\b(?:NaN|Infinity)\b/.test(element.textContent)) invalidDurations.push(description);
     if (element.matches('select,input[type="time"]')) nativeControls.push(description);
     const strings = [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent);
@@ -61,9 +68,9 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     }
   }
   const documentWidth = Math.max(doc.documentElement.scrollWidth, doc.body.scrollWidth);
-  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations, mixedLanguage };
+  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations, mixedLanguage, rawMarkdown };
 }
 
 export function failedChecks(result) {
-  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0 || (result.mixedLanguage?.length ?? 0) > 0;
+  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0 || (result.mixedLanguage?.length ?? 0) > 0 || (result.rawMarkdown?.length ?? 0) > 0;
 }

@@ -3,6 +3,23 @@ import { describe, expect, it } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 
 describe("rendered look checks", () => {
+  it.each(["# Heading", "## Heading", "Text\n  ### Heading", "- [ ] Pending", "**bold**", "```js\ncode\n```"])("rejects visible raw Markdown: %s", text => {
+    const window = new Window();
+    const paragraph = window.document.createElement("p");
+    paragraph.textContent = text; window.document.body.append(paragraph);
+    paragraph.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = { ...auditDocument(window.document, { width: 1120, height: 900 }), runtimeErrors: [] };
+    expect(result.rawMarkdown).toHaveLength(1);
+    expect(result.rawMarkdown[0].text).toBe(text);
+    expect(failedChecks(result)).toBe(true);
+  });
+  it("ignores rendered formatting, ordinary hashes, hidden text and Markdown outside a scrollport", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<h3>Conclusion</h3><p><strong>Owner</strong>: next step, issue #123, color #fff</p><div hidden>### Hidden</div><div style="overflow-y:auto"><p id="offscreen">**older**</p></div>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    window.document.querySelector("#offscreen").getBoundingClientRect = () => ({ left: 10, top: 200, right: 100, bottom: 230, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }).rawMarkdown).toEqual([]);
+  });
   it("rejects interface copy left in English in a Chinese window, allowing data and product names", () => {
     const window = new Window();
     window.document.body.innerHTML = '<textarea placeholder="Message 紫苑"></textarea><button aria-label="問拉斐爾">Google Calendar</button><p>Finance 已建立</p><a href="#">研究訪談摘要.pdf</a>';

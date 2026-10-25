@@ -108,8 +108,23 @@
 .au-room-row { display: flex; gap: var(--sp-1); align-items: center; margin: var(--sp-1) 0; }
 .au-room-row > .btn:first-child { flex: 1; min-width: 0; justify-content: flex-start; border: 0; background: transparent; gap: var(--sp-2); font-size: var(--fs-xs); }
 .au-room-row > .btn:first-child span { overflow: hidden; text-overflow: ellipsis; }
-.au-room-row > .danger { opacity: 0; }
-.au-room-row:hover > .danger, .au-room-row:focus-within > .danger { opacity: 1; }
+.au-room-row > .au-room-more { opacity: 0; }
+.au-room-row:hover > .au-room-more, .au-room-row:focus-within > .au-room-more { opacity: 1; }
+.au-room-reply { display: inline-flex; max-width: 100%; margin-left: var(--sp-2); padding: 2px var(--sp-2); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-2xs); overflow-wrap: anywhere; }
+.au-room-thread .au-room-thinking { display: flex; flex-direction: row; align-items: center; gap: var(--sp-3); color: var(--text-2); font-size: var(--fs-xs); padding-block: var(--sp-2); }
+.au-room-participant { position: relative; display: inline-flex; padding-right: 4px; }
+.au-room-faces { overflow: visible; }
+.au-room-crown { position: absolute; right: 0; bottom: 0; display: inline-flex; padding: 1px; border-radius: var(--r-pill); background: var(--panel); color: var(--accent-text); }
+.au-room-crown .i { width: 16px; height: 16px; }
+.au-room-role { margin-left: var(--sp-2); color: var(--text-2); font-size: var(--fs-2xs); }
+.au-room-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1); }
+.au-room-thread .au-room-wrapup .chat-message > .ans { border: 1px solid var(--edge); border-left: 3px solid var(--accent-text); border-radius: var(--r-md); padding: var(--sp-3); background: var(--surface-2); }
+.au-room-wrapup-title { display: block; margin-bottom: var(--sp-2); color: var(--accent-text); font-size: var(--fs-xs); }
+.au-room-wrapup-section + .au-room-wrapup-section { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--edge); }
+.au-room-wrapup .message-text .au-room-wrapup-section h3 { margin: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); }
+.au-room-wrapup .message-text .au-room-wrapup-owner { color: var(--accent-text); font-weight: 600; }
+.au-room-controls { display: flex; justify-content: flex-end; max-width: var(--pa-colw); margin-inline: auto; margin-bottom: var(--sp-2); }
+.au-room-controls:empty { display: none; }
 @media (max-width: 900px) {
   .au-calendar-side { width: 170px; padding: var(--sp-3) var(--sp-2); }
   .au-calendar-side .au-month-grid { gap: 0; }
