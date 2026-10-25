@@ -5,7 +5,7 @@ From `app/`:
 ```sh
 npm run look -- --list
 npm run look -- chat details --theme both --width 1120,720
-npm run look -- --all --theme both --width 1120,720
+npm run look -- --all --theme both --width 1120,720,1920x1080
 npm run look -- appearance --skin lagoon --locale ja --out .look/review
 npm run verify
 npm run verify -- --out ../.fold/app/.look

@@ -1,5 +1,7 @@
 // Self-contained so the same checks run in Chromium and in the DOM contract tests.
-export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = []) {
+// `latinAllowed` (lower-case words) turns on the one-language check for a Chinese window: any other
+// Latin word in visible text, a placeholder, an aria-label or a title is interface copy left in English.
+export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = [], latinAllowed = null) {
   const win = doc.defaultView;
   const describe = element => ({ tag: element.tagName.toLowerCase(), id: element.id, class: typeof element.className === "string" ? element.className : "", text: element.textContent?.trim().slice(0, 100) });
   const visible = element => {
@@ -32,7 +34,8 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
     }
     return right > left && bottom > top;
   };
-  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [];
+  const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [], mixedLanguage = [];
+  const allowed = latinAllowed && new Set(latinAllowed), seenWords = new Set();
   const keyPattern = /\b([a-z][A-Za-z0-9]*\.[A-Za-z0-9_.-]+)\b/g;
   const seenKeys = new Set();
   for (const element of doc.body.querySelectorAll("*")) {
@@ -52,11 +55,15 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
       if (!namespaces.includes(match[1].split(".")[0]) || seenKeys.has(match[1])) continue;
       seenKeys.add(match[1]); missingI18nKeys.push({ ...description, key: match[1] });
     }
+    if (allowed) for (const value of strings) for (const [word] of value.replace(keyPattern, "").replace(/https?:\/\/\S+|\S+\.(?:pdf|png|jpe?g|txt|md|csv|exe|com|dev|io)\b/gi, "").matchAll(/[A-Za-z]{2,}/g)) {
+      if (allowed.has(word.toLowerCase()) || seenWords.has(word)) continue;
+      seenWords.add(word); mixedLanguage.push({ ...description, word });
+    }
   }
   const documentWidth = Math.max(doc.documentElement.scrollWidth, doc.body.scrollWidth);
-  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations };
+  return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations, mixedLanguage };
 }
 
 export function failedChecks(result) {
-  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0;
+  return result.runtimeErrors.length > 0 || result.horizontalOverflow.document || result.horizontalOverflow.elements.length > 0 || result.outsideViewport.length > 0 || result.missingI18nKeys.length > 0 || result.nativeControls.length > 0 || (result.invalidDurations?.length ?? 0) > 0 || (result.mixedLanguage?.length ?? 0) > 0;
 }

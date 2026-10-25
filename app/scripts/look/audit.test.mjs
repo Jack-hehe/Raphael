@@ -3,6 +3,15 @@ import { describe, expect, it } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 
 describe("rendered look checks", () => {
+  it("rejects interface copy left in English in a Chinese window, allowing data and product names", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea placeholder="Message 紫苑"></textarea><button aria-label="問拉斐爾">Google Calendar</button><p>Finance 已建立</p><a href="#">研究訪談摘要.pdf</a>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    const result = { ...auditDocument(window.document, { width: 1120, height: 900 }, [], ["google", "calendar", "finance"]), runtimeErrors: [] };
+    expect(result.mixedLanguage.map(item => item.word)).toEqual(["Message"]);
+    expect(failedChecks(result)).toBe(true);
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, []).mixedLanguage).toEqual([]);
+  });
   it("rejects non-finite durations in visible work summaries", () => {
     const window = new Window();
     window.document.body.innerHTML = '<button class="work-toggle">已處理 NaN 秒</button><div hidden><span class="step-ms">Infinity</span></div>';

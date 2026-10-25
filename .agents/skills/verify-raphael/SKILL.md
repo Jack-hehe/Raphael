@@ -46,7 +46,7 @@ can select an already installed Edge/Chrome executable.
 
 ```powershell
 npm run verify
-npm run look -- --all --theme both --width 1120,720
+npm run look -- --all --theme both --width 1120,720,1920x1080
 ```
 
 Run mapped feature commands while iterating; use the full matrix for UI handoff.
