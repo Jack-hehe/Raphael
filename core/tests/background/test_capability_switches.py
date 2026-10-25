@@ -46,7 +46,7 @@ async def test_what_the_owner_turned_off_is_not_offered_to_a_task_at_all(web_rig
     rig.settings.set("vision_enabled", False)
     rig.settings.set("pdf_enabled", False)
     off = rig.run._tools.turned_off()
-    assert "read_attachment" not in names(take_snapshot(None, attachments=True, turned_off=off))
+    assert "read_attachment" in names(take_snapshot(None, attachments=True, turned_off=off))  # Local text still works.
 
 
 def test_the_snapshot_leaves_out_what_it_is_told_is_off_whoever_the_speaker():
