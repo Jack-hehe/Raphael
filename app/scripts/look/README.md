@@ -32,6 +32,10 @@ conversations, work/replies/attachments, team/rooms, schedules/runs, usage/CLI a
 MCP servers, providers/models and dictation data. Browser dates are fixed to the fixture's
 `now`, in Asia/Taipei. Change data in that file, not in a second mock.
 
+The normal entry opens Home and waits for Raphael's status strip. Existing non-home
+journeys then click the real Raphael rail destination before driving their steps.
+Home scenes cover rich/empty data, the lower strip, expansion, reports and routines.
+
 Add a `scene(name, description, steps, fixtureOverrides)` to a module in `scenes/` and
 export it from `scenes/index.mjs`. Steps include click, type, hover, key, wait, scroll,
 member/room selection and drag/drop. Use real UI selectors and wait for the resulting
@@ -53,7 +57,7 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 127 current scenes (508 combinations for both themes and widths).
+scenes. There are 133 current scenes (532 combinations for both themes and widths).
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
 the driver chooses the first visible match. Favicon requests return an empty 204.
 

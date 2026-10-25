@@ -34,5 +34,5 @@ export default [
   scene("dictation-notice", "Dictation connection notice", dictation("overview"), { problem: true }),
   scene("conversation-notice", "Conversation connection notice", [], { problem: true }),
   scene("onboarding", "First-run welcome", [wait('#ob:not([hidden]) [data-ob="next"]')], { onboarding: true }),
-  scene("after-onboarding", "First run with all optional abilities disabled", [click('[data-ob="next"]'), { action: "disable-abilities" }, click('[data-ob="next"]'), click('[data-ob="next"]'), wait(".page-agent:not([hidden])")], { onboarding: true }),
+  scene("after-onboarding", "First run opens the home overview with all optional abilities disabled", [click('[data-ob="next"]'), { action: "disable-abilities" }, click('[data-ob="next"]'), click('[data-ob="next"]'), wait(".page-home:not([hidden]) .ho-raphael"), check("home-overview")], { onboarding: true }),
 ];

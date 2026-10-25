@@ -16,13 +16,17 @@ describe("real app entry with the shared look fixture", () => {
     const state = installMock(fixture);
     await import("../../src/main/main.ts");
     await flush();
+    expect(document.querySelector('.page-home:not([hidden]) .ho-raphael')).not.toBeNull();
+    expect(document.querySelector('#nav .nav')?.dataset.go).toBe("home");
+    document.querySelector('#nav .nav[data-go="agent"]').click();
+    await flush();
     expect(document.querySelector(".page-agent:not([hidden]) .conversation-trigger")).not.toBeNull();
     expect(document.body.textContent).toContain("這週的研究與安排");
     // A reply wait must not select the earlier, collapsed work messages.
     const reply = document.querySelector(scenes.find(scene => scene.name === "chat").steps[0].selector);
     expect(reply?.querySelector(".message-text")?.textContent).toContain("這週的研究有三個重點");
     expect(reply?.closest("[hidden]")).toBeNull();
-    for (const destination of ["automations", "team", "dictation", "agent"]) {
+    for (const destination of ["home", "automations", "team", "dictation", "agent"]) {
       document.querySelector(`#nav .nav[data-go="${destination}"]`).click();
       await flush();
       expect(document.querySelector(`#nav .nav[data-go="${destination}"]`).getAttribute("aria-current"), destination).toBe("page");

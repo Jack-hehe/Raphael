@@ -770,7 +770,7 @@ export type TrayAction = "add-word";
 // ---------- what the pages share with main.ts ----------
 
 export type PageId = "home" | "agent" | "dictation" | "history" | "dictionary" | "settings" | "automations" | "team";
-export type MainPageId = Exclude<PageId, "settings" | "home" | "history" | "dictionary">;
+export type MainPageId = Exclude<PageId, "settings" | "history" | "dictionary">;
 export type DictationTab = "overview" | "history" | "dictionary";
 
 /** The tabs of the settings panel. */

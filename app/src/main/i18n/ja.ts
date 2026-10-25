@@ -1,8 +1,10 @@
 import { navJa } from "./nav-catalogs";
+import { homeJa } from "./home-catalogs";
 import type { Messages } from './zh-TW';
 
 export const ja = {
   ...navJa,
+  ...homeJa,
   "conversations.untitled": "新しい会話",
   "conversations.new": "新しい会話",
   "conversations.search": "会話を検索",
@@ -251,7 +253,7 @@ export const ja = {
   "unit.seconds": "秒",
   "unit.minutes": "分",
   "unit.hours": "時間",
-  "nav.home": "ラファエルへ",
+  "nav.home": "ホームへ",
   "nav.pages": "ページ",
   "action.refreshMicrophones": "マイクを再検索",
   "locale.english": "English",

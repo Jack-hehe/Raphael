@@ -347,7 +347,8 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 99] = [
+const ALLOWED_METHODS: [&str; 100] = [
+    "home.overview",
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -2052,6 +2053,8 @@ mod tests {
 
     #[test]
     fn usage_analytics_is_a_named_read_of_the_main_window_only() {
+        assert!(is_allowed_method("home.overview"));
+        assert!(validate_core_call("home.overview", &json!({"tz": "Asia/Taipei"})).is_ok());
         assert!(is_allowed_method("usage.analytics"));
         assert!(validate_core_call("usage.analytics", &json!({"range": "7d"})).is_ok());
         assert!(!is_allowed_method("usage.clear"));

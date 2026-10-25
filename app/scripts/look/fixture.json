@@ -1734,5 +1734,266 @@
     "enabled": false,
     "allowed": [],
     "pending": []
+  },
+  "home": {
+    "generated_at_ms": 1792807200000,
+    "report": {
+      "openrouter": {
+        "state": "ok",
+        "latency_ms": 120,
+        "checked_at_ms": 1792807200000,
+        "error": null,
+        "key": null,
+        "usage": null
+      },
+      "spend": {
+        "month_usd": 1.24,
+        "today_usd": 0.04,
+        "limit_usd": 20,
+        "forecast_usd": 2,
+        "daily": [
+          0.01,
+          0.04,
+          0.03
+        ]
+      },
+      "last": null
+    },
+    "today": [
+      {
+        "id": "question:1",
+        "kind": "question",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "確認本週研究方向",
+        "summary": "",
+        "at_ms": 1792807140000,
+        "turn_id": 1,
+        "conversation_id": 1,
+        "routine_id": null
+      },
+      {
+        "id": "routine:1",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792809000000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792816200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      },
+      {
+        "id": "report:2",
+        "kind": "report",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "Research progress",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792807080000,
+        "turn_id": 2,
+        "conversation_id": 11,
+        "routine_id": null
+      },
+      {
+        "id": "report:1",
+        "kind": "report",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "Daily briefing",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792805400000,
+        "turn_id": 1,
+        "conversation_id": 1,
+        "routine_id": null
+      }
+    ],
+    "reports": [
+      {
+        "id": "report:2",
+        "kind": "report",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "Research progress",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792807080000,
+        "turn_id": 2,
+        "conversation_id": 11,
+        "routine_id": null
+      },
+      {
+        "id": "report:1",
+        "kind": "report",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "Daily briefing",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792805400000,
+        "turn_id": 1,
+        "conversation_id": 1,
+        "routine_id": null
+      }
+    ],
+    "calendar": [
+      {
+        "id": "routine:1",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792809000000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792816200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      },
+      {
+        "id": "routine:1:tomorrow",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792891800000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2:tomorrow",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792904400000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      }
+    ],
+    "counts": {
+      "today": 5,
+      "reports": 2,
+      "calendar": 4
+    },
+    "usage": {
+      "month_usd": 1.24,
+      "limit_usd": 20,
+      "daily": [
+        0.02,
+        0.03,
+        0.01,
+        0.07,
+        0.04,
+        0.06,
+        0.02,
+        0.08,
+        0.11,
+        0.07,
+        0.09,
+        0.04,
+        0.03,
+        0.04
+      ],
+      "allowances": {
+        "quotas": [],
+        "brains": [
+          {
+            "id": "claude",
+            "name": "Claude CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          },
+          {
+            "id": "codex",
+            "name": "Codex CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          },
+          {
+            "id": "gemini",
+            "name": "Gemini CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "dictation": {
+      "words": 12000,
+      "audio_seconds": 3600,
+      "time_saved_seconds": 5400,
+      "speed_wpm": 200
+    }
   }
 }

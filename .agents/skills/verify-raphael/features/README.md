@@ -6,6 +6,7 @@ are the executable source. Native journeys cover behavior the fixture cannot pro
 
 | Feature | User-facing scope |
 | --- | --- |
+| [Home](home.md) | Startup overview, pending work, reports, calendar, usage and dictation totals |
 | [Conversation](conversation.md) | Threads, details panel, replies, public progress, search and composer |
 | [Members](members.md) | Identity, avatar, profile, memory, routines, skills, commands and voice |
 | [Automations](automations.md) | List/calendar, schedules, advanced options and deletion |

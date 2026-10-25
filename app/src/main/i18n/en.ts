@@ -1,8 +1,10 @@
 import { navEn } from "./nav-catalogs";
+import { homeEn } from "./home-catalogs";
 import type { Messages } from './zh-TW';
 
 export const en = {
   ...navEn,
+  ...homeEn,
   "conversations.untitled": "New conversation",
   "conversations.new": "New conversation",
   "conversations.search": "Search conversations",
@@ -251,7 +253,7 @@ export const en = {
   "unit.seconds": "sec",
   "unit.minutes": "min",
   "unit.hours": "hr",
-  "nav.home": "Back to Raphael",
+  "nav.home": "Back to home",
   "nav.pages": "Pages",
   "action.refreshMicrophones": "Find microphones again",
   "locale.english": "English",

@@ -1955,6 +1955,18 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
 
 # --- the voice assistant ----------------------------------------------------------------------
 
+async def test_home_overview_is_wired_without_waiting_for_speech(make_app, monkeypatch):
+    async def no_clis(brains):
+        return {"brains": []}
+
+    monkeypatch.setattr("raphael_core.agent.cli.allowances.read_allowances", no_clis)
+    app = make_app()
+    value = await app.call("home.overview", {"tz": "Asia/Taipei", "ui_language": "en"})
+    assert value["today"] == value["reports"] == value["calendar"] == []
+    assert len(value["usage"]["daily"]) == 14
+    assert value["dictation"]["words"] == 0
+
+
 ASSISTANT_METHODS = {
     "agent.ask",
     "agent.confirm",

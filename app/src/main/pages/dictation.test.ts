@@ -8,7 +8,7 @@ import type { AppContext, Page } from "../types";
 
 afterEach(() => { localStorage.clear(); document.body.replaceChildren(); });
 test("legacy home returns to conversation; dictation deep links select their tab", () => {
-  expect(resolvePage("home")).toEqual({ page: "agent" });
+  expect(resolvePage("home")).toEqual({ page: "home" });
   expect(resolvePage("history")).toEqual({ page: "dictation", tab: "history" });
   expect(resolvePage("dictionary")).toEqual({ page: "dictation", tab: "dictionary" });
   expect(samePage({ page: "dictation", tab: "overview" }, { page: "dictation", tab: "history" })).toBe(false);

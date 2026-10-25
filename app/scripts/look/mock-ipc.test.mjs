@@ -4,6 +4,16 @@ import { installMock } from "./mock-ipc.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("keeps empty home spend and the sidebar status consistent and exposes connection problems", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { homeEmpty: true, problem: true } }, target);
+    const call = method => target.__TAURI_INTERNALS__.invoke("core_call", { method });
+    const home = await call("home.overview"), status = await call("status.get");
+    expect(home.usage.month_usd).toBe(status.spend.month_usd);
+    expect(home.report.openrouter.state).toBe("no_key");
+    expect(home.today).toEqual([]);
+    expect(JSON.stringify(fixture.home)).not.toMatch(/\?{3}/);
+  });
   it("isolates conversations by member and turns by conversation", async () => {
     const target = {};
     installMock(fixture, {}, target);

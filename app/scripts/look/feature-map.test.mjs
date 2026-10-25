@@ -12,7 +12,7 @@ const readMap = file => {
   const staged = resolve(root, ".fold/.agents/skills/verify-raphael", file);
   return readFileSync(existsSync(staged) ? staged : resolve(skill, file), "utf8");
 };
-const names = ["conversation", "members", "automations", "team-and-rooms", "dictation", "settings-appearance", "connections-mcp", "usage", "onboarding"];
+const names = ["home", "conversation", "members", "automations", "team-and-rooms", "dictation", "settings-appearance", "connections-mcp", "usage", "onboarding"];
 
 describe("maintained verification feature map", () => {
   it("documents every requested feature with executable, current scene commands", () => {
@@ -30,7 +30,9 @@ describe("maintained verification feature map", () => {
         expect(options.widths, `${name}: ${command}`).toEqual([1120, 720]);
       }
     }
-    expect(readdirSync(resolve(skill, "features")).filter(file => file !== "README.md").sort()).toEqual(names.map(name => `${name}.md`).sort());
+    const staged = resolve(root, ".fold/.agents/skills/verify-raphael/features");
+    const files = [...new Set([...readdirSync(resolve(skill, "features")), ...(existsSync(staged) ? readdirSync(staged) : [])])];
+    expect(files.filter(file => file !== "README.md").sort()).toEqual(names.map(name => `${name}.md`).sort());
   });
   it("retires deliberately removed owner controls", () => {
     for (const name of ["owner-menu", "owner-keyboard-menu", "owner-photo"])

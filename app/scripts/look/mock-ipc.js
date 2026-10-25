@@ -17,6 +17,13 @@ export function installMock(fixture, config = {}, target = window) {
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));
     data.usage.groups = Object.fromEntries(Object.keys(data.usage.groups).map(key => [key, []]));
   }
+  if (variant.homeEmpty) {
+    data.home.today = []; data.home.reports = []; data.home.calendar = [];
+    data.home.counts = { today: 0, reports: 0, calendar: 0 };
+    data.home.usage = { month_usd: 0, limit_usd: 20, daily: Array(14).fill(0), allowances: { brains: [] } };
+    data.status.spend = { ...data.status.spend, month_usd: 0, today_usd: 0, daily: Array(14).fill(0) };
+    data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null };
+  }
   const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
   target.__look = state;
   const copy = value => value === undefined ? undefined : structuredClone(value);
@@ -34,6 +41,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "settings.get": return { settings: data.settings };
       case "settings.set": data.settings[p.key] = p.value; notify("SettingsChanged"); return { settings: data.settings };
       case "status.get": return data.status;
+      case "home.overview": return { ...data.home, report: data.status };
       case "status.check_openrouter": data.status.openrouter.state = "ok"; return data.status.openrouter;
       case "secrets.status": return { has_key: !variant.problem };
       case "stats.summary": return data.stats;

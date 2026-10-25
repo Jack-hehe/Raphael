@@ -7,8 +7,8 @@ import { setLocale } from "./i18n";
 afterEach(() => { setAvatar(null); setLocale("zh-TW"); });
 
 describe("the sidebar's pages", () => {
-  test("the emblem returns to the conversation page with a localized accessible name", () => {
-    for (const [locale, label] of [["zh-TW", "回到拉斐爾"], ["en", "Back to Raphael"], ["ja", "ラファエルへ"]] as const) {
+  test("the emblem returns to the home page with a localized accessible name", () => {
+    for (const [locale, label] of [["zh-TW", "回到首頁"], ["en", "Back to home"], ["ja", "ホームへ"]] as const) {
       setLocale(locale);
       const nav = document.createElement("nav");
       nav.innerHTML = navHomeHTML() + navItemHTML("agent", "Raphael", "");
@@ -16,7 +16,7 @@ describe("the sidebar's pages", () => {
       expect(emblem.tagName).toBe("BUTTON");
       expect(emblem.type).toBe("button");
       expect(emblem.getAttribute("aria-label")).toBe(label);
-      expect(emblem.dataset.go).toBe(nav.querySelector<HTMLElement>(".nav")!.dataset.go);
+      expect(emblem.dataset.go).toBe("home");
       expect(emblem.hasAttribute("data-window-drag")).toBe(false);
       expect(emblem.querySelector("img")).not.toBeNull();
     }

@@ -109,6 +109,7 @@ from .protocol import (
     invalid_params,
 )
 from .router import Router
+from .home import HomeOverview
 from .services.attachments import Attachment
 from .services.attachment_store import AttachmentStore
 from .services.hub import ServiceHub, offline_transport
@@ -863,6 +864,8 @@ class App(Router):
             speaker=self.speaker,
         )
         self.agent.register(self)
+        self.home = HomeOverview(self._conn, self, self.members)
+        self.home.register()
         self.background.use_team(self.members, self.agent.team_tool)
         # The questions the background waits on: a thread one waits in is `waiting` in the member
         # column, and the overlay's notice of one names the member whose thread holds it.

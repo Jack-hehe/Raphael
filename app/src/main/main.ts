@@ -1,4 +1,4 @@
-// The main window: Raphael conversations first, automation, team and dictation, this
+// The main window: home overview first, conversations, automation, team and dictation, this
 // month's spend and the way to the settings at the bottom, and the page that is chosen. The
 // settings open as a panel over the window. The pages are in pages/; this file holds what they
 // share. On the 拉斐爾 page the sidebar is a rail of its icons alone (52 px), to leave room for the
@@ -13,6 +13,7 @@ import * as api from "./api";
 import { avatarHTML, loadAvatar, onAvatarChange } from "./avatar";
 import { createAutomationsPage } from "./pages/automations";
 import { createTeamPage } from "./pages/team";
+import { createHome } from "./pages/home";
 import { configureRooms } from "./group-chats";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
@@ -63,6 +64,7 @@ const RESHOW_MS = 1000;
 
 /** Rail destinations; Raphael uses his face rather than a line icon. */
 const NAV: { id: MainPageId; name: string; icon: IconName | "face" }[] = [
+  { id: "home", get name() { return t("nav.overview"); }, icon: "home" },
   { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
   { id: "automations", get name() { return t("nav.automations"); }, icon: "repeat" },
   { id: "team", get name() { return t("nav.team"); }, icon: "grid" },
@@ -161,7 +163,7 @@ async function start(): Promise<void> {
   const settings = createSettings(ctx);
   configureRooms(ctx);
   registerNavigationPages({ automations: createAutomationsPage, team: createTeamPage });
-  const pages: Record<MainPageId | "settings", Page> = { dictation, agent, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
+  const pages: Record<MainPageId | "settings", Page> = { home: createHome(ctx), dictation, agent, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;

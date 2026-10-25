@@ -8,6 +8,7 @@ import type { LanguageGroup } from "./languages";
 import type { TelegramStatus } from "./messaging";
 import type { AvatarCrop } from "./avatar";
 import type { UsageAnalytics, UsageRequest } from "./usage-analytics-types";
+import type { HomeOverview } from "./home-types";
 import type { CliAllowances, RunReport, RunRequest } from "./run-analytics-types";
 import type {
   AgentQuestion,
@@ -60,6 +61,10 @@ export function core<T>(method: string, params: object = {}): Promise<T> {
 // ---------- status ----------
 
 export const statusGet = (): Promise<Status> => core("status.get");
+export const homeOverview = (): Promise<HomeOverview> => core("home.overview", {
+  tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  ui_language: document.documentElement.lang || "zh-TW",
+});
 
 /** Asks OpenRouter again; answers with the `openrouter` part of the status. */
 export const statusCheckOpenrouter = (): Promise<Status["openrouter"]> => core("status.check_openrouter");

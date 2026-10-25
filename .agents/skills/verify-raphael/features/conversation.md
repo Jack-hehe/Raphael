@@ -7,7 +7,7 @@ attachments, reply quoting, message actions, search and composer menus.
 
 ## How to get to it (user POV)
 
-Open Conversation. Select Raphael or another member in the sidebar (compact width:
+From Home, click Raphael in the rail or open a member report. Select Raphael or another member in the sidebar (compact width:
 member picker). Raphael stays pinned first as an ordinary row with the same 40px
 face, name/role/time line and preview as the other members. Click the stacked member/conversation title to toggle details. The title displays
 the current session only; conversation creation, search, switching and row menus

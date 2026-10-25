@@ -1,7 +1,9 @@
 import { navZh } from "./nav-catalogs";
+import { homeZh } from "./home-catalogs";
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
   ...navZh,
+  ...homeZh,
   "conversations.untitled": "新對話",
   "conversations.new": "新對話",
   "conversations.search": "搜尋對話",
@@ -250,7 +252,7 @@ export const zhTW = {
   "unit.seconds": "秒",
   "unit.minutes": "分",
   "unit.hours": "小時",
-  "nav.home": "回到拉斐爾",
+  "nav.home": "回到首頁",
   "nav.pages": "頁面",
   "action.refreshMicrophones": "重新搜尋麥克風",
   "locale.english": "English",

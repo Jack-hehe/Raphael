@@ -2,6 +2,26 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "home-overview") {
+    const home = document.querySelector('.page-home:not([hidden])');
+    require(home && visible(home.querySelector('.ho-raphael')), "Raphael's report is visible");
+    require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "Home is the selected rail destination");
+    require(document.querySelector('#nav .nav')?.dataset.go === "home", "Home is first in the rail");
+    require(home.querySelector('.ho-dictation')?.tagName === "BUTTON", "Dictation totals drill into dictation");
+    require(home.querySelector('.ho-spark')?.getAttribute('aria-label'), "Spend chart has an accessible description");
+    return { check: name, items: home.querySelectorAll('[data-home-item]').length, width: home.clientWidth };
+  }
+  if (name === "home-report") {
+    require(window.__look.calls.some(call => call.method === "agent.history.list" && call.params.member_id === 1), "Reported member history was requested");
+    require(visible(document.querySelector('.tn[data-id="2"]')), "The reported turn is rendered");
+    require(window.__look.calls.some(call => call.method === "agent.history.list" && call.params.conversation_id === 11 && call.params.around_id === 2), "The reported conversation was loaded around its exact turn");
+    return { check: name, turnId: 2, memberId: 1 };
+  }
+  if (name === "home-expanded") {
+    const count = document.querySelectorAll('[data-home-section="today"] [data-home-item]').length;
+    require(count === window.__look.data.home.today.length, "All returned today items are reachable after expansion");
+    return { check: name, items: count };
+  }
   if (name === "settings-shell") {
     const modal = document.querySelector(".modal"), close = modal?.querySelector(".modal-x");
     require(visible(modal) && visible(close), "settings and its close control are visible");
