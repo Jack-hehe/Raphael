@@ -30,7 +30,7 @@ async def test_desktop_permission_resumes_the_same_harness_turn(operating, clien
     done = await operating.confirm(asked['confirm']['id'])
     assert done['status'] == 'done' and done['turn_id'] == asked['turn_id']
     assert done['text'] == '已按下七。'
-    [turn] = await operating.turns()
+    [turn] = await operating.turns(quick=False)
     assert [m['kind'] for m in turn['messages']] == ['progress', 'reply']
     assert any(op == 'act' for op, args in shell.requests)
     assert client.chat_calls[-1]['messages'][-1]['role'] == 'tool'
@@ -45,7 +45,7 @@ async def test_cancel_a_desktop_permission_finishes_the_existing_turn_once(opera
     if run and run.task:
         await run.task
     await asyncio.sleep(0)
-    [turn] = await operating.turns()
+    [turn] = await operating.turns(quick=False)
     assert turn["status"] == "denied"
     assert len([m for m in turn["messages"] if m["kind"] == "reply"]) == 1
     assert not any(op == "act" for op, args in shell.requests)
@@ -55,6 +55,6 @@ async def test_a_denied_desktop_permission_is_data_for_the_harness_not_a_second_
     client.chats = [chat("Checking the calculator.", ("computer", {"request": "Press seven"})), *PRESS_SEVEN[:3], chat('{"text":"I left it unchanged.","detail":""}')]
     asked = await operating.call("agent.ask", {"session_id": "live", "source": "app", "text": "Press seven", "ui_language": "en"})
     await operating.confirm(asked["confirm"]["id"], approved=False)
-    [turn] = await operating.turns()
+    [turn] = await operating.turns(quick=False)
     assert turn["text"] == "I left it unchanged."
     assert not any(op == "act" for op, args in shell.requests)

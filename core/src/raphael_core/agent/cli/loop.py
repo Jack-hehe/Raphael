@@ -78,10 +78,11 @@ class Sessions:
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
                  system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
-                 conversation_id=None, quota=None, attachments=(), wait_timeout_s=None):
+                 conversation_id=None, quota=None, attachments=(), wait_timeout_s=None, resume_session=True):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
         self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
         self.quota = quota
+        self.resume_session = resume_session
         self.ledger, self.language, self.plain = ledger, language, plain
         self.spoken = spoken
         self.system = system + "\n" + PUBLIC_PROGRESS_RULES + "\nUse only Raphael MCP tools for actions and lookups. "
@@ -264,10 +265,10 @@ class CliLoop:
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
                     self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota, home=self.brains.home)
                     async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
-                            token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id), permission=self._native_permission,
+                            token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id) if self.resume_session else None, permission=self._native_permission,
                             cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:
                         async for event in stream:
-                            if event.kind == "session":
+                            if event.kind == "session" and self.resume_session:
                                 self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
                             elif event.kind == "text_delta":
                                 self._buffer = (self._buffer + event.text)[-64000:]

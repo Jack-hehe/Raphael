@@ -309,7 +309,7 @@ describe("the rules for every tab, in every language", () => {
     expect(described(tab("general"))).toEqual(["字幕"]);
     expect(described(tab("dictation"))).toEqual(["你說的語言"]);
     // the key's status, the month's forecast, what the limit does, and what each model costs
-    expect(described(tab("models"))).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
+    expect(described(tab("models"))).toEqual(["拉斐爾的回答", "快速提問", "整理文字", "語音轉文字"]);
     expect(described(tab("usage"))).toEqual(["金鑰"]);
   });
 });
@@ -463,7 +463,7 @@ describe("Models", () => {
   test("puts providers and model choices on Models, existing usage controls and analytics slot on Usage", () => {
     const html = tab("models");
     expect(groups(html)).toEqual(["使用的模型", "訂閱帳號", "供應商"]);
-    expect(names(html)).toEqual(["拉斐爾的回答", "整理文字", "語音轉文字"]);
+    expect(names(html)).toEqual(["拉斐爾的回答", "快速提問", "整理文字", "語音轉文字"]);
     expect(html.indexOf('data-pv="directory"')).toBeGreaterThanOrEqual(0);
     expect(html.indexOf('data-pv="directory"')).toBeGreaterThan(html.indexOf('data-row="stt-model"'));
     expect(html).not.toContain('data-row="raphael-spend"');
@@ -582,7 +582,7 @@ describe("Models", () => {
     expect(rowOf(tab("models", { catalog: "loading" }), "整理文字")).toContain(">價格載入中…</span>");
     expect(modelPickerLook(view({ catalog: "loading" }), "cleanup")).toMatchObject({ catalog: null, loading: true });
     expect(modelPickerLook(view({ catalog: "failed" }), "cleanup")).toMatchObject({ catalog: null, loading: false });
-    expect(priceTexts(view({ catalog: "failed" }))).toEqual({ model: "", "agent-model": "", "stt-model": "", note: "目前無法取得模型價格。" });
+    expect(priceTexts(view({ catalog: "failed" }))).toEqual({ model: "", "agent-model": "", "quick-model": "", "stt-model": "", note: "目前無法取得模型價格。" });
   });
 
   test("shows a saved model the catalog does not have by its id, with an unknown price", () => {

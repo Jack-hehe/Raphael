@@ -77,7 +77,7 @@ describe("shared look IPC boundary", () => {
     const invoke = (target, method) => target.__TAURI_INTERNALS__.invoke("core_call", { method });
     expect((await invoke(first, "agent.history.list")).turns).toEqual([]);
     expect((await invoke(first, "status.get")).openrouter.state).toBe("no_key");
-    expect((await invoke(second, "agent.history.list")).turns).toHaveLength(1);
+    expect((await invoke(second, "agent.history.list")).turns).toHaveLength(2);
     expect((await invoke(second, "status.get")).openrouter.state).toBe("ok");
     expect((await first.__TAURI_INTERNALS__.invoke("device_settings_get")).ui_language).toBe("ja");
   });

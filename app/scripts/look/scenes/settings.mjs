@@ -10,6 +10,8 @@ const cliMenu = [...settings("models"), scroll(".cli-accounts"), click('[data-cl
 const cliDisconnected = [...cliMenu, click('#app-popover [data-pick="disconnect"]'), wait('[data-cli="codex"]')];
 const dictation = tab => [page("dictation"), click(`[data-dictation-tab="${tab}"]`), check("dictation-navigation"), ...(tab === "overview" ? [wait('.page-overview .icard'), check("dictation-overview")] : [])];
 export default [
+  scene("quick-model-menu", "Quick questions shared model picker in existing model settings", [...settings("models"), click('[data-k="quick-model"]'), wait('.model-chooser'), click('[data-source="openrouter"]'), wait('.model-chooser [data-model="openai/gpt-6-luna"]')]),
+  scene("quick-effort-menu", "Quick questions supported reasoning effort dropdown", [...settings("models"), check("quick-model-row"), click('[data-k="quick-effort"]'), wait('.menu [data-value="low"]')]),
   scene("cli-account-menu", "Connected CLI account row actions", [...cliMenu, check("cli-account-menu")]),
   scene("cli-account-disconnected", "Disconnect only in Raphael and offer reconnection", [...cliDisconnected, check("cli-account-disconnected")]),
   scene("cli-account-reconnected", "Reconnect a signed-in CLI without starting login", [...cliDisconnected, click('[data-cli="codex"]'), wait('[data-cli-menu="codex"]'), check("cli-account-reconnected")]),

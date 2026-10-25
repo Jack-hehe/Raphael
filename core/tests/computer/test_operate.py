@@ -231,7 +231,7 @@ class _Notes:
 async def test_a_run_reads_the_conversation_and_the_notes_before_its_task(operating, client, conn):
     AgentHistory(conn).add(
         session_id="s0", question="12 乘 34 是多少", route="answer", prefix="答", text="408。<task>",
-        status="done",
+        status="done", conversation_id=operating.service.conversations.quick(),
     )  # fmt: skip
     operating.service._memory = _Notes()
     client.decisions.append(decision("operate"))

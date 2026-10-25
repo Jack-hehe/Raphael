@@ -15,6 +15,32 @@ export function checkRendered(name) {
   }
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "quick-model-row") {
+    const row = document.querySelector('[data-row="quick-model"]');
+    const picker = row?.querySelector('.mp-trigger');
+    require(visible(picker) && !!picker.querySelector('.mp-tname')?.textContent && !!picker.querySelector('.mp-source')?.textContent, "quick model uses the shared named provider card");
+    require(row.querySelector('.models-purpose-note')?.textContent.includes("Alt+Space"), "quick questions describe the shortcut's purpose");
+    require(!!row.querySelector('[data-price="quick-model"]')?.textContent, "quick questions show the effective model price");
+    const effort = row.querySelector('[data-k="quick-effort"]');
+    require(visible(effort) && Math.abs(picker.getBoundingClientRect().right - effort.getBoundingClientRect().right) < 2, "effort aligns under the model card");
+    return { check: name };
+  }
+  if (name === "quick-conversation-list") {
+    const first = document.querySelector('.mb-det [data-conversation-open]');
+    require(first?.dataset.conversationOpen === "4", "quick questions are pinned first");
+    require(first?.textContent.includes("快速提問"), "the kind uses the window-language title");
+    return { check: name, conversation: 4 };
+  }
+  if (name === "quick-conversation") {
+    require(document.querySelector('.conversation-trigger')?.textContent.includes("快速提問"), "the opened conversation keeps its kind title");
+    require(document.querySelector('.tn[data-id="90"] .me')?.textContent.includes("今天下午有哪些會議"), "the saved quick question is visible");
+    require(!document.querySelector('.tn[data-id="1"]'), "formal history stays out of quick questions");
+    return { check: name, conversation: 4 };
+  }
+  if (name === "overlay-step") {
+    require(document.getElementById('progress')?.textContent === "《告。正在查看今天下午的行程。》", "the latest shared turn narration is the subtitle");
+    return { check: name, text: document.getElementById('progress').textContent };
+  }
   if (name.startsWith("cli-account-")) {
     const row = document.querySelector('[data-cli-menu="codex"], [data-cli="codex"]')?.closest('.cli-card');
     require(visible(row), "the Codex card is visible");

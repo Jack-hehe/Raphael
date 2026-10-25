@@ -690,6 +690,20 @@ CREATE INDEX room_exchanges_room ON room_exchanges(room_id, origin_message_id);
 PRAGMA user_version = 27;
 COMMIT;
 """
+_MIGRATIONS[28] = """
+BEGIN;
+ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'
+    CHECK(kind IN ('standard', 'quick'));
+CREATE UNIQUE INDEX one_quick_conversation ON conversations(kind) WHERE kind = 'quick';
+CREATE TRIGGER quick_owner_insert BEFORE INSERT ON conversations
+WHEN NEW.kind = 'quick' AND (NEW.member_id != 0 OR NEW.is_default != 0)
+BEGIN SELECT RAISE(ABORT, 'quick conversations belong to Raphael'); END;
+CREATE TRIGGER quick_owner_update BEFORE UPDATE ON conversations
+WHEN NEW.kind = 'quick' AND (NEW.member_id != 0 OR NEW.is_default != 0)
+BEGIN SELECT RAISE(ABORT, 'quick conversations belong to Raphael'); END;
+PRAGMA user_version = 28;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

@@ -164,6 +164,8 @@
     "owner_photo": "",
     "skin": "default",
     "agent_model": "openai/gpt-6-sol",
+    "quick_model": "openai/gpt-6-luna",
+    "quick_effort": "low",
     "cleanup_model": "openai/gpt-6-luna",
     "stt_engine": "cloud",
     "stt_cloud_model": "elevenlabs/scribe-v2",
@@ -422,6 +424,15 @@
   ],
   "conversations": [
     {
+      "id": 4,
+      "member_id": 0,
+      "kind": "quick",
+      "title": "",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792720800000
+    },
+    {
       "id": 1,
       "member_id": 0,
       "title": "這週的研究與安排",
@@ -455,6 +466,17 @@
     }
   ],
   "turns": [
+    {
+      "id": 90, "session_id": "look-quick", "member_id": 0, "conversation_id": 4,
+      "created_at_ms": 1792807154000, "question": "今天下午有哪些會議？", "route": "answer",
+      "source": "voice", "prefix": "答", "text": "下午兩點有專案會議。", "detail": null,
+      "status": "done", "cost_usd": 0.001, "model": "openai/gpt-6-luna",
+      "messages": [
+        { "seq": 1, "kind": "progress", "text": "《告。正在查看今天下午的行程。》", "at_ms": 1792807155000 },
+        { "seq": 2, "kind": "reply", "text": "《答。下午兩點有專案會議。》", "at_ms": 1792807156000 }
+      ],
+      "steps": [], "attachments": []
+    },
     {
       "id": 1,
       "session_id": "look-research",
@@ -1049,6 +1071,7 @@
         "context_length": 128000,
         "created_at_ms": null,
         "capabilities": {
+          "reasoning": true,
           "structured_output": true,
           "tool_calling": true
         },
@@ -1079,6 +1102,7 @@
         "context_length": 128000,
         "created_at_ms": null,
         "capabilities": {
+          "reasoning": true,
           "structured_output": true,
           "tool_calling": true
         },
@@ -1111,6 +1135,7 @@
         "context_length": 128000,
         "created_at_ms": null,
         "capabilities": {
+          "reasoning": true,
           "structured_output": true,
           "tool_calling": true
         },
@@ -1140,7 +1165,8 @@
       "login_command": "claude",
       "models": [
         {
-          "id": "sonnet",
+          "id": "cli:claude:sonnet",
+            "reasoning_efforts": ["low", "medium", "high"],
           "name": "Sonnet"
         }
       ]
@@ -1155,7 +1181,8 @@
       "login_command": "codex",
       "models": [
         {
-          "id": "gpt-6.1",
+          "id": "cli:codex:gpt-6.1",
+            "reasoning_efforts": ["low", "medium", "high", "xhigh"],
           "name": "GPT-6.1"
         }
       ]
@@ -1170,7 +1197,8 @@
       "login_command": "gemini",
       "models": [
         {
-          "id": "gemini-pro",
+          "id": "cli:gemini:gemini-pro",
+            "reasoning_efforts": ["low", "high"],
           "name": "Gemini Pro"
         }
       ]

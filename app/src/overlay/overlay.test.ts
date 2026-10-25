@@ -172,6 +172,20 @@ const settings = (subtitles: string, language: string = "zh-TW", px = 150): Over
 
 const lines = (): string[] => view.log.filter((line) => line.startsWith("line:"));
 
+test("public turn progress replaces the previous subtitle without rotating or reviving a finished question", () => {
+  send({ type: "show", mode: "listening", line: "Hello" });
+  send({ type: "mode", mode: "thinking", quiet: true });
+  send({ type: "step", text: "Checking the schedule.", language: "en" });
+  expect(view.waiting).toBe("Checking the schedule.");
+  send({ type: "step", text: "Found two meetings.", language: "en" });
+  vi.advanceTimersByTime(10_000);
+  expect(view.waiting).toBe("Found two meetings.");
+  send({ type: "say", prefix: "Answer", text: "Two meetings." });
+  expect(view.waiting).toBeNull();
+  send({ type: "step", text: "Late event", language: "en" });
+  expect(view.waiting).toBeNull();
+});
+
 test("the fake page notices a caption and a line that stand in their one place together", () => {
   view.showLine("《答。好的》", "zh-TW");
   view.showProgress(42);

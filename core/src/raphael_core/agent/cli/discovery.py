@@ -132,6 +132,25 @@ class CliBrains:
             logged_in = self.logged_in(name) if command else False
         return cli_available(command, logged_in, self.disconnected(name))
 
+    def with_effort(self, model, effort):
+        """Resolve quick effort from discovered choices without spawning a discovery process."""
+        name, _ = brain_ref(model)
+        base = model.partition("?effort=")[0]
+        models = (claude_models(Path(self.environ.get("CLAUDE_CONFIG_DIR", self.home / ".claude")))
+                  if name == "claude" else self._models.get(name, []))
+        entry = next((m for m in models if m["id"] == base or base in m.get("effort_models", {}).values()), None)
+        if entry is None and base == f"cli:{name}":
+            entry = next((m for m in models if m.get("is_default")), None)
+            if entry is not None:
+                base = entry["id"]
+        if entry is None:
+            return f"{base}?effort={effort}"
+        levels = entry.get("reasoning_efforts", [])
+        if not levels:
+            return base
+        chosen = effort if effort in levels else next((e for e in ("low", "medium", "none", "minimal") if e in levels), levels[0])
+        return entry.get("effort_models", {}).get(chosen) or f"{base}?effort={chosen}"
+
     async def _one(self, name):
         command = self.command(name)
         logged_in = self.logged_in(name) if command else False

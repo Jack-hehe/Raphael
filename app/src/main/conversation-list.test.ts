@@ -8,6 +8,22 @@ import { closeMenu } from "./ui";
 afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
+test("quick questions stay first with their localized title and open the persistent conversation", async () => {
+  core.mockResolvedValue({ conversations: [
+    { id: 2, member_id: 0, title: "Project", updated_at_ms: Date.now() },
+    { id: 9, member_id: 0, title: "An old question", kind: "quick", updated_at_ms: 1 },
+  ] });
+  const host = document.createElement("div"); document.body.append(host);
+  const onOpen = vi.fn();
+  const list = mountConversationList(host, { memberId: 0, onOpen }); await flush();
+  const first = host.querySelector<HTMLButtonElement>("[data-conversation-open]")!;
+  expect(first.dataset.conversationOpen).toBe("9");
+  expect(first.textContent).toContain("快速提問");
+  expect(first.closest(".conversation-row")!.querySelector("[data-conversation-more]")).toBeNull();
+  first.click(); expect(onOpen).toHaveBeenCalledWith(9);
+  list.destroy();
+});
+
 test("searching and opening a conversation keeps its identity; plus creates for this member", async () => {
   core.mockImplementation(async (method: string) => method === "conversations.create" ? { conversation: { id: 9 } } : {
     conversations: [{ id: 2, member_id: 7, title: "Cobalt notes", created_at_ms: 1, updated_at_ms: Date.now() },

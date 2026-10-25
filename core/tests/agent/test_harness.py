@@ -11,7 +11,7 @@ from .test_service import make_rig  # noqa: F401
 @pytest.mark.parametrize("source", ["app", "telegram"])
 async def test_a_follow_up_uses_the_conversation_without_the_fast_router(make_rig, client, source):
     rig = make_rig()
-    rig.seed("Read today's NHK news", "An article about space: https://news.example/article")
+    rig.seed("Read today's NHK news", "An article about space: https://news.example/article", conversation_id=rig.service.conversations.main())
     client.chats = [chat(json.dumps({"prefix": "Answer", "text": "Here is the full article.", "detail": ""}))]
     result = await rig.call("agent.ask", {"session_id": "followup", "text": "Show it here in full", "ui_language": "en", "source": source})
     assert result["text"] == "Here is the full article."
@@ -36,7 +36,7 @@ async def test_public_thinking_and_progress_are_stored_before_the_tool_result(ma
 async def test_show_accepts_a_url_seen_in_an_earlier_turn_and_keeps_media_json_plain(make_rig, client, monkeypatch):
     rig = make_rig()
     url = "https://news.example/article"
-    rig.seed("Find NHK", f"Here: {url}")
+    rig.seed("Find NHK", f"Here: {url}", conversation_id=rig.service.conversations.main())
 
     async def show(address):
         from raphael_core.agent.tools import ToolResult

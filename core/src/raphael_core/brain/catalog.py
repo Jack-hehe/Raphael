@@ -160,6 +160,7 @@ class CatalogEntry:
     context_length: int | None  # in tokens, for a language model
     created_at_ms: int | None  # when OpenRouter added it
     capabilities: frozenset[str]  # those of CAPABILITIES[kind] that it has
+    reasoning_efforts: tuple[str, ...] | None = None
 
     @property
     def free(self) -> bool:
@@ -399,6 +400,9 @@ def _entry(model: Mapping, kind: str, makers: Mapping[str, str]) -> CatalogEntry
         context_length=_positive_int(model.get("context_length")) if kind == LLM else None,
         created_at_ms=None if created is None else created * _MS_PER_SECOND,
         capabilities=_capabilities(model, kind),
+        reasoning_efforts=tuple(model["reasoning"]["supported_efforts"]) if isinstance(model.get("reasoning"), dict)
+        and isinstance(model["reasoning"].get("supported_efforts"), list)
+        and all(isinstance(e, str) for e in model["reasoning"]["supported_efforts"]) else None,
     )
 
 
@@ -451,6 +455,7 @@ def entry_to_json(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": sorted(entry.capabilities),
+        "reasoning_efforts": list(entry.reasoning_efforts) if entry.reasoning_efforts is not None else None,
     }
 
 
@@ -482,6 +487,8 @@ def entry_from_json(data: object) -> CatalogEntry | None:
         context_length=_positive_int(data.get("context_length")),
         created_at_ms=_positive_int(data.get("created_at_ms")),
         capabilities=frozenset(c for c in capabilities if c in CAPABILITIES[kind]),
+        reasoning_efforts=tuple(data["reasoning_efforts"]) if isinstance(data.get("reasoning_efforts"), list)
+        and all(isinstance(e, str) for e in data["reasoning_efforts"]) else None,
     )
 
 
@@ -513,6 +520,7 @@ def entry_view(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": {name: name in entry.capabilities for name in CAPABILITIES[entry.kind]},
+        "reasoning_efforts": list(entry.reasoning_efforts) if entry.reasoning_efforts is not None else None,
         # What the model reads, as the list names it: the image picker offers the language models
         # whose list holds "image".
         "input_modalities": input_modalities(entry),

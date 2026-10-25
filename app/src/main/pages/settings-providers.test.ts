@@ -41,6 +41,28 @@ async function mount(open: SettingsPane = "models") {
 }
 const click = (selector: string) => { const button = document.querySelector<HTMLButtonElement>(selector); expect(button, selector).not.toBeNull(); button!.click(); };
 
+test("quick model card and supported effort save independent settings", async () => {
+  api.settingsGet.mockResolvedValue({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low" } });
+  api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low", [key]: value } }));
+  api.brainsCli.mockResolvedValue({ clis: [{ id: "codex", name: "Codex", available: true, installed: true, logged_in: true,
+    models: [{ id: "cli:codex:fast", name: "Fast", is_default: true, reasoning_efforts: ["low", "medium"] }] }] });
+  await mount();
+  expect(page.el.querySelector('[data-row="quick-model"]')!.textContent).toContain("Quick questions");
+  expect(page.el.querySelector('[data-row="quick-model"] .models-purpose-note')!.textContent).toContain("Alt+Space");
+  expect(page.el.querySelector('[data-k="quick-model"] .mp-tname')!.textContent).toBe("Fast");
+  expect(page.el.querySelector('[data-k="quick-model"] .mp-source')!.textContent).toContain("Codex");
+  expect(page.el.querySelector('[data-price="quick-model"]')!.textContent).toBe(t("brains.subscription"));
+  click('[data-k="quick-effort"]');
+  expect(document.querySelector('.menu [data-value="high"]')).toBeNull();
+  click('.menu [data-value="medium"]'); await flush();
+  expect(api.settingsSet).toHaveBeenCalledWith("quick_effort", "medium");
+  click('[data-k="quick-model"]'); click('[data-source="cli:codex"]');
+  expect(document.querySelector('.model-chooser [data-dlg="sources"]')!.classList.contains("ghost")).toBe(false);
+  click('.model-chooser [data-model="cli:codex:fast"]'); click('.model-chooser [data-dlg="use"]'); await flush();
+  expect(api.settingsSet).toHaveBeenCalledWith("quick_model", "cli:codex:fast");
+  expect(page.el.querySelector('select')).toBeNull();
+});
+
 beforeEach(() => {
   vi.restoreAllMocks(); vi.resetAllMocks(); listeners.clear(); setLocale("en");
   api.settingsGet.mockResolvedValue({ settings: { stt_engine: "cloud" } });
@@ -126,7 +148,7 @@ test.each(["usage", "models"] as const)("%s opens the single Models pane without
   expect(page.el.querySelectorAll('.set-list [data-pane="models"]')).toHaveLength(1);
   expect(page.el.querySelector('.set-list [data-pane="usage"]')).toBeNull();
   expect(page.el.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute("data-models-tab")).toBe(alias);
-  expect(page.el.querySelectorAll('[data-model-picker]')).toHaveLength(alias === "models" ? 3 : 0);
+  expect(page.el.querySelectorAll('[data-model-picker]')).toHaveLength(alias === "models" ? 4 : 0);
   expect(page.el.querySelector('[data-fallback-purpose]')).toBeNull();
   expect(page.el.textContent).not.toContain("Fallback models");
   expect(api.settingsSet).not.toHaveBeenCalled();

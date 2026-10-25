@@ -1,5 +1,16 @@
 # Settings and appearance
 
+Models in use includes one Quick questions row directly below Raphael's answer.
+The model uses the shared provider/model card and chooser, with the shortcut's
+purpose and price on the left. An empty quick model displays and inherits the answer
+model; quick effort defaults to low, offers the selected brain's supported choices,
+and uses the shared dropdown aligned beneath the model card.
+API effort metadata and CLI effort mappings follow their existing catalogs.
+
+```powershell
+npm run look -- quick-model-menu quick-effort-menu --theme both --width 1120,720,1920x1080
+```
+
 ## Sub-features
 
 Owner profile/preferences, themes/skins, models/providers, dictation, assistant,

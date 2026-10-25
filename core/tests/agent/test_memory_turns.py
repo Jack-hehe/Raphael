@@ -173,7 +173,7 @@ async def test_the_index_is_in_the_system_prompt_and_the_same_from_one_turn_to_t
 
 async def test_the_summary_comes_before_the_turns_and_the_time_after_them(rig, client, memory):
     rig.seed("上一句", "上一個回答")
-    memory.conversation._save("Ongoing:\n- 規劃墾丁之旅", 0)
+    rig.service._conversation_of(0, rig.service.conversations.quick())._save("Ongoing:\n- 規劃墾丁之旅", 0)
     client.decisions.append(decision("discuss"))
     client.replies.append(reply("好。", prefix="答"))
     await rig.ask("繼續")

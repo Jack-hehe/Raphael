@@ -43,6 +43,8 @@ def test_the_defaults_are_the_documented_ones():
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "agent_model": "openai/gpt-6-luna",
+        "quick_model": "",
+        "quick_effort": "low",
         "assistant_model": "",
         "action_mode": "direct",
         "router_model": "",

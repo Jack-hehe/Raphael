@@ -49,6 +49,7 @@ export type OverlayEvent =
   | { type: "mode"; mode: Mode; quiet?: boolean; lines?: string[] }
   | { type: "level"; value: number }
   | { type: "progress"; stage: Stage; done: number; total: number; audio_seconds: number }
+  | { type: "step"; text: string; language: string }
   | { type: "notice"; text: string }
   | { type: "learned"; text: string }
   | { type: "say"; prefix: string; text: string; hold?: boolean }
@@ -172,6 +173,7 @@ export interface ControllerOptions {
 export class OverlayController {
   private subtitles: SubtitleMode = "on";
   private language: UiLanguage = "zh-TW";
+  private mode: Mode = "steady";
   /** Lines that wait for the one on screen. */
   private readonly queue: Notice[] = [];
   /** A line is on screen, or about to be (or a question is). */
@@ -225,6 +227,14 @@ export class OverlayController {
         break;
       case "level":
         this.emblem.level = event.value;
+        break;
+      case "step":
+        if (!this.activeShow || this.mode !== "thinking" || !words(event.text).trim()) break;
+        this.dropGreeting();
+        this.stopProgress();
+        this.stopWaiting();
+        this.operating = true;
+        this.view.showWaiting(event.text, isLanguage(event.language) ? event.language : this.language);
         break;
       case "progress":
         // How far the dictation has come is a percentage beside the whole ring.
@@ -486,6 +496,7 @@ export class OverlayController {
   }
 
   private setMode(mode: Mode, quiet = false, lines: string[] = []): void {
+    this.mode = mode;
     if (mode !== "listening") this.dropGreeting();
     this.emblem.set(mode);
     if (this.activeShow && mode === "thinking" && quiet) this.startWaiting(lines);

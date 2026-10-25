@@ -68,6 +68,9 @@ import {
   APPEARANCES,
   HOTKEY_ROWS,
   agentCity,
+  quickPickerLook,
+  quickEffortChoices,
+  quickEffort,
   WORKER_COST_CAPS,
   workerCostCap,
   MODEL_ROWS,
@@ -202,7 +205,7 @@ export function createSettings(app: AppContext): SettingsPage {
   let catalog: ModelCatalog | "loading" | "failed" = "loading";
   let catalogLoads = 0;
   /** The pickers of the model rows (and of 服務's 看圖片) on the tab that is drawn (settings-view.ts draws their buttons). */
-  const pickers = new Map<PickerRole, ModelPicker>();
+  const pickers = new Map<PickerRole | "quick", ModelPicker>();
   /** The speech models of this computer, and the download of one that is under way. */
   let localModels: LocalModel[] | "loading" | "failed" = "loading";
   let localDownload: { name: string; done: number; total: number } | null = null;
@@ -302,6 +305,8 @@ export function createSettings(app: AppContext): SettingsPage {
     const v = view();
     const d = v.device;
     switch (k) {
+      case "quick-effort":
+        return { choices: quickEffortChoices(v), current: quickEffort(v), pick: value => void changeBrain("quick_effort", value) };
       case "mic": {
         const anchor = el.querySelector<HTMLElement>('.sel[data-k="mic"]');
         return {
@@ -764,7 +769,7 @@ export function createSettings(app: AppContext): SettingsPage {
   }
 
   /** What the picker of `role` is drawn from now. */
-  const lookFor = (role: PickerRole): ModelPickerLook => (role === "vision" ? visionPickerLook(view()) : modelPickerLook(view(), role));
+  const lookFor = (role: PickerRole | "quick"): ModelPickerLook => role === "quick" ? quickPickerLook(view()) : (role === "vision" ? visionPickerLook(view()) : modelPickerLook(view(), role));
 
   // ---------- the speech models of this computer ----------
 
@@ -853,6 +858,17 @@ export function createSettings(app: AppContext): SettingsPage {
   function mountPickers(): void {
     pickers.clear();
     const v = view();
+    const quick = body.querySelector<HTMLElement>('[data-row="quick-model"] .mp-slot');
+    if (quick) pickers.set("quick", mountModelPicker(quick, {
+      ...quickPickerLook(v),
+      onSources: () => openPane("models", "models"),
+      onChoose: (id) => void changeBrain("quick_model", id.split("?effort=")[0]),
+      onFavorite: (id, on) => void changeFavorite("answer", id, on),
+      onCliAction: (id) => {
+        const button = document.createElement("button"); button.dataset.cli = id;
+        void cliBrains.click(button);
+      },
+    }));
     const vision = body.querySelector<HTMLElement>('[data-model-picker="vision"]');
     if (vision) {
       pickers.set(
@@ -866,7 +882,7 @@ export function createSettings(app: AppContext): SettingsPage {
       );
     }
     for (const { role } of MODEL_ROWS) {
-      const slot = body.querySelector<HTMLElement>(`[data-model-picker="${role}"]`);
+      const slot = body.querySelector<HTMLElement>(`[data-row]:not([data-row="quick-model"]) [data-model-picker="${role}"]`);
       if (slot) {
         pickers.set(
           role,
@@ -909,6 +925,7 @@ export function createSettings(app: AppContext): SettingsPage {
       pickers.get(role)?.update({ favorites: brain?.model_favorites?.[role] ?? [] });
       // 看圖片 shows the answer model's stars.
       if (role === "answer") pickers.get("vision")?.update({ favorites: brain?.model_favorites?.answer ?? [] });
+      if (role === "answer") pickers.get("quick")?.update({ favorites: brain?.model_favorites?.answer ?? [] });
     });
     return savingFavorites;
   }
