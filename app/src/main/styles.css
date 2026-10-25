@@ -39,7 +39,10 @@
   /* the window's close button under the pointer: Windows' own red, the same in both themes */
   --close: #c42b1c; --on-close: #ffffff;
   --toast-action: #c8e0f8; --toast-hover: #35383d;
-  --heat-0: #e7eef8; --heat-1: #d0e8f8; --heat-2: #b8d0f8; --heat-3: #90b0e0; --heat-4: #5e86c8; --hatch: #c3cede;
+  /* Activity levels are one hue, the skin's accent, from the empty day up: more reads as stronger. */
+  --heat-0: #e7eef8; --hatch: #c3cede;
+  --heat-1: color-mix(in srgb, var(--accent) 30%, var(--heat-0)); --heat-2: color-mix(in srgb, var(--accent) 55%, var(--heat-0));
+  --heat-3: color-mix(in srgb, var(--accent) 78%, var(--heat-0)); --heat-4: var(--accent);
   --scroll-thumb: #bbc8dc; --scroll-hover: #8d9198;
   /* Raphael's own gold, from the emblem: only where he himself asks (the card of his YES/NO question) */
   --rg-bg: #fff7e2; --rg-edge: #e2b85a; --rg-ink: #6b4a08; --rg-btn: #e0a52e; --rg-on: #2b1c00; --rg-glow: rgba(224, 165, 46, 0.22);
@@ -60,7 +63,7 @@
   --track: #34435f; --menu: #1f2a40; --scrim: rgba(7, 13, 26, 0.58);
   --pop: 0 20px 64px rgba(4, 10, 24, 0.48), 0 3px 10px rgba(4, 10, 24, 0.3);
   --toast-action: #284c82; --toast-hover: #d8dbe0;
-  --heat-0: #283650; --heat-1: #354c70; --heat-2: #5e7da9; --heat-3: #90b0e0; --heat-4: #c8e0f8; --hatch: #465a7a;
+  --heat-0: #283650; --hatch: #465a7a;
   --scroll-thumb: #465777; --scroll-hover: #93979e;
   --rg-bg: #2a2314; --rg-edge: #b8862a; --rg-ink: #f6d58a; --rg-btn: #f0be55; --rg-on: #2b1c00; --rg-glow: rgba(240, 190, 85, 0.18);
   color-scheme: dark;
@@ -710,10 +713,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7eef8;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #c3cede;
   --scroll-thumb: #bbc8dc;
   --scroll-hover: #8d9198;
@@ -770,10 +769,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #283650;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #465a7a;
   --scroll-thumb: #465777;
   --scroll-hover: #93979e;
@@ -831,10 +826,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7eef8;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #c3cede;
   --scroll-thumb: #bbc8dc;
   --scroll-hover: #8d9198;
@@ -892,10 +883,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #3a3128;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #c8b494;
   --scroll-thumb: #c8b494;
   --scroll-hover: #93979e;
@@ -953,10 +940,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7ebef;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #526170;
   --scroll-thumb: #526170;
   --scroll-hover: #8d9198;
@@ -1014,10 +997,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #283650;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #465a7a;
   --scroll-thumb: #465777;
   --scroll-hover: #93979e;
@@ -1075,10 +1054,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7eef8;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #c3cede;
   --scroll-thumb: #bbc8dc;
   --scroll-hover: #8d9198;
@@ -1136,10 +1111,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #254040;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #a3c5bd;
   --scroll-thumb: #a3c5bd;
   --scroll-hover: #93979e;
@@ -1197,10 +1168,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #eee3f0;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #665371;
   --scroll-thumb: #665371;
   --scroll-hover: #8d9198;
@@ -1258,10 +1225,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #283650;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #465a7a;
   --scroll-thumb: #465777;
   --scroll-hover: #93979e;
@@ -1319,10 +1282,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e3eafa;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #53648a;
   --scroll-thumb: #53648a;
   --scroll-hover: #8d9198;
@@ -1380,10 +1339,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #283650;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #465a7a;
   --scroll-thumb: #465777;
   --scroll-hover: #93979e;
@@ -1441,10 +1396,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7eef8;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #c3cede;
   --scroll-thumb: #bbc8dc;
   --scroll-hover: #8d9198;
@@ -1502,10 +1453,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #2d4030;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #b2cda6;
   --scroll-thumb: #b2cda6;
   --scroll-hover: #93979e;
@@ -1563,10 +1510,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #c8e0f8;
   --toast-hover: #35383d;
   --heat-0: #e7eef8;
-  --heat-1: #d0e8f8;
-  --heat-2: #b8d0f8;
-  --heat-3: #90b0e0;
-  --heat-4: #5e86c8;
   --hatch: #c3cede;
   --scroll-thumb: #bbc8dc;
   --scroll-hover: #8d9198;
@@ -1624,10 +1567,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #284c82;
   --toast-hover: #d8dbe0;
   --heat-0: #323232;
-  --heat-1: #354c70;
-  --heat-2: #5e7da9;
-  --heat-3: #90b0e0;
-  --heat-4: #c8e0f8;
   --hatch: #b8b8b8;
   --scroll-thumb: #b8b8b8;
   --scroll-hover: #93979e;
@@ -1686,10 +1625,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #eff1f5;
   --toast-hover: #5c5f77;
   --heat-0: #e6e9ef;
-  --heat-1: #d20f39;
-  --heat-2: #8839ef;
-  --heat-3: #1e66f5;
-  --heat-4: #e64553;
   --hatch: #8c8fa1;
   --scroll-thumb: #9ca0b0;
   --scroll-hover: #8c8fa1;
@@ -1748,10 +1683,6 @@ kbd.ob-cap { white-space: nowrap; }
   --toast-action: #1e1e2e;
   --toast-hover: #bac2de;
   --heat-0: #313244;
-  --heat-1: #f38ba8;
-  --heat-2: #cba6f7;
-  --heat-3: #89b4fa;
-  --heat-4: #a6e3a1;
   --hatch: #6c7086;
   --scroll-thumb: #585b70;
   --scroll-hover: #9399b2;
