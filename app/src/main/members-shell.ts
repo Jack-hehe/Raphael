@@ -32,7 +32,7 @@ import {
   openDialog,
 } from "./member-dialogs";
 import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
-import type { AppContext, AvatarPreset, MainEvent, Member, MemberPatch, MembersList, WireAttachment } from "./types";
+import type { AppContext, AvatarPreset, MainEvent, Member, MemberGroup, MemberPatch, MembersList, WireAttachment } from "./types";
 import { type Choice, btn, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
 /** Below this window width the details panel lies over the chat instead of taking a column of its own. */
@@ -70,6 +70,10 @@ export interface MembersShell {
   faceOf(id: number, size: number): string;
   /** The open member, as the list has it. */
   member(): Member;
+  /** Existing groups sorted by position. */
+  groups(): readonly MemberGroup[];
+  /** Loaded avatar presets. */
+  presets(): readonly AvatarPreset[];
   /** Opens the thread of member `id`. */
   select(id: number): void;
   /** Reads the list (and what the column and the panel need with it) again. */
@@ -206,6 +210,7 @@ export function createMembers(host: MembersHost): MembersShell {
             if (Array.isArray(answer?.presets)) {
               presets = answer.presets;
               presetsRead = true;
+              host.onUpdate?.();
             }
           },
           () => {},
@@ -511,6 +516,8 @@ export function createMembers(host: MembersHost): MembersShell {
     pill,
     current: () => current,
     nameOf: (id) => memberOf(list, id)?.name ?? "",
+    groups: () => [...(list?.groups ?? [])].sort((a, b) => a.position - b.position),
+    presets: () => presets,
     faceOf(id, size) {
       const found = memberOf(list, id);
       return found ? faceHTML(found, size, { cls: "sys-face" }) : "";

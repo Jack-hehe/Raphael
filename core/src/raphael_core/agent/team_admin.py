@@ -5,7 +5,51 @@ Targets use member IDs; groups use IDs for rename and names for member placement
 The member service owns validation, persistence, defaults and live notifications.
 """
 
+from dataclasses import dataclass
+from typing import Any
+
 from .policy import Tier
+
+
+@dataclass(frozen=True)
+class MemberDraft:
+    id: str
+    name: str
+    role: str = ""
+    blurb: str = ""
+    personality: str = ""
+    instructions: str = ""
+    group: str = ""
+    avatar_preset: str = ""
+    member_id: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        data: dict[str, Any] = {
+            "id": self.id,
+            "name": self.name,
+            "role": self.role,
+            "blurb": self.blurb,
+            "personality": self.personality,
+            "instructions": self.instructions,
+            "group": self.group,
+            "avatar_preset": self.avatar_preset,
+        }
+        if self.member_id is not None:
+            data["member_id"] = self.member_id
+        return data
+
+
+@dataclass(frozen=True)
+class GroupDraft:
+    id: str
+    name: str
+    group_id: int | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"id": self.id, "name": self.name}
+        if self.group_id is not None:
+            data["group_id"] = self.group_id
+        return data
 
 
 def definition(description, properties=None, required=()):

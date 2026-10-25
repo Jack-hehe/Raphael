@@ -43,6 +43,7 @@ presets, then the neutral silhouette, and the create dialog defaults.
 
 ```powershell
 npm run look -- admin-approval admin-approval-batch admin-approval-long admin-delete-approval admin-approved admin-denied --theme both --width 1120,720
+npm run look -- member-draft member-draft-edit member-draft-done --theme both --width 1120,720
 ```
 
 The scenes retain full approval fields, allow long instructions to scroll by
@@ -60,7 +61,12 @@ transaction; rejection or expiry applies none. An invalid operation rolls everyt
 back without publishing partial roster changes. Deletions retain per-member T3 cards.
 Chinese and Japanese labels use full-width colons; English uses colon-space.
 The admin-approval-batch scene checks all eight entries, internal keyboard scrolling
-and the one pair of actions in both themes and widths.
+and the one pair of actions in both themes and widths. When structured `drafts` are
+present on `team_admin_batch`, the conversation renders `.draft-panel` with an
+editable `.draft-card` per proposed member (face/preset picker, name, role, blurb,
+group dropdown, expandable personality/instructions, remove button) and primary
+count CTA (`建立 N 位成員`), then settles into an expandable `.draft-done` summary
+(`已建立 COO、PM、RD`) once confirmed (`member-draft`, `member-draft-edit`, `member-draft-done`).
 
 ## Codex subscription isolation
 

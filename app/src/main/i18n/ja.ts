@@ -1287,4 +1287,10 @@ export const ja = {
   "members.profile.operationsInstructions": "目標を追跡できるタスクに分け、障害と依存関係を確認します。実際の進捗、判断事項、次の具体的な行動を報告します。",
   "members.profile.femaleNames": "陽菜|葵|結衣|さくら|美月|凛|詩織|明里",
   "members.profile.maleNames": "陽翔|蓮|悠真|湊|樹|颯太|大和|朝陽",
+  "members.draftTitle": "メンバーの下書きを確認",
+  "members.draftMore": "性格と指示",
+  "members.draftRemove": "{p0} を削除",
+  "members.draftCreateCount": "{p0} 人のメンバーを作成",
+  "members.draftSaveCount": "{p0} 件の変更を適用",
+  "members.draftDefaultAvatar": "デフォルトのシルエット",
 } satisfies Messages;

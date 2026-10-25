@@ -13,6 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 
 import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
+import { isSettledDraftTurn, settledDraftHTML } from "./member-draft";
 import { messageHTML } from "./message-content";
 import { quoteHTML } from "./message-quote";
 import { previewCardsHTML } from "./link-previews";
@@ -758,7 +759,8 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
   const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
   const work = workSectionHTML(turn, state, query, inner);
-  return work + ordered.filter(message => message.kind === "reply" || message.kind === "media").map(message => {
+  const settledDraft = isSettledDraftTurn(turn);
+  return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && message.text.trim() === turn.text.trim())) || message.kind === "media").map(message => {
     const text = message.text.trim();
     if (!text) return "";
     if (message.kind === "media") {
@@ -796,7 +798,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const id = esc(turn.id);
   const query = look.query ?? "";
   const hasMsgs = (turn.messages?.length ?? 0) > 0;
-  const detail = !hasMsgs && hasDetail(turn);
+  const settledDraft = isSettledDraftTurn(turn);
+  const detail = !settledDraft && !hasMsgs && hasDetail(turn);
   // a routine's run says its routine in a line of its own, in place of the owner's words
   const routine = sourceOf(turn) === "routine";
   const said = turn.question.trim() !== "" && !routine;
@@ -820,8 +823,9 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span><div class="ra-body">` +
     (hasMsgs
       ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
-      : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm")
+      : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)
         ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "")) +
+    (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +

@@ -51,6 +51,7 @@ import "../background-questions.css";
 import type { BackgroundQuestions } from "../background-questions";
 import { RAPHAEL_ID, faceHTML, memberPlaceholder } from "../members";
 import { createMembers } from "../members-shell";
+import { createDraftPanel, hasDrafts } from "../member-draft";
 import { mountBackgroundQuestions } from "../background-mount";
 import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { describeError } from "../format";
@@ -75,7 +76,7 @@ import {
   turnHTML,
   wantsRefresh,
 } from "../timeline";
-import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
+import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MemberDraft, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
 import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
@@ -284,6 +285,7 @@ export function createAgent(app: AppContext): Page {
       drawFaces();
       drawConversation();
       hi.textContent = emptyLine();
+      draftPanel.redraw();
       if (visible && !scroller.hidden) drawThread();
     },
   });
@@ -421,6 +423,12 @@ export function createAgent(app: AppContext): Page {
   const noButton = askCard.querySelector<HTMLButtonElement>(".ask-no")!;
   const alwaysButton = askCard.querySelector<HTMLButtonElement>(".ask-always")!;
   const yesButton = askCard.querySelector<HTMLButtonElement>(".ask-yes")!;
+  const draftPanel = createDraftPanel({
+    groups: () => members.groups(),
+    presets: () => members.presets(),
+    onConfirm: (edited) => void answer(true, false, edited),
+    onCancel: () => void answer(false),
+  });
 
   // ---------- what the page keeps ----------
 
@@ -473,7 +481,7 @@ export function createAgent(app: AppContext): Page {
   stage.append(dropOverlay);
   function measureDrop(): void {
     const bounds = stage.getBoundingClientRect();
-    const control = composer.hidden ? askCard : composer;
+    const control = composer.hidden ? (draftPanel.el.hidden ? askCard : draftPanel.el) : composer;
     const top = control.getBoundingClientRect().top;
     dropOverlay.style.bottom = `${Math.max(12, bounds.bottom - top + 12)}px`;
   }
@@ -664,6 +672,16 @@ export function createAgent(app: AppContext): Page {
     const waitingTurn = [...turns].reverse().find((turn) => turn.status === "confirm");
     const inline = asking && waitingTurn ? thread.querySelector<HTMLElement>(`[data-question-turn="${waitingTurn.id}"]`) : null;
     const cardHome = inline ?? home;
+    if (asking && hasDrafts(question)) {
+      if (voice.isUp) voice.drop();
+      askCard.hidden = true;
+      delete askCard.dataset.id;
+      composer.hidden = true;
+      if (draftPanel.el.parentElement !== cardHome) cardHome.append(draftPanel.el);
+      draftPanel.sync(question, answering);
+      return;
+    }
+    draftPanel.sync(null);
     if (askCard.parentElement !== cardHome) cardHome.append(askCard);
     askCard.classList.toggle("is-member", !inRaphael());
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
@@ -1156,16 +1174,22 @@ export function createAgent(app: AppContext): Page {
   // ---------- the approval card ----------
 
   /** `always` is the third answer: YES, and keep allowing (only a question that has the button). */
-  async function answer(approved: boolean, always = false): Promise<void> {
+  async function answer(approved: boolean, always = false, editedDrafts?: MemberDraft[]): Promise<void> {
     if (!question || answering) return;
     if (always && !question.always) return;
     answering = true;
     noButton.disabled = alwaysButton.disabled = yesButton.disabled = true;
     try {
-      await (always ? api.agentQuestionAnswer(question.id, true, true) : api.agentQuestionAnswer(question.id, approved));
+      if (hasDrafts(question)) draftPanel.sync(question, true);
+      await (editedDrafts !== undefined
+        ? api.agentQuestionAnswer(question.id, approved, always, editedDrafts)
+        : always
+          ? api.agentQuestionAnswer(question.id, true, true)
+          : api.agentQuestionAnswer(question.id, approved));
     } catch (err) {
       answering = false;
       noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
+      if (hasDrafts(question)) draftPanel.sync(question, false);
       toaster.info(describeError(err));
     }
   }
@@ -1356,6 +1380,22 @@ export function createAgent(app: AppContext): Page {
       });
       focusComposer();
     }
+  }
+
+  function toggleDraftDone(button: HTMLElement): void {
+    const box = button.closest<HTMLElement>(".draft-done");
+    const list = box?.querySelector<HTMLElement>(".draft-done-list");
+    if (!box || !list) return;
+    const id = Number(box.dataset.draftDone ?? button.closest<HTMLElement>(".tn")?.dataset.id);
+    const next = Boolean(list.hidden);
+    list.hidden = !next;
+    box.classList.toggle("is-open", next);
+    button.setAttribute("aria-expanded", String(next));
+    if (!Number.isNaN(id)) {
+      if (next) details.add(id);
+      else details.delete(id);
+    }
+    rememberLine(button);
   }
 
   function toggleDetail(button: HTMLElement): void {
@@ -1640,6 +1680,9 @@ export function createAgent(app: AppContext): Page {
       case "steps":
         toggleSteps(act);
         break;
+      case "draft-done":
+        toggleDraftDone(act);
+        break;
       case "detail":
         toggleDetail(act);
         break;
@@ -1897,6 +1940,7 @@ export function createAgent(app: AppContext): Page {
   onLocaleChange(() => {
     void slashMenu.refresh();
     drawWords();
+    draftPanel.redraw();
     drawQuotas();
     drawComposer();
     for (const child of thread.children) drawnHTML.delete(child);
@@ -1942,6 +1986,7 @@ export function createAgent(app: AppContext): Page {
       dropResize?.observe(stage);
       dropResize?.observe(composer);
       dropResize?.observe(askCard);
+      dropResize?.observe(draftPanel.el);
       void members.load();
       void readQuotas();
       // A draft goes into the field at once; the composer may then move (the empty page has it

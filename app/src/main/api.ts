@@ -24,6 +24,7 @@ import type {
   CliBrain,
   CliBrainId,
   Member,
+  MemberDraft,
   MemberGroup,
   MemberPatch,
   MembersList,
@@ -161,8 +162,14 @@ export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("ag
  * Answers the question `id` from the page, as the overlay's buttons do; the window must have the
  * focus. `always` (with `approved`) is the third answer, 「一律允許」, and is sent only when true.
  */
-export const agentQuestionAnswer = (id: string, approved: boolean, always = false): Promise<void> =>
-  invoke("agent_question_answer", always ? { id, approved, always: true } : { id, approved });
+export const agentQuestionAnswer = (id: string, approved: boolean, always = false, drafts?: MemberDraft[]): Promise<void> =>
+  invoke("agent_question_answer", {
+    id,
+    approved,
+    ...(always ? { always: true } : {}),
+    ...(drafts !== undefined ? { drafts } : {}),
+  });
+
 /**
  * Tells the app whether the 拉斐爾 page is what the window shows (no settings over it, no guide in
  * its place). While it is and the window is in front, a question to Raphael is shown on the page
