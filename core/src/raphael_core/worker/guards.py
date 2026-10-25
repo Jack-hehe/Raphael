@@ -57,10 +57,12 @@ def head_tail_split(text: str, limit: int = MAX_RESULT_CHARS) -> tuple[str, bool
     return text[:head] + mark + (text[len(text) - tail :] if tail else ""), True
 
 
-def wrap_untrusted(tool: str, text: str, *, ok: bool) -> str:
+def wrap_untrusted(tool: str, text: str, *, ok: bool, limit: int | None = None) -> str:
     """A tool's result as the model reads it: cut, neutralized and inside tags that say it is data
-    from outside, never to be obeyed."""
-    limit = MAX_SKILL_RESULT_CHARS if tool == "skill_read" else MAX_RESULT_CHARS
+    from outside, never to be obeyed. Inline attachments can supply their own budget;
+    ordinary tool results retain their default limits."""
+    if limit is None:
+        limit = MAX_SKILL_RESULT_CHARS if tool == "skill_read" else MAX_RESULT_CHARS
     shown, cut = head_tail_split(neutralize(text), limit)
     status = "ok" if ok else "error"
     note = " cut_short=true" if cut else ""
