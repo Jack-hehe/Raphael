@@ -79,6 +79,12 @@ export async function perform(page, step) {
     case "key": await page.keyboard.press(step.key); break;
     case "focus": await page.focus(step.selector); break;
     case "scroll": { const element = await visible(step.selector); await element.evaluate(element => element.scrollIntoView({ block: "end", inline: "nearest" })); await element.dispose(); break; }
+    case "wait-scroll-end": {
+      const element = await visible(step.selector);
+      try { await page.waitForFunction(element => element.scrollTop + element.clientHeight >= element.scrollHeight - 1, { timeout: 6000 }, element); }
+      finally { await element.dispose(); }
+      break;
+    }
     case "member":
       if (await compact()) { await click(".mb-pick"); await click(`#app-popover [data-value="${step.id}"]`); }
       else await click(`.mb-col [data-member="${step.id}"]`);

@@ -107,6 +107,7 @@ class ToolGate:
         for name, tier in HARNESS_TIERS.items():
             self._registry.register(name, tier)
         self._registry.register("cli_permission", Tier.T2)
+        self._registry.register("team_admin_batch", Tier.T2)
         self._audit = None if conn is None else AuditLog(conn, now_ms)
 
     @property
@@ -143,6 +144,17 @@ class ToolGate:
         if worker and (action.tool in COMMANDS or action.tool in COMPUTER_TIERS):
             raise NotApproved(action.tool)
         self._registry.check(action, approval)
+
+    def check_admin_batch(self, action: Action, approval: Approval | None) -> None:
+        """One single-use approval covers exactly the listed reversible admin operations."""
+        from .team_admin import BATCH_TOOLS
+
+        if action.tool != "team_admin_batch" or not action.args.get("operations"):
+            raise NotApproved("team_admin_batch")
+        for operation in action.args["operations"]:
+            if operation["name"] not in BATCH_TOOLS or self.tier(operation["name"]) > Tier.T1:
+                raise NotApproved(operation["name"])
+        self.check(action, approval)
 
     # --- the owner's safety rules ----------------------------------------------------------------
 

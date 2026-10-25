@@ -3,11 +3,12 @@
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, TypedDict
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .clock import wall_clock_ms
+from .connectors.http import ConnectorFailure
 from .members.schedule import next_run
 from .protocol import RpcError, invalid_params
 
@@ -57,8 +58,53 @@ class Overview(TypedDict):
 
 
 async def no_calendar_events(start_ms: int, end_ms: int) -> list[HomeItem]:
-    """Connector seam: replace with the private connected-calendar reader when available."""
+    """Keep the projection usable without a calendar service."""
     return []
+
+
+class ConnectedCalendar:
+    """Read the private Google calendar through its existing connector policy."""
+
+    def __init__(self, router, connectors):
+        self.router, self.connectors = router, connectors
+
+    async def __call__(self, start_ms: int, end_ms: int) -> list[HomeItem]:
+        try:
+            async with asyncio.timeout(12):
+                status = await self.router.call("connectors.status", {"refresh": False})
+                if not any(c["id"] == "google" and c["status"] == "ACTIVE"
+                           and "calendar_list_events" in c["enabled_tools"] for c in status.get("connectors", [])):
+                    return []
+                response = await self.connectors.call_google("calendar_list_events", {
+                    "calendarId": "primary", "singleEvents": True, "orderBy": "startTime", "maxResults": CALENDAR_LIMIT,
+                    "timeMin": datetime.fromtimestamp(start_ms / 1000, UTC).isoformat(),
+                    "timeMax": datetime.fromtimestamp(end_ms / 1000, UTC).isoformat(),
+                })
+        except (ConnectorFailure, RpcError, TimeoutError):
+            # Provider failures must not hide pending work or expose private diagnostics.
+            return []
+        try:
+            zone = ZoneInfo(response.get("timeZone", "UTC"))
+        except (ValueError, TypeError, ZoneInfoNotFoundError):
+            zone = UTC
+        events = []
+        for event in response.get("items", [])[:CALENDAR_LIMIT]:
+            if not isinstance(event, dict) or event.get("status") == "cancelled" or not isinstance(event.get("id"), str):
+                continue
+            try:
+                start = event["start"]
+                when = datetime.fromisoformat(start.get("dateTime") or start["date"])
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=zone)
+                at = int(when.timestamp() * 1000)
+            except (KeyError, TypeError, ValueError, OverflowError, OSError):
+                continue
+            if start_ms <= at < end_ms:
+                title = event.get("summary") or "Untitled event"
+                events.append({"id": f"event:{event['id']}", "kind": "event", "title": " ".join(title.split())[:120],
+                               "summary": "", "at_ms": at, "member_id": 0, "name": "Google Calendar", "avatar_url": None,
+                               "turn_id": None, "conversation_id": None, "routine_id": None})
+        return events
 
 
 class HomeOverview:
@@ -149,7 +195,6 @@ class HomeOverview:
             events = []
         calendar.extend(event for event in events if start <= event["at_ms"] < end)
         today.sort(key=lambda r: (0 if r["kind"] == "question" else 1, r["at_ms"], r["id"]))
-        today.extend(reports)
         calendar.sort(key=lambda r: (r["at_ms"], r["id"]))
         status = await self.router.call("status.get")
         stats = await self.router.call("stats.summary", {"days": 14})

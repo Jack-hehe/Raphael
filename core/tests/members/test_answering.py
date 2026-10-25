@@ -363,7 +363,7 @@ async def test_a_member_asks_raphael_who_answers_as_himself(setup, client, conn)
     result = await typed(rig, "問拉斐爾主人住哪裡", one.id)
     assert result["text"] == "主人住在台北。"
     tools = {t["function"]["name"] for t in client.chat_calls[0]["tools"]}
-    assert "ask_member" in tools and "create_member" in tools
+    assert "ask_member" in tools and "create_member" not in tools
     assert client.plan_calls == []
     assert "You are Raphael" in client.chat_calls[1]["messages"][0]["content"]
     (raphaels,) = AgentHistory(conn).list(member_id=0)
@@ -418,7 +418,8 @@ async def test_a_chain_is_at_most_two_deep_and_never_comes_back(setup):
         a, "create_member", {"name": "x", "role": "", "instructions": ""},
         language="zh-TW", ledger=None, session_id="s",
     )  # fmt: skip
-    assert created.ok  # Every directly addressed speaker may create a member.
+    assert not created.ok and created.error == "blocked"
+    assert team.members.find("x") is None
 
 
 async def test_the_fast_tier_offers_ask_member_only_for_someone_it_may_ask(setup):
@@ -428,7 +429,7 @@ async def test_the_fast_tier_offers_ask_member_only_for_someone_it_may_ask(setup
     assert team_tools_for(team.members, a, "問小財務") == []  # itself
     assert team_tools_for(team.members, b.asked_by(a), "問小財務") == []  # already in the chain
     assert team_tools_for(team.members, a, "今天天氣") == []
-    assert team_tools_for(team.members, a, always=True) == ["ask_member", "create_member"]
+    assert team_tools_for(team.members, a, always=True) == ["ask_member"]
 
 
 async def test_raphael_asked_for_the_desktop_says_the_owner_must_ask_him(setup, client, conn):

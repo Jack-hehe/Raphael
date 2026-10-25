@@ -57,6 +57,8 @@ async def test_pending_in_different_conversations_and_latest_unread_report(home,
     assert [r["turn_id"] for r in value["reports"]] == [newest]
     assert older != newest
     assert {r["turn_id"] for r in value["today"] if r["kind"] == "question"} == {first, second}
+    assert len(value["today"]) == value["counts"]["today"] == 2
+    assert {r["id"] for r in value["today"]}.isdisjoint(r["id"] for r in value["reports"])
     assert value["reports"][0]["summary"] == "A report with details"
     assert member in rig.service.store.unread()
     await rig.call("members.read", {"id": member})
@@ -81,9 +83,21 @@ async def test_limits_are_applied_after_ordering(home, rig):
         rig.wall.now += 1
     value = await rig.call("home.overview")
     assert len(value["reports"]) == 8
-    assert len(value["today"]) == 12
+    assert value["today"] == []
+    assert value["counts"]["today"] == 0
     assert value["counts"]["reports"] == 15
     assert value["reports"][0]["member_id"] == 15
+
+
+async def test_today_limits_pending_questions_after_ordering(home, rig):
+    turns = []
+    for _ in range(15):
+        turns.append(add(rig, status="confirm"))
+        rig.wall.now += 1
+    value = await rig.call("home.overview")
+    assert [item["turn_id"] for item in value["today"]] == turns[:12]
+    assert value["counts"]["today"] == 15
+    assert value["reports"] == []
 
 
 async def test_calendar_seam_and_invalid_timezone(home, rig):

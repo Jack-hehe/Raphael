@@ -38,3 +38,10 @@ match. The title reflects the details panel with aria-expanded; opening rooms pr
 the remembered member-panel preference. Rename/delete scenes open
 dialogs, not committed changes. Empty/running are fixture variants, not proof of
 streaming, cancellation, persistence or file transfer.
+
+## Team administration and progress
+
+Team administration approvals are covered by the member feature's `admin-*`
+scenes. Public progress parses complete reply envelopes and drops malformed or
+partial JSON; the exact CLI regression is exercised by core tests. The shared
+rendered audit also rejects non-finite durations in work summaries.

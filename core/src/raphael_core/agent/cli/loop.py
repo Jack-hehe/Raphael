@@ -116,8 +116,8 @@ class CliLoop:
         self.expire = expire
 
     def _progress(self):
-        if line := public_line(self._buffer.strip()[:400], self.language):
-            self.progress(line)
+        if line := public_line(self._buffer, self.language):
+            self.progress(line[:400])
         self._buffer = ""
 
     async def _tool(self, identifier, name, args):
@@ -251,8 +251,8 @@ class CliLoop:
                                 self._thought = (self._thought + event.text)[-240:]
                             elif event.kind in ("tool_start", "permission"):
                                 self._progress()
-                                if line := public_line(self._thought.strip()[:240], self.language):
-                                    self.thinking(line)
+                                if line := public_line(self._thought, self.language):
+                                    self.thinking(line[:240])
                                 self._thought = ""
                             elif event.kind == "usage":
                                 usage = event.data

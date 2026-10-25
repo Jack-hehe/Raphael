@@ -66,6 +66,12 @@ pub fn timeout_for(method: &str) -> Duration {
         // 330 s with a kind of failure), or, for a login with a code (GitHub), until the code
         // runs out: 900 s at most, and the core ends it at 930 s. Then reads the tools.
         "integrations.connect" => 960,
+        // Managed app OAuth leaves time for a human browser round trip and final tool discovery.
+        "connectors.connect" => 780,
+        "connectors.google.connect" => 180,
+        "connectors.catalog" | "connectors.categories" | "connectors.status"
+        | "connectors.disconnect" | "connectors.tools" | "connectors.set_tools"
+        | "connectors.set_key" => 120,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
         _ => 15,
@@ -843,6 +849,9 @@ mod tests {
 
     #[test]
     fn timeouts_follow_the_method() {
+        assert_eq!(timeout_for("connectors.connect"), Duration::from_secs(780));
+        assert_eq!(timeout_for("connectors.google.connect"), Duration::from_secs(180));
+        assert_eq!(timeout_for("connectors.status"), Duration::from_secs(120));
         assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(150));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
         assert_eq!(timeout_for("models.local_use"), Duration::from_secs(3600));

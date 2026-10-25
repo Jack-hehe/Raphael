@@ -80,7 +80,7 @@ describe("the column, drawn", () => {
     expect(row.querySelector(".mb-row-p")!.textContent).toBe("PR #17 已開");
     expect(row.querySelector(".mb-row-p")!.classList.contains("is-wait")).toBe(false);
     expect(row.querySelector(".mb-dot")).toBeNull();
-    expect(row.querySelector(".mb-av-letter")!.textContent).toBe("進");
+    expect(row.querySelector(".mb-av-placeholder svg")).not.toBeNull();
   });
 
   test("a question that waits: the line in gold, 「等你處理：…」, and a gold dot", () => {

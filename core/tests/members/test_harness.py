@@ -32,7 +32,8 @@ async def test_a_member_with_an_old_empty_tool_list_can_search_and_create_a_rout
     assert [m["kind"] for m in turn["messages"]] == ["thinking", "progress", "progress", "event", "reply"]
     assert turn["messages"][-2]["text"] == "已建立例行任務 · 每天 08:00 日文練習"
     offered = {t["function"]["name"] for t in client.chat_calls[0]["tools"]}
-    assert {"computer", "open", "web_search", "routine_create", "create_member"} <= offered
+    assert {"computer", "open", "web_search", "routine_create"} <= offered
+    assert "create_member" not in offered
 
 
 async def test_a_member_can_open_an_app_with_the_same_presence_guard(setup, client):

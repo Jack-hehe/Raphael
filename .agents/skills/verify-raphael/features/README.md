@@ -8,12 +8,12 @@ are the executable source. Native journeys cover behavior the fixture cannot pro
 | --- | --- |
 | [Home](home.md) | Startup overview, pending work, reports, calendar, usage and dictation totals |
 | [Conversation](conversation.md) | Threads, details panel, replies, public progress, search and composer |
-| [Members](members.md) | Identity, avatar, profile, memory, routines, skills, commands and voice |
+| [Members](members.md) | Identity, resources, voice and Raphael's approved team administration |
 | [Automations](automations.md) | List/calendar, schedules, advanced options and deletion |
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |
 | [Dictation](dictation.md) | Overview, history, dictionary, shortcuts, microphone and paste |
 | [Settings and appearance](settings-appearance.md) | Profile/preferences, skins, languages, models and app information |
-| [Connections and MCP](connections-mcp.md) | Setup, testing, import, discovery and disconnect |
+| [Connections and MCP](connections-mcp.md) | MCP setup/discovery, managed connectors core and Home's private Google calendar read |
 | [Usage](usage.md) | Spend overview, grouping, CSV and CLI allowances |
 | [Onboarding](onboarding.md) | First launch and entry into the usable app |
 

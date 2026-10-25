@@ -15,6 +15,7 @@ the raw text alike. A text pasted without cleanup also loses its most obvious st
 
 import difflib
 import functools
+import json
 import re
 import string
 from collections.abc import Sequence
@@ -454,6 +455,22 @@ def public_line(text: str, language: str) -> str:
     nothing at all when the line is not written in the owner's language (a model that drifts into
     English mid-task must not put an English line in a Chinese conversation)."""
     text = text.strip()
+    if "{" in text or "}" in text or "```" in text:
+        # CLI commentary can contain a reply envelope, including a partial streamed object.
+        # Decode the whole object before selecting public text; malformed packets are dropped.
+        start = text.find("{")
+        if start < 0:
+            return ""
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text, start)
+        except ValueError:
+            return ""
+        if not isinstance(value, dict):
+            return ""
+        value = value.get("progress", value.get("text", ""))
+        if not isinstance(value, str) or any(mark in value for mark in ("{", "}", "```")):
+            return ""
+        text = value.strip()
     if not text:
         return ""
     if language == "zh-TW":

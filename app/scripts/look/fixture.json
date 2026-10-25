@@ -1,4 +1,54 @@
 {
+  "adminQuestions": {
+    "create": {
+      "id": "look-admin-create",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立成員\n名稱：COO\n職責：營運長\n簡介：協助安排公司的日常營運。\n群組：個人公司\n工作指示：追蹤目標、整理進度，並提出具體下一步。\n允許這項變更嗎？",
+      "tier": "T1",
+      "timeout_ms": 30000
+    },
+    "long": {
+      "id": "look-admin-long",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立成員\n名稱：COO\n職責：營運長\n群組：個人公司\n工作指示：每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n最後一項指示：保留完整決策紀錄。\n允許這項變更嗎？",
+      "tier": "T1",
+      "timeout_ms": 30000
+    },
+    "batch": {
+      "id": "look-admin-batch",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立群組\n名稱：個人公司\n\n建立成員\n名稱：COO\n職責：營運長\n簡介：營運長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：PM\n職責：專案經理\n簡介：專案經理，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：RD\n職責：研發工程師\n簡介：研發工程師，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：CEO\n職責：執行長\n簡介：執行長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：CTO\n職責：技術長\n簡介：技術長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Marketing\n職責：行銷主管\n簡介：行銷主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Finance\n職責：財務主管\n簡介：財務主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Design\n職責：設計主管\n簡介：設計主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n允許以上所有變更嗎？",
+      "tier": "T2",
+      "timeout_ms": 30000
+    },
+    "delete": {
+      "id": "look-admin-delete",
+      "member_id": 0,
+      "prefix": "問",
+      "text": "永久刪除成員及其所有資料：小晴\nID：1\n允許這項變更嗎？",
+      "tier": "T3",
+      "timeout_ms": 30000
+    }
+  },
+  "adminGroup": { "id": 3, "name": "個人公司", "position": 2, "sources": [] },
+  "adminMember": {
+    "id": 8,
+    "name": "COO",
+    "role": "營運長",
+    "blurb": "協助安排公司的日常營運。",
+    "group_id": 3,
+    "avatar": "",
+    "reply_style": "full",
+    "personality": "",
+    "preview": "",
+    "last_at": null,
+    "unread": false,
+    "waiting": false,
+    "instructions": "追蹤目標、整理進度，並提出具體下一步。"
+  },
   "now": 1792807200000,
   "device": {
     "dictation_keys": [
@@ -305,6 +355,7 @@
           "tool": "search",
           "server": "專案筆記",
           "outcome": "ok",
+          "at_ms": 1792807156000,
           "ms": 720,
           "reason": null
         },
@@ -313,6 +364,7 @@
           "tool": null,
           "server": null,
           "outcome": "ok",
+          "at_ms": 1792807160000,
           "ms": 1800,
           "reason": null
         }
@@ -1798,32 +1850,6 @@
         "turn_id": null,
         "conversation_id": null,
         "routine_id": 2
-      },
-      {
-        "id": "report:2",
-        "kind": "report",
-        "member_id": 1,
-        "name": "小晴",
-        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
-        "title": "Research progress",
-        "summary": "研究摘要已整理完成。",
-        "at_ms": 1792807080000,
-        "turn_id": 2,
-        "conversation_id": 11,
-        "routine_id": null
-      },
-      {
-        "id": "report:1",
-        "kind": "report",
-        "member_id": 0,
-        "name": "拉斐爾",
-        "avatar_url": "/brand/in-app-icon.png",
-        "title": "Daily briefing",
-        "summary": "研究摘要已整理完成。",
-        "at_ms": 1792805400000,
-        "turn_id": 1,
-        "conversation_id": 1,
-        "routine_id": null
       }
     ],
     "reports": [
@@ -1882,6 +1908,19 @@
         "routine_id": 2
       },
       {
+        "id": "event:planning",
+        "kind": "event",
+        "member_id": 0,
+        "name": "Google Calendar",
+        "avatar_url": null,
+        "title": "Product planning",
+        "summary": "",
+        "at_ms": 1792825200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": null
+      },
+      {
         "id": "routine:1:tomorrow",
         "kind": "routine",
         "member_id": 0,
@@ -1909,9 +1948,9 @@
       }
     ],
     "counts": {
-      "today": 5,
+      "today": 3,
       "reports": 2,
-      "calendar": 4
+      "calendar": 5
     },
     "usage": {
       "month_usd": 1.24,

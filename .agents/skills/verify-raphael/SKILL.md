@@ -23,7 +23,8 @@ npm run look -- chat --theme both --width 1120,720
 loads the real `index.html`, modules and CSS, and closes both after capture. Each
 scene has an isolated fixture and each run has its own browser profile. No running
 native app, credentials, real database or separate preview server is needed.
-Readiness means the conversation header (or onboarding Next button) is visible,
+Readiness means Home's Raphael report (or onboarding Next button / overlay progress)
+is visible. Non-home journeys then enter the conversation through the real rail,
 followed by the scene's own prerequisite and resulting-state waits.
 
 Use the installed dependencies; `puppeteer-core` is pinned to `25.13.0`. Do not

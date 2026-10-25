@@ -916,7 +916,7 @@ describe("the details panel", () => {
     name.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     await flush();
     expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("Message 嚴格老師");
-    expect($(".thread .mb-av-letter").textContent).toBe("嚴");
+    expect($(".thread .mb-av-placeholder svg")).not.toBeNull();
   });
 });
 

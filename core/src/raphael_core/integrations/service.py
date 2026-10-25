@@ -136,6 +136,7 @@ class IntegrationsService:
         # The login that is under way (one at a time: there is one browser and one user).
         self._login: asyncio.Task | None = None
         self._login_for = ""  # the id of the server it signs in to
+        self.managed: Any = None
 
     def register(self, router: Router) -> None:
         methods = {
@@ -179,7 +180,7 @@ class IntegrationsService:
             "transport": server.transport,
             "command": server.command,
             "args": server.args,
-            "url": server.url,
+            "url": "" if server.managed_by else server.url,
             "enabled": server.enabled,
             "env": server.env,
             "headers": server.headers,
@@ -193,6 +194,7 @@ class IntegrationsService:
             "read_count": sum(1 for tool in server.tools if tool_kind(tool) == "read"),
             "checked_at_ms": server.tools_checked_at_ms,
             "result_size_limit": server.result_size_limit,
+            **({"managed_by": server.managed_by} if server.managed_by else {}),
         }
 
     @staticmethod
@@ -209,6 +211,8 @@ class IntegrationsService:
         server = self._config.get(_str(params, "id"))
         if server is None:
             raise invalid_params("There is no such plugin")
+        if server.managed_by:
+            raise invalid_params("Manage this connection through connectors RPCs")
         return server
 
     def _save(self) -> None:
@@ -556,6 +560,8 @@ class IntegrationsService:
         something, so only the server's own word counts."""
         for server in self._config.servers():
             if server.name == server_name:
+                if server.managed_by and self.managed is not None:
+                    return "read" if self.managed.tier(server.id, tool_name) < Tier.T2 else "write"
                 for tool in server.tools:
                     if tool.name == tool_name:
                         said = tool.read_only_hint is True and tool.destructive_hint is not True
@@ -603,6 +609,8 @@ class IntegrationsService:
         return {"tools": [self._tool_view(server, tool) for tool in tools]}
 
     def _group(self, server: ServerConfig) -> dict[str, Any]:
+        if server.managed_by:
+            return {**self._view(server), "tools": [], "tool_toggle_source": "connectors.tools", "tools_locked": True}
         return {**self._view(server), "tools": self._tool_views(server)}
 
     def connections(self) -> list[dict[str, Any]]:
@@ -654,6 +662,8 @@ class IntegrationsService:
         tool = server.tool(parsed[1])
         if tool is None or not server.tool_on(tool):
             return None
+        if server.managed_by and (self.managed is None or not self.managed.tool_available(server.id, tool.name)):
+            return None
         return server, tool
 
     def offered(self) -> list[PluginTool]:
@@ -662,7 +672,9 @@ class IntegrationsService:
             if not server.enabled:
                 continue
             for tool in server.tools:
-                if server.tool_on(tool):
+                if server.tool_on(tool) and (not server.managed_by or (
+                    self.managed is not None and self.managed.tool_available(server.id, tool.name)
+                )):
                     tools.append(
                         PluginTool(
                             key=tool_key(server.id, tool.name),
@@ -670,14 +682,17 @@ class IntegrationsService:
                             name=tool.name,
                             description=tool.description,
                             schema=tool.input_schema,
-                            tier=self._tier_for(tool),
+                            tier=self.managed.tier(server.id, tool.name) if server.managed_by else self._tier_for(tool),
                         )
                     )
         return tools
 
     def tier_of(self, key: str) -> Tier | None:
         usable = self._usable(key)
-        return None if usable is None else self._tier_for(usable[1])
+        if usable is None:
+            return None
+        server, tool = usable
+        return self.managed.tier(server.id, tool.name) if server.managed_by else self._tier_for(tool)
 
     def _names(self, key: str) -> tuple[str, str]:
         """What the audit calls a tool: its server's name and its own, as far as they are known."""
@@ -732,6 +747,8 @@ class IntegrationsService:
             json.dumps(arguments, ensure_ascii=False, default=str)
         ) > MAX_ARGUMENT_CHARS:
             return end("blocked", PluginResult(False, "blocked"))
+        if server.managed_by and not self.managed.allow_call(server.id, tool.name, arguments, approver):
+            return end("blocked", PluginResult(False, "blocked"))
         # A pool is passed on only when there is one: a connector of a test may not know it.
         kept = {} if pool is None else {"pool": pool}
         try:
@@ -748,6 +765,8 @@ class IntegrationsService:
             end("error", PluginResult(False, "cancelled"))
             raise
         except McpFailure as failure:
+            if server.managed_by and failure.kind == "auth":
+                await self.managed.auth_failed(server.id)
             if failure.kind == "gone":
                 return end("blocked", PluginResult(False, failure.kind))
             if failure.kind == "cancelled":  # sent, and the connection ended: not known to have failed

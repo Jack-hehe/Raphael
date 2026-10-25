@@ -94,6 +94,7 @@ from .brain.service import Brain
 from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
+from .connectors.service import ConnectorsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .messaging.config import MessagingStore
 from .messaging.service import MessagingService
@@ -109,7 +110,7 @@ from .protocol import (
     invalid_params,
 )
 from .router import Router
-from .home import HomeOverview
+from .home import ConnectedCalendar, HomeOverview
 from .services.attachments import Attachment
 from .services.attachment_store import AttachmentStore
 from .services.hub import ServiceHub, offline_transport
@@ -798,6 +799,8 @@ class App(Router):
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
         self.integrations = IntegrationsService(self._conn, data_dir, self.vault, notify=self.notify)
         self.integrations.register(self)
+        self.connectors = ConnectorsService(data_dir, self.vault, self.integrations)
+        self.connectors.register(self)
         # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
         # changes something, with their judge (Jev).
         self.safety_rules = SafetyRules(self._conn)
@@ -864,7 +867,7 @@ class App(Router):
             speaker=self.speaker,
         )
         self.agent.register(self)
-        self.home = HomeOverview(self._conn, self, self.members)
+        self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))
         self.home.register()
         self.background.use_team(self.members, self.agent.team_tool)
         # The questions the background waits on: a thread one waits in is `waiting` in the member

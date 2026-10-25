@@ -129,7 +129,7 @@ export function createHome(app: AppContext): Page {
   onAvatarChange(() => { if (visible) paint(); });
   onLocaleChange(() => { if (visible) void load(); });
   app.onEvent(event => {
-    if (visible && ["AgentTurn", "MembersChanged", "RoutinesChanged", "SettingsChanged", "QuotaChanged", "AgentQuestion", "AgentQuestionClosed", "ConversationsChanged"].includes(event.type)) void load();
+    if (visible && ["AgentTurn", "MembersChanged", "RoutinesChanged", "SettingsChanged", "QuotaChanged", "AgentQuestion", "AgentQuestionClosed", "ConversationsChanged", "ConnectionsChanged"].includes(event.type)) void load();
   });
   app.cleared.on("dictation", () => { if (visible) void load(); });
   app.cleared.on("conversation", () => { if (visible) void load(); });

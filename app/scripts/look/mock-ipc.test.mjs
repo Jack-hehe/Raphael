@@ -4,6 +4,17 @@ import { installMock } from "./mock-ipc.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("keeps reports out of today's work in both default and expanded home fixtures", async () => {
+    for (const homeManyQuestions of [false, true]) {
+      const target = {};
+      installMock(fixture, { fixture: { homeManyQuestions } }, target);
+      const home = await target.__TAURI_INTERNALS__.invoke("core_call", { method: "home.overview" });
+      expect(home.today.every(item => ["question", "routine"].includes(item.kind))).toBe(true);
+      expect(home.today.some(item => home.reports.some(report => report.id === item.id))).toBe(false);
+      expect(home.counts.today).toBe(home.today.length);
+      expect(home.today.length).toBe(homeManyQuestions ? 5 : 3);
+    }
+  });
   it("keeps empty home spend and the sidebar status consistent and exposes connection problems", async () => {
     const target = {};
     installMock(fixture, { fixture: { homeEmpty: true, problem: true } }, target);
@@ -13,6 +24,18 @@ describe("shared look IPC boundary", () => {
     expect(home.report.openrouter.state).toBe("no_key");
     expect(home.today).toEqual([]);
     expect(JSON.stringify(fixture.home)).not.toMatch(/\?{3}/);
+  });
+  it("creates the approved member in the promised group with an empty conversation", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { adminApproval: "create" } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const question = await invoke("agent_question_open");
+    await invoke("agent_question_answer", { id: question.id, approved: true });
+    const roster = await invoke("core_call", { method: "members.list" });
+    const created = roster.members.find(member => member.id === 8);
+    expect(roster.groups.find(group => group.id === created.group_id)?.name).toBe("個人公司");
+    expect(created.preview).toBe("");
+    expect(created.last_at).toBeNull();
   });
   it("isolates conversations by member and turns by conversation", async () => {
     const target = {};

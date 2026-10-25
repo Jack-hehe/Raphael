@@ -1,10 +1,16 @@
-import { scene, click, hover, type, wait, member, room, search, check } from "./steps.mjs";
+import { scene, click, hover, type, wait, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
 
 const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 export default [
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("running", "Conversation while a reply is being prepared", [], { running: true }),
+  scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
+  scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
+  scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
+  scene("admin-delete-approval", "Deleting a member always requires held approval", [wait('.ask-card[data-tier="T3"]:not([hidden])'), check("admin-approval")], { adminApproval: "delete" }),
+  scene("admin-approved", "Approve creation and select the live member", [wait('.ask-card:not([hidden])'), click('.ask-yes'), member(8), { action: "open-details" }, wait('.mb-det:not([hidden])'), check("admin-created")], { adminApproval: "create" }),
+  scene("admin-denied", "Declining creation leaves the team unchanged", [wait('.ask-card:not([hidden])'), click('.ask-no'), wait('.composer:not([hidden])'), check("admin-denied")], { adminApproval: "create" }),
   scene("empty", "Conversation without turns", [], { turns: [] }),
   scene("row-menu", "Conversation actions in the details panel", [...details, click(".mb-det [data-conversation-more]"), wait("#app-popover [data-pick]")]),
   ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog")])),

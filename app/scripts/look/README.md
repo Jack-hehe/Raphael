@@ -19,7 +19,7 @@ It never downloads a browser or installs packages. Preserve the package/lockfile
 
 Each run creates `.look/run-*/` with viewport PNGs, paginated PNG contact sheets,
 `contacts.json` and `report.json`. `--out` changes the parent directory. A nonzero exit
-means a scene, runtime, layout, raw translation key, or visible native select/time-input
+means a scene, runtime, layout, raw translation key, non-finite work duration, or visible native select/time-input
 check failed; missing dependencies produce a `blocked` report and a nonzero exit.
 Inspect contact sheets and full-size PNGs as well as the automated checks.
 
@@ -57,7 +57,9 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 133 current scenes (532 combinations for both themes and widths).
+scenes. There are 139 current scenes (556 combinations for both themes and widths).
+Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
+live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
 the driver chooses the first visible match. Favicon requests return an empty 204.
 
