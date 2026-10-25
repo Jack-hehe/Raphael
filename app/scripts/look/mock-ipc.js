@@ -5,14 +5,17 @@ export function installMock(fixture, config = {}, target = window) {
   for (const [key, value] of Object.entries(variant)) if (key in data) data[key] = structuredClone(value);
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
+  if (variant.liveScenarioOwnerView) data.turns = structuredClone(data.liveScenarioOwnerTurns);
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
   if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
+  const formalConversation = data.conversations.find(conversation => conversation.member_id === 0 && conversation.is_default);
+  const adminTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === formalConversation?.id);
   if (adminQuestion) {
-    data.turns[0].status = "confirm";
-    data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
-    data.turns[0].text = "";
+    adminTurn.status = "confirm";
+    adminTurn.messages = adminTurn.messages.filter(message => message.kind !== "reply");
+    adminTurn.text = "";
   }
   if (variant.running) {
     data.turns[0].status = "running";
@@ -247,20 +250,20 @@ export function installMock(fixture, config = {}, target = window) {
             }
             notify("MembersChanged", { member_id: 8 });
             const names = args.drafts.map(d => d.name).join("、");
-            data.turns[0].status = "done";
-            data.turns[0].text = `已建立 ${names}`;
-            data.turns[0].detail = args.drafts.map(d => {
+            adminTurn.status = "done";
+            adminTurn.text = `已建立 ${names}`;
+            adminTurn.detail = args.drafts.map(d => {
               const head = [d.name, d.role, d.group].filter(Boolean).join(" · ");
               return d.blurb ? `${head} — ${d.blurb}` : head;
             }).join("\n");
-            data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+            adminTurn.messages.push({ seq: 4, kind: "reply", text: adminTurn.text, at_ms: data.now });
           } else {
-            data.turns[0].status = "denied";
-            data.turns[0].text = "已取消建立成員。";
-            data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+            adminTurn.status = "denied";
+            adminTurn.text = "已取消建立成員。";
+            adminTurn.messages.push({ seq: 4, kind: "reply", text: adminTurn.text, at_ms: data.now });
           }
           notify("AgentQuestionClosed", { id: adminQuestion.id });
-          notify("AgentTurn", { turn_id: data.turns[0].id, member_id: 0 });
+          notify("AgentTurn", { turn_id: adminTurn.id, member_id: 0 });
           adminQuestion = null;
           return;
         }
@@ -270,11 +273,11 @@ export function installMock(fixture, config = {}, target = window) {
           data.conversations.push({ id: 80, member_id: data.adminMember.id, title: "", is_default: true, created_at_ms: data.now, updated_at_ms: data.now });
           notify("MembersChanged", { member_id: data.adminMember.id });
         }
-        data.turns[0].status = args.approved ? "done" : "denied";
-        data.turns[0].text = args.approved ? "已建立 COO：營運長。" : "已取消建立成員。";
-        data.turns[0].messages.push({ seq: 4, kind: "reply", text: data.turns[0].text, at_ms: data.now });
+        adminTurn.status = args.approved ? "done" : "denied";
+        adminTurn.text = args.approved ? "已建立 COO：營運長。" : "已取消建立成員。";
+        adminTurn.messages.push({ seq: 4, kind: "reply", text: adminTurn.text, at_ms: data.now });
         notify("AgentQuestionClosed", { id: adminQuestion.id });
-        notify("AgentTurn", { turn_id: data.turns[0].id, member_id: 0 });
+        notify("AgentTurn", { turn_id: adminTurn.id, member_id: 0 });
         adminQuestion = null;
         return;
       }

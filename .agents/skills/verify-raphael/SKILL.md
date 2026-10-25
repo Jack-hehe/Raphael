@@ -135,6 +135,8 @@ a failed scenario exits 1 and an entirely skipped/capped matrix exits 2. Reports
 live in core/.live/run-*/report.json. Native CLI-internal model round trips are not
 observable; the hard run cap counts API calls and submitted CLI turns, plus per-cell
 timeouts. The nightly API-only workflow needs no CLI login and is explicitly opt-in.
+The scenario contracts S01–S22, the tool-coverage manifest and the exit codes are in
+[scenarios.md](scenarios.md); an unbuilt contract reports FAIL "not implemented".
 
 Use the PR template to record rule IDs, commands/exits, look/judge/live artifacts,
 images inspected and all incomplete/native acceptance. Never infer deployed or native

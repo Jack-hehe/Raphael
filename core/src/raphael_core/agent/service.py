@@ -524,7 +524,11 @@ class AgentService:
         speaker: "Speaking | None" = None,
         cli_brains: CliBrains | None = None,
         attachment_store: AttachmentStore | None = None,
+        tool_observer: Callable[..., None] | None = None,
+        model_observer: Callable[..., None] | None = None,
     ) -> None:
+        self._tool_observer = tool_observer
+        self._model_observer = model_observer
         self._attachment_store = attachment_store
         self._conn = conn
         self._keys = keys
@@ -1630,9 +1634,17 @@ class AgentService:
                     self._message(ask, "event", phrase(ask.language, "member_created", member=str((result.data or {}).get("created", ""))))
                 return self._loop_result(result)
 
+            async def observed_execute(call_id: str, name: str, args: dict) -> ToolOutcome:
+                result = await execute(call_id, name, args)
+                if self._tool_observer is not None and plan(name, args) is None:
+                    schema = next((item["function"]["parameters"] for item in loop.tools
+                                   if item["function"]["name"] == name), None)
+                    self._tool_observer(name, args, result, ask.speaker.id, ask.conversation_id, schema)
+                return result
+
             async def cli_execute(call_id: str, name: str, args: dict) -> ToolOutcome:
                 began, before = time.perf_counter(), len(ask.steps)
-                result = await execute(call_id, name, args)
+                result = await observed_execute(call_id, name, args)
                 if len(ask.steps) == before:
                     ask.steps.append(self._step("tool", name, BUILTIN_SERVER, "ok" if result.ok else "blocked", began, result.kind))
                 return result
@@ -1642,7 +1654,7 @@ class AgentService:
                 system=system, user=user, tools=snapshot.definitions,
                 progress=lambda text: self._message(ask, "progress", text, PREFIXES[ask.language].notice),
                 thinking=lambda text: self._message(ask, "thinking", text),
-                execute=execute,
+                execute=observed_execute,
             )
             if brain_ref(settings.model):
                 common["execute"] = cli_execute
@@ -1659,6 +1671,8 @@ class AgentService:
                 loop = NarratedLoop(client=self._client, reasoning_effort=self._effort(settings), **common)
         try:
             outcome = await loop.run()
+            if isinstance(loop, CliLoop) and self._model_observer is not None:
+                self._model_observer(loop.actual_model)
         finally:
             if isinstance(loop, CliLoop) and loop.task and loop.task.done():
                 self._cli_loops.discard(loop)
@@ -1965,6 +1979,25 @@ class AgentService:
         return await self._gate.screen(proposed, language=ask.language, ledger=ledger)
 
     async def _make_call(
+        self,
+        ask: _Ask,
+        call: PlannedCall,
+        approval: Approval | None,
+        ledger: Ledger,
+        action: Action | None = None,
+        *,
+        steps: list[Step] | None = None,
+    ) -> ToolResult:
+        result = await self._make_call_result(ask, call, approval, ledger, action, steps=steps)
+        if self._tool_observer is not None:
+            from .harness_tools import definitions_for
+            definition = dict(definitions_for(ask.speaker.id)).get(call.tool.key)
+            schema = definition["parameters"] if definition else call.tool.schema
+            self._tool_observer(call.tool.key, call.arguments, self._loop_result(result),
+                                ask.speaker.id, ask.conversation_id, schema)
+        return result
+
+    async def _make_call_result(
         self,
         ask: _Ask,
         call: PlannedCall,

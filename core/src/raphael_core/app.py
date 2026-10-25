@@ -739,6 +739,9 @@ class App(Router):
         load_kit: Callable[[], Any] | None = None,
         agent_actions: DeviceActions | None = None,
         memory_dir: Path | None = None,
+        model_client: Any | None = None,
+        agent_tool_observer: Callable[..., None] | None = None,
+        agent_model_observer: Callable[..., None] | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -758,7 +761,7 @@ class App(Router):
             if fake_llm:
                 self.keys = MemoryKeyStore()
                 self.keys.set(_FAKE_KEY)
-                self.client = EchoClient()
+                self.client = model_client if model_client is not None else EchoClient()
                 self.vault = MemoryVault()
                 service_keys = memory_keys()
             else:
@@ -866,6 +869,8 @@ class App(Router):
             attachment_store=self.attachment_store,
             team=self.members,
             speaker=self.speaker,
+            tool_observer=agent_tool_observer,
+            model_observer=agent_model_observer,
         )
         self.agent.register(self)
         self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))

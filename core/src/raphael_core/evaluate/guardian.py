@@ -8,6 +8,7 @@ tool names and classified failures, never provider diagnostics or credentials.
 import argparse
 import asyncio
 import json
+import os
 import re
 import sqlite3
 import tempfile
@@ -159,7 +160,10 @@ def check_reply(text, scenario):
     if re.search(r"\b[A-Za-z]{2,}(?:[ ,.;:]+[A-Za-z]{2,}){2}", prose):
         reasons.append("english_sentence_in_zh_TW_reply")
     from opencc import OpenCC
-    if OpenCC("s2twp").convert(text) != text:
+    # OpenCC's regional vocabulary maps the UI's standard Taiwan term 權限 to
+    # 許可權. Preserve that product term while still rejecting simplified text.
+    traditional = text.replace("權限", "")
+    if OpenCC("s2twp").convert(traditional) != traditional:
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):
         reasons.append("raw_json_reply")
@@ -190,9 +194,11 @@ def read_models(config=None):
 class Budget:
     def __init__(self, limit):
         self.limit, self.used = limit, 0
+        self.capped = False
 
     def take(self):
         if self.used >= self.limit:
+            self.capped = True
             raise Stop("total_turn_cap")
         self.used += 1
 
@@ -350,14 +356,33 @@ async def run(models, output, *, max_turns=200, seconds=90, brains=None, client=
 def main():
     use_utf8_output()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", help="JSON with models: current agent API model and a cheap model")
+    parser.add_argument("--config", default=os.environ.get("RAPHAEL_LIVE_CONFIG"), help="JSON with codex and api model IDs (or a models list)")
     parser.add_argument("--out", type=Path, default=ROOT / "core" / ".live")
     parser.add_argument("--max-turns", type=int, default=200)
     parser.add_argument("--seconds", type=int, default=90)
     parser.add_argument("--api-only", action="store_true", help="Hosted nightly: skip subscription CLIs")
+    parser.add_argument("--legacy-only", action="store_true", help="Run the original Guardian cells without the scenario suite")
+    parser.add_argument("--registry-directory", type=Path, help="Sanitized ConfigStore snapshot directory; inventory includes disabled/lazy tools")
+    parser.add_argument("--manifest", type=Path, help="Reviewed tool-to-cell manifest for this registry snapshot")
+    parser.add_argument("--real-smoke", metavar="CONNECTOR", help="Separate owner-approved connector smoke (no automatic approval)")
+    parser.add_argument("--owner-approved-real-smoke", action="store_true", help="Explicit owner authorization for --real-smoke")
     args = parser.parse_args()
+    if args.real_smoke:
+        print("Real smoke refused: " + ("connector smoke adapter not implemented" if args.owner_approved_real_smoke
+                                        else "requires --owner-approved-real-smoke"))
+        return 1
     try:
-        return asyncio.run(run(read_models(args.config), args.out, max_turns=args.max_turns, seconds=args.seconds, api_only=args.api_only))
+        if args.legacy_only:
+            return asyncio.run(run(read_models(args.config), args.out, max_turns=args.max_turns, seconds=args.seconds, api_only=args.api_only))
+        from .guardian_suite import read_pair, run as run_suite
+        from .guardian_registry import load_manifest
+        from ..integrations.config import ConfigStore
+        if args.registry_directory and not (args.registry_directory / "integrations.json").is_file():
+            raise ValueError("registry_snapshot_missing")
+        servers = ConfigStore(args.registry_directory).servers() if args.registry_directory else ()
+        return asyncio.run(run_suite(read_pair(args.config), args.out, max_turns=args.max_turns, seconds=args.seconds,
+                                     api_only=args.api_only, servers=servers,
+                                     mapping=load_manifest(args.manifest) if args.manifest else None))
     except Exception as error:
         print("Guardian could not start: " + type(error).__name__)
         return 1

@@ -4,6 +4,7 @@ const details = [member(1), { action: "open-details" }, check("member-details")]
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
 export default [
+  scene("live-scenario-owner-view", "Guardian S17 owner-visible failure and separate public work", [check("conversation-design"), check("live-scenario-owner-view")], { liveScenarioOwnerView: true }),
   scene("quick-conversation-list", "Persistent quick questions at the top of Raphael conversations", [{ action: "open-details" }, check("quick-conversation-list")]),
   scene("quick-conversation", "Open and continue the persistent quick conversation", [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.ra .chat-message[data-expandable]'), check("quick-conversation")]),
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
