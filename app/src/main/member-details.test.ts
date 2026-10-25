@@ -450,7 +450,8 @@ test("a remote deletion keeps the routine draft editable and refresh failure kee
   const panel = mount();
   await flush();
   panel.el.querySelector<HTMLElement>('[data-tab="routines"]')!.click();
-  panel.el.querySelector<HTMLElement>('[data-det="routine-edit"]')!.click();
+  panel.el.querySelector<HTMLElement>('[data-det="routine-menu"]')!.click();
+  document.querySelector<HTMLElement>('#app-popover [data-pick="edit"]')!.click();
   const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.value = "Unsaved routine";
   title.focus();

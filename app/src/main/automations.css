@@ -138,6 +138,21 @@
   .au-toolbar h1 { flex: 1; font-size: var(--fs-sm); }
   .au-toolbar .au-spacer { display: none; }
 }
+/* Wide boards use the workspace while keeping names and roles readable. */
+@media (min-width: 1400px) {
+  .team-board-scroll { container: team-board / size; }
+  .team-board { display: flex; flex-direction: column; gap: clamp(24px, 4cqh, 48px); padding: clamp(24px, 4cqh, 48px) clamp(32px, 4cqw, 72px); max-width: 1760px; margin-inline: auto; }
+  .team-chief { margin-bottom: 0; }
+  .team-chief .team-member { width: clamp(320px, 28cqw, 440px); }
+  .team-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: stretch; gap: clamp(24px, 3cqw, 48px); }
+  .team-group { width: auto; padding: clamp(24px, 2cqw, 36px); min-height: clamp(320px, 42cqh, 480px); }
+  .team-group-members { gap: var(--sp-5); }
+  .team-member { padding: var(--sp-5); }
+  .team-member-head > div { max-width: 36ch; }
+  .team-member-head b { font-size: var(--fs-md); }
+  .team-member-head span { font-size: var(--fs-xs); }
+  .team-member footer { margin-top: var(--sp-4); padding-top: var(--sp-3); }
+}
 @media (max-width: 880px) {
   .team-page > .page-head { padding-inline: 24px; }
   .team-board { padding-inline: 24px; }

@@ -25,6 +25,9 @@ raw-key checks do not prove translation quality. Extend scenes through change/re
 for persistence. Native provider/model, messaging, import/export, autostart and data
 deletion need isolated real journeys and observable side effects.
 
+Safety-rule editing/deletion and always-allowed app removal use each row's overflow
+menu (R-UI-11). Memory rows use the same policy and retain Undo.
+
 ## Gotchas
 
 Both theme and skin matter; a preview is not the whole app in that skin. Contrast

@@ -1,10 +1,7 @@
-// Raphael's memory, in the 拉斐爾 tab of Settings: what he keeps about the person, one note a line.
-// It is drawn with the rows of every other tab. Closed, it is one row: 「記憶」 and how many notes
-// there are, with a chevron. Open, a row for each note (its type and its one line), each with a pencil
-// that opens its title (that one line, which the index Raphael always reads is made of) on a line
-// and its text in a box, to read and change, and a trash can that deletes it after the 10 s of
-// 「復原」 that every delete has; then the summary of the conversation, if there is one, with
-// 「清除」; and under the card 「全部清除」, which asks for a second press like 中斷連線.
+// Raphael's memory in Settings shares the standard rows. A collapsed section shows its note
+// count; expanded notes show their type and description. Each note's overflow menu offers
+// editing, deletion with the existing ten-second Undo period, and an optional space move.
+// Summary and clear-all actions retain their second-press confirmation.
 //
 // `memoryHTML` draws it from a snapshot (pure, so its rules can be tested without a browser);
 // `createMemory` holds the state and does what the buttons say, through the core's `memory.*`
@@ -116,11 +113,7 @@ function itemRows(v: MemoryView, list: MemoryList): string[] {
     const line = row(
       `<span class="mem-line"><span class="mem-type">${esc(typeLabel(m.type))}</span><span class="mem-desc">${esc(m.description)}</span>${inferred}</span>`,
       "",
-      iconButton("pencil", t("mem.edit", { p0: m.description }), ` data-mem="edit" data-name="${esc(m.name)}" aria-expanded="${open}"${off}`) +
-        iconButton("trash", t("mem.delete", { p0: m.description }), ` data-mem="delete" data-name="${esc(m.name)}"${off}`) +
-        (v.moveTo
-          ? iconButton("more", t("mem.more", { p0: m.description }), ` data-mem="more" data-name="${esc(m.name)}" aria-haspopup="menu" aria-expanded="false"${off}`)
-          : ""),
+      iconButton("more", t("mem.more", { p0: m.description }), ` data-mem="more" data-name="${esc(m.name)}" aria-haspopup="menu" aria-expanded="false"${off}`),
       { cls: "mem-sub", attrs: ` data-mem-item="${esc(m.name)}"` },
     );
     return open ? [line, editorHTML(v, m)] : [line];
@@ -366,18 +359,24 @@ export function createMemory(host: MemoryHost): MemoryPanel {
     host.onMoved?.();
   }
 
-  /** The menu of a note: 「移到共同記憶」 or 「移到 <name> 的記憶」. */
+  /** Keep editing, deletion and optional space moves in the note's menu. */
   function moreMenu(anchor: HTMLElement, name: string): void {
     const label = view().moveTo ?? "";
+    const description = status !== "loading" && status !== "failed" ? status.memories.find(note => note.name === name)?.description ?? name : name;
     const el = openPopover(
       anchor,
-      `<button type="button" role="menuitem" tabindex="-1" data-mem-move><span class="mt">${esc(label)}</span></button>`,
+      `<button type="button" role="menuitem" tabindex="-1" data-mem-edit><span class="mt">${esc(t("mem.edit", { p0: description }))}</span></button>` +
+      (label ? `<button type="button" role="menuitem" tabindex="-1" data-mem-move><span class="mt">${esc(label)}</span></button>` : "") +
+      `<button type="button" role="menuitem" class="danger" tabindex="-1" data-mem-delete><span class="mt">${esc(t("mem.delete", { p0: description }))}</span></button>`,
       { className: "menu", role: "menu", label: anchor.getAttribute("aria-label") ?? undefined },
     );
     el.addEventListener("click", (e) => {
-      if (!(e.target as Element).closest("[data-mem-move]")) return;
+      const target = (e.target as Element).closest('[data-mem-edit], [data-mem-move], [data-mem-delete]');
+      if (!target) return;
       closeMenu();
-      void move(name);
+      if (target.hasAttribute('data-mem-edit')) void open(name);
+      else if (target.hasAttribute('data-mem-delete')) remove(name);
+      else void move(name);
     });
     el.querySelector<HTMLElement>("button")?.focus();
   }

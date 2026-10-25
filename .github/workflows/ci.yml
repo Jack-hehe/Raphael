@@ -1,9 +1,7 @@
 name: CI
 
-# Each pull request runs only the jobs whose part of the repository it changes (the `changes`
-# job). main is not checked again after a merge: the release workflow runs every check before
-# anything ships. A merge that changes the Rust dependencies runs the Rust job on main once, so
-# main's cache, the one every pull request falls back to, stays current.
+# Every PR and merge-queue entry checks all layers and renders the real UI. Only
+# changed UI opts into the paid judge. Dependency pushes refresh the Rust cache.
 on:
   push:
     branches: [main]
@@ -12,10 +10,8 @@ on:
       - "app/src-tauri/Cargo.toml"
       - "app/src-tauri/vendor/handy-keys/Cargo.toml"
   pull_request:
-    paths-ignore:
-      - "README.md"
-      - "LICENSE"
   workflow_dispatch:
+  merge_group:
 
 permissions:
   contents: read
@@ -36,6 +32,7 @@ jobs:
       frontend: ${{ steps.pick.outputs.frontend }}
       python: ${{ steps.pick.outputs.python }}
       rust: ${{ steps.pick.outputs.rust }}
+      ui: ${{ steps.pick.outputs.ui }}
     steps:
       - name: List the changed files
         id: pick
@@ -48,26 +45,22 @@ jobs:
           set -euo pipefail
           out() { echo "frontend=$1" >> "$GITHUB_OUTPUT"; echo "python=$2" >> "$GITHUB_OUTPUT"; echo "rust=$3" >> "$GITHUB_OUTPUT"; echo "frontend=$1 python=$2 rust=$3"; }
           case "$EVENT" in
-            workflow_dispatch) out true true true; exit 0 ;;
+            workflow_dispatch|merge_group) out true true true; echo 'ui=true' >> "$GITHUB_OUTPUT"; exit 0 ;;
             push) out false false true; exit 0 ;;  # only the Rust dependencies start a push run
           esac
           files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate --jq '.[].filename')
-          any() { printf '%s\n' "$files" | grep -Eq "$1"; }
-          ci='^\.github/workflows/ci\.yml$'
-          frontend=false; python=false; rust=false
-          # The frontend job: everything under app/ but the shell.
-          if printf '%s\n' "$files" | grep -E '^app/' | grep -Evq '^app/src-tauri/' || any "$ci"; then frontend=true; fi
-          if any '^core/' || any "$ci"; then python=true; fi
-          # The Rust job also builds the app, through tauri.mjs and the locked npm packages.
-          if any '^app/src-tauri/' || any '^app/(package\.json|package-lock\.json|scripts/tauri\.mjs)$' || any "$ci"; then rust=true; fi
-          out "$frontend" "$python" "$rust"
+          ui=false
+          if printf '%s\n' "$files" | grep -Eq '^app/(src/|index\.html|overlay\.html|scripts/look/)'; then ui=true; fi
+          echo "ui=$ui" >> "$GITHUB_OUTPUT"
+          # Every PR checks repository contracts and all three implementation layers.
+          out true true true
 
   frontend:
     name: Frontend tests and build
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 180
     defaults:
       run:
         shell: pwsh
@@ -88,14 +81,89 @@ jobs:
       - name: Install locked frontend dependencies
         run: npm ci
 
-      - name: Run frontend and build-script tests
-        run: npm test
-
-      - name: Check text color contrast
-        run: npm run check:contrast
+      - name: Verify frontend, product rules and architecture
+        run: npm run verify
 
       - name: Type-check and build frontend
         run: npm run build
+
+      - name: Capture real UI in both themes and all three sizes
+        env:
+          LOOK_BROWSER: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+        run: npm run look -- --all --theme both --width 1120,720,1920x1080
+
+      - name: Determine paid design review availability
+        if: always() && needs.changes.outputs.ui == 'true'
+        id: judge
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          if ($env:OPENROUTER_API_KEY) { 'enabled=true' >> $env:GITHUB_OUTPUT }
+          else {
+            'enabled=false' >> $env:GITHUB_OUTPUT
+            Write-Output '::notice::Design judge SKIP: OPENROUTER_API_KEY is unavailable (including fork PRs). This is not a design PASS.'
+            'Design judge: SKIP (no secret); no visual-model acceptance claimed.' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Set up uv for design judge
+        if: steps.judge.outputs.enabled == 'true'
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.11"
+          working-directory: core
+
+      - name: Install judge dependencies
+        if: steps.judge.outputs.enabled == 'true'
+        working-directory: core
+        run: uv sync --locked --dev
+
+      - name: Restore image-hash design cache
+        if: steps.judge.outputs.enabled == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: app/.look/judge-cache
+          key: design-judge-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: design-judge-${{ runner.os }}-
+
+      - name: Fetch pinned external reference images
+        if: steps.judge.outputs.enabled == 'true'
+        env:
+          RAPHAEL_JUDGE_REFERENCE_MANIFEST: ${{ vars.RAPHAEL_JUDGE_REFERENCE_MANIFEST }}
+        run: node scripts/judge-references.mjs
+
+      - name: Judge changed UI with a bounded budget
+        if: steps.judge.outputs.enabled == 'true'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RAPHAEL_JUDGE_MODEL: ${{ vars.RAPHAEL_JUDGE_MODEL || 'anthropic/claude-sonnet-4.6' }}
+        run: |
+          $lookRun = Get-ChildItem .look -Directory -Filter 'run-*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $lookRun) { throw 'No look run available for judge.' }
+          $refs = Get-Content .look/references/paths.json -Raw | ConvertFrom-Json
+          $env:RAPHAEL_JUDGE_REFERENCES = ConvertTo-Json -InputObject @($refs) -Compress
+          npm run judge -- $lookRun.FullName --max-cost-usd 15 --request-ceiling 0.10 --max-requests 1000
+
+      - name: Preserve valid cached reviews even when later images fail
+        if: always() && steps.judge.outputs.enabled == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/.look/judge-cache
+          key: design-judge-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Upload look, judge and verification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guardian-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            app/.look/run-*/report.json
+            app/.look/run-*/*.png
+            app/.look/run-*/contacts.json
+            app/.look/judge-*/report.json
+            app/.look/judge-*/summary.txt
+            app/.look/verify-*/*
+          if-no-files-found: error
+          retention-days: 14
 
   python:
     name: Python tests
@@ -211,3 +279,20 @@ jobs:
 
       - name: Run Clippy with warnings denied
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  required:
+    name: Guardian required gates
+    needs: [changes, frontend, python, windows-shell]
+    if: always() && github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every implementation and rendered gate
+        env:
+          FRONTEND: ${{ needs.frontend.result }}
+          PYTHON: ${{ needs.python.result }}
+          RUST: ${{ needs.windows-shell.result }}
+        run: |
+          test "$FRONTEND" = success
+          test "$PYTHON" = success
+          test "$RUST" = success

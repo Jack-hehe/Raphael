@@ -11,6 +11,8 @@ describe("verify CLI", () => {
     expect(result.stdout).toContain("--core");
     expect(result.stdout).toContain("--rust");
     expect(result.stdout).toContain("--out dir");
+    expect(result.stdout).toContain("--live");
+    expect(result.stdout).toContain("--judge run");
   });
   it("rejects an output flag without a directory", () => {
     for (const args of [["--out"], ["--out", "--quick"]]) {
@@ -18,5 +20,10 @@ describe("verify CLI", () => {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Unknown option: --out");
     }
+  });
+  it("rejects a judge flag without evidence", () => {
+    const result = spawnSync(process.execPath, ["scripts/verify.mjs", "--judge"], { cwd: app, encoding: "utf8" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown option: --judge");
   });
 });

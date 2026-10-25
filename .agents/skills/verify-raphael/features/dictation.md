@@ -40,6 +40,10 @@ localized notice clear of the composer, and the unchanged single gold-emblem / b
 Only dictation seeds learning; ordinary typing and clipboard paste do not. Native microphone,
 external-editor correction tracking and persistence still require isolated native acceptance.
 
+History and dictionary rows put deletion in the overflow menu (R-UI-11). The dictionary
+scene opens that menu and dismisses it before capture; the real-entry DOM test also
+deletes a word through it and restores it with Undo.
+
 ## Gotchas
 
 The fixture's populated history day is 2026-10-24; the first heatmap cell may have no

@@ -23,7 +23,7 @@
 
 /* Today: a short timeline with the time on the left and a line for now. */
 .ho-schedule { display: flex; flex-direction: column; gap: var(--sp-3); }
-.ho-slot.btn { display: grid; grid-template-columns: 52px 3px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); width: 100%; min-height: 48px; padding: var(--sp-2) var(--sp-2) var(--sp-2) 0; border: 0; border-radius: var(--r-sm); background: transparent; text-align: left; }
+.ho-slot.btn { display: grid; grid-template-columns: 52px 3px minmax(0, 1fr) auto; align-items: center; gap: var(--sp-3); width: 100%; min-height: 48px; padding: var(--sp-2) var(--sp-2) var(--sp-2) 0; border: 1px solid var(--edge); border-radius: var(--r-sm); background: transparent; text-align: left; }
 .ho-slot.btn::before { content: ""; grid-column: 2; grid-row: 1; align-self: stretch; border-radius: var(--r-pill); background: var(--accent-icon); }
 .ho-slot.btn.is-event::before { background: var(--ok); }
 .ho-slot.btn:hover { background: var(--hover); }

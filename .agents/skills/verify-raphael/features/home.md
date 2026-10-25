@@ -29,6 +29,8 @@ scene scrolls to the lower usage and dictation area at all three widths. The hom
 assertion checks member history, conversation 11, around_id 2 and the rendered turn.
 The after-onboarding scene also asserts that Home is selected and first in the rail.
 
+Timeline actions keep visible token-based frames (R-UI-18), including calendar events.
+
 ## Gotchas
 
 All records come from home.overview; no new persistent store is introduced. Counts

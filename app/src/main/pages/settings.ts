@@ -13,6 +13,7 @@ import { createOwnerControls } from "../owner-settings";
 import { getVersion } from "@tauri-apps/api/app";
 import * as api from "../api";
 import { createHiddenMembers } from "../hidden-members";
+import { openActions } from "../member-column";
 import "../member-panel.css";
 import "../settings-polish.css";
 import "../connections.css";
@@ -1236,11 +1237,13 @@ export function createSettings(app: AppContext): SettingsPage {
       case "or-check":
         void checkOpenrouter();
         break;
-      case "computer-remove": {
+      case "computer-menu": {
         // one app at a time, taken off under the app's own lock: a list computed from the
         // settings the window has would put back an app another quick removal takes away
         const exe = target.closest<HTMLElement>("[data-exe]")?.dataset.exe;
-        if (exe !== undefined) void removeComputerApp(exe);
+        if (exe !== undefined) {
+          openActions(target.closest<HTMLElement>('[data-act]')!, [{ id: "delete", label: t("settings.computerRemove"), icon: "trash" }], () => void removeComputerApp(exe));
+        }
         break;
       }
       case "clear-dictation":

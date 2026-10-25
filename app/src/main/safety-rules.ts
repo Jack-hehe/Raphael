@@ -1,10 +1,7 @@
-// The owner's safety rules, in the 拉斐爾 tab of Settings: which actions Raphael asks about first, does
-// at once, or never does (the core's `agent/safety.py`). On one card: a line that adds a rule (what
-// Raphael wants to do, in the owner's own words, with a dropdown of 先問我 / 直接做 / 不准做 and a
-// bordered 「新增」), then the rules under the two columns 「當拉斐爾想要」 and 「他會」, each with a
-// borderless pencil, which opens the rule in its own row to change it there, and a trash can, which
-// deletes it after the 10 s of 「復原」 that every delete has. There is no switch: the rules are always
-// read.
+// The owner's safety rules in Settings control which actions Raphael asks about, allows or
+// denies (the core's agent/safety.py). A framed add action follows the draft and verdict menu.
+// Each saved row offers editing and deletion in its overflow menu. Deletion retains the
+// ten-second Undo period; rules are always read and have no opt-out switch.
 //
 // `rulesHTML` draws it from a snapshot (pure, so its rules can be tested without a browser);
 // `createRules` holds the state and does what the buttons say, through the core's `safety.rules.*`
@@ -13,6 +10,7 @@
 import { core } from "./api";
 import { describeError } from "./format";
 import { getLocale, t } from "./i18n";
+import { openActions } from "./member-column";
 import type { MessageKey } from "./i18n/zh-TW";
 import { type Choice, actionRow, btn, esc, iconButton, note, sel, st } from "./ui";
 import type { Undoable } from "./undo";
@@ -119,8 +117,7 @@ function ruleRow(v: RulesView, rule: SafetyRule): string {
     `<span class="rules-what">${esc(rule.action)}</span>` +
     `<span class="rules-how">${esc(verdictLabel(rule.verdict))}</span>` +
     `<span class="rules-tools">` +
-    iconButton("pencil", t("rules.edit", { p0: rule.action }), ` data-rule="edit" data-id="${rule.id}"${off}`) +
-    iconButton("trash", t("rules.delete", { p0: rule.action }), ` data-rule="delete" data-id="${rule.id}"${off}`) +
+    iconButton("more", t("members.more", { p0: rule.action }), ` data-rule="more" data-id="${rule.id}" aria-haspopup="menu" aria-expanded="false"${off}`) +
     `</span></div>`
   );
 }
@@ -320,6 +317,11 @@ export function createRules(host: RulesHost): RulesPanel {
     if (!button) return false;
     const id = Number(button.dataset.id);
     switch (button.dataset.rule) {
+      case "more": {
+        const rule = status !== "loading" && status !== "failed" ? status.find(rule => rule.id === id) : undefined;
+        if (rule) openActions(button, [{ id: "edit", label: t("rules.edit", { p0: rule.action }), icon: "pencil" }, { id: "delete", label: t("rules.delete", { p0: rule.action }), icon: "trash" }], choice => { if (choice === "edit") edit(id); else remove(id); });
+        return true;
+      }
       case "add":
         void add();
         return true;

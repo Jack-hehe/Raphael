@@ -741,26 +741,26 @@ describe("電腦操作", () => {
   const CALC = { exe: "calculatorapp.exe", name: "Calculator" };
   const withApps = (apps: DeviceSettings["computer_apps"]) => tab("agent", { device: { ...device, computer_apps: apps } });
 
-  test("is the last section of 拉斐爾: a row per always-allowed app with a borderless trash button", () => {
+  test("is the last section of Raphael: a row per always-allowed app with an overflow menu", () => {
     const html = withApps([EXCEL, CALC]);
     expect(html).toContain("<h2>電腦操作</h2>");
     expect(html.lastIndexOf("<h2>")).toBe(html.indexOf("<h2>電腦操作</h2>"));
     expect(names(html).slice(-2)).toEqual(["Microsoft Excel", "Calculator"]);
     const excel = rowOf(html, "Microsoft Excel");
-    expect(excel).toContain('data-act="computer-remove"');
+    expect(excel).toContain('data-act="computer-menu"');
     expect(excel).toContain('data-exe="excel.exe"');
-    expect(excel).toContain('aria-label="移除"');
-    // a trash icon only: no word beside it, no helper text anywhere
+    expect(excel).toContain('aria-label="「Microsoft Excel」的選項"');
+    // An overflow icon only: no word beside it, no helper text anywhere.
     expect(excel.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).toBe("Microsoft Excel");
     expect(described(html)).toEqual([]);
-    expect(buttons(html).filter((b) => b.includes("computer-remove"))).toHaveLength(2);
+    expect(buttons(html).filter((b) => b.includes("computer-menu"))).toHaveLength(2);
   });
 
   test("with no app: one muted row, nothing else", () => {
     for (const apps of [[], undefined as unknown as DeviceSettings["computer_apps"]]) {
       const html = withApps(apps);
       expect(html).toContain('<span class="val">沒有一律允許的 App</span>');
-      expect(html).not.toContain("computer-remove");
+      expect(html).not.toContain("computer-menu");
     }
     setLocale("en");
     expect(withApps([])).toContain("No apps are always allowed");
@@ -784,7 +784,7 @@ describe("電腦操作", () => {
   test("the settings wire the button to the removal of that one app, never a whole list", () => {
     // two apps removed quickly must not compute both lists from the settings the window had
     const source = readFileSync(path.resolve(import.meta.dirname, "settings.ts"), "utf8");
-    expect(source).toContain('case "computer-remove"');
+    expect(source).toContain('case "computer-menu"');
     expect(source).toContain("removeComputerApp(exe)");
     expect(source).not.toContain("computer_apps: computerAppsWithout");
   });

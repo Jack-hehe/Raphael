@@ -354,7 +354,7 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // opened to the page by accident.
 // The messaging connections are named one by one, for the same reason. A message that arrives from
 // a messaging app has no way to reach any of them: only this window does.
-const ALLOWED_METHODS: [&str; 110] = [
+const ALLOWED_METHODS: [&str; 111] = [
     "home.overview",
     "connectors.catalog",
     "connectors.categories",
@@ -465,6 +465,7 @@ const ALLOWED_METHODS: [&str; 110] = [
     "rooms.delete",
     "rooms.messages",
     "rooms.send",
+    "rooms.stop",
     "rooms.transcribe",
     "rooms.update",
     // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).

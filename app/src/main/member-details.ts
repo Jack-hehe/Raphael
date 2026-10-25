@@ -5,6 +5,7 @@
 
 import { openRoutineDialog } from "./routine-dialog";
 import { mountConversationList } from "./conversation-list";
+import { openActions } from "./member-column";
 import * as api from "./api";
 import { mountMemberResources } from "./member-profile-resources";
 import "./member-panel.css";
@@ -162,8 +163,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       `<div class="mb-rt" data-routine="${routine.id}">` +
       `<span class="mb-rt-main"><b>${esc(routine.title)}</b><span>${esc(scheduleText(routine.schedule))}</span></span>` +
       `<span class="mb-rt-ctl">` +
-      iconButton("pencil", t("members.routineEdit", { p0: routine.title }), ` data-det="routine-edit" data-id="${routine.id}" data-k="routine-edit:${routine.id}"`, "row mb-tool") +
-      iconButton("trash", t("members.routineDelete", { p0: routine.title }), ` data-det="routine-delete" data-id="${routine.id}" data-k="routine-delete:${routine.id}"`, "row mb-tool") +
+      iconButton("more", t("members.more", { p0: routine.title }), ` data-det="routine-menu" data-id="${routine.id}" data-k="routine-menu:${routine.id}" aria-haspopup="menu" aria-expanded="false"`, "row mb-tool") +
       tg(routine.enabled, t("members.routineSwitch", { p0: routine.title }), ` data-det="routine-switch" data-id="${routine.id}" data-k="routine-switch:${routine.id}"`) +
       `</span></div>`
     );
@@ -442,14 +442,17 @@ export function createDetails(host: DetailsHost): DetailsPanel {
       case "routine-add":
         openRoutineDialog({ members: host.list()?.members ?? [host.member()], memberId: member.id, onSaved: () => void loadRoutines() });
         break;
-      case "routine-edit": {
+      case "routine-menu": {
         const routine = typeof routines === "object" ? routines.find(r => r.id === Number(act.dataset.id)) : undefined;
-        if (routine) openRoutineDialog({ members: host.list()?.members ?? [host.member()], routine, onSaved: () => void loadRoutines(), onDeleted: () => void loadRoutines() });
+        if (routine) openActions(act, [
+          { id: "edit", label: t("members.routineEdit", { p0: routine.title }), icon: "pencil" },
+          { id: "delete", label: t("members.routineDelete", { p0: routine.title }), icon: "trash" },
+        ], choice => {
+          if (choice === "delete") void deleteRoutine(routine.id);
+          else openRoutineDialog({ members: host.list()?.members ?? [host.member()], routine, onSaved: () => void loadRoutines(), onDeleted: () => void loadRoutines() });
+        });
         break;
       }
-      case "routine-delete":
-        void deleteRoutine(Number(act.dataset.id));
-        break;
       case "routine-switch":
         void switchRoutine(Number(act.dataset.id), act);
         break;

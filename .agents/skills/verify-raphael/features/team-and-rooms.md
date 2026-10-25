@@ -33,11 +33,11 @@ autocomplete menu.
 npm run look -- team team-group-menu team-rename team-delete team-new-menu team-new-group team-mentions team-empty team-drop-target team-zoom --theme both --width 1120,720,1920x1080
 npm run look -- sidebar compact-rooms new-room room-group-menu room room-draft room-menu room-rename room-members room-delete room-hover --theme both --width 1120,720,1920x1080
 npm run look -- room-composer-empty room-text room-composer-hover team-composer-empty team-text team-composer-hover --theme both --width 1120,720,1920x1080
-npm run look -- room-discussion room-thinking room-wrapup room-row-menu new-room-responder room-reply-send room-stop --theme both --width 1120,720,1920x1080
+npm run look -- room-replies room-discussion room-thinking room-wrapup room-row-menu new-room-responder room-reply-send room-stop --theme both --width 1120,720,1920x1080
 ```
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
-composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention/slash items start at normal row padding and reserve no empty icon/check column. For mutation work extend scenes through create,
+composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: at 1920x1080 the group panels occupy at least 80% of workspace width and 35% of workspace area, remain inside the scrollport, and keep names and roles at a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention/slash items start at normal row padding and reserve no empty icon/check column. For mutation work extend scenes through create,
 send, rename and membership changes; assert UI and mock boundary records. Native
 proof needs a harmless room message, actual recipient responses and persistence
 after reopening the isolated dev instance. Record recipients, states and cleanup.

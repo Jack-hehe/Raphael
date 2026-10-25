@@ -674,6 +674,7 @@ version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx", extra = ["http2"] },
+    { name = "jsonschema" },
     { name = "keyring" },
     { name = "mcp" },
     { name = "numpy" },
@@ -699,6 +700,7 @@ packaging = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.1,<1" },
+    { name = "jsonschema", specifier = "==4.26.0" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "mcp", specifier = ">=2.3.0" },
     { name = "numpy", specifier = ">=2" },

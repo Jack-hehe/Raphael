@@ -1,5 +1,5 @@
 // History: a filter and search, then the dictations grouped by day, each row its time, the cleaned
-// text and the target program. Hover for copy and delete; a click shows what the speech recognition
+// text and the target program. Hover for copy and the deletion menu; a click shows what recognition
 // heard. A day of the activity grid on Home opens the page at that day (`setDay`): a chip says so
 // and takes the filter off, and the page shows all days again the next time it is opened. How long
 // the history is kept, and clearing it all, are in Settings › 資料.
@@ -8,6 +8,7 @@ import { onLocaleChange, t } from "../i18n";
 
 import * as api from "../api";
 import { historyEmptyHint } from "../dictation";
+import { openActions } from "../member-column";
 import { loadingHTML } from "../loading";
 import { dayBounds, dayLabel, describeError, formatClock } from "../format";
 import { bindingLabels } from "../keys";
@@ -52,7 +53,7 @@ function itemHTML(item: HistoryItem, expanded: boolean): string {
     `<div class="row hrow" data-id="${item.id}" tabindex="0" aria-expanded="${expanded}">` +
     `<div class="time num">${esc(formatClock(item.created_at_ms))}</div>` +
     `<div class="lbl"><div class="txt">${esc(item.text)}</div>${meta ? `<div class="meta">${meta}</div>` : ""}</div>` +
-    `<div class="ctl acts">${iconBtn("copy", t("history.003"), ' data-act="copy"')}${iconBtn("trash", t("history.004"), ' data-act="delete"')}</div></div>` +
+    `<div class="ctl acts">${iconBtn("copy", t("history.003"), ' data-act="copy"')}${iconBtn("more", t("members.more", { p0: formatClock(item.created_at_ms) }), ' data-act="history-menu" aria-haspopup="menu" aria-expanded="false"')}</div></div>` +
     t("history.005", { p0: expanded ? "" : " hidden", p1: esc(item.raw_text) })
   );
 }
@@ -276,7 +277,7 @@ export function createHistory(app: AppContext): HistoryPage {
     } else if (act && row) {
       const id = Number(row.dataset.id);
       if (act.dataset.act === "copy") void copy(id);
-      else if (act.dataset.act === "delete") remove(id);
+      else if (act.dataset.act === "history-menu") openActions(act, [{ id: "delete", label: t("history.004"), icon: "trash" }], () => remove(id));
     } else if (row) {
       toggle(row);
     }

@@ -159,6 +159,8 @@ export function installMock(fixture, config = {}, target = window) {
       }
       if (command === "overlay_log") return;
       if (command === "main_events") { state.channel = args.channel; return; }
+      // Escape reaches the native worker even when no capture is active.
+      if (command === "window_hotkey" && args.kind === "cancel") return;
       if (command === "agent_ask_text") return null;
       if (command === "core_call") return copy(await core(args.method, args.params));
       if (command === "device_settings_get") return copy(data.device);

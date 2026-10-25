@@ -1,9 +1,66 @@
 import { Window } from "happy-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
+import { checkRendered } from "./checks.mjs";
 import { scenes } from "./scenes/index.mjs";
 
 describe("rendered look checks", () => {
+  it("rejects known English interface labels while preserving user content and brands", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<button>Save</button><button>Raphael</button><p class="message-text">Save</p><button hidden>Cancel</button>';
+    for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], null, ['Save', 'Cancel', 'Raphael']);
+    expect(result.productRules.map(item => item.rule)).toEqual(['R-UI-14']);
+  });
+  const productAudit = html => {
+    const window = new Window();
+    window.document.body.innerHTML = html;
+    for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    return { window, audit: () => auditDocument(window.document, { width: 1120, height: 900 }, []) };
+  };
+  it("rejects a small centered team board at full screen", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<div class="team-board-scroll"><div class="team-group"></div><div class="team-group"></div></div>';
+    const rect = (left, top, width, height) => ({ left, top, width, height, right: left + width, bottom: top + height });
+    window.document.querySelector('.team-board-scroll').getBoundingClientRect = () => rect(232, 100, 1688, 894);
+    const groups = window.document.querySelectorAll('.team-group');
+    groups[0].getBoundingClientRect = () => rect(780, 273, 278, 334);
+    groups[1].getBoundingClientRect = () => rect(1082, 273, 278, 198);
+    vi.stubGlobal('document', window.document); vi.stubGlobal('innerWidth', 1920);
+    try {
+      expect(() => checkRendered('team-board-space')).toThrow(/R-UI-01/);
+      groups[0].getBoundingClientRect = () => rect(300, 340, 742, 400);
+      groups[1].getBoundingClientRect = () => rect(1090, 340, 742, 400);
+      expect(checkRendered('team-board-space').widthShare).toBeGreaterThanOrEqual(0.8);
+      groups[0].getBoundingClientRect = () => rect(300, 340, 742, 120);
+      groups[1].getBoundingClientRect = () => rect(1090, 340, 742, 120);
+      expect(() => checkRendered('team-board-space')).toThrow(/35%/);
+      vi.stubGlobal('innerWidth', 1120);
+      expect(checkRendered('team-board-space')).toEqual({ check: 'team-board-space', wide: false });
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("rejects duplicate custom and native tooltips", () => {
+    const { audit } = productAudit('<button data-tooltip="Save" title="Save">Save</button><button data-tooltip="Open"><svg><title>Open</title></svg></button><button title="Native">Native</button>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-26', 'R-UI-26']);
+  });
+  it("rejects visible row destruction but permits overflow menus", () => {
+    const { audit } = productAudit('<div class="mp-resource"><button class="danger">Delete</button></div><div role="menu"><div class="mp-resource"><button class="danger">Delete</button></div></div><div class="mp-resource" hidden><button class="danger">Delete</button></div>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-11']);
+  });
+  it("checks text frames and bare icon borders", () => {
+    const { audit } = productAudit('<button class="btn" style="border: none">Save</button><button class="btn icon" style="border: 1px solid red">X</button><button class="btn" style="border: 1px solid red">Cancel</button><button class="btn brand" style="border:none">Raphael</button>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-18', 'R-UI-18']);
+  });
+  it("checks rendered primary and destructive action positions", () => {
+    const { window, audit } = productAudit('<div class="action-row"><button class="pri">Save</button><span class="action-destructive"><button>Delete</button></span></div>');
+    const primary = window.document.querySelector('.pri');
+    primary.getBoundingClientRect = () => ({ left: 0, top: 10, right: 50, bottom: 40, width: 50, height: 30 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-27', 'R-UI-27']);
+  });
+  it("distinguishes date choices and navigation from ordinary text actions", () => {
+    const { audit } = productAudit('<div class="au-month-grid"><button class="btn" style="border:0">25</button></div><button class="btn mb-panel-back" style="border:0">Members</button><button class="btn mc-source" style="border:0">Provider</button><button class="btn cs-main" style="border:0">Notion service details</button><button class="btn conversation-new" style="border:0">New conversation</button>');
+    expect(audit().productRules.map(item => item.text)).toEqual(['New conversation']);
+  });
   it.each(scenes.filter(scene => scene.name.endsWith("composer-learn")))("keeps $name correction data distinct from untranslated UI", scene => {
     const window = new Window(), { before, after } = scene.fixture.dictationText;
     expect(scene.steps.find(step => step.action === "dictation-paste").text).toBe(before);

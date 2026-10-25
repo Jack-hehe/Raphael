@@ -28,7 +28,7 @@ export default [
   ...["day", "provider", "routine"].map(group => scene(`usage-group-${group}`, `Usage grouped by ${group}`, [...usage, click(`[data-run-group="${group}"]`), scroll(".run-groups")])),
   scene("usage-allowances", "Allowances for Claude, Codex and Gemini CLIs", [...usage, scroll(".run-allowance")]),
   scene("usage-empty", "Usage without runs", usage, { usageEmpty: true }),
-  ...["overview", "history", "dictionary"].map(tab => scene(`dictation-${tab}`, `Dictation ${tab}`, dictation(tab))),
+  ...["overview", "history", "dictionary"].map(tab => scene(`dictation-${tab}`, `Dictation ${tab}`, [...dictation(tab), ...(tab === "dictionary" ? [wait(".wrow"), click('[data-act="word-menu"]'), wait('#app-popover [data-pick="delete"]'), key("Escape")] : [])])),
   scene("dictation-keyboard", "Horizontal dictation navigation with keyboard focus", [...dictation("overview"), key("ArrowRight"), wait('[data-dictation-tab="history"][aria-selected="true"]'), key("ArrowLeft"), wait('[data-dictation-tab="overview"][aria-selected="true"]'), key("End"), key("Home"), wait('[data-dictation-tab="overview"][aria-selected="true"]'), key("End"), wait('[data-dictation-tab="dictionary"][aria-selected="true"]'), check("dictation-navigation")]),
   scene("dictation-history-day", "History filtered through the heatmap", [...dictation("overview"), click('.heat [data-date="2026-10-24"]'), wait(".day-row:not([hidden])")]),
   scene("dictation-notice", "Dictation connection notice", dictation("overview"), { problem: true }),

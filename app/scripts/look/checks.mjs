@@ -159,6 +159,18 @@ export function checkRendered(name) {
     }
     return { check: name, popover: !!popover, weekdays: weekdays.map(day => day.textContent) };
   }
+  if (name === "team-board-space") {
+    const workspace = document.querySelector('.team-board-scroll').getBoundingClientRect();
+    const groups = [...document.querySelectorAll('.team-group:not([hidden])')].map(group => group.getBoundingClientRect());
+    if (innerWidth < 1400 || !groups.length) return { check: name, wide: false };
+    const left = Math.min(...groups.map(box => box.left)), right = Math.max(...groups.map(box => box.right));
+    const widthShare = (right - left) / workspace.width;
+    const areaShare = groups.reduce((sum, box) => sum + box.width * box.height, 0) / (workspace.width * workspace.height);
+    require(widthShare >= 0.8, "R-UI-01: team groups must use at least 80% of the workspace width");
+    require(areaShare >= 0.35, "R-UI-01: team groups must use at least 35% of the workspace area");
+    require(groups.every(box => box.left >= workspace.left && box.right <= workspace.right && box.bottom <= workspace.bottom), "R-UI-01: the default board fits its workspace");
+    return { check: name, wide: true, widthShare, areaShare };
+  }
   if (name === "team-header") {
     const page = document.querySelector('.team-page'), header = page.querySelector('.page-head');
     const title = header?.querySelector('h1'), add = header?.querySelector('[data-team="new"]');

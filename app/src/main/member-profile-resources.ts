@@ -1,6 +1,7 @@
 // The profile and details panel share the member-owned skill and command editor. New members
 // keep these in a draft; existing members write each explicit resource action immediately.
 import * as api from "./api";
+import { openActions } from "./member-column";
 import { describeError } from "./format";
 import { t } from "./i18n";
 import type { Member, MemberCommand, MemberPatch, MemberSkill, MemberVoice, Routine, WireAttachment } from "./types";
@@ -92,10 +93,10 @@ export function mountMemberResources(container: HTMLElement, host: ResourceHost)
     const off = busy ? " disabled" : "";
     const skillHTML = `<section class="mp-card"><h3>${esc(t("members.profile.skillsTitle"))}</h3>` +
       `<div class="mp-add">${input("mp-skill-source", source, t("members.profile.source"), 2048)}${btn(esc(t("members.profile.import")), "sm", ` data-res="import"${off}`)}</div>` +
-      skills.map(s => `<div class="mp-resource"><div><b>${esc(s.name)}</b><p>${esc(s.description || s.source)}</p></div>${tg(s.enabled, `${t("members.profile.enable")} ${s.name}`, ` data-res="skill-toggle" data-id="${s.id}"${off}`)}${iconButton("trash", t("members.profile.delete"), ` data-res="skill-delete" data-id="${s.id}"${off}`, "danger")}</div>`).join("") +
+      skills.map(s => `<div class="mp-resource"><div><b>${esc(s.name)}</b><p>${esc(s.description || s.source)}</p></div>${tg(s.enabled, `${t("members.profile.enable")} ${s.name}`, ` data-res="skill-toggle" data-id="${s.id}"${off}`)}${iconButton("more", t("members.more", { p0: s.name }), ` data-res="skill-menu" data-id="${s.id}" aria-haspopup="menu" aria-expanded="false"${off}`)}</div>`).join("") +
       (skills.length ? "" : empty(t("members.profile.noSkills"))) + `</section>`;
     const commandsHTML = `<section class="mp-card"><h3>${esc(t("members.profile.commands"))}</h3>` +
-      commands.map(c => `<div class="mp-resource"><div><b>/${esc(c.name)}</b><p>${esc(c.description)}</p></div>${iconButton("pencil", t("members.profile.editResource"), ` data-res="command-edit" data-id="${c.id}"${off}`)}${iconButton("trash", t("members.profile.delete"), ` data-res="command-delete" data-id="${c.id}"${off}`, "danger")}</div>`).join("") +
+      commands.map(c => `<div class="mp-resource"><div><b>/${esc(c.name)}</b><p>${esc(c.description)}</p></div>${iconButton("more", t("members.more", { p0: c.name }), ` data-res="command-menu" data-id="${c.id}" aria-haspopup="menu" aria-expanded="false"${off}`)}</div>`).join("") +
       (commands.length ? "" : empty(t("members.profile.noCommands"))) +
       `<div class="mp-command-fields">${input("mp-command-name", command.name, t("members.profile.commandName"), 32)}${input("mp-command-description", command.description, t("members.profile.commandDescription"), 200)}</div>` +
       `<textarea id="mp-command-template" class="mb-fin mb-ta" rows="4" maxlength="8000" placeholder="${esc(t("members.profile.commandTemplate", { input: "{input}" }))}" aria-label="${esc(t("members.profile.commandTemplate", { input: "{input}" }))}">${esc(command.template)}</textarea>` +
@@ -146,12 +147,7 @@ export function mountMemberResources(container: HTMLElement, host: ResourceHost)
     else if (host.memberId !== null) await api.membersUpdate(host.memberId, next);
     Object.assign(voiceState, next);
   }
-  const click = (e: Event): void => {
-    const target = (e.target as Element).closest<HTMLButtonElement>("[data-res]");
-    if (!target || target.disabled || busy) return;
-    capture();
-    const action = target.dataset.res;
-    const id = Number(target.dataset.id);
+  function choose(action: string | undefined, id: number, target: HTMLButtonElement): void {
     if (action === "retry") { void refresh(); return; }
     if (action === "voice") {
       openMenu(target, [{ value: "", label: t("members.profile.defaultVoice") }, ...voices.map(v => ({ value: v.id, label: v.name }))], voiceState.voice, value => void run(() => patch({ voice: value })));
@@ -208,6 +204,17 @@ export function mountMemberResources(container: HTMLElement, host: ResourceHost)
         if (alive) container.innerHTML = "";
       }
     });
+  }
+  const click = (e: Event): void => {
+    const target = (e.target as Element).closest<HTMLButtonElement>("[data-res]");
+    if (!target || target.disabled || busy) return;
+    capture();
+    const action = target.dataset.res;
+    const id = Number(target.dataset.id);
+
+    if (action === "skill-menu") openActions(target, [{ id: "skill-delete", label: t("members.profile.delete"), icon: "trash" }], choice => choose(choice, id, target));
+    else if (action === "command-menu") openActions(target, [{ id: "command-edit", label: t("members.profile.editResource"), icon: "pencil" }, { id: "command-delete", label: t("members.profile.delete"), icon: "trash" }], choice => choose(choice, id, target));
+    else choose(action, id, target);
   };
   container.addEventListener("click", click);
   draw();

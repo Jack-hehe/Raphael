@@ -35,7 +35,7 @@ export async function run(options) {
   await mkdir(options.out, { recursive: true });
   // Keep each invocation separate: a blocked run must never inherit old green screenshots.
   const directory = await mkdtemp(join(options.out, "run-"));
-  const report = { status: "running", startedAt: new Date().toISOString(), options: { scenes: options.selected.map(scene => scene.name), themes: options.themes, widths: options.widths, skin: options.skin, locale: options.locale }, results: [], contactSheets: [], errors: [] };
+  const report = { status: "running", startedAt: new Date().toISOString(), options: { scenes: options.selected.map(scene => scene.name), themes: options.themes, widths: options.widths, heights: options.heights, skin: options.skin, locale: options.locale }, results: [], contactSheets: [], errors: [] };
   let server, browser;
   const save = () => writeFile(join(directory, "report.json"), JSON.stringify(report, null, 2) + "\n");
   try {
@@ -64,7 +64,7 @@ export async function run(options) {
     for (const scene of options.selected) for (const theme of options.themes) for (const width of options.widths) {
       const page = await browser.newPage();
       const runtimeErrors = [];
-      const result = { scene: scene.name, theme, width, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
+      const result = { scene: scene.name, theme, width, height: options.heights[width] ?? 900, skin: options.skin, locale: options.locale, runtimeErrors, image: null, failed: true };
       report.results.push(result);
       const error = (kind, message) => runtimeErrors.push({ kind, message });
       page.on("pageerror", value => error("exception", value.message));
@@ -111,7 +111,12 @@ export async function run(options) {
         result.diagnostics = await page.evaluate(() => ({ messages: [...document.querySelectorAll('.message-text, .ans, .ra')].map(el => ({ tag: el.tagName, class: el.className, parent: el.parentElement?.outerHTML.slice(0, 500) })) })).catch(() => null);
       }
       try {
-        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: options.heights[width] ?? 900 }, namespaces, latinFor(scene)));
+        const englishUI = options.locale === "zh-TW" && !scene.name.startsWith("overlay-") ? await page.evaluate(async () => {
+          const [{ en }, { zhTW }] = await Promise.all([import('/src/main/i18n/en.ts'), import('/src/main/i18n/zh-TW.ts')]);
+          // Brand/key names and deliberately shared CTA decisions have identical values.
+          return [...new Set(Object.entries(en).filter(([key, value]) => typeof value === 'string' && /[A-Za-z]/.test(value) && !/[<{}]/.test(value) && /[\u3400-\u9fff]/.test(zhTW[key] ?? '') && value !== zhTW[key]).map(([, value]) => value.trim()))];
+        }) : [];
+        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: options.heights[width] ?? 900 }, namespaces, latinFor(scene), englishUI));
         const mockErrors = await page.evaluate(() => window.__look?.errors ?? ["Mock boundary was not installed"]);
         for (const message of mockErrors) error("ipc", message);
         const image = `${scene.name}-${theme}-${width}.png`;

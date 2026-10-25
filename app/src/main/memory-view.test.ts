@@ -33,12 +33,13 @@ describe("the memory's rows", () => {
     expect(html).toContain('data-mem="expand" aria-expanded="false"');
   });
 
-  test("open, a row for each note with its type, a pencil and a trash can, then the summary and 全部清除", () => {
+  test("open, a row for each note with its type and an overflow menu, then the summary and 全部清除", () => {
     const html = memoryHTML(view({ expanded: true }));
     expect(html.match(/<div class="row mem-sub/g)).toHaveLength(3);
     expect(visible(html)).toBe("記憶 2 本人 主人住在台北 偏好 回答保持兩三句 推測 對話摘要 清除 全部清除");
-    expect(html).toContain('data-mem="edit" data-name="user-city"');
-    expect(html).toContain('data-mem="delete" data-name="preference-short"');
+    expect(html).toContain('data-mem="more" data-name="user-city"');
+    expect(html).toContain('data-mem="more" data-name="preference-short"');
+    expect(html).not.toMatch(/data-mem="(?:edit|delete)"/);
     // The summary's text itself is not shown: only that there is one, and the way to clear it.
     expect(html).not.toContain("規劃週末");
   });
@@ -59,7 +60,7 @@ describe("the memory's rows", () => {
         expect(tag).toMatch(/title="[^"]+"/);
       }
     }
-    expect(html).toContain('aria-label="刪除「主人住在台北」" title="刪除「主人住在台北」"');
+    expect(html).toContain('aria-label="「主人住在台北」的選項" title="「主人住在台北」的選項"');
   });
 
   test("an open note is its title on one line and its text in a box, with 取消 and 儲存", () => {
@@ -67,7 +68,7 @@ describe("the memory's rows", () => {
     const title = '<input id="mem-title" class="mem-title" type="text" maxlength="80" aria-label="「主人住在台北」的標題" value="主人住在&amp;台北">';
     const text = '<textarea id="mem-body" class="mem-body" rows="5" maxlength="1200" aria-label="「主人住在台北」的內容">主人住在&lt;台北&gt;。</textarea>';
     expect(html).toContain(title + text);
-    expect(html).toContain('data-mem="edit" data-name="user-city" aria-expanded="true"');
+    expect(html).toContain('data-mem="more" data-name="user-city" aria-haspopup="menu"');
     expect(html).toContain('data-mem="cancel"');
     expect(html).toContain('data-mem="save"');
   });

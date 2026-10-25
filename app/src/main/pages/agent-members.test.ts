@@ -362,7 +362,8 @@ test("routine notifications refresh the open panel immediately and keep the rout
   send({ type: "RoutinesChanged", member_id: 3 });
   await flush();
   expect($(".mb-rts").textContent).toContain("Daily review");
-  $('[data-det="routine-edit"]').click();
+  $('[data-det="routine-menu"]').click();
+  document.querySelector<HTMLElement>('#app-popover [data-pick="edit"]')!.click();
   const title = document.querySelector<HTMLInputElement>("#au-title")!;
   title.focus();
   title.value = "My unsaved title";

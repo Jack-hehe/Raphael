@@ -11,7 +11,8 @@
     "test": "vitest run",
     "check:contrast": "node scripts/check-palette.mjs",
     "look": "node scripts/look/index.mjs",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "judge": "node scripts/guardian.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0"

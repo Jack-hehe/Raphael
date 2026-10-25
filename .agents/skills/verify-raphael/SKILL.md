@@ -95,3 +95,47 @@ kill processes by name. If interrupted, identify only the instance/profile/port
 started by this run before stopping it. Keep evidence; do not wipe `.look/` during
 a handoff. Stop only a native dev process that this task started; leave the user's
 installed app and other worktrees untouched.
+
+
+## Guardian hand-off gates
+
+Read [RULES.md](../../product/RULES.md) and [ARCHITECTURE.md](../../product/ARCHITECTURE.md).
+Their named tests run in the ordinary Vitest/pytest suites on every PR, not local hooks.
+From app/, the complete offline check is `npm run verify -- --core --rust`.
+
+For UI hand-off, capture `npm run look -- --all --theme both --width 1120,720,1920x1080`.
+The 1920 viewport is 1080px high. Inspect every contact sheet and relevant full-size
+image at all three sizes, then run `npm run judge -- <look run dir> --references <external png/jpg paths...>`
+(or `npm run verify -- --judge <look run dir>` with RAPHAEL_JUDGE_REFERENCES as a JSON
+array of external paths). Judge is required after look and before UI hand-off.
+It refuses failed/incomplete look evidence, uses judge rules plus each scene's
+feature entry, and fails scores below 4, hard violations, malformed reviews and
+budget exhaustion. Reports and summaries live in app/.look/judge-*/; cache identity
+includes candidate bytes, model, rules, feature and reference bytes.
+
+Judge uses Windows Credential Manager locally; hosted GitHub Actions alone accepts
+OPENROUTER_API_KEY. No secret is ever logged. Its default vision model is configurable
+with RAPHAEL_JUDGE_MODEL or --model. Costs vary by model and image size; --max-cost-usd,
+--request-ceiling and --max-requests bound admission. Unknown/over-ceiling reported
+costs stop the run. The provider controls final billing; the configured per-request
+ceiling is a conservative reservation, not a provider-enforced credit limit.
+Use an account/key spending limit as the billing backstop. Cache hits cost zero.
+Reference images stay outside git; CI downloads public HTTPS images using a pinned
+URL/hash manifest in the repository variable RAPHAEL_JUDGE_REFERENCE_MANIFEST.
+Missing configuration fails when judge is enabled. No maintainer-specific path is
+required. Missing fork secrets produce an explicit SKIP notice, never design PASS.
+
+For brain/tool-path hand-off, the maintainer runs `npm run verify -- --live` with
+installed/logged-in subscriptions and the OS key. RAPHAEL_LIVE_CONFIG can select a
+JSON models list; core/guardian-models.json is the portable API example. Each turn
+uses production loops/tool definitions/MCP with a recording executor and synthetic
+files. It performs no real member, routine, memory, URL or deletion action. A model
+request still uses network/subscription/API budget. Missing login/key is SKIP;
+a failed scenario exits 1 and an entirely skipped/capped matrix exits 2. Reports
+live in core/.live/run-*/report.json. Native CLI-internal model round trips are not
+observable; the hard run cap counts API calls and submitted CLI turns, plus per-cell
+timeouts. The nightly API-only workflow needs no CLI login and is explicitly opt-in.
+
+Use the PR template to record rule IDs, commands/exits, look/judge/live artifacts,
+images inspected and all incomplete/native acceptance. Never infer deployed or native
+acceptance from offline gates. See GUARDIAN-NOTES.md for repository settings and costs.

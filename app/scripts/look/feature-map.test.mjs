@@ -28,6 +28,7 @@ describe("maintained verification feature map", () => {
         const options = parseOptions(command.trim().split(/\s+/), scenes);
         expect(options.themes, `${name}: ${command}`).toEqual(["light", "dark"]);
         expect(options.widths, `${name}: ${command}`).toEqual(["home", "automations", "dictation", "members", "conversation", "team-and-rooms"].includes(name) ? [1120, 720, 1920] : [1120, 720]);
+        if (options.widths.includes(1920)) expect(options.heights[1920], `${name}: ${command}`).toBe(1080);
       }
     }
     const staged = resolve(root, ".fold/.agents/skills/verify-raphael/features");
