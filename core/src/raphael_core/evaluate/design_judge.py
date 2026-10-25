@@ -19,6 +19,9 @@ from .credentials import key_provider
 ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
 VERSION = 1
+# One request per look image: the full matrix must fit the default; dollars stay the real limit.
+DEFAULT_MAX_REQUESTS = 1200
+MAX_REQUESTS = 2000
 
 
 def rules_path(root):
@@ -144,7 +147,7 @@ def candidates(run):
     return report["results"]
 
 
-async def run_judge(run, *, root=ROOT, model=DEFAULT_MODEL, references=(), client=None, max_cost_usd=5.0, request_ceiling=0.10, max_requests=1000):
+async def run_judge(run, *, root=ROOT, model=DEFAULT_MODEL, references=(), client=None, max_cost_usd=5.0, request_ceiling=0.10, max_requests=DEFAULT_MAX_REQUESTS):
     output = root / "app/.look"
     output.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="judge-", dir=output))
@@ -152,7 +155,7 @@ async def run_judge(run, *, root=ROOT, model=DEFAULT_MODEL, references=(), clien
     own_client = client is None
     client = client or OpenRouterClient(key_provider)
     try:
-        if not 0 < request_ceiling <= max_cost_usd <= 100 or not 1 <= max_requests <= 1000:
+        if not 0 < request_ceiling <= max_cost_usd <= 100 or not 1 <= max_requests <= MAX_REQUESTS:
             raise ValueError("invalid_budget")
         rows = candidates(run)
         if not references:
@@ -217,7 +220,7 @@ def main():
     parser.add_argument("--references", type=Path, nargs="+", default=[])
     parser.add_argument("--max-cost-usd", type=float, default=5.0)
     parser.add_argument("--request-ceiling", type=float, default=0.10)
-    parser.add_argument("--max-requests", type=int, default=1000)
+    parser.add_argument("--max-requests", type=int, default=DEFAULT_MAX_REQUESTS)
     args = parser.parse_args()
     return asyncio.run(run_judge(args.run.resolve(), model=args.model, references=args.references, max_cost_usd=args.max_cost_usd, request_ceiling=args.request_ceiling, max_requests=args.max_requests))
 

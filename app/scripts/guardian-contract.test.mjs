@@ -17,7 +17,7 @@ it("CI enforces the same offline layers and real three-size UI for every PR", ()
   expect(ci).toContain("--max-cost-usd");
   const requestLimit = Number(ci.match(/--max-requests (\d+)/)?.[1]);
   expect(requestLimit).toBeGreaterThanOrEqual(scenes.length * 6);
-  expect(requestLimit).toBeLessThanOrEqual(1000);
+  expect(requestLimit).toBeLessThanOrEqual(2000);
   expect(ci).toContain("secrets.OPENROUTER_API_KEY");
   expect(ci).toContain("needs: [changes, frontend, python, windows-shell]");
   const nightly = read(".github/workflows/guardian-live.yml");

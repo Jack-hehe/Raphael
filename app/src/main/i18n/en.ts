@@ -71,7 +71,6 @@ export const en = {
   "brains.missing": "Not installed",
   "brains.ready": "Signed in",
   "brains.signedOut": "Signed out",
-  "brains.login": "Sign in",
   "brains.install": "Install guide",
   "models.providers": "Providers",
   "models.used": "Models in use",
@@ -1292,4 +1291,7 @@ export const en = {
   "members.draftCreateCount": "Create {p0} members",
   "members.draftSaveCount": "Apply {p0} changes",
   "members.draftDefaultAvatar": "Default silhouette",
+  "brains.connect": "Connect",
+  "brains.disconnect": "Disconnect",
+  "brains.disconnected": "Disconnected",
 } satisfies Messages;

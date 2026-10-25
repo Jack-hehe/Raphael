@@ -71,7 +71,6 @@ export const ja = {
   "brains.missing": "未インストール",
   "brains.ready": "ログイン済み",
   "brains.signedOut": "未ログイン",
-  "brains.login": "ログイン",
   "brains.install": "インストール方法",
   "models.providers": "プロバイダー",
   "models.used": "使用するモデル",
@@ -1292,4 +1291,7 @@ export const ja = {
   "members.draftCreateCount": "{p0} 人のメンバーを作成",
   "members.draftSaveCount": "{p0} 件の変更を適用",
   "members.draftDefaultAvatar": "デフォルトのシルエット",
+  "brains.connect": "接続",
+  "brains.disconnect": "接続を解除",
+  "brains.disconnected": "切断済み",
 } satisfies Messages;

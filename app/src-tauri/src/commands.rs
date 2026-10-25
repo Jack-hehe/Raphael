@@ -380,6 +380,7 @@ const ALLOWED_METHODS: [&str; 111] = [
     "providers.list",
     "brains.cli",
     "brains.cli_login",
+    "brains.cli_disconnect",
     "providers.add",
     "providers.update",
     "providers.remove",
@@ -1903,7 +1904,7 @@ mod tests {
 
     #[test]
     fn cli_brains_are_main_window_methods_and_emit_no_private_payload() {
-        for method in ["brains.cli", "brains.cli_login"] {
+        for method in ["brains.cli", "brains.cli_login", "brains.cli_disconnect"] {
             assert!(is_allowed_method(method), "{method}");
         }
         assert!(!is_allowed_method("brains.execute"));

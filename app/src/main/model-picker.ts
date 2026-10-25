@@ -655,7 +655,7 @@ class MountedPicker implements ModelPicker {
     const rail = (["subscriptions", "api", "local"] as const).map((group) => {
       const items = sources.filter((source) => source.group === group);
       return !items.length ? "" : `<section><h3>${esc(t(groupKeys[group]))}</h3>` + items.map((source) => {
-        const status = source.id.startsWith("cli:") ? !this.o.clis ? t("common.loading") : t(!source.cli?.installed ? "brains.missing" : source.cli.logged_in === true ? "brains.ready" : "brains.signedOut") :
+        const status = source.id.startsWith("cli:") ? !this.o.clis ? t("common.loading") : t(source.cli?.disconnected ? "brains.disconnected" : !source.cli?.installed ? "brains.missing" : source.cli.available ? "brains.ready" : "brains.signedOut") :
           t(source.group === "local" ? "chooser.localCount" : "chooser.modelCount", { n: source.id === "local-speech" && Array.isArray(this.o.local?.models) ? this.o.local.models.length : source.models.length });
         return `<button type="button" class="btn mc-source" data-source="${esc(source.id)}" aria-pressed="${this.source === source.id}">${sourceMark(source)}<span><strong>${esc(source.name)}</strong><small>${esc(status)}</small></span>${source.id === (this.o.local?.active ? "local-speech" : savedSource) ? '<i class="mc-current" aria-hidden="true"></i>' : ""}</button>`;
       }).join("") + `</section>`;
@@ -670,8 +670,8 @@ class MountedPicker implements ModelPicker {
     if (!source) { pane.innerHTML = `<p class="mc-empty">${esc(t("chooser.empty"))}</p>`; this.paintFooter(); return; }
     const note = source.group === "subscriptions" ? "chooser.subscriptionNote" : source.group === "local" ? "chooser.localNote" : "chooser.apiNote";
     pane.innerHTML = `<header class="mc-pane-head">${sourceMark(source)}<span><h3>${esc(source.name)}</h3><p>${esc(t(note))}</p></span></header>`;
-    if (source.group === "subscriptions" && (!source.cli?.installed || source.cli.logged_in !== true)) {
-      pane.innerHTML += `<div class="mc-empty"><p>${esc(t(source.cli?.installed ? "chooser.loginNote" : "chooser.installNote"))}</p>${this.o.clis ? btn(esc(t(source.cli?.installed ? "brains.login" : "brains.install")), "", ' data-dlg="login"') : esc(t("common.loading"))}</div>`;
+    if (source.group === "subscriptions" && !source.cli?.available) {
+      pane.innerHTML += `<div class="mc-empty"><p>${esc(t(source.cli?.disconnected ? "brains.disconnected" : source.cli?.installed ? "chooser.loginNote" : "chooser.installNote"))}</p>${this.o.clis ? btn(esc(t(source.cli?.installed ? "brains.connect" : "brains.install")), "", ' data-dlg="login"') : esc(t("common.loading"))}</div>`;
       this.paintFooter(); return;
     }
     if (source.models.length > 12) {

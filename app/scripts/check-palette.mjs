@@ -50,6 +50,8 @@ for (const [theme, palette] of Object.entries({ "default/light": light, "default
   contrast["on-accent"] = { foreground: palette["on-accent"], fill: palette.accent, ratio: +ratio(palette["on-accent"], palette.accent).toFixed(2), minimum: +minimum.toFixed(2) };
   if (minimum < 4.5) process.exitCode = 1;
   contrast.toast = { normal: +ratio(palette["toast-action"], palette.text).toFixed(2), hover: +ratio(palette["toast-action"], palette["toast-hover"]).toFixed(2) };
+  contrast.captionClose = +ratio(palette["on-close"], palette.close).toFixed(2);
+  if (contrast.captionClose < 4.5) process.exitCode = 1;
   if (Math.min(...Object.values(contrast.toast)) < 4.5) process.exitCode = 1;
   contrast.destructive = Object.fromEntries(["panel", "btn", "menu", "danger-hover", "danger-pressed"].map(surface => [surface, +ratio(palette.err, palette[surface]).toFixed(2)]));
   if (Object.values(contrast.destructive).some(value => value < 4.5)) process.exitCode = 1;

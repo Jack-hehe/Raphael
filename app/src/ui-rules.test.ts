@@ -116,7 +116,11 @@ describe("buttons", () => {
       }
     }
     for (const modifier of ["pri", "sm", "row", "danger", "btn"]) classes.delete(modifier);
-    const allowlist: readonly string[] = []; // Frozen: may only shrink.
+    // Owner-approved caption hover exception (2026-10-25); ordinary icon controls stay frameless.
+    const allowlist: readonly string[] = [
+      "styles.css: .window-button:hover", "styles.css: .window-button:active",
+      "styles.css: .window-close:hover", "styles.css: .window-close:active",
+    ];
     const violations = (css: string): string[] => [...strip(css).matchAll(/([^{}]+)\{([^{}]*)\}/g)].flatMap(([, selectors, body]) => {
       const surfaces = [...body!.matchAll(/(?:^|;)\s*background(?:-color|-image)?\s*:\s*([^;]+)/g)]
         .filter(([, value]) => !/^(?:transparent|none)\s*(?:!important)?$/.test(value!.trim()));

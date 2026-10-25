@@ -67,11 +67,16 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 159 current scenes (954 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen.
+scenes. There are 170 current scenes (1020 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 Answer scenes select expandable replies, avoiding collapsed work's hidden messages;
 the driver chooses the first visible match. Favicon requests return an empty 204.
+
+Subscription account scenes drive the shared row menu through disconnect and reconnect. The
+`window-control` driver step checks caption hover/pressed tokens, rounded geometry, glyph
+centering, inner margins, labels, keyboard focus and close contrast without closing the page.
+Its `hoverOnly` option preserves an open settings modal for the resulting screenshot.
 
 Verify always runs TypeScript and Vitest; its default also runs contrast. `--quick`
 excludes contrast; `--core` adds offline pytest and `--rust` adds offline locked cargo
@@ -86,6 +91,6 @@ Its rules, feature context, external reference paths, budgets and cache are
 documented in the verify-raphael skill and `GUARDIAN-NOTES.md`. The verify alias is
 `npm run verify -- --judge <look run>`; set `RAPHAEL_JUDGE_REFERENCES` to a JSON array
 of external image paths. Live matrix and judge opt into paid network requests;
-ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1000 (the full matrix has 954 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
+ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1200 (the full matrix has 1020 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
 the repo's contracts and full look matrix in CI. Missing hosted secrets produce
 an explicit SKIP notice, never live/design acceptance.

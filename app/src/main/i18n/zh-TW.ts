@@ -70,7 +70,6 @@ export const zhTW = {
   "brains.missing": "未安裝",
   "brains.ready": "已登入",
   "brains.signedOut": "未登入",
-  "brains.login": "登入",
   "brains.install": "安裝說明",
   "models.providers": "供應商",
   "models.used": "使用的模型",
@@ -1291,6 +1290,9 @@ export const zhTW = {
   "members.draftCreateCount": "建立 {p0} 位成員",
   "members.draftSaveCount": "套用 {p0} 項變更",
   "members.draftDefaultAvatar": "預設剪影",
+  "brains.connect": "連線",
+  "brains.disconnect": "中斷連線",
+  "brains.disconnected": "已中斷連線",
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

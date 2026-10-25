@@ -27,7 +27,8 @@ describe("maintained verification feature map", () => {
       for (const [, command] of commands) {
         const options = parseOptions(command.trim().split(/\s+/), scenes);
         expect(options.themes, `${name}: ${command}`).toEqual(["light", "dark"]);
-        expect(options.widths, `${name}: ${command}`).toEqual(["home", "automations", "dictation", "members", "conversation", "team-and-rooms"].includes(name) ? [1120, 720, 1920] : [1120, 720]);
+        const wide = ["home", "automations", "dictation", "members", "conversation", "team-and-rooms"].includes(name) || options.selected.some(scene => scene.name.startsWith("cli-account-") || scene.name.startsWith("window-hover-"));
+        expect(options.widths, `${name}: ${command}`).toEqual(wide ? [1120, 720, 1920] : [1120, 720]);
         if (options.widths.includes(1920)) expect(options.heights[1920], `${name}: ${command}`).toBe(1080);
       }
     }

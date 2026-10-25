@@ -181,7 +181,8 @@ class CliLoop:
                 if self.response is not None:
                     await self.aclose()
                 else:
-                    await self.task
+                    if not self.task.cancelled():
+                        await self.task
             return outcome
         except asyncio.CancelledError:
             await self.aclose()
@@ -196,18 +197,31 @@ class CliLoop:
         if self.task:
             await asyncio.gather(self.task, return_exceptions=True)
 
+    async def disconnect(self):
+        """Stop the child and release the waiting turn with the usual connection guidance."""
+        await self.aclose()
+        self._failure("login", NAMES[brain_ref(self.model)[0]])
+
     def _failure(self, reason, name):
         self.failed = True
         messages = {
             "missing": f"請先安裝 {name}，再到設定 › 模型與用量登入。",
-            "login": f"請先在設定 › 模型與用量登入 {name}。",
+            "login": f"請先到設定 › 模型與用量 › 訂閱帳號，為 {name} 按下「連線」。",
             "busy": "這個對話仍有 CLI 回合執行中，請先完成或取消它。",
             "error": f"{name} 回合中斷。請確認 CLI 登入狀態後再試一次。",
             "quota": f"{name} 的訂閱額度暫時用完了，請稍後再試，或換一個模型。",
         }
-        if self.language != "zh-TW":
+        if str(self.language).startswith("ja"):
+            messages = {
+                "missing": f"先に {name} をインストールし、設定 › モデルと使用量でログインしてください。",
+                "login": f"設定 › モデルと使用量 › サブスクリプションアカウントで {name} の「接続」を押してください。",
+                "busy": "この会話ではまだ CLI ターンが実行中です。完了するかキャンセルしてください。",
+                "error": f"{name} が予期せず停止しました。ログイン状態を確認してからもう一度お試しください。",
+                "quota": f"{name} の利用上限に達しました。しばらく待つか、別のモデルを選んでください。",
+            }
+        elif self.language != "zh-TW":
             messages = {"missing": f"Install {name}, then sign in in Settings > Models & usage.",
-                        "login": f"Sign in to {name} in Settings > Models & usage.",
+                        "login": f"Connect {name} in Settings > Models & usage > Subscription accounts.",
                         "busy": "This thread has an active CLI turn. Finish or cancel it first.",
                         "error": f"{name} stopped unexpectedly. Check its login and try again.",
                         "quota": f"{name} has used up its subscription quota for now. Try again later or pick another model."}
@@ -223,7 +237,7 @@ class CliLoop:
         if not command:
             self._failure("missing", NAMES[name])
             return
-        if self.brains.logged_in(name) is False:
+        if not self.brains.available(name, command=command):
             self._failure("login", NAMES[name])
             return
         lock = self.sessions.locks.setdefault((self.member_id, self.conversation_id), asyncio.Lock())

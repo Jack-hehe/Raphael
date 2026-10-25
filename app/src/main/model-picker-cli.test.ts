@@ -3,12 +3,12 @@ import { afterEach, expect, test, vi } from "vitest";
 import { mountModelPicker, modelPickerHTML, type ModelPicker, type PickerRole } from "./model-picker";
 import type { CliBrain } from "./types";
 const clis: CliBrain[] = [
-  { id: "claude", name: "Claude Code", installed: true, logged_in: true, login_command: "claude auth login", models: [
+  { id: "claude", name: "Claude Code", disconnected: false, installed: true, logged_in: true, available: true, login_command: "claude auth login", models: [
     { id: "cli:claude:sonnet", name: "Claude Sonnet 5.5", is_default: true, reasoning_efforts: ["low", "high"], default_effort: "high" },
     { id: "cli:claude:opus", name: "Claude Opus 5.5", reasoning_efforts: ["low", "high"] },
   ] },
-  { id: "codex", name: "Codex", installed: true, logged_in: true, login_command: "codex login", models: [{ id: "cli:codex:luna", name: "GPT Luna", is_default: true }] },
-  { id: "gemini", name: "Antigravity", installed: false, logged_in: false, login_command: "agy", models: [] },
+  { id: "codex", name: "Codex", disconnected: false, installed: true, logged_in: true, available: true, login_command: "codex login", models: [{ id: "cli:codex:luna", name: "GPT Luna", is_default: true }] },
+  { id: "gemini", name: "Antigravity", disconnected: false, installed: false, logged_in: false, available: false, login_command: "agy", models: [] },
 ];
 let picker: ModelPicker;
 afterEach(() => { picker?.close(); document.body.innerHTML = ""; vi.restoreAllMocks(); });
@@ -43,7 +43,7 @@ test.each(["cleanup", "stt", "vision"] as const)("%s excludes subscription brain
   mount(role); expect(document.querySelector('[data-source^="cli:"]')).toBeNull();
 });
 test("logout removes rows and disables confirmation without saving", () => {
-  const { choose } = mount(); picker.update({ clis: clis.map((c) => ({ ...c, logged_in: false })) });
+  const { choose } = mount(); picker.update({ clis: clis.map((c) => ({ ...c, logged_in: false, available: false })) });
   expect(picker.button.textContent).toContain("Claude Sonnet 5.5");
   expect(document.querySelector(".mc-row")).toBeNull(); expect(document.querySelector<HTMLButtonElement>('[data-dlg="use"]')!.disabled).toBe(true);
   expect(choose).not.toHaveBeenCalled();
@@ -53,7 +53,7 @@ test("Antigravity shows mixed makers and saves the full effort-suffixed model re
   const slot = document.createElement("div"); document.body.append(slot);
   const choose = vi.fn();
   picker = mountModelPicker(slot, { role: "answer", catalog: null, label: "Answer", current: "cli:gemini:gemini-4-argon-low", onChoose: choose,
-    clis: [{ id: "gemini", name: "Antigravity", installed: true, logged_in: true, login_command: "agy", models: [
+    clis: [{ id: "gemini", name: "Antigravity", disconnected: false, installed: true, logged_in: true, available: true, login_command: "agy", models: [
       { id: "cli:gemini:gemini-4-argon", name: "Gemini Argon", provider: "Google", is_default: true, reasoning_efforts: ["low", "high"], default_effort: "high",
         effort_models: { low: "cli:gemini:gemini-4-argon-low", high: "cli:gemini:gemini-4-argon-high" } },
       { id: "cli:gemini:claude-opus-5-5", name: "Claude Opus 5.5", provider: "Anthropic", reasoning_efforts: ["high"], effort_models: { high: "cli:gemini:claude-opus-5-5-high" } },
@@ -104,7 +104,16 @@ test("an inherited member model remains selectable even when every subscription 
   const slot = document.createElement("div"); document.body.append(slot);
   const choose = vi.fn();
   picker = mountModelPicker(slot, { role: "answer", current: "cli:codex:luna", catalog: null,
-    clis: clis.map((cli) => ({ ...cli, logged_in: false })), label: "Member model", lead: { id: "", name: "Shared model" }, onChoose: choose });
+    clis: clis.map((cli) => ({ ...cli, logged_in: false, available: false })), label: "Member model", lead: { id: "", name: "Shared model" }, onChoose: choose });
   picker.open(); click('.mc-inherit'); expect(choose).not.toHaveBeenCalled();
   click('[data-dlg="use"]'); expect(choose).toHaveBeenCalledWith("");
+});
+
+test("an open chooser drops disconnected models and offers reconnect despite a valid CLI login", () => {
+  const { choose, login } = mount();
+  picker.update({ clis: clis.map(c => ({ ...c, available: false, disconnected: true })) });
+  expect(document.querySelectorAll('.mc-row')).toHaveLength(0);
+  expect(document.querySelector<HTMLButtonElement>('[data-dlg="use"]')!.disabled).toBe(true);
+  click('[data-dlg="login"]'); expect(login).toHaveBeenCalledWith("claude");
+  expect(choose).not.toHaveBeenCalled();
 });
