@@ -197,6 +197,17 @@ async def test_prompt_carries_dictionary_and_transcript(svc, fake_client, dictio
     assert call["schema"] == CLEANUP_SCHEMA
 
 
+async def test_prompt_leaves_out_latin_words_with_nothing_like_them_in_the_dictation(
+    svc, fake_client, dictionary
+):
+    # Shown "Chief of Staff", the model wrote it for 幕僚長: a translation, not a spelling fix.
+    for word in ("Chief of Staff", "OpenRouter", "拉斐爾"):
+        dictionary.add(word)
+    fake_client.reply = completion({"text": "x"}, cost=0)
+    await svc.clean("拉斐爾當幕僚長，然後用歐噴 router 傳訊息", audio_seconds=2)
+    assert dictionary_lines(fake_client.calls[0]["system"]) == ["- 拉斐爾", "- OpenRouter"]
+
+
 # --- when the model is not asked ----------------------------------------------------------------
 
 
@@ -311,8 +322,9 @@ async def test_the_service_asks_the_shared_functions(svc, fake_client, monkeypat
 async def test_the_whole_dictionary_reaches_the_prompt(svc, fake_client, dictionary):
     dictionary.add("OpenRouter")
     dictionary.add("拉斐爾", ["拉菲爾", "拉非爾"])
-    fake_client.reply = completion({"text": "你好。"})
-    await svc.clean("你好", audio_seconds=1)
+    fake_client.reply = completion({"text": "Hello."})
+    # English only: there is nothing to translate from, so no word is left out for the dictation.
+    await svc.clean("hello", audio_seconds=1)
     # The newest word first, as the dictionary lists them.
     assert dictionary_lines(fake_client.calls[0]["system"]) == [
         "- 拉斐爾（常被聽成：拉菲爾、拉非爾）",
@@ -744,8 +756,8 @@ async def test_the_words_the_user_chose_survive_a_dictionary_full_of_learned_one
         dictionary.add(name)
     for n in range(130):
         dictionary.add(f"Learned{n:03d}", source="learned")
-    fake_client.reply = completion({"text": "你好。"})
-    await svc.clean("你好", audio_seconds=1)
+    fake_client.reply = completion({"text": "Hello."})
+    await svc.clean("hello", audio_seconds=1)
     lines = dictionary_lines(fake_client.calls[0]["system"])
     assert len(lines) == cleanup.PROMPT_MAX_WORDS
     assert set(lines[:3]) == {"- 拉斐爾", "- OpenRouter", "- Tailscale"}
@@ -1028,3 +1040,21 @@ async def test_the_service_uses_the_languages_of_the_settings(svc, fake_client, 
     system = fake_client.calls[0]["system"]
     assert languages_line(system) == "簡體中文（中國）, English (United Kingdom)"
     assert "Simplified characters with Mainland usage" in system
+
+
+def test_the_dictionary_block_keeps_only_words_the_transcript_may_hold():
+    words = ["Commit", "OpenRouter", "Alt", "拉斐爾"]
+    prompt = build_system_prompt(words, [("O S", "Alt")], heard="右邊那個O S鍵，用歐噴 router 看提交記錄")
+    assert dictionary_lines(prompt) == ["- OpenRouter", "- Alt（常被聽成：O S）", "- 拉斐爾"]
+    assert dictionary_lines(build_system_prompt(words, [("O S", "Alt")])) == [
+        "- Commit",
+        "- OpenRouter",
+        "- Alt（常被聽成：O S）",
+        "- 拉斐爾",
+    ]
+
+
+def test_words_left_out_for_the_transcript_do_not_count_towards_the_limit():
+    words = [f"Unrelated{i}" for i in range(cleanup.PROMPT_MAX_WORDS)] + ["Telegram"]
+    prompt = build_system_prompt(words, [], heard="用 tele gram 傳訊息")
+    assert dictionary_lines(prompt) == ["- Telegram"]

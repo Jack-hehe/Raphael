@@ -975,7 +975,7 @@ async def test_the_hints_of_the_dictionary_reach_the_cleanup_prompt(router, fake
     await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
     await learn(router, "Claude", "cloud")
     await learn(router, "手機", "首機")
-    await finalize(router, "好")
+    await finalize(router, "好，用 cloud 寫")
     system = fake_client.calls[0]["system"]
     assert "- 拉斐爾（常被聽成：拉菲爾）" in system
     assert "- Claude（常被聽成：cloud）" in system, "a hint is told to the model like a rule"

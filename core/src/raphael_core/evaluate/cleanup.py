@@ -301,7 +301,11 @@ async def run_case(
             model=model,
             fallbacks=[],
             system=build_system_prompt(
-                case.prompt_words, case.prompt_hints, case.target_app, languages=case.languages
+                case.prompt_words,
+                case.prompt_hints,
+                case.target_app,
+                languages=case.languages,
+                heard=sent,
             ),
             user=build_user_message(sent),
             schema=CLEANUP_SCHEMA,

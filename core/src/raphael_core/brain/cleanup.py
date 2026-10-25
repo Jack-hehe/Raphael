@@ -29,6 +29,7 @@ from importlib import resources
 
 from ..languages import DEFAULT_LANGUAGES, display_name
 from .dictionary import DictionaryStore
+from .mishearing import may_be_heard_in
 from .openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterError
 from .providers.base import ModelProvider
 from .providers.registry import for_purpose
@@ -401,6 +402,7 @@ def build_system_prompt(
     target_app: str | None = None,
     *,
     languages: Sequence[str] = DEFAULT_LANGUAGES,
+    heard: str | None = None,
 ) -> str:
     """The system prompt with the user's languages, dictionary and the target app filled in.
 
@@ -420,6 +422,11 @@ def build_system_prompt(
     written as （空）. A line break inside a word becomes a space, and a blank word or form is left
     out. The block is cut off at the end of `words` (PROMPT_MAX_WORDS, PROMPT_MAX_FORMS and
     PROMPT_MAX_CHARS above).
+
+    `heard` is the transcript the prompt is for. Given, the block leaves out the words it cannot
+    hold (`mishearing.may_be_heard_in`): a Latin word with nothing like it in a Chinese or Japanese
+    transcript only invites the model to translate what was said into it. Those words do not count
+    towards the cut-off.
     """
     misheard_forms: dict[str, list[str]] = {}
     for misheard, word in replacements:
@@ -434,6 +441,8 @@ def build_system_prompt(
         if len(lines) == PROMPT_MAX_WORDS:
             break
         forms = misheard_forms.get(word)
+        if heard is not None and not may_be_heard_in(word, heard, forms or ()):
+            continue
         line = f"- {word}（常被聽成：{'、'.join(forms[:PROMPT_MAX_FORMS])}）" if forms else f"- {word}"
         if size + len(line) + 1 > PROMPT_MAX_CHARS:
             continue
@@ -630,6 +639,7 @@ class CleanupService:
             self._dictionary.hint_forms(),
             target_app,
             languages=self._settings.get("languages"),
+            heard=heard,
         )
         if len(pieces) <= 1:
             return await self._clean_one(raw, heard, system, self._timeout_fn(audio_seconds), is_cancelled)

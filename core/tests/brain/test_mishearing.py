@@ -185,3 +185,48 @@ def test_the_american_soundex_code(word, code):
 def test_the_edit_distance_counts_insertions_deletions_and_substitutions(first, second, distance):
     assert mishearing._edit_distance(first, second) == distance
     assert mishearing._edit_distance(second, first) == distance
+
+
+# --- dictionary words a transcript may hold -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("word", "text"),
+    [
+        ("OpenRouter", "我用歐噴 router 傳訊息"),
+        ("Telegram", "跟 tele gram 傳訊息給你"),
+        ("STT", "語音轉文字的 SST model"),
+        ("Hermes Agent", "我想要變成類似Hermegie這樣子的感覺"),
+        ("Hermes Agent", "home 目前 Herman Seligs 的金鏢在哪裡啊"),
+        ("Typeless", "目前只有 typelist 的功能"),
+        ("MCP", "plugins、NCP servers 之類的"),
+        ("claude", "打開 Claude Code"),
+        ("computer use", "還有 Computer News 這些"),
+        ("拉斐爾", "拉菲爾老師"),
+        ("拉斐爾", "no Chinese here at all"),
+    ],
+)
+def test_a_word_said_or_misheard_may_be_in_the_transcript(word, text):
+    assert mishearing.may_be_heard_in(word, text)
+
+
+@pytest.mark.parametrize(
+    ("word", "text"),
+    [
+        ("Commit", "歷史記錄要根據所有的提交記錄去做一個時間軸"),
+        ("Repository", "然後倉庫保持乾淨"),
+        ("Chief of Staff", "然後拉斐爾當幕僚長做總結"),
+        ("Project", "幫我把專案記錄更新一下，跟 GitHub 對照"),
+        ("Agent", "這個代理要可以自己操作電腦"),
+        ("Windows", "把那個視窗拉到右邊"),
+    ],
+)
+def test_a_latin_word_with_nothing_like_it_in_the_transcript_is_not(word, text):
+    assert not mishearing.may_be_heard_in(word, text)
+
+
+def test_a_known_misheard_form_in_the_transcript_counts():
+    assert mishearing.may_be_heard_in("Alt", "右邊那個O S鍵", ["O S", "OS"])
+    assert not mishearing.may_be_heard_in("Alt", "右邊那個鍵", ["O S", "OS"])
+    # Speech-to-text wrote a CJK form for an English key once: the form is all that is like it.
+    assert mishearing.may_be_heard_in("Alt", "按一下偶遇見就開始轉錄", ["偶遇見"])
