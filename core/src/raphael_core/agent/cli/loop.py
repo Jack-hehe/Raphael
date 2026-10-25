@@ -175,16 +175,25 @@ class CliLoop:
             self.task = asyncio.create_task(self._work())
             if self.on_done:
                 self.task.add_done_callback(lambda _: self.on_done(self))
+        getter = asyncio.ensure_future(self._queue.get())
         try:
-            outcome = await self._queue.get()
+            await asyncio.wait({getter, self.task}, return_when=asyncio.FIRST_COMPLETED)
+            if not getter.done() and not self.task.cancelled():
+                # The work ended without an outcome: it raised outside its own handling. Without this the
+                # turn would wait forever.
+                if self.task.exception() is not None:
+                    logger.warning("CLI turn work failed before an outcome: %s", type(self.task.exception()).__name__)
+                self._failure("error", NAMES[brain_ref(self.model)[0]])
+            outcome = await getter
             if outcome.kind != WAITING:
                 if self.response is not None:
                     await self.aclose()
                 else:
                     if not self.task.cancelled():
-                        await self.task
+                        await asyncio.gather(self.task, return_exceptions=True)
             return outcome
         except asyncio.CancelledError:
+            getter.cancel()
             await self.aclose()
             raise
 

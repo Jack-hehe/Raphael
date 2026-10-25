@@ -493,3 +493,19 @@ time.sleep(30)
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_an_unexpected_error_before_the_cli_starts_still_ends_the_turn(setup, tmp_path):
+    # The turn waited forever when the work raised before its own error handling: the owner would have
+    # seen a reply that never finished.
+    rig, team = setup
+    teacher = member(team, model="cli:claude")
+
+    class Broken(CliBrains):
+        def available(self, name, **kwargs):
+            raise RuntimeError("PRIVATE-AVAILABILITY-DETAIL")
+
+    rig.service._cli_brains = Broken(home=tmp_path, environ={}, commands={"claude": ["this-must-not-run"]})
+    result = await asyncio.wait_for(typed(rig, "Hello", teacher.id), 10)
+    assert "登入狀態" in result["text"]
+    assert "PRIVATE-AVAILABILITY-DETAIL" not in result["text"]
