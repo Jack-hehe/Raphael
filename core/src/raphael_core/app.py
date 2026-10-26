@@ -95,6 +95,7 @@ from .brain.service import Brain
 from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
+from .connectors.cards import ConnectorCards
 from .connectors.service import ConnectorsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .messaging.config import MessagingStore
@@ -805,6 +806,9 @@ class App(Router):
         self.integrations.register(self)
         self.connectors = ConnectorsService(data_dir, self.vault, self.integrations)
         self.connectors.register(self)
+        # The card a chat shows for an app its task needs, and that task's one resume once connected.
+        self.cards = ConnectorCards(self._conn, self, self.connectors, notify=self._agent_notice)
+        self.cards.register(self)
         # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
         # changes something, with their judge (Jev).
         self.safety_rules = SafetyRules(self._conn)
@@ -872,6 +876,7 @@ class App(Router):
             speaker=self.speaker,
             tool_observer=agent_tool_observer,
             model_observer=agent_model_observer,
+            cards=self.cards,
         )
         self.agent.register(self)
         self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))
@@ -1078,6 +1083,7 @@ class App(Router):
             ("end the messaging connections", self.messaging.aclose),
             ("stop the routines' scheduler", self.members.aclose),
             ("end the background tasks", self.background.aclose),
+            ("end the connector cards' sign-ins", self.cards.aclose),
             ("end the assistant's requests", self.agent.aclose),
             ("end Raphael's voice", self.speaker.aclose),
             ("end the memory's background pass", self.memory.aclose),

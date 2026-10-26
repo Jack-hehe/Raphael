@@ -118,6 +118,7 @@ answered, a city or a key: only routes, kinds, latencies and costs.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -133,7 +134,8 @@ import httpx
 
 from ..background.brief import background_block, background_line
 from ..background.tasks import Refused
-from ..background.snapshot import FIND, take_snapshot
+from ..background.snapshot import FIND, MCP, take_snapshot
+from ..connectors.apps import APPS
 from ..brain.catalog import CatalogEntry
 from ..clock import wall_clock_ms
 from ..computer.run import ComputerRun, ComputerRuns, Final, Question, conversation_block
@@ -175,7 +177,7 @@ from .quota import Quotas
 from .quotes import quote_from_wire
 from .ledger import Ledger
 from .harness_tools import (
-    DEFINITIONS as HARNESS_TOOLS, ROUTINE_TOOLS, HarnessToolError,
+    CONNECT_APP, DEFINITIONS as HARNESS_TOOLS, ROUTINE_TOOLS, HarnessToolError,
     routine_event, tool as harness_tool,
 )
 from .team_admin import DEFINITIONS as ADMIN_TOOLS, CONFIRM_TOOLS, LEADERSHIP, BATCH_TOOLS
@@ -243,6 +245,7 @@ from .tools import ToolResult, Tools
 
 if TYPE_CHECKING:
     from ..background.service import BackgroundService
+    from ..connectors.cards import ConnectorCards
     from ..services.hub import ServiceHub
     from ..services.speaker import Speaking
     from ..memory.reflection import Applied
@@ -264,6 +267,8 @@ HISTORY_QUERY_MAX_CHARS = 200
 _SOURCE = re.compile(r"[a-z]{1,20}")
 # A question typed in the app's conversation page: asked at this computer, like a spoken one.
 TYPED = "app"
+# The source of a turn that carries on a task whose connector cards were connected (`resume_turn`).
+RESUMED = "connector"
 # The sources of the requests made at this computer: a new one replaces every question that waits.
 _QUICK_SOURCES = (VOICE, "overlay")
 _AT_THIS_COMPUTER = frozenset({*_QUICK_SOURCES, TYPED})
@@ -441,10 +446,34 @@ class _Ask:
     trace_logged: bool = False
     admin_pending: list[PlannedCall] = field(default_factory=list)
     admin_screenings: list[Screening] = field(default_factory=list)
+    # (tool key, argument digest) of each call made that changes something, in order.
+    made: list[tuple[str, str]] = field(default_factory=list)
+    # The apps whose connector cards this turn showed: it then waits for them and calls nothing else.
+    waiting_apps: list[str] = field(default_factory=list)
+    resumption: "Resumption | None" = None
 
     @property
     def nested(self) -> bool:
         return self.peer is not None
+
+
+@dataclass(frozen=True)
+class Resumption:
+    """A task carried on after its connector cards were connected: the turn that asked, the apps
+    now connected, and what it already did before it asked, which is not done again."""
+
+    turn_id: int
+    apps: tuple[str, ...]
+    done: frozenset[tuple[str, str]]
+
+    def note(self) -> str:
+        text = (f"\n\nNow connected: {', '.join(self.apps)}. The owner signed in from the card you showed for the request"
+                " in <question>, which was asked earlier and resumes now, once. Do it now with these apps' tools,"
+                " and do not ask to connect them again.")
+        if self.done:
+            tools = sorted({key.rsplit("/", 1)[-1] for key, _ in self.done})
+            text += " Already done before the pause, not to be repeated: " + ", ".join(tools) + "."
+        return text
 
 
 # The source of an exchange between two members: neither the owner's voice nor a chat app.
@@ -534,10 +563,16 @@ class AgentService:
         attachment_store: AttachmentStore | None = None,
         tool_observer: Callable[..., None] | None = None,
         model_observer: Callable[..., None] | None = None,
+        cards: "ConnectorCards | None" = None,
     ) -> None:
         self._tool_observer = tool_observer
         self._model_observer = model_observer
         self._attachment_store = attachment_store
+        # The connector cards a turn shows for an app its task needs (`connectors.cards`); their
+        # connection resumes that task here (`resume_turn`).
+        self._cards = cards
+        if cards is not None:
+            cards.resume = self.resume_turn
         self._conn = conn
         self._keys = keys
         # Raphael's voice (`services.speaker`): says the answers of the owner's own requests to
@@ -812,13 +847,15 @@ class AgentService:
         conversation_id: int | None = None,
         quick: bool = False,
         transcript_ms: float | None = None,
+        resumption: Resumption | None = None,
     ) -> dict:
         """One request, as `agent.ask` answers it. `attachments` are the files handed with it
         (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
         files and no words, the request asks 「看這個」 in its language. `member_id` is who it is
         for: Raphael (0), or a member of the team addressed by its thread's composer, in writing
         or by voice. The global voice hotkey and chat apps default to Raphael. `quick` sends it to
-        Raphael's quick conversation, answered by the quick model (`_destination`)."""
+        Raphael's quick conversation, answered by the quick model (`_destination`). `resumption`
+        carries on a task whose connector cards were connected (`resume_turn`)."""
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
@@ -840,6 +877,8 @@ class AgentService:
             speaker=speaker,
             conversation_id=conversation_id,
             quick=quick,
+            resumption=resumption,
+            source_turn_id=resumption.turn_id if resumption is not None else None,
         )
         if ask.quick:
             elapsed = float(transcript_ms) if type(transcript_ms) in (int, float) and 0 <= transcript_ms < 3_600_000 else 0.0
@@ -1512,6 +1551,8 @@ class AgentService:
                 background_block(self._briefs(ask.speaker.id)), summary=context.summary, say_ja=say_ja, narrated=True,
                 quote=ask.quote,
             )
+            if ask.resumption is not None:
+                user += ask.resumption.note()
             if brain_ref(settings.model):
                 # A resumed CLI thread keeps the instructions it began with (live, a renamed member and a
                 # removed app stayed in its answers), so each turn carries the team as it is now.
@@ -1676,7 +1717,20 @@ class AgentService:
                 return self._loop_result(result)
 
             async def observed_execute(call_id: str, name: str, args: dict) -> ToolOutcome:
+                if ask.waiting_apps and name != CONNECT_APP:
+                    return ToolOutcome(False, "waiting_for_connection", instruction=(
+                        "A card to connect an app is waiting for the owner, and this request resumes after it. "
+                        "Call nothing else now: end this turn with one short sentence."))
+                ref = snapshot.refs.get(name)
+                key = ref.key if ref is not None else name
+                digest = hashlib.sha256(canonical(args).encode()).hexdigest() if isinstance(args, dict) else ""
+                if ask.resumption is not None and (key, digest) in ask.resumption.done:
+                    return ToolOutcome(False, "already_done", instruction=(
+                        "This exact action was already done before the pause. Do not do it again."))
                 result = await execute(call_id, name, args)
+                reads = ref is not None and (self._gate.reads_only(ref.server, ref.name) if ref.kind == MCP else ref.tier == Tier.T0)
+                if result.ok and digest and not reads:
+                    ask.made.append((key, digest))
                 if self._tool_observer is not None and plan(name, args) is None:
                     schema = next((item["function"]["parameters"] for item in loop.tools
                                    if item["function"]["name"] == name), None)
@@ -2021,7 +2075,8 @@ class AgentService:
         tool its server says only reads. Member contact preferences can require the owner's yes."""
         tool = call.tool
         if tool.key in HARNESS_TOOLS:
-            if tool.key in ("routine_list", "team_overview", "show", "computer"):
+            # A connector card only shows a card: the owner's own sign-in is the consent.
+            if tool.key in ("routine_list", "team_overview", "show", "computer", CONNECT_APP):
                 return PASS
             return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments)), language=ask.language, ledger=ledger)
         if tool.key in TEAM_TOOLS:
@@ -2131,6 +2186,8 @@ class AgentService:
                 data = await self._team.routine_tool(ask.speaker.id, name, args)
                 if name != "routine_list":
                     self._message(ask, "event", routine_event(name, data, ask.language))
+            elif name == CONNECT_APP:
+                data = self._show_card(ask, args)
             elif name in COMMANDS:
                 if ask.source not in _AT_THIS_COMPUTER or ask.nested:
                     raise HarnessToolError("presence_required")
@@ -2170,6 +2227,38 @@ class AgentService:
         self._gate.record_builtin(name, outcome="ok" if result.ok else "error",
                                   approver="auto" if approval is None else "user")
         return result
+
+    def _show_card(self, ask: _Ask, args: Mapping[str, Any]) -> dict:
+        """`connect_app`: the card of an app the request needs, in this private chat, holding what
+        the request already did. The turn then waits for it; its connection resumes the request."""
+        app = APPS.get(args.get("app")) if isinstance(args.get("app"), str) else None
+        if app is None:
+            raise ValueError("unknown app")
+        if self._cards is None or not ask.turn_id:
+            raise HarnessToolError("unavailable")
+        if ask.nested or ask.quick or ask.scope != "private" or ask.source not in (TYPED, RESUMED):
+            raise HarnessToolError("private_chat_only")
+        card = self._cards.show(turn_id=ask.turn_id, member_id=ask.speaker.id, conversation_id=ask.conversation_id,
+                                app=app, language=ask.language, done=ask.made)
+        if card is None:
+            return {"app": app.name, "connected": True, "note": f"{app.name} is connected already: use its tools."}
+        ask.waiting_apps.append(app.name)
+        self._turn_changed(ask.turn_id, ask.speaker.id)
+        return {"app": app.name, "card": card.state, "note": (
+            f"A card to connect {app.name} is shown to the owner in this chat. End this turn now with one short "
+            "sentence. This request resumes by itself, once, after the owner connects; never claim its data now.")}
+
+    async def resume_turn(self, turn_id: int) -> None:
+        """Carry on, once, the request of `turn_id` now that every app its cards asked for is
+        connected: the same request in the same thread, which now has the apps' tools."""
+        origin = self._history.get(turn_id)
+        cards = self._cards.cards_of(turn_id) if self._cards is not None else []
+        if origin is None or not cards:
+            return
+        resumption = Resumption(turn_id, tuple(APPS[card.app].name for card in cards),
+                                frozenset(done for card in cards for done in card.done))
+        await self.ask(f"connect-{turn_id}", origin.question, cards[0].language, RESUMED,
+                       member_id=origin.member_id, conversation_id=origin.conversation_id, resumption=resumption)
 
     async def _plugin_call(
         self,
@@ -3312,10 +3401,15 @@ class AgentService:
         messages = self._history.messages(ids)
         tasks = self._background.tasks_for_turns(ids)
         asked = self._history.asked_from(ids)
+        # The connector cards a turn showed, and for a turn that resumed a task, the apps it waited for.
+        resumed = [turn.source_turn_id for turn in turns if turn.source == RESUMED and turn.source_turn_id]
+        cards = self._cards.views([*ids, *resumed]) if self._cards is not None else {}
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
             handoffs = self._colleague_events(turn, asked.get(turn.id or 0, []))
+            shown = cards.get(turn.id or 0)
+            waited = cards.get(turn.source_turn_id or 0) if turn.source == RESUMED else None
             views.append(
                 {
                     "id": turn.id,
@@ -3345,6 +3439,8 @@ class AgentService:
                     + task_steps,
                     "task": task,
                     **({"handoffs": handoffs} if handoffs else {}),
+                    **({"connectors": shown} if shown else {}),
+                    **({"resumed_apps": [card["app"] for card in waited]} if waited else {}),
                     "messages": messages.get(turn.id or 0, []),
                 }
             )
