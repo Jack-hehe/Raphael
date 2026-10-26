@@ -29,6 +29,8 @@ export default [
   scene("members-collapsed-hover", "Member name tooltip over the collapsed face strip", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="2"]'), check("member-column"), wait('.message-tooltip:not([hidden])')], { waitingMember: 3 }),
   scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
+  scene("plain-bot-chat", "Raphael's stored two-message 《答。…》 reply reads plainly", [wait(".ra .chat-message[data-expandable]"), check("conversation-design"), check("plain-bot-chat")], { splitReply: true }),
+  scene("centred-system-events", "Hand-off, consultation and meeting lines centred between question and answer", [wait("[data-handoff]"), check("centred-system-events")], { systemEvents: true }),
   scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
   scene("composer-task-stop", "Running private task uses the same composer slot", [wait('.composer[data-task-state="running"] .cmp-voice'), check('p04-task-slot')], {running:true}),
   scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),

@@ -1,4 +1,5 @@
 import { fileKind, sentFileHTML } from "./attachments";
+import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
@@ -769,9 +770,7 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
   const lastReply = [...replies].reverse().find(m => said.get(m.seq))?.seq;
   const work = workSectionHTML(turn, state, query, inner);
   const settledDraft = isSettledDraftTurn(turn);
-  const meetings = ordered.filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(m => m !== null);
-  const events = meetings.map(event => `<div class="conversation-event-line">${btn(esc(t("rooms.meetingOpened", { p0: event.name })), "sm", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
-  return events + work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && said.get(message.seq) === turn.text.trim())) || message.kind === "media").map(message => {
+  return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && said.get(message.seq) === turn.text.trim())) || message.kind === "media").map(message => {
     const text = message.kind === "reply" ? said.get(message.seq) ?? "" : message.text.trim();
     if (!text) return "";
     if (message.kind === "media") {
@@ -780,6 +779,17 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
     }
     return `<div data-seq="${message.seq}">${messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
   }).join("");
+}
+
+/**
+ * The centred event lines of a turn, outside Raphael's messages: the work it handed over (each opens on
+ * what the owner asked) and the meetings it opened, whose line opens the room.
+ */
+function turnEventsHTML(turn: AgentTurn, look: TurnLook, said: boolean): string {
+  const request = said ? { author: t("rooms.owner"), text: turn.question.trim() } : undefined;
+  const meetings = (turn.messages ?? []).filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(event => event !== null);
+  return (turn.handoffs ?? []).map(task => handoffLineHTML(task, look.memberFace?.(task.member_id) ?? "", request)).join("") +
+    meetings.map(event => `<div class="conversation-event-line">${btn(eventLineHTML(t("rooms.meetingOpened", { p0: NAME }), ico("chat"), event.name), "event-open", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
 }
 
 /** The line of an exchange, named and faced after the member on its other side. */
@@ -830,7 +840,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
-    (turn.handoffs ?? []).map(handoffLineHTML).join("") +
+    turnEventsHTML(turn, look, said) +
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs

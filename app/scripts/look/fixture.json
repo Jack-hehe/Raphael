@@ -1,9 +1,15 @@
 {
   "p02MeetingEvent": { "type": "meeting", "room_id": 1, "name": "產品方向討論" },
   "p02BlockedIntents": [
-    { "id": 100, "recipient_id": 1, "recipient_name": "小堇", "state": "blocked", "reason": "owner" },
-    { "id": 101, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cost" }
+    { "id": 100, "origin_message_id": 1, "source_message_id": 1, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cli_rate_limited" },
+    { "id": 101, "origin_message_id": 7, "source_message_id": 7, "recipient_id": 1, "recipient_name": "小堇", "state": "blocked", "reason": "owner" },
+    { "id": 102, "origin_message_id": 7, "source_message_id": 7, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cost" }
   ],
+  "p02BlockedMessage": {
+    "id": 7, "room_id": 1, "member_id": null, "text": "@小晴 @小森 請補上文案檢查結果。",
+    "created": 1792807200000, "status": "done", "request_id": null, "reply_to": null,
+    "turn_id": null, "reply_to_member": null, "kind": "message"
+  },
   "p02Roles": { "1": "moderator", "2": "pro", "3": "con" },
   "liveScenarioOwnerTurns": [
     {
@@ -379,6 +385,7 @@
       "reply_to": null,
       "turn_id": 1,
       "reply_to_member": null,
+      "origin_message_id": 1,
       "reply_reference": { "message_id": 1, "author_kind": "owner", "author_member_id": null },
       "kind": "message"
     },
@@ -393,6 +400,7 @@
       "reply_to": null,
       "turn_id": 1,
       "reply_to_member": 1,
+      "origin_message_id": 1,
       "reply_reference": { "message_id": 2, "author_kind": "member", "author_member_id": 1 },
       "kind": "message"
     }
@@ -404,7 +412,7 @@
     "member_name": "小晴", "from_member_id": 0, "stage_id": "launch-report", "mode": "work",
     "state": "queued", "reason": null, "created_at_ms": 1792807141000, "ready_at_ms": 1792807141000,
     "dispatch_policy": "immediate", "result": "已讀取來源，完成上線驗收報告。兩項待確認文案已整理。",
-    "evidence": [{ "kind": "artifact", "digest": "fixture-report-digest", "verdict": "verified" }]
+    "evidence": [{ "kind": "artifact", "uri": "reports/上線驗收報告.html", "mime": "text/html", "digest": "fixture-report-digest", "verdict": "verified" }]
   },
   "roomActiveExchange": {
     "origin_message_id": 1, "room_id": 1, "state": "running", "turns_taken": 2,

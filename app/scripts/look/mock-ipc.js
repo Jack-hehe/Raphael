@@ -55,10 +55,26 @@ export function installMock(fixture, config = {}, target = window) {
     }
   }
   if (variant.p02Meeting) data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === 1).messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
+  if (variant.splitReply) {
+    // The core writes a long reply as messages of one 《答。…》 line (agent/service.py `_message`).
+    const turn = data.turns.find(turn => turn.id === 1), reply = turn.messages.find(message => message.kind === "reply");
+    const [first, last] = reply.text.split("\n\n我已");
+    turn.messages = [...turn.messages.filter(message => message !== reply), { ...reply, text: first }, { ...reply, seq: reply.seq + 1, text: `我已${last}`, at_ms: reply.at_ms + 500 }];
+  }
+  if (variant.systemEvents) {
+    const turn = data.turns.find(turn => turn.id === 1);
+    turn.handoffs = [{ ...data.roomHandoff, state: "done" }, { ...data.roomHandoff, task_id: 43, member_id: 2, member_name: "小森", mode: "consult", state: "running", result: "", evidence: [] }];
+    turn.messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
+  }
   if (variant.p02Roles) data.rooms[0].roles = data.p02Roles;
   if (variant.p02Blocked || variant.p02Fallback || variant.p02LongExchange) {
     const exchange = { ...data.roomActiveExchange, state: "stopped", active_turn: null };
-    if (variant.p02Blocked) exchange.reply_intents = data.p02BlockedIntents;
+    if (variant.p02Blocked) {
+      // 小森's first reply hit the CLI rate limit; the owner then stopped a second request.
+      data.messages = [data.messages[0], data.messages[1], data.p02BlockedMessage];
+      exchange.origin_message_id = data.p02BlockedMessage.id;
+      exchange.reply_intents = data.p02BlockedIntents;
+    }
     if (variant.p02Fallback) exchange.routing = { fallback: "timeout", model: "fixture/router" };
     if (variant.p02LongExchange) { exchange.turns_taken = 8; exchange.hops = 5; exchange.state = "done"; exchange.reply_intents = [{ id: 100, recipient_id: 1, recipient_name: data.members[1].name, state: "done", reason: "" }]; }
     data.roomExchanges.push(exchange);

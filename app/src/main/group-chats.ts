@@ -10,9 +10,18 @@ import { teamMentions } from "./team-mentions";
 import { roomWrapupHTML } from "./room-wrapup";
 import { filesHTML, messageActionsHTML } from "./timeline";
 import { faceHTML } from "./members";
+import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 import type { HandoffView } from "./types";
 import type { AppContext, MembersList, Room, RoomMessage, RoomExchange } from "./types";
+
+/** Why a member's room reply never came, by the core's reason for its blocked intent. */
+const BLOCKED = {
+  owner: "rooms.blockedOwner", cost: "rooms.blockedCost", revoked: "rooms.blockedRevoked", restart: "rooms.blockedRestart",
+  worker: "rooms.blockedWorker", source_unavailable: "rooms.blockedSource", cli_rate_limited: "rooms.blockedRateLimited",
+  cli_quota: "rooms.blockedQuota", cli_login: "rooms.blockedLogin", cli_missing: "rooms.blockedLogin", cli_busy: "rooms.blockedBusy",
+  cli_error: "rooms.blockedWorker",
+} as const;
 import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, sel, toaster } from "./ui";
 import "./automations.css";
 
@@ -196,18 +205,28 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):"";
     const quote=composer.el.querySelector<HTMLElement>('.cmp-quote')!;quote.hidden=!replyTo;
     quote.innerHTML=replyTo?`<span>${esc(t("rooms.replyTo",{p0:person(replyTo.member_id)?.name??t("members.title")}))}</span>${iconButton("x",t("common.cancel"),' data-room-act="cancel-reply"')}`:"";
-    const notices = (exchange?.reply_intents ?? []).filter(intent => intent.state === "blocked");
-    const reasons = { owner: "rooms.blockedOwner", revoked: "rooms.blockedRevoked", cost: "rooms.blockedCost", restart: "rooms.blockedRestart", worker: "rooms.blockedWorker", source_unavailable: "rooms.blockedSource" } as const;
-    status.innerHTML += notices.map(intent => `<span class="room-intent-blocked" role="status">${esc(t("rooms.intentBlocked", { p0: person(intent.recipient_id)?.name ?? intent.recipient_name, p1: t(reasons[intent.reason as keyof typeof reasons] ?? "rooms.blockedWorker") }))}</span>`).join("");
     if (exchange?.routing?.fallback) status.innerHTML += `<span role="status">${esc(t("rooms.routingFallback"))}</span>`;
     older.innerHTML=canOlder?btn(esc(t("rooms.older")),"sm",` data-room-act="older"${loadingOlder?" disabled":""}`):"";
     const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80,top=scroll.scrollTop;
     const thinking=messages.find(m=>m.member_id!==null&&m.status==="running");
-    const entries = [...messages.map(message => ({ created: message.created, message, task: undefined as HandoffView | undefined })),
-      ...handoffs.map(task => ({ created: task.created_at_ms, message: undefined as RoomMessage | undefined, task }))].sort((a,b)=>a.created-b.created);
+    const faceOf=(id:number,name:string)=>faceHTML(person(id)??{id,name},20);
+    // A reply that never came stands where its exchange stopped: after its last message, before its wrap-up.
+    const blocked=(exchange?.reply_intents??[]).filter(intent=>intent.state==="blocked").flatMap(intent=>{
+      const anchor=messages.filter(m=>(m.origin_message_id??m.id)===intent.origin_message_id&&m.kind!=="wrapup").pop();
+      return anchor?[{created:anchor.created,order:1,intent}]:[];
+    });
+    const entries=[...messages.map(message=>({created:message.created,order:0,message})),...handoffs.map(task=>({created:task.created_at_ms,order:0,task})),...blocked]
+      .sort((a,b)=>a.created-b.created||a.order-b.order);
     thread.innerHTML=entries.length?entries.map(entry=>{
-      if(entry.task) return `<li class="tn handoff-row">${handoffLineHTML(entry.task)}</li>`;
-      const m=entry.message!;
+      if("intent" in entry){
+        const intent=entry.intent,name=person(intent.recipient_id)?.name??intent.recipient_name;
+        return `<li class="tn room-intent-blocked" role="status">${eventLineHTML(t("rooms.intentBlocked",{p0:NAME,p1:t(BLOCKED[intent.reason as keyof typeof BLOCKED]??"rooms.blockedWorker")}),faceOf(intent.recipient_id,name),name)}</li>`;
+      }
+      if("task" in entry){
+        const source=messages.find(m=>m.turn_id===entry.task.source_turn_id);
+        return `<li class="tn handoff-row">${handoffLineHTML(entry.task,faceOf(entry.task.member_id,entry.task.member_name),source&&{author:source.member_id===null?t("rooms.owner"):person(source.member_id)?.name??"",text:source.text})}</li>`;
+      }
+      const m=entry.message;
       if(m.member_id!==null&&m.status==="running") {
         if(m!==thinking)return "";
         const member=person(m.member_id);

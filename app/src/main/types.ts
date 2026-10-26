@@ -792,14 +792,16 @@ export interface HandoffView {
   member_name: string; from_member_id: number; stage_id: string; mode: "work" | "consult";
   state: string; reason: string | null; created_at_ms: number; ready_at_ms: number;
   dispatch_policy: "immediate"; result: string;
-  evidence: { kind: string; digest: string; verdict: string }[];
+  /** An artifact's `uri` is its path inside the task's workspace. */
+  evidence: { kind: string; digest: string; verdict: string; uri?: string; mime?: string }[];
 }
 
 export interface RoomExchange {
   origin_message_id: number; room_id: number; state: "queued" | "running" | "done" | "stopped";
   turns_taken: number; hops: number; chime_ins: number; cost: number; stop_requested: number;
   routing?: { fallback?: string; model?: string };
-  reply_intents?: { id: number; recipient_id: number; recipient_name: string; state: string; reason: string }[];
+  /** The latest exchange's intents and every blocked one of the room; `origin_message_id` names its exchange. */
+  reply_intents?: { id: number; origin_message_id: number; source_message_id: number; recipient_id: number; recipient_name: string; state: string; reason: string }[];
 }
 
 /** A routine of `routines.list`. Times are ms; null for never. */
