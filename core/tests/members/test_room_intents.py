@@ -354,6 +354,18 @@ async def test_a_meeting_runs_two_rounds_then_the_moderator_closes_and_raphael_c
     assert 'Both rounds are complete' in prompts[6] and '@拉斐爾' in prompts[6]
 
 
+async def test_an_agenda_that_names_raphael_still_opens_with_the_moderator(rig, exchange):
+    # Live, an agenda saying 「第二輪結束後 @拉斐爾 作最後結論」 had Raphael speak before the moderator opened.
+    room, ids = await team(rig)
+    await exchange.meeting({'member_ids':[0,*ids], 'agenda':'Debate the launch. After round two @Raphael concludes.',
+                            'roles':{str(ids[0]):'moderator', str(ids[1]):'con'}}, 'en', 47)
+    assert [s['member_id'] for s in rig.background.submitted] == [ids[0]]
+    assert 'Open round 1' in rig.background.submitted[0]['text']
+    while (await history(rig, room))['exchange']['state'] != 'done':
+        await finish(rig, exchange, 'Evidence reviewed')
+    assert [s['member_id'] for s in rig.background.submitted] == [*ids, *ids, 0]
+
+
 async def test_after_a_meeting_the_owners_next_message_is_not_another_debate(rig, exchange):
     # 「開始做吧」 after a meeting started a fresh two-round debate, during which no one could hand off work.
     room, ids = await team(rig)

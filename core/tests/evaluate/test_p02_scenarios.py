@@ -174,7 +174,6 @@ async def test_s07_meeting_goes_on_when_one_cli_member_is_rate_limited(tmp_path,
         assert conn.execute('SELECT state FROM room_exchanges WHERE origin_message_id=?', (origin,)).fetchone()[0] == 'done'
         intents = conn.execute('SELECT recipient_id, state, reason FROM room_reply_intents WHERE origin_message_id=?', (origin,)).fetchall()
         assert {tuple(i) for i in intents if i['state'] != 'done'} == {(5, 'blocked', 'cli_rate_limited')}
-        assert {i['recipient_id'] for i in intents if i['state'] == 'done'} >= {1, 3, 4}
         spoken = conn.execute("SELECT m.member_id FROM room_messages m JOIN agent_turns t ON t.id=m.turn_id "
                               "WHERE m.origin_message_id=? AND m.kind='message' AND t.status='done'", (origin,)).fetchall()
         assert {row[0] for row in spoken} == {1, 3, 4}
