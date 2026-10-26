@@ -439,11 +439,12 @@ test("memory notifications refresh the visible own and shared lists with correct
 });
 
 describe("Raphael's thread", () => {
-  test("is as it was: his turns in 《》, 問拉斐爾, his voice button, asked with no member", async () => {
+  test("reads plainly: his answers without 《》, 問拉斐爾, his voice button, asked with no member", async () => {
     mount();
     await flush();
     expect(api.agentHistoryList).toHaveBeenCalledWith({ limit: 50 });
-    expect($(".thread").textContent).toContain("《答。回答 2》");
+    expect($(".thread").textContent).toContain("回答 2");
+    expect($(".thread").textContent).not.toContain("《");
     expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("問拉斐爾");
     expect($(".cmp-voice").hidden).toBe(false);
     expect($(".mb-pill-t").textContent).toBe("拉斐爾");
@@ -488,7 +489,7 @@ describe("a member's thread", () => {
     expect(thread.textContent).not.toContain("回答 2");
     expect(thread.textContent).toContain("今天的單字");
     expect(thread.textContent).not.toContain("《");
-    expect(thread.querySelector(".tn-plain .ans")!.textContent).toBe("10 題已送出");
+    expect(thread.querySelector(".tn .ans")!.textContent).toBe("10 題已送出");
     expect(thread.querySelector(".sys")!.textContent).toBe("例行任務每天的單字");
     // a routine's prompt is no bubble of the owner's
     expect(thread.querySelector('[data-id="30"] .bubble')).toBeNull();
@@ -625,7 +626,7 @@ describe("a member's thread", () => {
     await pick(3);
     await pick(0);
     expect(api.agentHistoryList).toHaveBeenLastCalledWith({ limit: 50 });
-    expect($(".thread").textContent).toContain("《答。回答 2》");
+    expect($(".thread").textContent).toContain("回答 2");
     expect($(".thread").textContent).not.toContain("今天的單字");
     expect($<HTMLTextAreaElement>(".cmp-input").placeholder).toBe("問拉斐爾");
   });
@@ -670,7 +671,7 @@ describe("a member's thread", () => {
     expect($(".ask-card").hidden).toBe(true);
     await pick(0);
     expect($(".ask-card").hidden).toBe(false);
-    expect($(".ask-q").textContent).toBe("《問。要關燈嗎》");
+    expect($(".ask-q").textContent).toBe("要關燈嗎");
     // what is typed in a member's thread later does not take Raphael's question along
     api.agentAskText.mockImplementation(() => new Promise<void>(() => {}));
     await pick(3);
@@ -741,7 +742,7 @@ describe("a member's thread", () => {
     expect(document.querySelectorAll('[data-mount="background-questions"]')).toHaveLength(1);
   });
 
-  test("the gold card shows in the thread of its member only: their name and plain words there, Raphael's 《問。》 in his", async () => {
+  test("the gold card shows in the thread of its member only: their name there, Raphael's emblem in his, plain words in both", async () => {
     const asked = (member_id: number, text: string) => ({ id: `q-${member_id}`, task_id: 10 + member_id, member_id, prefix: "問", text, tier: null, created_at_ms: 1, expires_at_ms: 2 });
     const waiting: Record<number, ReturnType<typeof asked>[]> = { 0: [asked(0, "要付款嗎？")], 3: [asked(3, "要寄出信件嗎？")] };
     api.core.mockImplementation(async (method: string, params?: { member_id?: number }) =>
@@ -750,7 +751,8 @@ describe("a member's thread", () => {
     mount();
     await flush();
     const slot = (): HTMLElement => $('[data-mount="background-questions"]');
-    expect(slot().querySelector(".bgq-card")!.textContent).toContain("《問。要付款嗎？》");
+    expect(slot().querySelector(".bgq-card")!.textContent).toContain("要付款嗎？");
+    expect(slot().querySelector(".bgq-card")!.textContent).not.toContain("《");
     expect(slot().querySelector(".bgq-name")).toBeNull();
     expect(slot().querySelector(".bgq-card img")!.getAttribute("src")).toContain("/brand/");
     await pick(3);
@@ -764,7 +766,7 @@ describe("a member's thread", () => {
     expect(cards[0].querySelector("img")).toBeNull();
     await pick(0);
     await flush();
-    expect(slot().querySelector(".bgq-card")!.textContent).toContain("《問。要付款嗎？》");
+    expect(slot().querySelector(".bgq-card")!.textContent).toContain("要付款嗎？");
     api.core.mockReset();
   });
 
@@ -947,7 +949,7 @@ test("a core without the members: Raphael alone, and the page works as before", 
   await flush();
   expect(document.querySelectorAll(".mb-col .mb-row")).toHaveLength(1);
   expect($(".mb-col .mb-chief").textContent).toBe("拉斐爾");
-  expect($(".thread").textContent).toContain("《答。回答 2》");
+  expect($(".thread").textContent).toContain("回答 2");
 });
 
 

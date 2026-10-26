@@ -24,10 +24,10 @@ const QUESTION: BackgroundQuestion = {
 const visible = (html: string): string => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 
 describe("the card of a question of the background", () => {
-  test("it is Raphael's face and line, then 否 outlined and 是 gold, both real buttons", () => {
+  test("it is Raphael's face and plain question, then 否 outlined and 是 gold, both real buttons", () => {
     const html = backgroundQuestionHTML(QUESTION);
     expect(html).toMatch(/^<div class="bgq-card" role="group" aria-label="拉斐爾在等你回答" data-bgq-card="q-1">/);
-    expect(visible(html)).toBe("《問。是否讓「Notes」執行「note」（買牛奶）？》 否 是");
+    expect(visible(html)).toBe("是否讓「Notes」執行「note」（買牛奶）？ 否 是");
     expect(html).toContain('<button type="button" class="btn bgq-no" data-bgq="no" data-task="7" data-id="q-1">否</button>');
     expect(html).toContain('<button type="button" class="btn bgq-yes" data-bgq="yes" data-task="7" data-id="q-1">是</button>');
     expect(html).toContain("/brand/app-emblem-light-64.webp");
@@ -46,7 +46,7 @@ describe("the card of a question of the background", () => {
   test("Raphael's own card has no name and keeps the emblem, bare", () => {
     const html = backgroundQuestionHTML(QUESTION);
     expect(html).not.toContain("bgq-name");
-    expect(html).toContain("《問。");
+    expect(html).not.toContain("《");
   });
 
   test("its words are escaped, and its buttons are off while it is answered", () => {
@@ -58,7 +58,7 @@ describe("the card of a question of the background", () => {
   test("one language at a time", () => {
     setLocale("en");
     expect(visible(backgroundQuestionHTML({ ...QUESTION, prefix: "Question", text: "Allow Notes to run note?" }))).toBe(
-      "《Question. Allow Notes to run note?》 No Yes",
+      "Allow Notes to run note? No Yes",
     );
   });
 });

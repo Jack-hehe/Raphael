@@ -106,8 +106,6 @@
 .sel.mb-pick .mb-dot { margin-left: -2px; }
 
 /* ---------- the thread of a member ---------- */
-/* its answers are plain bubbles, with none of Raphael's 《》 */
-.tn-plain .ans:not(.thinking) { justify-self: start; max-width: 100%; padding: var(--pa-bpy) var(--pa-bpx); border: 0; border-radius: var(--r-lg); background: var(--panel); font-size: var(--pa-fs-b); line-height: var(--pa-lh-b); }
 .ask-card.is-member { border-color: var(--edge); background: var(--panel); box-shadow: none; animation: none; }
 .ask-card.is-member .ask-q { color: var(--text); }
 .page-agent .ask-card.is-member .btn { border-color: var(--edge); color: var(--text); background: var(--surface-2); }

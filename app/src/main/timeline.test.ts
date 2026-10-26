@@ -63,7 +63,7 @@ test("a live turn renders ordered public bubbles and event chips without raw ste
     { seq: 1, kind: "progress", text: "I will check the examples.", at_ms: T0 },
     { seq: 2, kind: "event", text: "Example saved", at_ms: T0 },
     { seq: 3, kind: "reply", text: "Your turn?", at_ms: T0 },
-  ] }), emptyTimelineState(), false, { face: () => "", plain: true });
+  ] }), emptyTimelineState(), false, { face: () => "" });
   expect(html.indexOf("I will check")).toBeLessThan(html.indexOf("Example saved"));
   expect(html.indexOf("Example saved")).toBeLessThan(html.indexOf("Your turn?"));
   expect(html).toContain('class="turn-event"');
@@ -77,7 +77,20 @@ test("a live turn renders ordered public bubbles and event chips without raw ste
 test("an old turn without messages still renders its answer once", () => {
   const html = turnHTML(turn(1), emptyTimelineState(), false, { face: () => "" });
   expect(html.match(/class="ans"/g)).toHaveLength(1);
-  expect(html).toContain("《答。台北現在 24 度。》");
+  expect(visible(html)).toContain("台北現在 24 度。");
+  expect(html).not.toContain("《");
+});
+
+test("Raphael's stored replies and progress read plainly in the window", () => {
+  const html = turnHTML(turn(1, { status: "done", messages: [
+    { seq: 1, kind: "progress", text: "《告。正在查看今天下午的行程。》", at_ms: T0 },
+    { seq: 2, kind: "reply", text: "《答。下午兩點有專案會議，", at_ms: T0 + 1 },
+    { seq: 3, kind: "reply", text: "記得帶《三體》。》", at_ms: T0 + 2 },
+  ] }), emptyTimelineState(), false, { face: () => "" });
+  const answers = [...html.matchAll(/<div class="message-text">([\s\S]*?)<\/div>/g)].map(([, inner]) => visible(inner));
+  expect(answers).toEqual(["下午兩點有專案會議，", "記得帶《三體》。"]);
+  expect(visible(html)).toContain("正在查看今天下午的行程。");
+  expect(visible(html)).not.toMatch(/《[答告]/);
 });
 
 test.each([false, true])("a durable receipt renders outside assistant bubbles with public messages=%s", (hasMessages) => {
@@ -383,13 +396,13 @@ describe("a turn", () => {
     expect(html).toContain("<span>2 則訊息往來</span>");
   });
 
-  test("the person on the right without 「」 with where and when; Raphael on the left with his face and 《》", () => {
+  test("the person on the right without 「」 with where and when; Raphael on the left with his face and plain words", () => {
     const html = turnHTML(turn(5), emptyTimelineState(), false, LOOK);
     expect(html).not.toContain('class="me-src"');
     expect(html).toContain('data-act="edit-message"');
     expect(html).toContain('<div class="bubble">台北天氣如何，順便記到行事曆</div>');
     expect(html).toContain('<span class="ra-face" title="gpt-6-luna · US$0.0012"><i class="face"></i></span>');
-    expect(html).toContain('<div class="ans"><div class="message-text"><p>《答。台北現在 24 度。》</p>');
+    expect(html).toContain('<div class="ans"><div class="message-text"><p>台北現在 24 度。</p>');
     expect(html).not.toContain("tn-foot"); // nothing more to open
   });
 
@@ -479,7 +492,7 @@ describe("a turn", () => {
       turn(20, { model, status: "running", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
       emptyTimelineState(),
       false,
-      { ...LOOK, plain: true },
+      LOOK,
     );
     expect(runningHtml.match(/class="work-section think-box/g)).toHaveLength(1);
     expect(runningHtml).toContain('data-act="thinking" aria-expanded="false"');
@@ -492,7 +505,7 @@ describe("a turn", () => {
       turn(20, { model, status: "done", text: "不該重複出現的文字", detail: "不該出現的詳細", messages }),
       emptyTimelineState(),
       false,
-      { ...LOOK, plain: true },
+      LOOK,
     );
     expect(doneHtml.match(/class="work-section think-box/g)).toHaveLength(1);
     expect(doneHtml).toContain('data-act="thinking" aria-expanded="false"');
@@ -563,7 +576,7 @@ describe("a turn", () => {
       }),
       emptyTimelineState(),
       false,
-      { ...LOOK, plain: true },
+      LOOK,
     );
     expect(html).toContain('data-act="lightbox" data-src="https://example.com/chart.png"');
     expect(html).toContain('<video class="media-video" controls preload="metadata" src="https://example.com/clip.mp4"></video>');

@@ -1,8 +1,8 @@
 // The questions of the background: a task that needs the owner's yes pauses and waits, at most a day,
 // for an answer here (the core's `background/service.py`). Each is a gold card, like the card of
 // Raphael's YES/NO question, with an outlined 「否」 and a gold 「是」. In Raphael's thread it is his:
-// his bare emblem and his line (《問。…》). In a member's thread it is that member's: their face and
-// name, and the question as it is, plain, with no 《》 (a member does not speak in Raphael's voice).
+// his bare emblem. In a member's thread it is that member's: their face and name. The question is
+// plain words either way; his 《問。…》 belongs to the desktop overlay.
 // It is answered here only, never from a chat app (`background.answer`, which the core refuses from
 // anywhere else).
 //
@@ -13,7 +13,6 @@
 // `backgroundQuestionHTML` draws one card from a question (pure, so it can be tested without a
 // browser). Nothing here logs a question.
 
-import { replyLine } from "../shared/anime";
 import { core } from "./api";
 import { avatarHTML, onAvatarChange } from "./avatar";
 import { describeError } from "./format";
@@ -37,7 +36,7 @@ export interface BackgroundQuestion {
 export type AnswerStatus = "approved" | "denied" | "expired" | "cancelled" | "unknown" | string;
 
 /**
- * Who asks in a thread: `name` is null for Raphael (his bare emblem and his 《問。》 line), and a
+ * Who asks in a thread: `name` is null for Raphael (his bare emblem), and a
  * member's name otherwise, with `face` that member's face (members.ts `faceHTML`, 22 px).
  */
 export interface Asker {
@@ -55,17 +54,16 @@ const RAPHAEL: Asker = {
 
 /**
  * One card, then 「否」 (outlined) and 「是」 (gold), the buttons off while it is being answered. By
- * Raphael it carries his emblem and his line (`replyLine`, 《問。…》); by a member, that member's
- * face, their name and the question's words as they are.
+ * Raphael it carries his emblem; by a member, that member's face and name. The question's words are
+ * as they are.
  */
 export function backgroundQuestionHTML(q: BackgroundQuestion, busy = false, asker: Asker = RAPHAEL): string {
   const off = busy ? " disabled" : "";
   const ids = ` data-task="${q.task_id}" data-id="${esc(q.id)}"`;
-  const line = asker.name === null ? replyLine(q.prefix, q.text) : q.text;
   const head = asker.name === null ? "" : `<span class="bgq-name">${esc(asker.name)}</span>`;
   return (
     `<div class="bgq-card${asker.name === null ? "" : " is-member"}" role="group" aria-label="${esc(t("agent.asking"))}" data-bgq-card="${esc(q.id)}">` +
-    `<div class="bgq-q">${asker.face}<span class="bgq-t">${head}<span class="bgq-line">${esc(line)}</span></span></div>` +
+    `<div class="bgq-q">${asker.face}<span class="bgq-t">${head}<span class="bgq-line">${esc(q.text)}</span></span></div>` +
     `<div class="bgq-row">` +
     `<button type="button" class="btn bgq-no" data-bgq="no"${ids}${off}>${esc(t("agent.no"))}</button>` +
     `<button type="button" class="btn bgq-yes" data-bgq="yes"${ids}${off}>${esc(t("agent.yes"))}</button>` +

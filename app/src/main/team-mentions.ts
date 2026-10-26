@@ -1,9 +1,18 @@
+import { iconHTML } from "./connections";
 import { t } from "./i18n";
+import { faceHTML } from "./members";
+import { serviceIconOf } from "./service-icons";
 import type { MembersList } from "./types";
-import { closeMenu, menuIsOpenFor, openMenu } from "./ui";
+import { closeMenu, ico, menuIsOpenFor, openMenu } from "./ui";
 import { textPositionRect } from "./text-position";
 
-/** Prompts and menus consume the same public inventory; apps never become bot recipients. */
+const APP_STATES = { ready: "rooms.appConnected", needs_sign_in: "rooms.appSignIn" } as const;
+
+/**
+ * Prompts and menus consume the same public inventory; apps never become bot recipients. Each row leads
+ * with who or what it names: a member's face, the app's connection mark, the team icon for everyone and
+ * groups.
+ */
 export function teamMentions(input: HTMLTextAreaElement, list: MembersList, allowed?: number[]): void {
   const before = input.value.slice(0, input.selectionStart), match = /@([^@\n]*)$/.exec(before);
   if (!match || match[1].length > 40) {
@@ -11,12 +20,13 @@ export function teamMentions(input: HTMLTextAreaElement, list: MembersList, allo
     return;
   }
   const people = list.team_context?.members ?? list.members;
+  const face = (id: number, name: string): string => faceHTML(list.members.find(m => m.id === id) ?? { id, name }, 20);
   const choices = [
-    { value: t("team.everyone"), label: "@" + t("team.everyone") },
-    ...people.filter(m => !allowed || allowed.includes(m.id)).map(m => ({ value: m.name, label: "@" + m.name })),
-    ...(!allowed ? list.groups.map(g => ({ value: g.name, label: "@" + g.name })) : []),
-    ...(list.team_context?.apps ?? []).map(app => ({ value: app.name, label: "@" + app.name + " · " + t(
-      app.state === "ready" ? "rooms.appConnected" : app.state === "needs_sign_in" ? "rooms.appSignIn" : "rooms.appUnknown") })),
+    { value: t("team.everyone"), label: "@" + t("team.everyone"), lead: ico("grid") },
+    ...people.filter(m => !allowed || allowed.includes(m.id)).map(m => ({ value: m.name, label: "@" + m.name, lead: face(m.id, m.name) })),
+    ...(!allowed ? list.groups.map(g => ({ value: g.name, label: "@" + g.name, lead: ico("grid") })) : []),
+    ...(list.team_context?.apps ?? []).map(app => ({ value: app.name, label: "@" + app.name, lead: iconHTML(app.name, serviceIconOf({ name: app.name }), "md"),
+      tag: t(APP_STATES[app.state as keyof typeof APP_STATES] ?? "rooms.appUnknown") })),
   ].filter(c => c.value.toLocaleLowerCase().includes(match[1].toLocaleLowerCase()));
   if (!choices.length) { closeMenu(); return; }
   const caret = input.selectionStart;

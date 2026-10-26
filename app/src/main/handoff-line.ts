@@ -1,16 +1,29 @@
+import { NAME, eventLineHTML } from "./event-line";
 import { t } from "./i18n";
 import { messageHTML } from "./message-content";
-import { faceHTML } from "./members";
-import type { HandoffView } from "./types";
-import { esc } from "./ui";
+import { quoteHTML } from "./message-quote";
+import type { HandoffView, MessageQuote } from "./types";
+import { esc, ico } from "./ui";
 
-/** Durable receipts render as compact events, with work details available on demand. */
-export function handoffLineHTML(task: HandoffView): string {
-  const label = task.mode === "consult" ? "handoff.asked" : "handoff.forwarded";
-  const state = task.state === "queued" ? "handoff.queued" : task.state === "running" ? "handoff.running"
-    : task.state === "waiting" ? "handoff.waiting" : task.state === "done" ? "handoff.done"
-    : task.state === "withheld" ? "handoff.withheld" : "handoff.failed";
-  const reasons={missing_artifact:"handoff.missingArtifact",artifact_changed:"handoff.changedArtifact",work_without_action:"handoff.noAction",missing_terminal:"handoff.invalidFinal",dangling_mention:"handoff.invalidFinal",cancelled:"handoff.cancelled"} as const;
-  const reason=task.reason && reasons[task.reason as keyof typeof reasons] ? `<span role="status">${esc(t(reasons[task.reason as keyof typeof reasons],{}))}</span>` : "";
-  return `<details class="handoff-event" data-handoff="${task.task_id}" data-state="${esc(task.state)}"><summary><span class="handoff-event-line">${faceHTML({ id: task.member_id, name: task.member_name }, 20)}<span>${esc(t(label, { p0: task.member_name }))}</span><span class="handoff-state">${esc(t(state))}</span></span></summary><div class="handoff-detail"><span>${esc(t("handoff.task", { p0: String(task.task_id) }))}</span>${reason}${task.result ? `<div class="message-text">${messageHTML(task.result, "", true)}</div>` : ""}</div></details>`;
+const STATES = { queued: "handoff.queued", running: "handoff.running", waiting: "handoff.waiting", done: "handoff.done", withheld: "handoff.withheld" } as const;
+const REASONS = { missing_artifact: "handoff.missingArtifact", artifact_changed: "handoff.changedArtifact", work_without_action: "handoff.noAction",
+  missing_terminal: "handoff.invalidFinal", dangling_mention: "handoff.invalidFinal", cancelled: "handoff.cancelled" } as const;
+
+/**
+ * A durable receipt is one centred event line (the assignee's `face`, 「已轉交給 X」 or 「已詢問 X」 and
+ * the state) that opens on what was asked (`request`, where the thread has it), the result and the
+ * files it produced. Task numbers stay in `data-handoff` for the code; the owner never reads them.
+ */
+export function handoffLineHTML(task: HandoffView, face: string, request?: MessageQuote): string {
+  const state = STATES[task.state as keyof typeof STATES] ?? "handoff.failed";
+  const reason = REASONS[task.reason as keyof typeof REASONS];
+  const files = task.evidence.filter(item => item.kind === "artifact" && item.uri).map(item => `<li>${ico("file")}<span>${esc(item.uri!.split("/").pop()!)}</span></li>`);
+  return `<details class="handoff-event" data-handoff="${task.task_id}" data-state="${esc(task.state)}">` +
+    `<summary>${eventLineHTML(t(task.mode === "consult" ? "handoff.asked" : "handoff.forwarded", { p0: NAME }), face, task.member_name, t(state))}</summary>` +
+    `<div class="handoff-detail">` +
+    (request?.text.trim() ? quoteHTML(request) : "") +
+    (reason ? `<span class="handoff-reason" role="status">${esc(t(reason))}</span>` : "") +
+    (task.result ? `<div class="message-text">${messageHTML(task.result, "", true)}</div>` : "") +
+    (files.length ? `<ul class="handoff-files">${files.join("")}</ul>` : "") +
+    `</div></details>`;
 }

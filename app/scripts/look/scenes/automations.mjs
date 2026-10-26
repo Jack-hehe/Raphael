@@ -30,7 +30,7 @@ export default [
   scene("room-round-typing", "The current round speaker is named", [room(1), wait(".au-room-thinking"), check("room-thinking")], { roomThinking: true, p02Roles: true }),
   scene("room-mention-after-hop-limit", "Completed explicit mentions survive four handoffs", [room(1), check("p02-long-exchange")], { p02LongExchange: true, roomDiscussion: true }),
   scene("room-mention-after-turn-limit", "Replies survive the seventh turn", [room(1), check("p02-long-exchange")], { p02LongExchange: true, roomDiscussion: true }),
-  scene("room-mention-blocked", "Stopped and cost-blocked recipients stay named", [room(1), check("p02-blocked")], { p02Blocked: true }),
+  scene("room-mention-blocked", "Rate-limited and stopped replies stand in the thread where their exchange stopped", [room(1), check("p02-blocked")], { p02Blocked: true }),
   scene("room-wrapup-after-replies", "Chief conclusion follows completed reply intents", [room(1), check("room-wrapup"), check("p02-long-exchange")], { p02LongExchange: true, roomWrapup: true }),
   scene("automations-hover", "Calendar chip hover", [...calendar, hover('.au-occurrence')]),
   scene("automations-empty", "Calendar without routines", [...auto, check("calendar-shell")], { routines: [] }),

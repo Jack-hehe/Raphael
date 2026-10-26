@@ -32,7 +32,9 @@
 .quota-chip .i { width: 16px; height: 16px; }
 .tn.is-search-target { border-radius: var(--r-lg); outline: 2px solid var(--accent); outline-offset: -2px; }
 .work-section { margin: var(--sp-1) 0 var(--sp-2); }
-.work-toggle { background: var(--side); display: inline-flex; justify-self: start; align-items: center; gap: var(--sp-2); font-size: var(--fs-2xs); color: var(--text-3); padding: var(--sp-1) var(--sp-2); border: 0; border-radius: var(--r-pill); max-width: 100%; }
+/* Work is a muted one-line state above the answer, not a framed control. */
+.page-agent .btn.work-toggle { display: inline-flex; justify-self: start; align-items: center; gap: var(--sp-1); min-height: 0; max-width: 100%; padding: 2px 0; border-color: transparent; border-radius: var(--r-sm); background: transparent; font-size: var(--fs-xs); color: var(--text-3); }
+.page-agent .btn.work-toggle:hover:not(:disabled) { border-color: transparent; background: transparent; color: var(--text-2); }
 .work-chevron { display: inline-flex; flex-shrink: 0; }
 .work-toggle[aria-expanded="true"] .work-chevron .i { transform: rotate(90deg); }
 .work-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

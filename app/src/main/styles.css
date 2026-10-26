@@ -461,6 +461,12 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .menu .ck { width: 16px; height: 16px; flex: none; color: var(--accent-text); }
 .menu .ck svg { display: block; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .menu .mt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A face or a mark before the label (mentions): one 20px column, and the item's state quieter on the right. */
+.menu .mlead { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; color: var(--text-3); }
+.menu .mlead .av { --av: 20px !important; }
+.menu .mlead .mono { width: 20px; height: 20px; margin: 0; color: var(--text-2); }
+.menu .mlead .logo-mono[style] { color: var(--brand); }
+.menu .mlead ~ .mtag { flex: none; margin-left: var(--sp-3); font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 /* A menu whose choices have a detail (a price): the details line up on the right. */
 .menu.detailed { min-width: 340px; }
 .menu.detailed button { min-height: 38px; }

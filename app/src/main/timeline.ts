@@ -1,4 +1,5 @@
 import { fileKind, sentFileHTML } from "./attachments";
+import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
@@ -12,7 +13,7 @@ import { handoffLineHTML } from "./handoff-line";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 
-import { replyLine, userLine } from "../shared/anime";
+import { plainReplies, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { isBotRename, isSettledDraftTurn, settledDraftHTML } from "./member-draft";
 import { messageHTML } from "./message-content";
@@ -494,11 +495,6 @@ export interface TurnLook {
   face: (loop: boolean) => string;
   /** The words being looked for, marked wherever they are; blank for none. */
   query?: string;
-  /**
-   * A member's thread: its answers are plain sentences in a bubble, with none of Raphael's
-   * 《prefix。》. Raphael's thread leaves it out and stays as it was.
-   */
-  plain?: boolean;
   /** The exchanges between members that are open, by turn id (their line opens on the messages). */
   openExchanges?: ReadonlySet<number>;
   /** The name of member `id` (0 is Raphael), for the line of an exchange. */
@@ -672,9 +668,13 @@ function meetingEvent(text: string): { room_id: number; name: string } | null {
   } catch { return null; }
 }
 
+/** One public line of Raphael's work (《告。…》 on the desktop) as the window shows it: plain. */
+const plainLine = (text: string): string => plainReplies([text])[0];
+
 /** Keep all work behind one closed chip; running turns show their latest public update. */
 function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, exchanges = ""): string {
-  const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && !meetingEvent(m.text) && m.text.trim());
+  const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && !meetingEvent(m.text) && m.text.trim())
+    .map(m => ({ ...m, text: plainLine(m.text) }));
   if (!messages.length && !exchanges && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
   const live = turn.status === "running" || isLive(turn.task);
   const firstReply = (turn.messages ?? []).find(m => m.kind === "reply" && m.at_ms >= turn.created_at_ms)?.at_ms;
@@ -763,23 +763,33 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 }
 
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
-function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, plain: boolean | undefined, regenerate: boolean, inner = ""): string {
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, regenerate: boolean, inner = ""): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
-  const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
+  const replies = ordered.filter(m => m.kind === "reply");
+  const said = new Map(plainReplies(replies.map(m => m.text)).map((text, index) => [replies[index].seq, text.trim()]));
+  const lastReply = [...replies].reverse().find(m => said.get(m.seq))?.seq;
   const work = workSectionHTML(turn, state, query, inner);
   const settledDraft = isSettledDraftTurn(turn);
-  const meetings = ordered.filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(m => m !== null);
-  const events = meetings.map(event => `<div class="conversation-event-line">${btn(esc(t("rooms.meetingOpened", { p0: event.name })), "sm", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
-  return events + work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && message.text.trim() === turn.text.trim())) || message.kind === "media").map(message => {
-    const text = message.text.trim();
+  return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && said.get(message.seq) === turn.text.trim())) || message.kind === "media").map(message => {
+    const text = message.kind === "reply" ? said.get(message.seq) ?? "" : message.text.trim();
     if (!text) return "";
     if (message.kind === "media") {
       const media = parseMediaPayload(text);
       return media ? `<div class="chat-message" data-message="${message.seq}">${mediaCardHTML(media, query, message.seq)}</div>` : "";
     }
-    const line = plain || text.startsWith("\u300a") ? text : replyLine(turn.prefix, text);
-    return `<div data-seq="${message.seq}">${messageBlockHTML(turn, String(message.seq), line, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
+    return `<div data-seq="${message.seq}">${messageBlockHTML(turn, String(message.seq), text, message.at_ms, query, state, true, regenerate && message.seq === lastReply)}</div>`;
   }).join("");
+}
+
+/**
+ * The centred event lines of a turn, outside Raphael's messages: the work it handed over (each opens on
+ * what the owner asked) and the meetings it opened, whose line opens the room.
+ */
+function turnEventsHTML(turn: AgentTurn, look: TurnLook, said: boolean): string {
+  const request = said ? { author: t("rooms.owner"), text: turn.question.trim() } : undefined;
+  const meetings = (turn.messages ?? []).filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(event => event !== null);
+  return (turn.handoffs ?? []).map(task => handoffLineHTML(task, look.memberFace?.(task.member_id) ?? "", request)).join("") +
+    meetings.map(event => `<div class="conversation-event-line">${btn(eventLineHTML(t("rooms.meetingOpened", { p0: NAME }), ico("chat"), event.name), "event-open", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
 }
 
 /** The line of an exchange, named and faced after the member on its other side. */
@@ -822,7 +832,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     : "";
   const regenerate = !live && said && turn.id === look.regenerateTurnId;
   return (
-    `<li class="tn${look.plain ? " tn-plain" : ""}" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
+    `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
     (asked
       ? `<div class="me">` +
@@ -830,13 +840,13 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
-    (turn.handoffs ?? []).map(handoffLineHTML).join("") +
+    turnEventsHTML(turn, look, said) +
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
+      ? turnMessagesHTML(turn, state, query, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
       : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)
-        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", look.plain ? turn.text : replyLine(turn.prefix, turn.text), turn.created_at_ms, query, state, true, regenerate) : "")) +
+        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", turn.text, turn.created_at_ms, query, state, true, regenerate) : "")) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +
@@ -859,7 +869,7 @@ export function pendingTurnHTML(question: string | null, _source: string, look: 
   const words =
     question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : messageHTML(question.trim());
   return (
-    `<li class="tn is-pending${look.plain ? " tn-plain" : ""}"${request ? ` data-session="${esc(request.id)}"` : ""}>` +
+    `<li class="tn is-pending"${request ? ` data-session="${esc(request.id)}"` : ""}>` +
     `<div class="me"><div class="chat-message owner-message" data-message="question">${bubbleHTML(words, files, request?.quote)}${request ? messageActionsHTML(request.time, false, "cancel") : ""}</div></div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
     typingHTML() +

@@ -28,13 +28,19 @@ npm run look -- live-scenario-owner-view --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
 npm run look -- member-composer-empty member-text member-composer-hover conversation-notice --theme both --width 1120,720,1920x1080
 npm run look -- composer-learn member-composer-learn room-composer-learn team-composer-learn --theme both --width 1120,720,1920x1080
+npm run look -- plain-bot-chat centred-system-events --theme both --width 1120,720,1920x1080
 ```
 
 Keep reports and result PNGs: answer/attachment, expanded work, open menus/dialogs,
 quoted draft and highlighted search target. Inspect action-menu placement and
 composer clearance at 720. Slash commands use the slash's measured text rectangle, start-aligned above the line with a below-line fallback. The slash-commands scene checks its left edge within 24px of the character. The chat scene also checks 15px/24px message type,
 12px bubble radii, a borderless answer and the original Raphael emblem and other members' 40px faces. Owner
-messages use the skin accent/on-accent colors; assistant messages use a raised surface. A real send needs a native journey: submit an innocuous
+messages use the skin accent/on-accent colors; assistant messages use a raised surface. Every thread reads plainly
+(R-UI-42): the core stores Raphael's replies and progress as his 《prefix。…》 line, split over messages when long,
+and the window shows, copies and quotes them without it; his in-app questions are plain too, while the overlay keeps
+the persona. `chat`, `running` and `plain-bot-chat` reject a visible prefix or stray closing mark. Work is one muted
+line above the answer and the day is a plain centred word. `centred-system-events` shows a hand-off, a consultation and
+a meeting between the question and the answer, each one centred grey line. A real send needs a native journey: submit an innocuous
 prompt, observe public progress/final reply, navigate away/back, and verify
 conversation persistence. Keep the resulting turn and relevant logs.
 
@@ -85,7 +91,8 @@ The live-scenario-owner-view scene replays S17 synthetic history through the sha
 ## Meetings and shared inventory
 
 Durable assignments use `handoff`, which returns a task receipt immediately. The requesting
-conversation displays a compact centered event with expandable task/result detail. Work runs
+conversation displays one centred grey line (the assignee's face, 已轉交給/已詢問 and the name, then the
+state) whose detail shows the request, the result and the produced files, never task numbers. Work runs
 in the assignee's isolated work turn; results return only to the requesting source. Quick
 `ask_member` consultation remains tool data. Source-document deadlines never schedule work.
 The room handoff scenes in [Team and rooms](team-and-rooms.md) cover the shared event renderer;
@@ -93,7 +100,7 @@ private and room result destinations are also checked by offline core tests.
 
 Every private/API/CLI/member turn receives the current public TeamContextSnapshot with self,
 count, stable IDs, roles, primary/chief and secret-free app connection states. Meeting requests
-use room_meeting; one centered event opens the room, and quick ask_member answers remain tool
+use room_meeting; one centred grey line with the group icon, outside Raphael's message, opens the room, and quick ask_member answers remain tool
 data folded into the requesting assistant reply. Room history remains outside private turns.
 
 ```powershell

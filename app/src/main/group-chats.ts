@@ -10,11 +10,20 @@ import { teamMentions } from "./team-mentions";
 import { roomWrapupHTML } from "./room-wrapup";
 import { filesHTML, messageActionsHTML } from "./timeline";
 import { faceHTML } from "./members";
+import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 import type { HandoffView } from "./types";
 import type { AppContext, MembersList, Room, RoomMessage, RoomExchange } from "./types";
 import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, sel, toaster } from "./ui";
 import "./automations.css";
+
+/** Why a member's room reply never came, by the core's reason for its blocked intent. */
+const BLOCKED = {
+  owner: "rooms.blockedOwner", cost: "rooms.blockedCost", revoked: "rooms.blockedRevoked", restart: "rooms.blockedRestart",
+  worker: "rooms.blockedWorker", source_unavailable: "rooms.blockedSource", cli_rate_limited: "rooms.blockedRateLimited",
+  cli_quota: "rooms.blockedQuota", cli_login: "rooms.blockedLogin", cli_missing: "rooms.blockedLogin", cli_busy: "rooms.blockedBusy",
+  cli_error: "rooms.blockedWorker",
+} as const;
 
 let context: AppContext | undefined;
 const listeners = new Set<() => void>();
@@ -190,34 +199,44 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
   const person=(id:number|null)=>list.members.find(m=>m.id===id);
   function draw():void {
     if(!room)return;
-    el.querySelector('.au-room-heading')!.innerHTML=`<b>${esc(room.name)}</b><div class="au-room-faces">${room.member_ids.map(id=>{const m=person(id);return m?`<span class="au-room-participant">${faceHTML(m,24)}${id===0?`<span class="au-room-crown" role="img" aria-label="${esc(t("rooms.chief"))}">${ico("crown")}</span>`:""}</span>`:"";}).join("")}</div>`;
+    el.querySelector('.au-room-heading')!.innerHTML=`<b>${esc(room.name)}</b><div class="au-room-faces">${room.member_ids.map(id=>{const m=person(id);return m?`<span class="au-room-participant" data-tooltip="${esc(m.role?`${m.name} · ${m.role}`:m.name)}">${faceHTML(m,24)}${id===0?`<span class="au-room-crown" role="img" aria-label="${esc(t("rooms.chief"))}">${ico("crown")}</span>`:""}</span>`:"";}).join("")}</div>`;
     const active=exchange&&["queued","running"].includes(exchange.state);
     composer.setTaskState(active || handoffs.some(task=>["queued","running","waiting"].includes(task.state)) ? "running" : sendingRooms.has(room.id) ? "ack" : "idle");
     status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):"";
     const quote=composer.el.querySelector<HTMLElement>('.cmp-quote')!;quote.hidden=!replyTo;
     quote.innerHTML=replyTo?`<span>${esc(t("rooms.replyTo",{p0:person(replyTo.member_id)?.name??t("members.title")}))}</span>${iconButton("x",t("common.cancel"),' data-room-act="cancel-reply"')}`:"";
-    const notices = (exchange?.reply_intents ?? []).filter(intent => intent.state === "blocked");
-    const reasons = { owner: "rooms.blockedOwner", revoked: "rooms.blockedRevoked", cost: "rooms.blockedCost", restart: "rooms.blockedRestart", worker: "rooms.blockedWorker", source_unavailable: "rooms.blockedSource" } as const;
-    status.innerHTML += notices.map(intent => `<span class="room-intent-blocked" role="status">${esc(t("rooms.intentBlocked", { p0: person(intent.recipient_id)?.name ?? intent.recipient_name, p1: t(reasons[intent.reason as keyof typeof reasons] ?? "rooms.blockedWorker") }))}</span>`).join("");
     if (exchange?.routing?.fallback) status.innerHTML += `<span role="status">${esc(t("rooms.routingFallback"))}</span>`;
     older.innerHTML=canOlder?btn(esc(t("rooms.older")),"sm",` data-room-act="older"${loadingOlder?" disabled":""}`):"";
     const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80,top=scroll.scrollTop;
     const thinking=messages.find(m=>m.member_id!==null&&m.status==="running");
-    const entries = [...messages.map(message => ({ created: message.created, message, task: undefined as HandoffView | undefined })),
-      ...handoffs.map(task => ({ created: task.created_at_ms, message: undefined as RoomMessage | undefined, task }))].sort((a,b)=>a.created-b.created);
+    const faceOf=(id:number,name:string)=>faceHTML(person(id)??{id,name},20);
+    // A reply that never came stands where its exchange stopped: after its last message, before its wrap-up.
+    const blocked=(exchange?.reply_intents??[]).filter(intent=>intent.state==="blocked").flatMap(intent=>{
+      const anchor=messages.filter(m=>(m.origin_message_id??m.id)===intent.origin_message_id&&m.kind!=="wrapup").pop();
+      return anchor?[{created:anchor.created,order:1,intent}]:[];
+    });
+    const entries=[...messages.map(message=>({created:message.created,order:0,message})),...handoffs.map(task=>({created:task.created_at_ms,order:0,task})),...blocked]
+      .sort((a,b)=>a.created-b.created||a.order-b.order);
     thread.innerHTML=entries.length?entries.map(entry=>{
-      if(entry.task) return `<li class="tn handoff-row">${handoffLineHTML(entry.task)}</li>`;
-      const m=entry.message!;
+      if("intent" in entry){
+        const intent=entry.intent,name=person(intent.recipient_id)?.name??intent.recipient_name;
+        return `<li class="tn room-intent-blocked" role="status">${eventLineHTML(t("rooms.intentBlocked",{p0:NAME,p1:t(BLOCKED[intent.reason as keyof typeof BLOCKED]??"rooms.blockedWorker")}),faceOf(intent.recipient_id,name),name)}</li>`;
+      }
+      if("task" in entry){
+        const source=messages.find(m=>m.turn_id===entry.task.source_turn_id&&m.member_id===entry.task.from_member_id&&m.kind!=="wrapup");
+        return `<li class="tn handoff-row">${handoffLineHTML(entry.task,faceOf(entry.task.member_id,entry.task.member_name),source&&{author:person(source.member_id)?.name??"",text:source.text})}</li>`;
+      }
+      const m=entry.message;
       if(m.member_id!==null&&m.status==="running") {
         if(m!==thinking)return "";
         const member=person(m.member_id);
-        return `<li class="tn tn-plain au-room-thinking" data-room-message="${m.id}" role="status"><span class="ra-face">${member?faceHTML(member,30):""}</span><span>${esc(t("rooms.speaking",{p0:member?.name??t("members.title")}))}</span></li>`;
+        return `<li class="tn au-room-thinking" data-room-message="${m.id}" role="status"><span class="ra-face">${member?faceHTML(member,30):""}</span><span>${esc(t("rooms.speaking",{p0:member?.name??t("members.title")}))}</span></li>`;
       }
       const member=person(m.member_id),owner=m.member_id===null,words=m.text||(owner?"":t(m.status==="error"?"auto.error":"auto.running"));
       const source=m.reply_reference;
       const reply=source?`<span class="au-room-reply">${esc(source.unavailable?t("rooms.sourceMissing"):t("rooms.replyTo",{p0:source.author_kind==="owner"?t("rooms.owner"):person(source.author_member_id??null)?.name??t("rooms.sourceMissing")}))}</span>`:"";
       const actions=messageActionsHTML(m.created, false, undefined, false).replace('</div>',(!owner?iconButton("reply",t("rooms.reply"),` data-room-act="reply" data-message="${m.id}"`).replace(" title="," data-tooltip="):"")+"</div>");
-      return `<li class="tn tn-plain au-room-message${m.kind==="wrapup"?" au-room-wrapup":""}" data-room-message="${m.id}">${owner?`<div class="me"><div class="chat-message owner-message">${reply}${filesHTML(m.attachments)}${words?`<div class="bubble">${messageHTML(words)}</div>`:""}${actions}</div></div>`:`<div class="ra"><span class="ra-face">${member?faceHTML(member,30):""}</span><div class="ra-body"><div class="au-room-meta"><b class="au-room-author">${esc(member?.name??t("members.title"))}</b>${member?.role?`<span class="au-room-role">${esc(member.role)}</span>`:""}${reply}</div><div class="chat-message"><div class="ans">${m.kind==="wrapup"?`<b class="au-room-wrapup-title">${esc(t("rooms.wrapup"))}</b>`:""}<div class="message-text">${m.kind==="wrapup"?roomWrapupHTML(words,list.members.map(member=>member.name)):messageHTML(words,"",true)}</div></div>${actions}</div></div></div>`}</li>`;
+      return `<li class="tn au-room-message${m.kind==="wrapup"?" au-room-wrapup":""}" data-room-message="${m.id}">${owner?`<div class="me"><div class="chat-message owner-message">${reply}${filesHTML(m.attachments)}${words?`<div class="bubble">${messageHTML(words)}</div>`:""}${actions}</div></div>`:`<div class="ra"><span class="ra-face">${member?faceHTML(member,30):""}</span><div class="ra-body"><div class="au-room-meta"><b class="au-room-author">${esc(member?.name??t("members.title"))}</b>${reply}</div><div class="chat-message"><div class="ans"><div class="message-text">${m.kind==="wrapup"?roomWrapupHTML(words,list.members.map(member=>member.name)):messageHTML(words,"",true)}</div></div>${actions}</div></div></div>`}</li>`;
     }).join(""):`<li class="au-empty">${esc(t("rooms.empty"))}</li>`;
     scroll.scrollTop=follow?scroll.scrollHeight:top;composer.draw();onRender();
   }

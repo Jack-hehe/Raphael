@@ -105,7 +105,9 @@
 .au-room-faces { display: flex; gap: var(--sp-1); flex-shrink: 0; max-width: 140px; overflow: hidden; }
 .au-room-pane .ra-dock .composer { width: 100%; max-width: var(--pa-colw); margin-inline: auto; }
 .au-room-author { font-size: var(--fs-2xs); color: var(--text-2); }
-.au-room-thread { padding: var(--sp-3) 0; }
+/* Each message keeps its hover actions' row under it, which already parts it from the next. */
+.au-room-thread { padding: var(--sp-3) 0; gap: var(--sp-2); }
+.au-room-thread > .handoff-row, .au-room-thread > .room-intent-blocked { margin-block: var(--sp-2); }
 .au-room-thread .ra { align-items: flex-start; }
 .au-room-thread .room-turn { white-space: nowrap; }
 .au-room-row [aria-current="true"] { background: var(--accent-soft) !important; color: var(--text); }
@@ -125,12 +127,10 @@
 .au-room-faces { overflow: visible; }
 .au-room-crown { position: absolute; right: 0; bottom: 0; display: inline-flex; padding: 1px; border-radius: var(--r-pill); background: var(--panel); color: var(--accent-text); }
 .au-room-crown .i { width: 16px; height: 16px; }
-.au-room-role { margin-left: var(--sp-2); color: var(--text-2); font-size: var(--fs-2xs); }
 .au-room-meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1); }
-.au-room-thread .au-room-wrapup .chat-message > .ans { border: 1px solid var(--edge); border-left: 3px solid var(--accent-text); border-radius: var(--r-md); padding: var(--sp-3); background: var(--surface-2); }
-.au-room-wrapup-title { display: block; margin-bottom: var(--sp-2); color: var(--accent-text); font-size: var(--fs-xs); }
-.au-room-wrapup-section + .au-room-wrapup-section { margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--edge); }
-.au-room-wrapup .message-text .au-room-wrapup-section h3 { margin: 0 0 var(--sp-1); font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); }
+/* Raphael's wrap-up is his ordinary message: its three parts are light headings in the body. */
+.au-room-wrapup-section + .au-room-wrapup-section { margin-top: var(--sp-3); }
+.au-room-wrapup .message-text .au-room-wrapup-section h3 { margin: 0 0 2px; font-size: var(--fs-xs); font-weight: 600; line-height: 1.6; color: var(--text-2); }
 .au-room-wrapup .message-text .au-room-wrapup-owner { color: var(--accent-text); font-weight: 600; }
 .au-room-controls { display: flex; justify-content: flex-end; max-width: var(--pa-colw); margin-inline: auto; margin-bottom: var(--sp-2); }
 .au-room-controls:empty { display: none; }
@@ -171,15 +171,21 @@
   .au-members { grid-template-columns: minmax(0, 1fr); }
   .team-composer { flex-basis: 100%; }
 }
-.conversation-event-line { display: flex; justify-content: center; margin: 12px 0; color: var(--text-2); }
-.handoff-row { width: 100%; }
-.handoff-event { margin: var(--sp-3) 0; color: var(--text-2); font-size: var(--fs-xs); }
-.handoff-event > summary { cursor: pointer; list-style: none; display: flex; justify-content: center; }
+/* System events (event-line.ts): one centred grey line with a small face or icon, never a pill or a card. */
+.event-line { flex-wrap: wrap; justify-content: center; column-gap: 6px; row-gap: 0; text-align: center; line-height: 1.6; }
+.event-line > .i { width: 16px; height: 16px; color: var(--text-3); }
+.event-state::before { content: "·"; margin-inline-end: 6px; }
+.conversation-event-line, .handoff-event > summary { display: flex; justify-content: center; }
+.page-agent .btn.event-open { min-height: 0; padding: 2px var(--sp-2); border-color: transparent; background: transparent; font: inherit; color: inherit; }
+.page-agent .btn.event-open:hover:not(:disabled) { border-color: transparent; background: transparent; }
+.page-agent .btn.event-open:hover .event-line, .handoff-event > summary:hover .event-line { color: var(--text-2); }
+.handoff-row, .handoff-event { width: 100%; }
+.handoff-event > summary { cursor: pointer; list-style: none; }
 .handoff-event > summary::-webkit-details-marker { display: none; }
-.handoff-event-line { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
-.handoff-state { color: var(--text-3); }
-.handoff-detail { margin: var(--sp-3) auto; max-width: 56ch; padding: var(--sp-3); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
+.handoff-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: fit-content; max-width: min(calc(560px + 160 * var(--pa-u)), 100%); margin: var(--sp-2) auto 0; padding: calc(10px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border-radius: var(--r-lg); background: var(--surface-2); font-size: var(--pa-fs-d); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
+.handoff-detail > .message-quote { margin: 0; }
+.handoff-files { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
+.handoff-files li { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font-size: var(--fs-xs); }
 .au-room-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.room-intent-blocked { font-size: var(--fs-xs); color: var(--text-2); }
 .room-picked { display: flex; flex-wrap: wrap; gap: 6px; }
 .room-picked span { padding: var(--sp-1) var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-pill); }

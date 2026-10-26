@@ -2,9 +2,30 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  // R-UI-42: system events are one centred grey line that never shows an internal number.
+  const eventLines = expected => {
+    const lines = [...document.querySelectorAll('.event-line')].filter(visible);
+    require(lines.length === expected, `${expected} event lines are visible, found ${lines.length}`);
+    for (const line of lines) {
+      const box = line.getBoundingClientRect(), column = line.closest('.ra-col').getBoundingClientRect();
+      require(Math.abs(box.left + box.width / 2 - column.left - column.width / 2) <= 2, `"${line.textContent}" is centred in the thread`);
+      require(!/#\d/.test(line.closest('.handoff-event, .conversation-event-line, li').textContent), `"${line.textContent}" shows no internal number`);
+      const size = parseFloat(getComputedStyle(line).fontSize);
+      require(!line.closest('.chat-message, .ra-body') && size >= 12 && size <= 14, `event lines sit outside message bodies at a readable small size (${size}px)`);
+      const control = line.closest('button');
+      if (control) require(getComputedStyle(control).borderTopColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(control).backgroundColor === 'rgba(0, 0, 0, 0)', "an event line is never a pill");
+    }
+    return lines;
+  };
+  const plainWords = () => {
+    const wrapped = /^\s*《(?:答|告|否|了|問|解|Answer|Notice|Negative|Understood|Question)[。.：:]/i;
+    const words = [...document.querySelectorAll('.page-agent .ra .message-text, .page-agent .work-latest, .page-agent .work-progress, .page-agent .ask-q, .page-agent .bgq-line')].filter(visible);
+    for (const text of words) require(!wrapped.test(text.textContent) && !/》\s*$/.test(text.textContent.replace(/《[^《》]*》/g, "")), `R-UI-42: Raphael's words read plainly: ${text.textContent.slice(0, 40)}`);
+    return words.length;
+  };
   if(name.startsWith("p04-")) {
     const messages=[...document.querySelectorAll('.au-room-thread .message-text')];
-    if(name==='p04-blocked')require(document.querySelector('[data-handoff]').textContent.includes('缺少驗收所需的檔案'),'missing artifact reason is actionable');
+    if(name==='p04-blocked'){require(document.querySelector('[data-handoff]').textContent.includes('缺少驗收所需的檔案'),'missing artifact reason is actionable');require(!document.querySelector('[data-handoff] .message-quote'),"the request is only ever the delegating member's own message");}
     if(name==='p04-chief-last')require(document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup'),'chief is last');
     if(name==='p04-status-only')require(!messages.some(message=>message.textContent.includes('正在發言')),'progress never enters final bodies');
     if(name==='p04-addresses')require(!messages.some(message=>/@(?:\s|$)/u.test(message.textContent)),'no dangling address');
@@ -24,11 +45,29 @@ export function checkRendered(name) {
       require(visible(menu), "mention menu is visible");
       require(menu.textContent.includes(data.members[1].name), "bot comes from the roster");
       require(data.servers.some(app => menu.textContent.includes(app.name)), "app comes from the same snapshot");
+      const rows = [...menu.querySelectorAll('button')], row = label => rows.find(item => item.querySelector('.mt').textContent === label);
+      for (const item of rows) require(visible(item.querySelector('.mlead > *')), `${item.textContent} leads with a face or a mark`);
+      require(row("@" + data.members[1].name)?.querySelector('.mlead .av'), "a bot shows its member face");
+      for (const app of data.servers) require(row("@" + app.name)?.querySelector('.mlead .mono'), `${app.name} shows its connection mark`);
+      const columns = selector => rows.map(item => item.querySelector(selector).getBoundingClientRect().left);
+      for (const selector of ['.mlead', '.mt']) require(Math.max(...columns(selector)) - Math.min(...columns(selector)) <= 1, `${selector} aligns in one column`);
     }
     if (name === "p02-picker") require(document.querySelectorAll(".room-picked span").length === 2, "Raphael and the selected colleague have chips");
     if (name === "p02-fallback") require(document.querySelector(".au-room-controls").textContent.includes("群組預設"), "fallback is visible");
-    if (name === "p02-blocked") require(document.querySelectorAll(".room-intent-blocked").length === 2, "both blocked recipients stay visible");
-    if (name === "p02-meeting-event") require(visible(document.querySelector(".conversation-event-line [data-meeting-room]")), "meeting event stays outside collapsed work");
+    if (name === "p02-blocked") {
+      const lines = eventLines(3), rows = [...document.querySelectorAll('.au-room-thread > li')];
+      require(lines.every(line => line.closest('.au-room-thread > li.room-intent-blocked')), "blocked replies are lines of the thread");
+      require(!document.querySelector('.au-room-controls')?.textContent.trim(), "nothing about blocked replies sits above the composer");
+      const at = selector => rows.indexOf(document.querySelector(selector)?.closest('li'));
+      const blocked = rows.filter(row => row.matches('.room-intent-blocked')).map(row => rows.indexOf(row));
+      require(blocked[0] === at('[data-room-message="2"]') + 1 && blocked[1] === at('[data-room-message="7"]') + 1 && blocked[2] === blocked[1] + 1, "each blocked reply stands where its exchange stopped");
+      require(lines[0].textContent === "小森 未能回覆：請求太頻繁而被限流" && lines[1].textContent === "小晴 未能回覆：已停止", "blocked replies name the member and why in the window language");
+    }
+    if (name === "p02-meeting-event") {
+      const [line] = eventLines(1);
+      require(line.closest('.conversation-event-line [data-meeting-room]') && line.textContent === "已開啟會議 產品方向討論", "the meeting is one centred line that opens its room");
+      require(visible(line.querySelector('svg.i')) && !line.closest('.ra'), "a small group icon leads the line, beside no avatar");
+    }
     if (name === "p02-meeting-open") require(document.querySelector(".au-room-heading b").textContent === data.rooms[0].name, "meeting link opens the real room pane");
     if (name === "p02-roles") require(calls.some(c => c.method === "rooms.update" && c.params.roles?.[1] === "moderator"), "room roles are persisted at the native boundary");
     if (name === "p02-long-exchange") {
@@ -85,12 +124,26 @@ export function checkRendered(name) {
     }
     return { check: name, created: created.length };
   }
+  if (name === "plain-bot-chat") {
+    const replies = [...document.querySelectorAll('.tn[data-id="1"] .ra [data-expandable] .message-text')].filter(visible);
+    require(replies.length === 2, "the core's two-message reply shows as two answers");
+    require(replies[0].textContent.startsWith("這週的研究有三個重點") && replies[1].textContent.trim().endsWith("方便你接著討論。"), "the reply loses only its opening and closing marks");
+    return { check: name, words: plainWords() };
+  }
+  if (name === "centred-system-events") {
+    const lines = eventLines(3).map(line => line.textContent);
+    require(lines.join("|") === "已轉交給 小晴已完成|已詢問 小森執行中|已開啟會議 產品方向討論", `hand-off, consultation and meeting lines in order: ${lines.join("|")}`);
+    const answer = document.querySelector('.tn[data-id="1"] .ra').getBoundingClientRect(), last = document.querySelector('.tn[data-id="1"] .conversation-event-line').getBoundingClientRect();
+    require(last.bottom <= answer.top, "events stand between the owner's words and Raphael's answer");
+    return { check: name, lines };
+  }
   if (name === "conversation-running") {
     const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
     require(calls.some(call => (call.params?.member_id ?? 0) === 0 && (call.params?.conversation_id ?? 1) === 1), "R-UI-32: running turn belongs to the open formal conversation");
     require([...document.querySelectorAll('.ra .work-toggle')].some(visible), "R-UI-32: running progress is visible");
     require(![...document.querySelectorAll('.ra .chat-message[data-expandable]')].some(visible), "R-UI-32: completed answer is absent while running");
-    return { check: name, running: true };
+    require(document.querySelector('.work-latest')?.textContent === "已核對三份報告，正在彙整研究結論。", "R-UI-42: the running state shows the latest step plainly");
+    return { check: name, running: true, words: plainWords() };
   }
   if (name === "live-scenario-owner-view") {
     const answers = [...document.querySelectorAll('.ra [data-expandable] > .ans')].filter(visible);
@@ -255,13 +308,17 @@ export function checkRendered(name) {
     const crown = document.querySelector('.au-room-crown').getBoundingClientRect();
     const face = document.querySelector('.au-room-crown').parentElement.getBoundingClientRect();
     require(crown.right <= face.right && crown.left >= face.left, "the chief badge stays inside its participant slot");
-    require(document.querySelectorAll('.au-room-role').length >= 3, "member roles remain visible");
+    // Messages carry face, name and reply chip only; roles stay with the faces of the header and the member column.
+    require(document.querySelectorAll('.au-room-participant[data-tooltip*=" · "]').length === 3, "header faces name each member and role");
+    for (const meta of document.querySelectorAll('.au-room-meta')) require([...meta.children].every(child => child.matches('.au-room-author, .au-room-reply')), "no role tag above a message");
     return { check: name, replyChips: document.querySelectorAll('.au-room-reply').length };
   }
   if (name === "room-wrapup") {
     const card = document.querySelector('.au-room-wrapup');
-    require(visible(card), "wrap-up is a distinct card");
-    require(getComputedStyle(card.querySelector('.ans')).borderLeftWidth === '3px', "the wrap-up retains its card accent");
+    require(visible(card), "the wrap-up is visible");
+    const answer = getComputedStyle(card.querySelector('.ans')), ordinary = getComputedStyle(document.querySelector('.au-room-message:not(.au-room-wrapup) .ra .ans'));
+    require(answer.borderLeftWidth === '0px' && answer.borderTopWidth === '0px' && answer.backgroundColor === ordinary.backgroundColor && answer.paddingLeft === ordinary.paddingLeft, "the wrap-up is Raphael's ordinary message, not a bordered card");
+    require(card.querySelector('.au-room-author')?.textContent === '拉斐爾' && visible(card.querySelector('.ra-face .av')) && !/討論收束/.test(card.textContent), "face and name lead the wrap-up like every room message");
     require([...card.querySelectorAll('.au-room-wrapup-section h3')].map(heading => heading.textContent).join('|') === '結論|待你決定|下一步', "wrap-up has three labelled sections");
     require(card.querySelectorAll('.au-room-wrapup-owner').length === 3, "next steps style each named owner");
     for (const text of ['小晴：', '小森：', '拉斐爾：']) require(card.textContent.includes(text), `wrap-up preserves ${text}`);
@@ -310,13 +367,17 @@ export function checkRendered(name) {
     require(visible(event) && document.querySelectorAll('[data-handoff]').length === 1, "one durable receipt is visible");
     require(!event.closest('.chat-message'), "handoffs are events outside message bodies");
     require(event.dataset.state === task.state, "receipt and rendered state agree");
-    require(event.textContent.includes('已轉交給 小晴'), "the receipt names its assignee");
-    require(visible(event.querySelector('.av')), "the compact line includes the member face");
-    const line = event.querySelector('.handoff-event-line').getBoundingClientRect(), bounds = event.getBoundingClientRect();
-    require(Math.abs(line.left + line.width / 2 - bounds.left - bounds.width / 2) <= 2, "the handoff line is centered");
+    require(event.querySelector('summary').textContent.startsWith('已轉交給 小晴'), "the receipt names its assignee");
+    require(visible(event.querySelector('summary .av')), "the compact line includes the member face");
+    eventLines(1);
     require(task.ready_at_ms === task.created_at_ms && task.dispatch_policy === 'immediate', "source dates do not schedule work");
-    if (name === "p03-handoff-expanded") require(event.open && visible(event.querySelector('.handoff-detail .message-text')), "expansion shows the persisted result");
-    else require(!event.open, "handoff details start collapsed");
+    if (name === "p03-handoff-expanded") {
+      const detail = event.querySelector('.handoff-detail');
+      require(event.open && visible(detail.querySelector('.message-text')), "expansion shows the persisted result");
+      require(detail.querySelector('.message-quote')?.textContent === "你請小晴立即整理驗收報告。", "expansion shows what was asked");
+      require(detail.querySelector('.handoff-files')?.textContent === "上線驗收報告.html", "expansion names the produced file, not its digest");
+      require(!/#\d|digest|fixture-report/.test(detail.textContent), "expansion shows no internal ids");
+    } else require(!event.open, "handoff details start collapsed");
     return { check: name, taskId: task.task_id, state: task.state, readyAt: task.ready_at_ms };
   }
   if (name === "room-row-menu") {
@@ -344,8 +405,8 @@ export function checkRendered(name) {
     require(box.left >= 8 && box.right <= innerWidth - 8, "the menu stays inside the viewport");
     for (const item of menu.querySelectorAll('button')) {
       require(!item.querySelector('.ck'), "text completions do not reserve an empty icon/check column");
-      const label = item.querySelector('.mt'), itemBox = item.getBoundingClientRect();
-      require(label && label.getBoundingClientRect().left - itemBox.left <= 12, "completion text starts at the row padding");
+      const lead = item.querySelector('.mlead'), first = lead ?? item.querySelector('.mt'), itemBox = item.getBoundingClientRect();
+      require(first && first.getBoundingClientRect().left - itemBox.left <= 12 && (!lead || lead.childElementCount > 0), "a completion starts at the row padding with its face, mark or text");
     }
     return { check: name, menuLeft: box.left, characterX: expected, delta: Math.abs(box.left - expected) };
   }
@@ -588,6 +649,7 @@ export function checkRendered(name) {
       require(style.borderTopLeftRadius === "12px", "messages use the shared card radius");
     }
     require(getComputedStyle(answer).borderTopWidth === "0px", "assistant bubble has no decorative border");
+    plainWords();
     const column = document.querySelector(".mb-col");
     if (visible(column)) {
       const rows = [...column.querySelectorAll(".mb-row")], first = rows[0];

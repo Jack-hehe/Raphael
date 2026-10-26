@@ -77,10 +77,10 @@ test("switching conversations scopes history, quotes the entire answer and sends
   document.querySelector<HTMLButtonElement>('.mb-det [data-conversation-open="2"]')!.click(); await flush();
   expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2 }));
   page.el.querySelector<HTMLButtonElement>('.ra [data-act="reply-message"]')!.click();
-  expect(page.el.querySelector(".cmp-quote .quote-text")?.textContent).toBe("《Entire answer\nSecond paragraph.》");
+  expect(page.el.querySelector(".cmp-quote .quote-text")?.textContent).toBe("Entire answer\nSecond paragraph.");
   const input = page.el.querySelector<HTMLTextAreaElement>(".cmp-input")!; input.value = "Continue"; input.dispatchEvent(new Event("input"));
   page.el.querySelector(".composer")!.dispatchEvent(new Event("submit", { cancelable: true })); await flush();
-  expect(api.agentAskText).toHaveBeenCalledWith("Continue", [], 0, expect.objectContaining({ conversationId: 2, quote: expect.objectContaining({ text: "《Entire answer\nSecond paragraph.》" }) }));
+  expect(api.agentAskText).toHaveBeenCalledWith("Continue", [], 0, expect.objectContaining({ conversationId: 2, quote: expect.objectContaining({ text: "Entire answer\nSecond paragraph." }) }));
   page.el.querySelector<HTMLButtonElement>('[data-act="more-message"]')!.click(); await flush();
   expect(document.querySelector('[data-pick="speak"]')).not.toBeNull();
   document.querySelector<HTMLButtonElement>('[data-pick="speak"]')!.click(); await flush();

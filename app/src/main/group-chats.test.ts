@@ -168,15 +168,38 @@ test("reply controls target a member message and can be cancelled",async()=>{
  expect((document.querySelector('.cmp-quote') as HTMLElement).hidden).toBe(true);
 });
 
-test("active exchanges expose stop and Raphael's distinct wrap-up card",async()=>{
+test("active exchanges expose stop, and Raphael's wrap-up is his ordinary message",async()=>{
  api.roomStop.mockResolvedValue({stopped:true});
  api.roomMessages.mockResolvedValue({messages:[{id:12,member_id:0,text:'### Conclusion\nAlice owns testing',kind:'wrapup',created:1,status:'done'}],exchange:{state:'running',stop_requested:0}});
- await pane();expect(document.querySelector('.au-room-wrapup')!.textContent).toContain('Wrap-up');
- expect(document.querySelector('.au-room-wrapup h3')!.textContent).toBe('Conclusion');
+ await pane();
+ const wrapup=document.querySelector('.au-room-wrapup')!;
+ expect(wrapup.querySelector('.au-room-author')!.textContent).toBe('Raphael');
+ expect(wrapup.textContent).not.toContain('Wrap-up');
+ expect(wrapup.querySelector('.au-room-wrapup h3, h3')!.textContent).toBe('Conclusion');
  expect(document.querySelector('.au-room-crown')!.getAttribute('aria-label')).toBe('Chief of staff');
  document.querySelector<HTMLElement>('.au-room-pane .composer[data-task-state="running"] .cmp-voice')!.click();await flush();expect(api.roomStop).toHaveBeenCalledWith(1);
  api.roomMessages.mockResolvedValue({messages:[],exchange:{state:'stopped',stop_requested:1}});event({type:'RoomsChanged',room_id:1});await flush();
  expect(document.querySelector('.au-room-pane .composer[data-task-state="running"] .cmp-voice')).toBeNull();
+});
+
+test("a blocked reply is a line of the thread after its exchange, with its reason in words",async()=>{
+ const intent=(id:number,origin:number,reason:string)=>({id,origin_message_id:origin,source_message_id:origin,recipient_id:1,recipient_name:'Alice',state:'blocked',reason});
+ api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:null,text:'@Alice check',created:1,status:'done'},{id:2,member_id:0,text:'On it.',created:2,status:'done',origin_message_id:1},
+   {id:3,member_id:null,text:'@Alice again',created:3,status:'done'}],exchange:{state:'stopped',stop_requested:1,reply_intents:[intent(7,1,'cli_rate_limited'),intent(8,3,'cli_quota'),intent(9,3,'mystery')]}});
+ await pane();
+ const rows=[...document.querySelectorAll('.au-room-thread > li')].map(row=>row.matches('.room-intent-blocked')?row.textContent:(row as HTMLElement).dataset.roomMessage);
+ expect(rows).toEqual(['1','2',"Alice couldn't reply: Rate limited for too many requests",'3',"Alice couldn't reply: Subscription quota used up","Alice couldn't reply: Something went wrong"]);
+ expect(document.querySelector('.au-room-controls')!.textContent).toBe('');
+});
+
+test("a hand-off line names its assignee and opens on the request, result and files, never its number",async()=>{
+ api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:0,text:'Alice, write the report.',created:1,status:'done',turn_id:5}],exchange:null,handoffs:[{task_id:42,source_turn_id:5,work_turn_id:6,member_id:1,member_name:'Alice',from_member_id:0,stage_id:'stage-xyz',mode:'work',state:'done',reason:null,created_at_ms:2,ready_at_ms:2,dispatch_policy:'immediate',result:'Report ready.',evidence:[{kind:'artifact',uri:'out/report.html',mime:'text/html',digest:'abc',verdict:'verified'}]}]});
+ await pane();
+ const line=document.querySelector('[data-handoff="42"]')!;
+ expect(line.querySelector('summary')!.textContent).toBe('Forwarded to AliceCompleted');
+ expect(line.querySelector('.handoff-detail .message-quote')!.textContent).toBe('RaphaelAlice, write the report.');
+ expect(line.querySelector('.handoff-files')!.textContent).toBe('report.html');
+ expect(line.textContent).not.toMatch(/42|abc|stage-xyz/);
 });
 
 test("wrap-up renders three labelled sections and escaped owners without Markdown markers",async()=>{
