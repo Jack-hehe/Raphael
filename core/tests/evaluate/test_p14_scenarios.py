@@ -1,4 +1,4 @@
-"""S04/S12 through production RPC, stores, loops, worker and authenticated MCP, with honest fake brains:
+"""S04/S12/S13 through production RPC, stores, loops, worker and authenticated MCP, with honest fake brains:
 each says only the codes it can see, so a leak of private knowledge shows in what it says."""
 import json
 import re
@@ -17,8 +17,8 @@ from background.conftest import Links
 from test_guardian import FakeBrains
 from test_guardian_scenarios import FakeClient
 
-CODE = re.compile(r"\b(?:NX|TR|BC|PV)-[0-9a-f]+\b")
-KINDS = (("品牌", "BC"), ("新品", "NX"), ("房子", "PV"))
+CODE = re.compile(r"\b(?:NX|TR|BC|PV|GR|PR)-[0-9a-f]+\b")
+KINDS = (("品牌", "BC"), ("新品", "NX"), ("房子", "PV"), ("群組代碼", "GR"), ("私人代碼", "PR"))
 
 
 def between(text, start, end):
@@ -26,8 +26,13 @@ def between(text, start, end):
 
 
 def asked(user):
-    """What a turn was asked: the owner's or a colleague's question, or a task's request."""
-    return between(user, "<question>", "</question>") or between(user, "<task>", "</task>")
+    """What a turn was asked: the owner's or a colleague's question, a task's request, or in a room the owner's
+    latest message there."""
+    task = between(user, "<task>", "</task>")
+    if "Full room transcript" in task:
+        said = re.findall(r'"name": "Owner", "role": "Owner", "text": "((?:[^"\\]|\\.)*)"', task)
+        return json.loads(f'"{said[-1]}"') if said else ""
+    return between(user, "<question>", "</question>") or task
 
 
 def honest(system, user):
@@ -79,6 +84,8 @@ class HonestBrain(FakeClient):
             text = json.dumps({"text": "好，我記住了。", "memory": [{"op": "write", **remembered(question)}]}, ensure_ascii=False)
         elif consults(question, user) and not results:
             calls = [consultation(self.tool, system, question)]
+        elif "群組代碼" in question and not results:
+            calls = [("history_search", {"query": "群組代碼"})]
         elif results and '"task_id"' in results[-1]:
             text = "我已詢問行銷，等他回覆。"
         else:
@@ -110,6 +117,8 @@ def cli_brain(monkeypatch, tool):
             elif consults(question, user):
                 came = await call(*consultation(tool, system, question))
                 answer = honest(system, user + came) if tool == "ask_member" else "我已詢問行銷，等他回覆。"
+            elif "群組代碼" in question:
+                answer = honest(system, user + await call("history_search", {"query": "群組代碼"}))
             else:
                 answer = honest(system, user)
             yield Event("final", answer)
@@ -119,7 +128,7 @@ def cli_brain(monkeypatch, tool):
     monkeypatch.setattr("raphael_core.agent.cli.loop.Driver", Driver)
 
 
-@pytest.mark.parametrize("scenario", ["S04", "S12"])
+@pytest.mark.parametrize("scenario", ["S04", "S12", "S13"])
 @pytest.mark.parametrize("tool", ["ask_member", "handoff"])
 @pytest.mark.parametrize("brain", ["api", "cli"])
 async def test_consultation_and_memory_scenarios_pass_on_both_brains(tmp_path, monkeypatch, scenario, tool, brain):
@@ -151,5 +160,57 @@ async def test_a_brain_that_reads_a_colleagues_private_chat_fails_the_memory_sce
     try:
         reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == "S12"))
         assert "private_isolation" in reasons
+    finally:
+        await driver.aclose()
+
+
+class CarryingBrain(HonestBrain):
+    """Carries every code it ever heard into every answer, as one session shared by a group and a private chat
+    would."""
+
+    def __init__(self):
+        super().__init__("ask_member")
+        self.heard = []
+
+    async def chat_tools(self, **kwargs):
+        self.requests.append(kwargs)
+        self.heard += [code for code in CODE.findall(json.dumps(kwargs["messages"])) if code not in self.heard]
+        return ChatTurn("我聽過：" + "、".join(self.heard) + "。", [], kwargs["model"], .001, 10, 10, 1)
+
+
+async def test_the_privacy_scenario_searches_the_private_chat_and_asks_in_the_room(tmp_path):
+    brain = HonestBrain("ask_member")
+    driver = RpcDriver(tmp_path, "fake/model", brain, Budget(200))
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == "S13"))
+        assert not reasons, reasons
+        found = [str(m["content"]) for r in brain.requests for m in r["messages"] if m.get("role") == "tool"]
+        assert found and all("GR-" not in text for text in found)
+        questions = [asked("\n".join(str(m.get("content") or "") for m in r["messages"][1:])) for r in brain.requests]
+        assert any(q.startswith("@行銷 我的私人代碼") for q in questions)
+    finally:
+        await driver.aclose()
+
+
+async def test_a_room_without_the_shared_notes_fails_the_privacy_scenario(tmp_path, monkeypatch):
+    # Rooms once read no memory, so a fact the owner gave the whole team never reached a group.
+    from raphael_core.background.service import BackgroundService
+    monkeypatch.setattr(BackgroundService, "_shared_memory", lambda self: None)
+    driver = RpcDriver(tmp_path, "fake/model", HonestBrain("ask_member"), Budget(200))
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == "S13"))
+        assert "shared_fact_not_in_group" in reasons
+    finally:
+        await driver.aclose()
+
+
+async def test_a_brain_that_carries_the_group_into_a_private_chat_fails_the_privacy_scenario(tmp_path):
+    driver = RpcDriver(tmp_path, "fake/model", CarryingBrain(), Budget(200))
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == "S13"))
+        assert {"group_text_in_private_reply", "private_text_in_group"} <= set(reasons), reasons
     finally:
         await driver.aclose()

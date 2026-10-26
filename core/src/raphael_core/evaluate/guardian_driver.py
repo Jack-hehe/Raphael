@@ -216,6 +216,8 @@ class RpcDriver:
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
         elif cell.driver in ('consult', 'memory'):
             reasons, result = await (self.consult_scenario() if cell.driver == 'consult' else self.memory_scenario())
+        elif cell.driver == 'privacy':
+            reasons, result = await self.privacy_scenario()
         elif cell.driver == "team-setup":
             reasons = []
             async def team_state():
@@ -571,6 +573,43 @@ class RpcDriver:
         for member in (0, marketing):
             reasons += (await self.owner_view(member))[1]
         return reasons, {**result, 'viewer': pm}
+
+    async def privacy_scenario(self):
+        """S13: what is said in a group stays out of a member's private chat (its history, its context, its
+        search and its CLI session), and what the owner tells the member privately stays out of the group;
+        what the owner gave the whole team reaches the group."""
+        ids = await self.seed_team()
+        marketing, pm = ids[0], ids[3]
+        brand, group, private = 'BC-' + self.nonce, 'GR-' + self.nonce, 'PR-' + self.nonce[::-1]
+        room_id = (await self.app.call('rooms.create', {'name': '隱私驗收', 'member_ids': [0, marketing, pm]}))['room']['id']
+
+        async def in_room(request, text):
+            await self.app.call('rooms.send', {'room_id': room_id, 'request_id': request, 'text': text, 'ui_language': 'zh-TW'})
+            while self.app.rooms._exchanges.latest(room_id)['state'] not in ('done', 'stopped'):
+                await asyncio.sleep(.02)
+            await self.settled()
+            return (await self.app.call('rooms.messages', {'room_id': room_id}))['messages']
+
+        await self.ask(f'請記住，這是全團隊都要知道的共同資訊：我們的品牌主色是金色，色號 {brand}。')
+        await self.settled()
+        await in_room('group-' + self.nonce, f'@行銷 群組代碼是 {group}，請在群組裡回覆收到。')
+        await self.ask(f'私下跟你說：我的私人代碼是 {private}。', member=marketing)
+        await self.settled()
+        result = await self.ask('群組代碼是什麼？只根據你在這個對話裡看得到或搜尋得到的內容回答，不要問任何人。', member=marketing)
+        await self.settled()
+        reasons = []
+        if group in await self.said_to(marketing):
+            reasons.append('group_text_in_private_reply')
+        turns = (await self.app.call('agent.history.list', {'member_id': marketing}))['turns']
+        if any(group in turn['question'] for turn in turns):
+            reasons.append('group_text_in_private_history')
+        before = len(await in_room('brand-' + self.nonce, '@行銷 我們的品牌主色色號是什麼？'))
+        messages = await in_room('private-' + self.nonce, '@行銷 我的私人代碼是什麼？只根據這個群組裡看得到的內容回答。')
+        if not any(brand in message['text'] for message in messages[:before] if message['member_id'] is not None):
+            reasons.append('shared_fact_not_in_group')
+        if any(private in message['text'] for message in messages):
+            reasons.append('private_text_in_group')
+        return reasons, {**result, 'viewer': marketing}
 
     async def meeting_scenario(self):
         ids = await self.seed_team()
