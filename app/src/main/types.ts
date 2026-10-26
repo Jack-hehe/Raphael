@@ -317,6 +317,25 @@ export interface AgentTurn {
    * conversation lists its exchanges where they came, each drawn as one centred line.
    */
   peer_id?: number | null;
+  /** The cards of the apps this turn's task waits for (`connectors.cards`). */
+  connectors?: ConnectorCard[];
+  /** For a turn that resumed a task once its cards were connected (`source` "connector"): those apps. */
+  resumed_apps?: string[];
+}
+
+/** A connector card: an app a task needs, and where its sign-in stands. Never a URL or a token. */
+export interface ConnectorCard {
+  id: string;
+  app: string;
+  name: string;
+  state: "pending" | "authorizing" | "connected" | "failed" | "cancelled" | "expired";
+  error: string | null;
+  /** The app was connected and its sign-in ran out: the card reconnects it. */
+  reconnect: boolean;
+  /** How many of the app's tools can be used, once connected. */
+  tool_count: number | null;
+  expires_at_ms: number;
+  resumed: boolean;
 }
 
 /** File metadata and a stored-copy ID; preview data belongs only to an unsaved outgoing turn. */

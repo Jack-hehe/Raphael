@@ -1,4 +1,5 @@
 import { fileKind, sentFileHTML } from "./attachments";
+import { connectorCardsHTML, resumedLineHTML } from "./connector-card";
 import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
@@ -774,9 +775,11 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   const hasMsgs = (turn.messages?.length ?? 0) > 0;
   const settledDraft = isSettledDraftTurn(turn);
   const detail = !settledDraft && !hasMsgs && hasDetail(turn);
-  // a routine's run says its routine in a line of its own, in place of the owner's words
+  // a routine's run says its routine in a line of its own, in place of the owner's words; so does a task
+  // resumed once its connector cards were connected
   const routine = sourceOf(turn) === "routine";
-  const said = turn.question.trim() !== "" && !routine;
+  const resumed = sourceOf(turn) === "connector";
+  const said = turn.question.trim() !== "" && !routine && !resumed;
   const asked = said || (turn.attachments?.length ?? 0) > 0;
   const live = turn.status === "running" || isLive(turn.task);
   const revealing = look.revealing?.(turn.id) ?? false;
@@ -791,6 +794,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
+    (resumed ? resumedLineHTML(turn) : "") +
     (asked
       ? `<div class="me">` +
         `<div class="chat-message owner-message" data-message="question">` +
@@ -804,6 +808,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
       ? turnMessagesHTML(turn, state, query, regenerate) + (turn.messages!.some(m => m.kind === "reply") ? "" : textAnswer)
       : workSectionHTML(turn, state, query) + textAnswer) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
+    connectorCardsHTML(turn) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +

@@ -1702,6 +1702,26 @@ export function createAgent(app: AppContext): Page {
     finally { retracting.delete(session); }
   }
 
+  /** Connect or Cancel on a connector card. The core answers at once and tells each new state (`AgentTurn`). */
+  async function cardAction(act: HTMLElement): Promise<void> {
+    const id = act.dataset.card ?? "";
+    (act as HTMLButtonElement).disabled = true;
+    try {
+      if (act.dataset.act === "card-cancel") await api.cardCancel(id);
+      else {
+        const result = await api.cardConnect(id);
+        // Not started while the card still waits: another card's sign-in holds the browser.
+        if (!result.started && ["pending", "failed", "cancelled"].includes(result.card.state)) {
+          toaster.info(t("card.busy"));
+          (act as HTMLButtonElement).disabled = false;
+        }
+      }
+    } catch (err) {
+      toaster.info(describeError(err));
+      (act as HTMLButtonElement).disabled = false;
+    }
+  }
+
   el.addEventListener("auxclick", (e) => {
     const link = (e.target as Element).closest<HTMLElement>('[data-act="open-url"]');
     if (!link || e.button !== 1) return;
@@ -1812,6 +1832,13 @@ export function createAgent(app: AppContext): Page {
         input.focus();
         break;
       }
+      case "card-connect":
+      case "card-cancel":
+        void cardAction(act);
+        break;
+      case "card-settings":
+        app.go("settings", "connections");
+        break;
       case "no":
         void answer(false);
         break;

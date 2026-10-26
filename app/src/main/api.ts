@@ -303,6 +303,11 @@ export const integrationsConnect = (target: { catalog_id: string } | { id: strin
   core("integrations.connect", target);
 /** Ends the wait for a login; the call that waits then answers `cancelled`. */
 export const integrationsConnectCancel = (): Promise<{ cancelled: boolean }> => core("integrations.connect_cancel");
+/** Starts the sign-in of a chat's connector card; the card's new states arrive as `AgentTurn`. */
+export const cardConnect = (id: string): Promise<{ card: import("./types").ConnectorCard; started: boolean }> =>
+  core("integrations.card_connect", { id });
+/** Ends a card's sign-in that is under way. */
+export const cardCancel = (id: string): Promise<{ cancelled: boolean }> => core("integrations.card_cancel", { id });
 /** Connects a server of the user's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
 export const integrationsUpdate = (id: string, server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.update", { ...server, id });
