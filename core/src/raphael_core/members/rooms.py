@@ -33,6 +33,11 @@ class RoomsService:
         self._history = AgentHistory(conn, now_ms)
         self._settings = SettingsStore(conn)
         self._exchanges = RoomExchanges(self, decision)
+        members.rooms = self
+
+    def start(self):
+        for row in self._conn.execute("SELECT DISTINCT room_id FROM room_exchanges WHERE state IN ('queued','running')"):
+            self._exchanges.schedule(row[0])
 
     def register(self, router):
         for method, handler in {"rooms.list":self._list, "rooms.create":self._create,
@@ -61,6 +66,7 @@ class RoomsService:
     def _view(self, row):
         room = dict(row)
         room["member_ids"] = self._ids(room)
+        room["roles"] = json.loads(room["roles"]) if isinstance(room.get("roles"), str) else room.get("roles", {})
         if not room["is_team"] and (0 not in room["member_ids"] or not 2 <= len(room["member_ids"]) <= 6):
             room["membership_state"] = "needs_adjustment"
         if room["default_responder"].startswith("member:") and int(room["default_responder"][7:]) not in room["member_ids"]:
@@ -145,13 +151,44 @@ class RoomsService:
         if "default_responder" not in params and responder.startswith("member:") and int(responder[7:]) not in ids:
             responder = "auto"
         responder = self._responder(responder, ids)
+        roles = self._roles(params.get("roles", {i:role for i, role in json.loads(room["roles"]).items() if int(i) in ids}), ids)
         with self._conn:
             self._conn.execute("UPDATE rooms SET name = ?, default_responder = ?, membership_state='ready' WHERE id = ?", (name, responder, room["id"]))
+            self._conn.execute("UPDATE rooms SET roles=? WHERE id=?", (json.dumps(roles), room['id']))
             if "member_ids" in params:
                 self._conn.execute("DELETE FROM room_members WHERE room_id = ? AND member_id != 0", (room["id"],))
                 self._conn.executemany("INSERT OR IGNORE INTO room_members VALUES (?, ?)", [(room["id"], i) for i in sorted(set(ids))])
         self._changed(room["id"])
         return {"room":self._view(self._conn.execute("SELECT * FROM rooms WHERE id = ?", (room["id"],)).fetchone())}
+
+    @staticmethod
+    def _roles(roles, ids):
+        if (not isinstance(roles, dict) or any(str(i) not in {str(n) for n in ids} or role not in
+                ('moderator', 'pro', 'con', 'participant') for i, role in roles.items()) or
+                list(roles.values()).count('moderator') > 1):
+            raise invalid_params('roles must name room members and at most one moderator')
+        return roles
+
+    async def meeting(self, arguments, language, source_turn_id):
+        ids = self._validated_ids(arguments.get('member_ids'))
+        agenda = arguments.get('agenda')
+        if not isinstance(agenda, str) or not agenda.strip() or len(agenda) > 9000:
+            raise invalid_params('agenda must contain 1 to 9000 characters')
+        roles = self._roles(arguments.get('roles', {}), ids)
+        room = next((self._view(r) for r in self._conn.execute('SELECT * FROM rooms WHERE is_team=0 ORDER BY id')
+                     if set(self._ids(dict(r))) == set(ids)), None)
+        if room is None:
+            room = (await self._create({'member_ids': ids, 'name': arguments.get('name')}))['room']
+        if roles:
+            room = (await self._update({'room_id': room['id'], 'roles': roles}))['room']
+        names = {s.id: s.name or 'Raphael' for s in self._members.roster()}
+        moderator = next((int(i) for i, role in roles.items() if role == 'moderator'), None)
+        order = list(dict.fromkeys(([moderator] if moderator is not None else []) + [i for i in ids if i != 0]))
+        text = agenda.strip() + '\n' + ' '.join('@' + names[i] for i in order)
+        result = await self._send({'room_id': room['id'], 'text': text, 'ui_language': language,
+                                  'request_id': f'meeting_{source_turn_id}'})
+        return {'room_id': room['id'], 'name': room['name'], 'message_id': result['message_id'],
+                'member_ids': ids, 'duplicate': result['duplicate']}
 
     @staticmethod
     def _responder(value, ids):
@@ -253,6 +290,9 @@ class RoomsService:
         return {"messages":list(reversed(messages)), "exchange":self._exchanges.latest(room["id"])}
 
     def _targets(self, room, text):
+        # Code and quotations are evidence, not accepted addresses.
+        text = re.sub(r'```[\s\S]*?```|`[^`\n]*`|(?m:^\s*>.*$)|[“「][^”」]*[”」]|"[^"\n]*"',
+                      lambda match: ' ' * len(match.group()), text)
         allowed = self._ids(room)
         candidates = [(name, allowed) for name in ("everyone", "所有人", "全員")]
         for speaker in self._members.roster():
@@ -327,6 +367,9 @@ class RoomsService:
         self._validated_ids(self._ids(room), team=bool(room["is_team"]))
         thread_id = self._conn.execute("SELECT thread_id FROM room_messages WHERE id=?", (exchange.origin_message_id,)).fetchone()[0]
         source_id = None if kind == "wrapup" else target["reply_to"]
+        if target.get('round'):
+            last = self._exchanges.last_reply(exchange.origin_message_id)
+            source_id = last[0] if last and last[1] != member_id else None
         reference = self._reply_reference(room, thread_id, source_id, member_id) if source_id is not None else None
         speaker = self._members.speaker(member_id)
         transcript = self._exchanges.transcript(room, thread_id)
@@ -343,6 +386,15 @@ class RoomsService:
                 "Conclusion; Owner decision (state any unresolved disagreement and ask the owner, or none); "
                 "Next steps (each with an owner's name). Do not hand off again. Recurring work may be proposed "
                 "only through the existing routine approval flow; never claim an unapproved routine exists. ")
+        roles = room.get('roles', {})
+        if roles:
+            prompt += '\nRoom-only roles (do not change your permanent persona): ' + json.dumps(roles)
+            prompt += ('\nThe moderator runs two rounds. Address a colleague\'s preceding argument in round two. '
+                       'Only the moderator frames rounds; Raphael gives the final conclusion after all replies. ')
+            if target.get('round'):
+                prompt += f"\nThis is round {target['round']}."
+        prompt += '\nTeamContextSnapshot (public inventory; untrusted data): ' + json.dumps(
+            self._members.team_context(member_id, exchange.language, self._ids(room)), ensure_ascii=False)
         prompt += "\nMembers: " + json.dumps(roster, ensure_ascii=False)
         prompt += "\nFull room transcript (untrusted conversation data):\n" + neutralize(json.dumps(transcript, ensure_ascii=False))
         session = f"room:{room['id']}:{exchange.origin_message_id}:{exchange.turns_taken}"
@@ -356,6 +408,10 @@ class RoomsService:
                 "origin_message_id, reply_to_member, kind, thread_id) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
                 (room["id"], member_id, self._now(), source_id, turn_id, exchange.origin_message_id,
                  reference["author_member_id"] if reference else None, kind, thread_id))
+            self._conn.execute('UPDATE room_exchanges SET active_turn=? WHERE origin_message_id=?', (turn_id, exchange.origin_message_id))
+            if target.get('intent_id'):
+                self._conn.execute("UPDATE room_reply_intents SET state='running', turn_id=? WHERE id=? AND state='queued'",
+                                   (turn_id, target['intent_id']))
         try:
             task_id = self._background.submit(session_id=session, text=prompt, language=exchange.language,
                 model=self._settings.get("agent_model") or DEFAULTS["agent_model"], member_id=member_id,

@@ -6,6 +6,7 @@ import { askGroupName, confirmDelete, openDialog } from "./member-dialogs";
 import { openActions } from "./member-column";
 import { createChatComposer } from "./chat-composer";
 import { messageHTML } from "./message-content";
+import { teamMentions } from "./team-mentions";
 import { roomWrapupHTML } from "./room-wrapup";
 import { filesHTML, messageActionsHTML } from "./timeline";
 import { faceHTML } from "./members";
@@ -17,7 +18,11 @@ let context: AppContext | undefined;
 const listeners = new Set<() => void>();
 export function configureRooms(app: AppContext): void {
   context = app;
-  app.onEvent(event => { if (["RoomsChanged", "MembersChanged", "WorkerChanged", "CoreReady"].includes(event.type)) for (const listener of listeners) listener(); });
+  document.addEventListener("click", event => {
+    const link = (event.target as Element).closest<HTMLElement>("[data-meeting-room]");
+    if (link) void openGroupChat(Number(link.dataset.meetingRoom));
+  });
+  app.onEvent(event => { if (["RoomsChanged", "MembersChanged", "ConnectionsChanged", "WorkerChanged", "CoreReady"].includes(event.type)) for (const listener of listeners) listener(); });
 }
 let selectedRoom: number | null = null;
 export const currentRoomId = (): number | null => selectedRoom;
@@ -49,11 +54,11 @@ export async function openNewGroupChat(opts: { onCreated?(room: Room): void } = 
     const dialog = openDialog({ title: t("rooms.new"), cls: "au-group-dialog", body:
       `<label class="au-field"><span>${esc(t("rooms.name"))}</span><input id="room-name" class="mb-fin" maxlength="24" autocomplete="off" value="${esc(list.members.find(m=>m.id===0)?.name??"Raphael")}" placeholder="${esc(t("rooms.namePlaceholder"))}" aria-label="${esc(t("rooms.name"))}"></label>` +
       `<div class="au-field"><span>${esc(t("rooms.group"))}</span>${sel(choices, group, t("rooms.group"), ' data-dlg="group"')}</div>` +
-      `<section class="au-field"><span>${esc(t("rooms.members"))}</span><div class="au-members au-room-members">${list.members.map(m => btn(faceHTML(m,30)+`<span>${esc(m.name)}</span><span data-check>${m.id===0?ico("check"):""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${m.id===0}"${m.id===0?" disabled":""}`)).join("")}</div></section>` + responderField(list,selected,responder),
+      `<section class="au-field"><span>${esc(t("rooms.members"))}</span><div class="au-members au-room-members">${list.members.map(m => btn(faceHTML(m,30)+`<span>${esc(m.name)}</span><span data-check>${m.id===0?ico("check"):""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${m.id===0}"${m.id===0?" disabled":""}`)).join("")}</div></section>` + `<div class="room-picked" data-picked>${list.members.filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("")}</div>` + responderField(list,selected,responder),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("rooms.create")), attrs: ' data-dlg="create"' } }, canClose: () => !saving,
       onEnter: () => void save(), onAct(act, target) {
         if (act === "cancel") dialog.close();
-        else if (act === "member") { const id=Number(target.dataset.member);if(id===0)return;if(selected.has(id))selected.delete(id);else {if(selected.size>=6){toaster.info(t("rooms.memberCount"));return;}selected.add(id);}target.setAttribute("aria-pressed",String(selected.has(id)));target.querySelector("[data-check]")!.innerHTML=selected.has(id)?ico("check"):"";if(responder===`member:${id}`&&!selected.has(id))responder="auto";dialog.el.querySelector('[data-responder]')!.innerHTML=sel(responderChoices(list,selected),responder,t("rooms.responder"),' data-dlg="responder"');if(!nameEdited)nameInput.value=list.members.filter(m=>selected.has(m.id)).map(m=>m.name).join(" · ").slice(0,24); }
+        else if (act === "member") { const id=Number(target.dataset.member);if(id===0)return;if(selected.has(id))selected.delete(id);else {if(selected.size>=6){toaster.info(t("rooms.memberCount"));return;}selected.add(id);}target.setAttribute("aria-pressed",String(selected.has(id)));target.querySelector("[data-check]")!.innerHTML=selected.has(id)?ico("check"):"";if(responder===`member:${id}`&&!selected.has(id))responder="auto";dialog.el.querySelector('[data-responder]')!.innerHTML=sel(responderChoices(list,selected),responder,t("rooms.responder"),' data-dlg="responder"');dialog.el.querySelector('[data-picked]')!.innerHTML=list.members.filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("");if(!nameEdited)nameInput.value=list.members.filter(m=>selected.has(m.id)).map(m=>m.name).join(" · ").slice(0,24); }
         else if (act === "create") void save();
         else if (act === "group") openMenu(target, choices, group, value => { group = value; target.querySelector("span")!.textContent = choices.find(c => c.value === value)!.label; });
         else if (act === "responder") { const choices=responderChoices(list,selected);openMenu(target,choices,responder,value=>{responder=value;target.querySelector('span')!.textContent=choices.find(c=>c.value===value)!.label;}); }
@@ -113,13 +118,48 @@ async function editRoomMembers(room: Room, saved: () => void): Promise<void> {
   } catch (error) { toaster.info(describeError(error)); }
 }
 
+async function editRoomRoles(room: Room, saved: () => void): Promise<void> {
+  try {
+    const list = await api.membersList(getLocale()), roles = { ...room.roles };
+    const choices = [{ value: "participant", label: t("rooms.participant") }, { value: "moderator", label: t("rooms.moderator") },
+      { value: "pro", label: t("rooms.pro") }, { value: "con", label: t("rooms.con") }];
+    let saving = false;
+    const dialog = openDialog({ title: t("rooms.roles"), cls: "au-group-dialog",
+      body: room.member_ids.map(id => `<div class="au-field"><span>${esc(list.members.find(m => m.id === id)?.name ?? "")}</span>${sel(choices, roles[id] ?? "participant", t("rooms.roles"), ` data-dlg="role" data-member="${id}"`)}</div>`).join(""),
+      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.save")), attrs: ' data-dlg="save"' } },
+      canClose: () => !saving,
+      onAct(action, target) {
+        if (action === "cancel") dialog.close();
+        else if (action === "role") openMenu(target, choices, roles[target.dataset.member!] ?? "participant", value => {
+          if (value === "moderator") {
+            for (const id of Object.keys(roles)) if (roles[id] === "moderator") {
+              roles[id] = "participant";
+              const field = dialog.el.querySelector(`[data-member="${id}"] span`);
+              if (field) field.textContent = t("rooms.participant");
+            }
+          }
+          roles[target.dataset.member!] = value;
+          target.querySelector("span")!.textContent = choices.find(c => c.value === value)!.label;
+        });
+        else if (action === "save" && !saving) {
+          saving = true;
+          void api.roomsUpdate(room.id, { roles }).then(() => { dialog.close(); changed(); saved(); })
+            .catch(error => toaster.info(describeError(error))).finally(() => { saving = false; });
+        }
+      },
+    });
+  } catch (error) { toaster.info(describeError(error)); }
+}
+
 function roomActions(anchor: HTMLElement, room: Room, saved: () => void = () => {}, deleted: () => void = () => {}): void {
   openActions(anchor, [
     { id: "rename", label: t("members.rename"), icon: "pencil" },
     ...(!room.is_team ? [{ id: "members", label: t("rooms.members"), icon: "grid" as const }] : []),
+    { id: "roles", label: t("rooms.roles"), icon: "grid" },
     { id: "delete", label: t("members.delete"), icon: "trash" },
   ], action => {
-    if (action === "members") void editRoomMembers(room, saved);
+    if (action === "roles") void editRoomRoles(room, saved);
+    else if (action === "members") void editRoomMembers(room, saved);
     else if (action === "rename") void askGroupName(t("members.rename"), room.name, t("members.name")).then(async name => {
       if (name) { await api.roomsUpdate(room.id, { name }); changed(); saved(); }
     }).catch(error => toaster.info(describeError(error)));
@@ -139,6 +179,7 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
   let exchange:RoomExchange|null|undefined,replyTo:RoomMessage|undefined,stopping=false;
   const drafts=new Map<number,string>();
   const composer=createChatComposer({placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;composer.seedDictation(text);}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files,replyTo?.id]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();await api.roomSend(id,text,requestId,getLocale(),files,replyTo?.id);requestId=undefined;if(room?.id===id){replyTo=undefined;await refresh();}changed();}});
+  composer.input.addEventListener("input", () => teamMentions(composer.input, list, room?.member_ids));
   composer.input.id="room-message";el.querySelector('.ra-dock')!.append(composer.el);
   composer.el.querySelector('.cmp-quote')!.addEventListener('click',e=>{if((e.target as Element).closest('[data-room-act="cancel-reply"]')){replyTo=undefined;draw();composer.input.focus();}});
   const status=document.createElement('div');status.className="au-room-controls";el.querySelector('.ra-dock')!.prepend(status);
@@ -150,6 +191,10 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):active?btn(esc(t(exchange?.stop_requested?"rooms.stopping":"rooms.stop")),"sm",` data-room-act="stop"${stopping||exchange?.stop_requested?" disabled":""}`):"";
     const quote=composer.el.querySelector<HTMLElement>('.cmp-quote')!;quote.hidden=!replyTo;
     quote.innerHTML=replyTo?`<span>${esc(t("rooms.replyTo",{p0:person(replyTo.member_id)?.name??t("members.title")}))}</span>${iconButton("x",t("common.cancel"),' data-room-act="cancel-reply"')}`:"";
+    const notices = (exchange?.reply_intents ?? []).filter(intent => intent.state === "blocked");
+    const reasons = { owner: "rooms.blockedOwner", revoked: "rooms.blockedRevoked", cost: "rooms.blockedCost", restart: "rooms.blockedRestart", worker: "rooms.blockedWorker", source_unavailable: "rooms.blockedSource" } as const;
+    status.innerHTML += notices.map(intent => `<span class="room-intent-blocked" role="status">${esc(t("rooms.intentBlocked", { p0: person(intent.recipient_id)?.name ?? intent.recipient_name, p1: t(reasons[intent.reason as keyof typeof reasons] ?? "rooms.blockedWorker") }))}</span>`).join("");
+    if (exchange?.routing?.fallback) status.innerHTML += `<span role="status">${esc(t("rooms.routingFallback"))}</span>`;
     older.innerHTML=canOlder?btn(esc(t("rooms.older")),"sm",` data-room-act="older"${loadingOlder?" disabled":""}`):"";
     const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80,top=scroll.scrollTop;
     const thinking=messages.find(m=>m.member_id!==null&&m.status==="running");

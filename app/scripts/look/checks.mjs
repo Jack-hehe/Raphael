@@ -2,6 +2,28 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name.startsWith("p02-")) {
+    const data = window.__look.data, calls = window.__look.calls;
+    if (name === "p02-roster") require(calls.some(c => c.method === "members.list"), "shared roster boundary is read");
+    if (name === "p02-mentions" || name === "p02-room-mentions") {
+      const menu = document.querySelector("#app-popover");
+      require(visible(menu), "mention menu is visible");
+      require(menu.textContent.includes(data.members[1].name), "bot comes from the roster");
+      require(data.servers.some(app => menu.textContent.includes(app.name)), "app comes from the same snapshot");
+    }
+    if (name === "p02-picker") require(document.querySelectorAll(".room-picked span").length === 2, "Raphael and the selected colleague have chips");
+    if (name === "p02-fallback") require(document.querySelector(".au-room-controls").textContent.includes("群組預設"), "fallback is visible");
+    if (name === "p02-blocked") require(document.querySelectorAll(".room-intent-blocked").length === 2, "both blocked recipients stay visible");
+    if (name === "p02-meeting-event") require(visible(document.querySelector(".conversation-event-line [data-meeting-room]")), "meeting event stays outside collapsed work");
+    if (name === "p02-meeting-open") require(document.querySelector(".au-room-heading b").textContent === data.rooms[0].name, "meeting link opens the real room pane");
+    if (name === "p02-roles") require(calls.some(c => c.method === "rooms.update" && c.params.roles?.[1] === "moderator"), "room roles are persisted at the native boundary");
+    if (name === "p02-long-exchange") {
+      const exchange = data.roomExchanges.at(-1);
+      require(exchange.hops > 3 && exchange.turns_taken > 6, "rendered exchange crosses both admission limits");
+      require(exchange.reply_intents.every(intent => intent.state === "done"), "wrap-up has no pending intent");
+    }
+    return { check: name, matched: true };
+  }
   if (name === "conversation-running") {
     const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
     require(calls.some(call => (call.params?.member_id ?? 0) === 0 && (call.params?.conversation_id ?? 1) === 1), "R-UI-32: running turn belongs to the open formal conversation");

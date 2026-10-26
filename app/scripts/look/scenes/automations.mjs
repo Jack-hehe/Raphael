@@ -8,6 +8,20 @@ const team = [page("team"), wait(".team-member"), check("team-header")];
 const tools = [...calendar, { action: "calendar-tools" }, check("calendar-tools")];
 const groupMenu = [...team, click('[data-team="group-menu"]')];
 export default [
+  scene("team-roster-aware", "Team inventory agrees with the shared prompt snapshot", [...team, check("p02-roster")]),
+  scene("mentions-bots-apps", "Bots and connected apps share the mention inventory", [...team, type(".team-composer textarea", "@"), wait("#app-popover"), check("p02-mentions")]),
+  scene("member-mentions-bots-apps", "Private composer shares the current team and app inventory", [type(".composer .cmp-input", "@"), wait("#app-popover"), check("p02-mentions")]),
+  scene("plus-create-room", "Plus opens a room picker with selected chips", [...team, click('[data-team="new"]'), click('[data-pick="room"]'), wait(".mb-dialog"), click('[data-dlg="member"][data-member="1"]'), check("p02-picker")]),
+  scene("room-mentions", "Room mention menu follows the typed character", [room(1), type("#room-message", "@"), wait("#app-popover"), check("p02-room-mentions")]),
+  scene("room-routing-fallback", "The saved routing fallback is visible", [room(1), check("p02-fallback")], { p02Fallback: true }),
+  scene("meeting-open-room", "A centered chief event opens the meeting", [wait("[data-meeting-room]"), check("p02-meeting-event"), click("[data-meeting-room]"), wait(".au-room-heading b"), check("p02-meeting-open")], { p02Meeting: true }),
+  scene("meeting-chief-event", "The chief private chat has one centered meeting link", [wait("[data-meeting-room]"), check("p02-meeting-event")], { p02Meeting: true }),
+  scene("room-role-assignment", "Room roles use shared dropdowns and save", [room(1), click("[data-room-menu]"), click('[data-pick="roles"]'), wait(".mb-dialog"), click('[data-dlg="role"][data-member="1"]'), click('[data-value="moderator"]'), click('[data-dlg="save"]'), wait(".au-room-heading b"), check("p02-roles"), click("[data-room-menu]"), click('[data-pick="roles"]'), wait(".mb-dialog")]),
+  scene("room-round-typing", "The current round speaker is named", [room(1), wait(".au-room-thinking"), check("room-thinking")], { roomThinking: true, p02Roles: true }),
+  scene("room-mention-after-hop-limit", "Completed explicit mentions survive four handoffs", [room(1), check("p02-long-exchange")], { p02LongExchange: true, roomDiscussion: true }),
+  scene("room-mention-after-turn-limit", "Replies survive the seventh turn", [room(1), check("p02-long-exchange")], { p02LongExchange: true, roomDiscussion: true }),
+  scene("room-mention-blocked", "Stopped and cost-blocked recipients stay named", [room(1), check("p02-blocked")], { p02Blocked: true }),
+  scene("room-wrapup-after-replies", "Chief conclusion follows completed reply intents", [room(1), check("room-wrapup"), check("p02-long-exchange")], { p02LongExchange: true, roomWrapup: true }),
   scene("automations-hover", "Calendar chip hover", [...calendar, hover('.au-occurrence')]),
   scene("automations-empty", "Calendar without routines", [...auto, check("calendar-shell")], { routines: [] }),
   scene("automations-calendar", "Automation week calendar", calendar),

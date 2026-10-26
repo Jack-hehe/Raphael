@@ -90,7 +90,7 @@ async def inventory(servers=()):
         for name, item in {**_DEFINITIONS, **dict(definitions_for(member))}.items():
             register(builtin(name), name, item["parameters"], role)
         for name in TEAM_TOOLS:
-            if name == "create_member" and member:
+            if name in ("create_member", "room_meeting") and member:
                 continue
             definition = worker_definition(name)["function"]
             register(builtin(name), name, definition["parameters"], role)

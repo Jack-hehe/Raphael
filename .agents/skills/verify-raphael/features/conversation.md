@@ -64,3 +64,14 @@ rendered audit also rejects non-finite durations in work summaries.
 ## Guardian scenario owner view
 
 The live-scenario-owner-view scene replays S17 synthetic history through the shared IPC fixture. It checks the personal conversation, actionable Traditional Chinese failure, and separation of progress from the final answer. This rendered fixture does not prove live model or connector acceptance. Core scenario reports retain digests, scopes, message kinds and test-mode receipts in owner-view.json.
+
+## Meetings and shared inventory
+
+Every private/API/CLI/member turn receives the current public TeamContextSnapshot with self,
+count, stable IDs, roles, primary/chief and secret-free app connection states. Meeting requests
+use room_meeting; one centered event opens the room, and quick ask_member answers remain tool
+data folded into the requesting assistant reply. Room history remains outside private turns.
+
+```powershell
+npm run look -- meeting-open-room meeting-chief-event member-mentions-bots-apps --theme both --width 1120,720,1920x1080
+```

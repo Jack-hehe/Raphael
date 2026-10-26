@@ -3,12 +3,32 @@ import { beforeEach, expect, test, vi } from "vitest";
 import { membersCommandsList } from "./api";
 import { matchingCommands, mountSlashMenu } from "./slash-menu";
 import { closeMenu } from "./ui";
+import { teamMentions } from "./team-mentions";
+import type { MembersList } from "./types";
 vi.mock("./api", () => ({ membersCommandsList: vi.fn() }));
 const commands = [{ id: 1, name: 'review', description: 'Review code', template: 'Secret expansion {input}' }, { id: 2, name: 'research', description: 'Find sources', template: '{input}' }];
 const flush = async (): Promise<void> => { for (let i = 0; i < 15; i++) await Promise.resolve(); };
 beforeEach(() => { closeMenu(); document.body.innerHTML = ''; vi.resetAllMocks(); vi.mocked(membersCommandsList).mockResolvedValue({ commands }); });
 const setup = () => { const input = document.createElement('textarea'); document.body.append(input); input.focus(); let id = 7; const menu = mountSlashMenu(input, { memberId: () => id }); return { input, menu, selectMember: (next: number) => { id = next; } }; };
 const type = (input: HTMLTextAreaElement, value: string) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); };
+
+test('slash and mention menus retain their own focus, keyboard and dismissal behavior', async () => {
+  const { input, menu } = setup();
+  const list = { members: [{ id: 0, name: 'Raphael' }, { id: 1, name: 'Alice' }], groups: [] } as unknown as MembersList;
+  input.addEventListener('input', () => teamMentions(input, list));
+  type(input, '/'); await flush();
+  expect(document.querySelector('.slash-menu')).not.toBeNull();
+  type(input, '@');
+  expect(document.querySelector('#app-popover[data-team-mentions]')).not.toBeNull();
+  expect(document.activeElement).toBe(input);
+  document.querySelector<HTMLElement>('[data-value="Alice"]')!.click();
+  expect(input.value).toBe('@Alice ');
+  type(input, '');
+  expect(document.querySelector('#app-popover')).toBeNull();
+  type(input, '/'); await flush();
+  expect(document.querySelector('.slash-menu')).not.toBeNull();
+  menu.destroy();
+});
 
 test('command filtering is limited to a slash at the start and excludes arguments', () => {
   expect(matchingCommands(commands, '/REv').map(c => c.name)).toEqual(['review']);

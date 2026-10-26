@@ -992,7 +992,7 @@ class BackgroundService:
                 arguments,
                 language=task.language,
                 ledger=ledger,
-                session_id=task.session_id, **consent,
+                session_id=task.session_id, source_turn_id=task.turn_id, **consent,
             )
 
         return call

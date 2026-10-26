@@ -1307,6 +1307,23 @@ export const zhTW = {
   "brains.connect": "連線",
   "brains.disconnect": "中斷連線",
   "brains.disconnected": "已中斷連線",
+  "rooms.appConnected": "已連結",
+  "rooms.appSignIn": "需要登入",
+  "rooms.appUnknown": "狀態未知",
+  "rooms.roles": "房內角色",
+  "rooms.moderator": "主持人",
+  "rooms.pro": "正方",
+  "rooms.con": "反方",
+  "rooms.participant": "參與者",
+  "rooms.meetingOpened": "已開啟會議：{p0}",
+  "rooms.routingFallback": "自動選人暫不可用，已使用群組預設",
+  "rooms.intentBlocked": "{p0}：回覆受阻（{p1}）",
+  "rooms.blockedOwner": "已停止",
+  "rooms.blockedRevoked": "權限已撤銷",
+  "rooms.blockedCost": "費用上限",
+  "rooms.blockedRestart": "重新啟動後需確認",
+  "rooms.blockedWorker": "執行失敗",
+  "rooms.blockedSource": "來源不可用",
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

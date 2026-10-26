@@ -321,6 +321,10 @@ class MembersService:
             for member in self.store.members()
         ]
 
+    def team_context(self, self_id=0, language="zh-TW", room_member_ids=None):
+        from ..agent.team_context import snapshot
+        return snapshot(self, self_id, language, room_member_ids).wire()
+
     def create(self, *, name: Any, role: Any, instructions: Any, group: Any, personality: Any = "") -> Speaker:
         """Add a member at the owner's request (`create_member`): in the group of that name, made
         when there is none, or in none. MemberError when it cannot be added."""
@@ -702,7 +706,8 @@ class MembersService:
         latest = self._history.latest_by_member()
         members = [self._raphael_view(language, unread, waiting, latest)]
         members += [self._member_view(m, unread, waiting, latest) for m in self.store.members()]
-        return {"members": members, "groups": [group_view(g) for g in self.store.groups()]}
+        return {"members": members, "groups": [group_view(g) for g in self.store.groups()],
+                "team_context": self.team_context(0, language)}
 
     def _member_id(self, params: dict) -> int:
         """The `id` of a member that is there (never Raphael's: he is not changed here)."""

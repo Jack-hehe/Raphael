@@ -1,6 +1,10 @@
 {
   "version": 1,
   "tools": {
+    "raphael/core/room_meeting": {
+      "scenario_ids": ["S07", "S21.meetings.create-reuse"],
+      "expected_assertions": ["production_state"]
+    },
     "raphael/core/approve": {
       "scenario_ids": [
         "S21.settings-quick.approve"

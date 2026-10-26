@@ -5,14 +5,14 @@ import { describeError } from "../format";
 import { getLocale, onLocaleChange, t } from "../i18n";
 import { askGroupName, confirmDelete } from "../member-dialogs";
 import { openActions } from "../member-column";
-import { openGroupChat } from "../group-chats";
+import { openNewGroupChat, openGroupChat } from "../group-chats";
 import { faceHTML } from "../members";
 import { messageTooltip } from "../message-tooltip";
 import { modelMark } from "../provider-marks";
 import { openMemberThread } from "../team-navigation";
-import { textPositionRect } from "../text-position";
+import { teamMentions } from "../team-mentions";
 import type { AppContext, Member, MemberGroup, MembersList, Page, WireAttachment } from "../types";
-import { btn, closeMenu, esc, ico, iconButton, openMenu, toaster } from "../ui";
+import { btn, esc, ico, iconButton, toaster } from "../ui";
 import "../members.css";
 import "../automations.css";
 
@@ -69,25 +69,24 @@ export function createTeamPage(app: AppContext): Page {
     const target = (e.target as Element).closest<HTMLElement>("[data-team]"); if (!target) return;
     const act = target.dataset.team;
     if (act === "chat") openMemberThread(app, Number(target.dataset.member));
-    else if (act === "new") openActions(target, [{ id: "group", label: t("team.newGroup"), icon: "folder" }], () => void newGroup());
+    else if (act === "new") openActions(target, [
+      { id: "member", label: t("members.newMember"), icon: "plus" },
+      { id: "room", label: t("members.sideNewGroupChat"), icon: "chat" },
+      { id: "group", label: t("team.newGroup"), icon: "folder" },
+    ], pick => {
+      if (pick === "room") void openNewGroupChat();
+      else if (pick === "member") { app.go("agent"); window.dispatchEvent(new CustomEvent("raphael:new-member")); }
+      else void newGroup();
+    });
     else if (act === "zoom-in" || act === "zoom-out") { zoom = Math.max(0.5, Math.min(1.5, Math.round((zoom + (act === "zoom-in" ? 0.1 : -0.1)) * 10) / 10)); draw(); }
     else if (act === "group-menu") { const g = list.groups.find(g => g.id === Number(target.dataset.group)); if (g) openActions(target, [{ id: "rename", label: t("members.rename"), icon: "pencil" }, { id: "delete", label: t("members.delete"), icon: "trash" }], pick => { if (pick === "rename") void rename(g); else void remove(g); }); }
   });
-  input.addEventListener("input", () => {
-    const before = input.value.slice(0, input.selectionStart), match = /@([^@\n]*)$/.exec(before);
-    if (!match || match[1].length > 30) { closeMenu(); return; }
-    const choices = [{ value: t("team.everyone"), label: "@" + t("team.everyone") }, ...list.members.map(m => ({ value: m.name, label: "@" + m.name })), ...list.groups.map(g => ({ value: g.name, label: "@" + g.name }))].filter(c => c.value.toLocaleLowerCase().includes(match[1].toLocaleLowerCase()));
-    if (choices.length) {
-      const caret = input.selectionStart;
-      openMenu(input, choices, "", value => { const tail = input.value.slice(caret); const prefix = before.slice(0, match.index); input.value = prefix + "@" + value + " " + tail; input.focus(); input.setSelectionRange(prefix.length + value.length + 2, prefix.length + value.length + 2); }, undefined, [], { placement: "start", anchorRect: () => textPositionRect(input, match.index), selectionIndicator: false });
-      input.focus();
-    } else closeMenu();
-  });
+  input.addEventListener("input", () => teamMentions(input, list));
   board.addEventListener("dragstart", e => { const m = (e.target as Element).closest<HTMLElement>("[data-team-member]"); if (m) { e.dataTransfer?.setData("application/x-raphael-member", m.dataset.teamMember!); const target=board.querySelector<HTMLElement>(".team-drop-empty"); if(target)target.hidden=false; } });
   board.addEventListener("dragend", () => { const target=board.querySelector<HTMLElement>(".team-drop-empty");if(target)target.hidden=true; });
   board.addEventListener("dragover", e => { if ((e.target as Element).closest("[data-team-group]") && e.dataTransfer?.types.includes("application/x-raphael-member")) e.preventDefault(); });
   board.addEventListener("drop", e => { const g = (e.target as Element).closest<HTMLElement>("[data-team-group]"); if (!g) return; e.preventDefault(); const id = Number(e.dataTransfer?.getData("application/x-raphael-member")); if (!id || !list.members.some(m => m.id === id)) return; void api.membersUpdate(id, { group_id: g.dataset.teamGroup === "none" ? null : Number(g.dataset.teamGroup) }).then(() => load()).catch(error => toaster.info(describeError(error))); });
-  app.onEvent(event => { if (visible && ["MembersChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
+  app.onEvent(event => { if (visible && ["MembersChanged", "ConnectionsChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
   onLocaleChange(() => { if (visible) { draw(); void load(); } });
   return { id: "team", el, show() { visible = true; draw(); void load(); }, hide() { visible = false; loads++; hideTooltip(); } };
 }

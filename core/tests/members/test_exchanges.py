@@ -137,14 +137,16 @@ async def test_a_removed_default_responder_is_presented_as_auto_for_room_editing
     await rig.call("rooms.update", {"room_id":room["id"], "member_ids":view["member_ids"], "default_responder":view["default_responder"]})
 
 
-async def test_handoff_allows_only_explicit_repeats_and_three_hops(rig, exchange):
+async def test_explicit_handoffs_survive_the_fourth_hop_and_repeated_speakers(rig, exchange):
     room, ids = await team(rig)
     await send(rig, room, "@Alice plan")
     for text in ("@Bob check", "@Alice disagree", "@Bob please revise", "@Alice check again"):
         await finish(rig, exchange, text)
-    assert [s["member_id"] for s in rig.background.submitted] == [ids[0],ids[1],ids[0],ids[1],0]
+    assert [s["member_id"] for s in rig.background.submitted] == [ids[0],ids[1],ids[0],ids[1],ids[0]]
+    await finish(rig, exchange, 'Ready')
+    assert rig.background.submitted[-1]['member_id'] == 0
     await finish(rig, exchange, "Wrap-up")
-    assert (await history(rig, room))["exchange"]["hops"] == 3
+    assert (await history(rig, room))["exchange"]["hops"] == 4
 
 
 async def test_material_chime_ins_are_bounded_and_cannot_repeat(rig, exchange):
@@ -189,7 +191,7 @@ async def test_cost_and_restart_stop_without_replay(rig, exchange):
     assert len(rig.background.submitted) == 2
 
 
-async def test_six_turn_cap_reserves_one_wrapup_and_removes_repeated_queued_members(rig, exchange):
+async def test_six_explicit_recipients_all_answer_before_the_seventh_wrapup(rig, exchange):
     room, ids = await team(rig)
     extra = [(await rig.call("members.create", {"name":f"Person{i}"}))["member"]["id"] for i in range(3)]
     await rig.call("rooms.update", {"room_id":room["id"], "member_ids":[0,*ids,*extra]})
@@ -199,12 +201,14 @@ async def test_six_turn_cap_reserves_one_wrapup_and_removes_repeated_queued_memb
         if (await history(rig, room))["exchange"]["state"] == "done":
             break
     result = await history(rig, room)
-    assert result["exchange"]["turns_taken"] == 6
+    assert result["exchange"]["turns_taken"] == 7
     assert result["messages"][-1]["kind"] == "wrapup"
-    assert len(rig.background.submitted) == 6
+    assert len(rig.background.submitted) == 7
+    await finish(rig, exchange, 'Conclusion')
+    assert {i['recipient_id'] for i in (await history(rig, room))['exchange']['reply_intents'] if i['state']=='done'} == {0,*ids,*extra}
 
 
-async def test_default_seniority_and_unavailable_cli_decider(rig, exchange):
+async def test_cli_decider_uses_the_shared_api_adapter_and_saved_fallback(rig, exchange):
     room, ids = await team(rig)
     from raphael_core.protocol import RpcError
     with pytest.raises(RpcError):
@@ -212,7 +216,8 @@ async def test_default_seniority_and_unavailable_cli_decider(rig, exchange):
     exchange._settings.set("agent_model", "cli:codex:gpt-5.6-terra")
     await send(rig, room, "Status")
     assert rig.background.submitted[-1]["member_id"] == 0
-    assert exchange._exchanges.decision.calls == []
+    assert len(exchange._exchanges.decision.calls) == 1
+    assert not exchange._exchanges.decision.calls[0]['model'].startswith('cli:')
     for responder in ("member:999", "wrong", True):
         from raphael_core.protocol import RpcError
         with pytest.raises(RpcError):

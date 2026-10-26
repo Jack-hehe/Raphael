@@ -1,4 +1,10 @@
 {
+  "p02MeetingEvent": { "type": "meeting", "room_id": 1, "name": "產品方向討論" },
+  "p02BlockedIntents": [
+    { "id": 100, "recipient_id": 1, "recipient_name": "小堇", "state": "blocked", "reason": "owner" },
+    { "id": 101, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cost" }
+  ],
+  "p02Roles": { "1": "moderator", "2": "pro", "3": "con" },
   "liveScenarioOwnerTurns": [
     {
       "id": 1700, "session_id": "guardian-owner-view", "member_id": 0, "conversation_id": 1,
