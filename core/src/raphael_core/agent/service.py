@@ -3240,15 +3240,18 @@ class AgentService:
         # A limit is clamped into 1..200: SQLite reads a negative LIMIT as "no limit".
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
+        conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
+        # Colleagues' questions and hand-offs arrive in the member's main chat, as Grok Bot's do.
+        exchanges = conversation_id == self.conversations.main(member_id)
         turns = self._history.list(limit=limit, before_id=before_id, member_id=member_id,
-                                   conversation_id=self.conversations.resolve(member_id, _opt_int(params, "conversation_id")))
+                                   conversation_id=conversation_id, exchanges=exchanges)
         if around_id is not None:
-            conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
             anchor = self._history.get(around_id)
             if anchor is None or anchor.member_id != member_id or anchor.conversation_id != conversation_id:
                 raise invalid_params("around_id must name a turn in this conversation")
-            before = self._history.list(limit=limit, before_id=around_id + 1, member_id=member_id, conversation_id=conversation_id)
-            after = self._history.after(around_id, member_id=member_id, conversation_id=conversation_id)
+            before = self._history.list(limit=limit, before_id=around_id + 1, member_id=member_id,
+                                        conversation_id=conversation_id, exchanges=exchanges)
+            after = self._history.after(around_id, member_id=member_id, conversation_id=conversation_id, exchanges=exchanges)
             turns = sorted([*before, *after[:limit]], key=lambda turn: turn.id, reverse=True)
         return {"turns": self._turn_views(turns)}
 
@@ -3278,10 +3281,11 @@ class AgentService:
         steps = self._history.steps(ids)
         messages = self._history.messages(ids)
         tasks = self._background.tasks_for_turns(ids)
+        asked = self._history.asked_from(ids)
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
-            handoffs = self._background.handoff_views(source_turn_id=turn.id)
+            handoffs = self._colleague_events(turn, asked.get(turn.id or 0, []))
             views.append(
                 {
                     "id": turn.id,
@@ -3315,6 +3319,27 @@ class AgentService:
                 }
             )
         return views
+
+    def _colleague_events(self, turn: Turn, asked: list[Turn]) -> list[dict]:
+        """What a turn asked or handed colleagues, as its centred lines: its durable hand-offs, and
+        each quick question (`ask_member`), which has no task, read from the colleague's record."""
+        views = self._background.handoff_views(source_turn_id=turn.id)
+        tasked = {view["work_turn_id"] for view in views}
+        for exchange in asked:
+            if exchange.id in tasked:
+                continue
+            state = {"done": "done", "running": "running", "confirm": "waiting"}.get(exchange.status, "failed")
+            speaker = self._speaker(exchange.member_id)
+            views.append({
+                "task_id": None, "source_turn_id": turn.id, "work_turn_id": exchange.id,
+                "member_id": exchange.member_id, "member_name": speaker.name if speaker else "",
+                "from_member_id": exchange.peer_id, "stage_id": "", "mode": "consult", "state": state,
+                "reason": None, "created_at_ms": exchange.created_at_ms, "ready_at_ms": exchange.created_at_ms,
+                "dispatch_policy": "immediate", "request": exchange.question,
+                "result": (exchange.detail or exchange.text) if state == "done" else "",
+                "evidence": [], "completion_state": state,
+            })
+        return sorted(views, key=lambda view: view["created_at_ms"])
 
     async def _history_clear(self, params: dict) -> dict:
         """Clear the conversations: every thread, with every summary (each member's too), what

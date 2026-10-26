@@ -17,8 +17,9 @@ they all share one more:
   found, how the owner wants it to work.
 
 The conversations are private to each assistant: its prompt, its summary, its search of the past
-(`history_search`) and its reflection pass read only its own thread. The one text two of them share
-is an exchange of `ask_member`, which is written in the threads of those two.
+(`history_search`) and its reflection pass read only its own thread. What one of them was told
+reaches another only as the answer to a question it was asked (`ask_member`, or a hand-off in
+`consult` mode), which the asked one words from its own notes and conversation.
 
 The prompt carries both indexes, the shared one first (`store.MemoryIndex`), each within the limits
 of an index. A write chooses its space (`space`); a note read by name is looked for in the

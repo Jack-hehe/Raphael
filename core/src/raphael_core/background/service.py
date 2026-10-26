@@ -655,6 +655,7 @@ class BackgroundService:
                 'member_id':task.member_id,'from_member_id':task.from_member_id,'stage_id':task.stage_id,
                 'state':'withheld' if withheld else task.state,'reason':task.reason,'created_at_ms':task.created_at_ms,
                 'ready_at_ms':task.ready_at_ms,'dispatch_policy':task.dispatch_policy,'mode':task.mode,
+                'request':task.text,
                 'result':(task.report_detail or task.report_text or '') if not withheld and task.state=='done' else '',
                 'evidence':self._store.evidence(task.id) if not withheld else [],
                 'completion_state':(stage['state'] if (stage:=self._metrics_conn.execute('SELECT state FROM task_stage_owners WHERE owner_task_id=?',(task.id,)).fetchone()) else task.state)})

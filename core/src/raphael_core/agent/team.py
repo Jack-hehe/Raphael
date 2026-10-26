@@ -6,8 +6,9 @@
   through the same answer path as always (`AgentService.answer_for`), as itself: from its own
   conversation, its own memory and the shared one, with its own tools, as if the owner had asked
   it, but never on the desktop. Nobody asks itself, a chain is at most two deep (A asks B, B may ask
-  C, C asks nobody) and has no cycle (`Speaker.can_ask`). The exchange is written in the two threads
-  of the two who had it, as one line each (`route` "exchange"), and nowhere else.
+  C, C asks nobody) and has no cycle (`Speaker.can_ask`). The exchange is kept once, in the asked
+  one's thread (`route` "exchange"): its chat shows it as one line where it came, the asker's turn
+  names it as 「已詢問」, and no model reads it back.
 - `create_member {name, role, instructions, personality?, group?}` adds a member when the owner asks for one
   (「幫我加一個管行程的成員」), through Raphael, as an alias of `member_create`.
 - `handoff` returns an immediate durable receipt for isolated assigned work. Its task graph has

@@ -114,12 +114,13 @@ async def test_relaying_a_lesson_preserves_the_owner_as_the_japanese_quotes_spea
     # The fake repeats the live model's unmarked quote; provenance comes from the real thread.
     assert f"紫苑: {answer.splitlines()[0]}" in str(tool)
     assert f"owner: {question}" in str(tool)
-    for member_id in (0, teacher.id):
-        scope = {"member_id": member_id}
-        if source == "voice" and member_id == 0:
-            scope["conversation_id"] = rig.service.conversations.quick()
-        turns = (await rig.call("agent.history.list", scope))["turns"]
-        assert not any(t["route"] == "exchange" for t in turns)
+    scope = {"member_id": 0}
+    if source == "voice":
+        scope["conversation_id"] = rig.service.conversations.quick()
+    assert not any(t["route"] == "exchange" for t in (await rig.call("agent.history.list", scope))["turns"])
+    # The asked member's chat lists the exchange where it came, as its one line.
+    taught = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"]
+    assert [(t["scope"], t["peer_id"], t["question"]) for t in taught if t["route"] == "exchange"] == [("exchange", 0, request)]
     [exchange] = [AgentHistory(rig.conn).get(r[0]) for r in rig.conn.execute("SELECT id FROM agent_turns WHERE scope='exchange'")]
     # The record keeps the plain words; only the tool data the asker reads carries the speakers.
     assert (exchange.question, exchange.text) == (request, answer)

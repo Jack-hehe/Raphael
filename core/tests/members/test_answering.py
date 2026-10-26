@@ -418,6 +418,38 @@ async def test_a_member_asks_another_and_only_those_two_threads_hold_it(setup, c
     assert (await rig.call("agent.history.search", {"query": "上季", "member_id": c.id}))["turns"] == []
 
 
+async def test_both_chats_show_the_question_where_it_happened_and_nothing_else_reads_it(setup, client, conn):
+    rig, team = setup
+    a = member(team, name="小財務")
+    b = member(team, name="小研究")
+    client.decisions.append(decision("chat"))
+    client.chats.append(live_said("記下了。"))
+    await typed(rig, "記一下：上季營收兩百萬", b.id)
+    client.decisions.append(decision("answer"))  # A's request
+    client.chats.append(chat("我先問小研究。", ("ask_member", {"member": "小研究", "request": "上季的數字是多少？"})))
+    client.decisions.append(decision("answer"))  # B's flags
+    client.chats.append(live_said("上季營收兩百萬。"))
+    client.chats.append(live_said("小研究說上季營收兩百萬。"))
+    await typed(rig, "問小研究上季的數字", a.id)
+    # B's chat lists the question where it came, after B's own turn, as its plain words.
+    exchange, own = (await rig.call("agent.history.list", {"member_id": b.id}))["turns"]
+    assert (exchange["scope"], exchange["peer_id"], exchange["question"], exchange["text"]) == (
+        "exchange", a.id, "上季的數字是多少？", "上季營收兩百萬。")
+    assert own["scope"] == "private" and own["question"] == "記一下：上季營收兩百萬"
+    # A's turn names what it asked and what came back, with no task behind a quick question.
+    [mine] = (await rig.call("agent.history.list", {"member_id": a.id}))["turns"]
+    [asked] = mine["handoffs"]
+    assert (asked["mode"], asked["member_id"], asked["state"], asked["request"], asked["result"], asked["task_id"]) == (
+        "consult", b.id, "done", "上季的數字是多少？", "上季營收兩百萬。", None)
+    # Another conversation of B, the previews and every search leave it out.
+    named = (await rig.call("conversations.create", {"member_id": b.id}))["conversation"]
+    assert (await rig.call("agent.history.list", {"member_id": b.id, "conversation_id": named["id"]}))["turns"] == []
+    assert AgentHistory(conn).latest_by_member()[b.id].scope == "private"
+    found = (await rig.call("agent.history.search", {"query": "上季的數字", "member_id": b.id}))["turns"]
+    assert all(turn["scope"] == "private" for turn in found)
+    assert all(t["scope"] == "private" for t in team.memory.search("數字", member_id=b.id).data["turns"])
+
+
 async def test_a_chain_is_at_most_two_deep_and_never_comes_back(setup):
     rig, team = setup
     a, b, c = (member(team, name=n).speaker() for n in ("小財務", "小研究", "小行程"))
