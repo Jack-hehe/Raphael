@@ -74,13 +74,6 @@ function inline(text: string, query: string, markdown: boolean, urls: Set<string
 
 function render(text: string, query: string, markdown: boolean, urls: Set<string>): string {
   if (!markdown) return inline(text, query, false, urls);
-  const wrapped = /^《([^。\n]{1,20}。)([\s\S]*)》$/.exec(text);
-  if (wrapped) {
-    let body = render(wrapped[2], query, true, urls);
-    const prefix = highlightHTML(`《${wrapped[1]}`, query);
-    body = body.startsWith("<p>") ? `<p>${prefix}${body.slice(3)}` : `<p>${prefix}</p>${body}`;
-    return body.endsWith("</p>") ? `${body.slice(0, -4)}》</p>` : `${body}<p>》</p>`;
-  }
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   let out = "", list = "", paragraph: string[] = [];
   const flush = (): void => { if (paragraph.length) out += `<p>${paragraph.join("<br>")}</p>`; paragraph = []; };
