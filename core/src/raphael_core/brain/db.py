@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .mishearing import may_become_rule
+from .room_scope import migrate as _migrate_room_scope
 from .textnorm import replacement_key
 
 # A migration is one transaction that also sets user_version, so a failure cannot leave half a
@@ -704,6 +705,7 @@ BEGIN SELECT RAISE(ABORT, 'quick conversations belong to Raphael'); END;
 PRAGMA user_version = 28;
 COMMIT;
 """
+_MIGRATIONS[29] = _migrate_room_scope
 LATEST_VERSION = max(_MIGRATIONS)
 
 

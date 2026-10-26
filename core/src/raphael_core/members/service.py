@@ -364,6 +364,8 @@ class MembersService:
         try:
             self._finish_run(turn_id)
             turn = self._history.get(turn_id)
+            if turn is not None and turn.scope != "private":
+                return
             if turn is not None and turn.member_id:
                 self._deliver_turn(turn)
             if turn is None or (turn.source == "voice" and turn.member_id == 0) or turn.member_id == self._viewing:
@@ -413,7 +415,7 @@ class MembersService:
         waiting = {
             int(row[0])
             for row in self._conn.execute(
-                "SELECT DISTINCT member_id FROM agent_turns WHERE status = 'confirm'"
+                "SELECT DISTINCT member_id FROM agent_turns WHERE scope = 'private' AND status = 'confirm'"
             )
         }
         for source in self._waiting_sources:

@@ -64,9 +64,11 @@ async def test_mention_and_reply_target_do_not_force_a_discussion(rig, exchange)
     assert [s["member_id"] for s in rig.background.submitted] == [ids[0]]
     await finish(rig, exchange, "Ready")
     messages = (await history(rig, room))["messages"]
-    await send(rig, room, "More details", "two", reply_to=messages[-1]["id"])
+    alice = next(m for m in messages if m["member_id"] == ids[0])
+    await finish(rig, exchange, "Conclusion")
+    await send(rig, room, "More details", "two", reply_to=alice["id"])
     assert rig.background.submitted[-1]["member_id"] == ids[0]
-    assert (await history(rig, room))["messages"][-1]["reply_to_member"] == ids[0]
+    assert (await history(rig, room))["messages"][-1]["reply_reference"]["author_kind"] == "owner"
 
 
 async def test_decider_role_address_and_low_confidence_fallback(rig, exchange):
@@ -75,9 +77,23 @@ async def test_decider_role_address_and_low_confidence_fallback(rig, exchange):
     await send(rig, room, "PM, what is the plan?")
     assert rig.background.submitted[-1]["member_id"] == ids[0]
     await finish(rig, exchange, "Ready")
+    await finish(rig, exchange, "Conclusion")
     exchange._exchanges.decision = Decision({"choice":ids[0], "confidence":.4, "reason":"uncertain"})
     await send(rig, room, "Hello", "two")
     assert rig.background.submitted[-1]["member_id"] == ids[1]
+
+
+async def test_decider_and_worker_read_only_the_origin_thread(rig, exchange):
+    room, ids = await team(rig)
+    with rig.conn:
+        rig.conn.execute("INSERT INTO room_messages(room_id,text,created) VALUES (?,'Other thread secret',1)", (room['id'],))
+        thread = rig.conn.execute("INSERT INTO room_threads(room_id,created) VALUES (?,1)", (room['id'],)).lastrowid
+    decision = Decision({"choice":ids[0], "confidence":1})
+    exchange._exchanges.decision = decision
+    await send(rig, room, "Current thread question", thread_id=thread)
+    assert [m['text'] for m in decision.calls[0]['transcript']] == ['Current thread question']
+    assert 'Other thread secret' not in rig.background.submitted[-1]['text']
+    assert 'Current thread question' in rig.background.submitted[-1]['text']
 
 
 async def test_everyone_is_sequential_pass_is_hidden_and_wrapup_is_once(rig, exchange):
@@ -108,7 +124,7 @@ async def test_wrapup_answers_the_last_visible_reply_and_all_passes_remain_safe(
         await finish(rig, exchange, "")
         pending = (await history(rig, room))["messages"][-1]
         assert pending["kind"] == "wrapup"
-        assert pending["reply_to_member"] == (0 if key == "one" else None)
+        assert pending["reply_to_member"] is None
         assert pending["reply_to"] is None
         await finish(rig, exchange, "Conclusion")
 
@@ -190,10 +206,12 @@ async def test_six_turn_cap_reserves_one_wrapup_and_removes_repeated_queued_memb
 
 async def test_default_seniority_and_unavailable_cli_decider(rig, exchange):
     room, ids = await team(rig)
-    await rig.call("rooms.update", {"room_id":room["id"], "member_ids":ids})
+    from raphael_core.protocol import RpcError
+    with pytest.raises(RpcError):
+        await rig.call("rooms.update", {"room_id":room["id"], "member_ids":ids})
     exchange._settings.set("agent_model", "cli:codex:gpt-5.6-terra")
     await send(rig, room, "Status")
-    assert rig.background.submitted[-1]["member_id"] == ids[1]
+    assert rig.background.submitted[-1]["member_id"] == 0
     assert exchange._exchanges.decision.calls == []
     for responder in ("member:999", "wrong", True):
         from raphael_core.protocol import RpcError

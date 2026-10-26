@@ -154,15 +154,13 @@ def test_history_search_labels_every_line_and_keeps_exchange_quote_sources(memor
     found = {t["turn"]: t for t in memory.search("日文課").data["turns"]}
     assert found[ordinary]["question"] == "owner: 日文課\nowner: 先生、今日は何を勉強しますか？"
     assert found[ordinary]["answer"] == "Raphael: 今天用中文練習。\nRaphael: 先介紹自己。"
-    assert "owner: 先生、今日は何を勉強しますか？" in found[exchange]["answer"]
-    assert "紫苑: 那是你問我的句子。" in found[exchange]["answer"]
+    assert exchange not in found
+    assert history.get(exchange).scope == "exchange"
 
 
 def test_exchange_search_keeps_the_quoted_speaker_when_a_snippet_starts_mid_line(memory, history):
     add_turn(history, "Raphael: 回顧課程", "owner: " + "長" * 200 + "先生、今日は何を勉強しますか？", route="exchange")
-    [found] = memory.search("先生").data["turns"]
-    assert found["answer"].startswith("responding assistant: owner: …")
-    assert "先生、今日は何を勉強しますか？" in found["answer"]
+    assert memory.search("先生").data["turns"] == []
 
 
 def test_a_search_that_finds_a_run_on_the_desktop_is_untrusted(memory, history):

@@ -15,6 +15,33 @@ export function checkRendered(name) {
   }
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "room-required-chief") {
+    const chief = document.querySelector('[data-dlg="member"][data-member="0"]');
+    require(chief?.disabled && chief.getAttribute('aria-pressed') === 'true', 'Raphael is required');
+    return { check: name, chief: 0 };
+  }
+  if (name === "room-generated-name" || name === "room-edited-name") {
+    const input = document.querySelector('#room-name');
+    require(name === 'room-edited-name' ? input.value === '上線協作' : input.value.includes('小晴') && input.value.includes('拉斐爾'), 'generated name follows selection and preserves owner edits');
+    return { check: name, value: input.value };
+  }
+  if (name === 'room-isolation-send') {
+    require(window.__look.calls.some(c => c.method === 'rooms.send' && c.params.text === 'roomnonce-private-isolation'), 'room send reaches its own boundary');
+    require(!window.__look.calls.some(c => c.method === 'agent.ask'), 'room send never uses private ask');
+    require(!document.querySelector('[data-room-act="turn"]'), 'room messages have no private navigation');
+    return { check: name };
+  }
+  if (name === 'room-private-isolation') {
+    require(!document.querySelector('.mb-chat:not([hidden]) .thread')?.textContent.includes('roomnonce-private-isolation'), 'private history excludes room text');
+    return { check: name };
+  }
+  if (['room-reply-owner','room-reply-peer','room-reply-source-missing'].includes(name)) {
+    const id = name === 'room-reply-owner' ? 2 : 3;
+    const chip = document.querySelector(`[data-room-message="${id}"] .au-room-reply`);
+    require(visible(chip), 'source chip is visible');
+    require(chip.textContent === (name === 'room-reply-owner' ? '回覆 你' : name === 'room-reply-peer' ? '回覆 小晴' : '來源訊息已無法取得'), 'chip uses server source identity');
+    return { check: name, source: chip.textContent };
+  }
   if (name === "quick-model-row") {
     const row = document.querySelector('[data-row="quick-model"]');
     const picker = row?.querySelector('.mp-trigger');
@@ -104,7 +131,7 @@ export function checkRendered(name) {
     return { check: name, stopRequested: true };
   }
   if (name === "room-replies") {
-    const chip = document.querySelector('.au-room-reply');
+    const chip = document.querySelector('[data-room-message="3"] .au-room-reply');
     require(visible(chip) && chip.textContent === "回覆 小晴", "the reply identifies its recipient");
     require(chip.getBoundingClientRect().right <= innerWidth, "the reply chip fits the viewport");
     return { check: name, recipient: 1 };
@@ -291,6 +318,13 @@ export function checkRendered(name) {
       require(cards[0].querySelector('[data-draft-field="role"]')?.value === "首席營運長", "edited role field is preserved");
     }
     return { check: name, cards: cards.length, confirmLabel: confirmBtn.textContent.trim() };
+  }
+  if (name === "member-draft-submitted") {
+    const calls=window.__look.calls.filter(call=>call.command==='agent_question_answer');
+    require(calls.length===1&&calls[0].approved&&calls[0].drafts?.length===3,'confirmation submits the edited draft once');
+    const turn=window.__look.data.turns.find(turn=>turn.status==='done'&&turn.detail?.includes('COO'));
+    require(turn&&turn.text.startsWith('已建立'),'native boundary persists the settled draft');
+    return {check:name,turnId:turn.id,conversationId:turn.conversation_id};
   }
   if (name === "member-draft-done") {
     const done = [...document.querySelectorAll('.draft-done')].find(visible);

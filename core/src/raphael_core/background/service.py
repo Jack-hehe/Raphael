@@ -749,7 +749,7 @@ class BackgroundService:
         if speaker is not None and chain is not None:
             speaker = dataclasses.replace(speaker, depth=chain[0], chain=chain[1])
         origin = self._history.get(task.turn_id) if task.turn_id else None
-        if speaker is not None and origin is not None and origin.source == "room":
+        if speaker is not None and task.scope == "room":
             # The persisted origin survives a retry or restart after the in-memory chain is gone.
             speaker = dataclasses.replace(speaker, depth=MAX_DEPTH)
         if speaker is None:  # the member was deleted while its task waited
@@ -762,10 +762,10 @@ class BackgroundService:
         limits = self._limits
         ledger = Ledger(self._spend)
         selected_model = self._models.pop(task.id, DEFAULTS["agent_model"])
-        room_cli = origin is not None and origin.source == "room" and selected_model.startswith("cli:")
+        room_cli = task.scope == "room" and selected_model.startswith("cli:")
         model = selected_model if room_cli else api_model(self._settings, selected_model)
         context = self._context(task)
-        memory = self._memory_of(task.member_id)
+        memory = self._memory_of(task.member_id) if task.scope == "private" else None
         team = team_tools_for(self._team, speaker, always=True) if self._team_tool else []
         snapshot = take_snapshot(
             self._gate.plugins,
@@ -1309,6 +1309,11 @@ class BackgroundService:
     def _context(self, task: Task) -> list[Turn]:
         """The last turns of the thread the task is of, without the one that handed it over."""
         try:
+            if task.scope != "private":
+                return []
+            origin = self._history.get(task.turn_id) if task.turn_id else None
+            if origin is not None and origin.scope != "private":
+                return []
             turns = self._history.recent(CONTEXT_TURNS + 1, member_id=task.member_id)
         except sqlite3.Error:
             return []
@@ -1482,6 +1487,9 @@ class BackgroundService:
             raise RpcError(NOT_FOUND, "There is no such task")
         if old.state not in RERUNNABLE or not old.text.strip():
             raise invalid_params("only a task that did not finish can run again")
+        earlier = self._history.get(old.turn_id) if old.turn_id else None
+        if old.scope != "private" and earlier is None:
+            raise invalid_params("the scoped task source is unavailable")
         speaker = self._speaker(old.member_id)
         if speaker is None:
             raise RpcError(NOT_FOUND, "The member of that task is gone")
@@ -1498,7 +1506,6 @@ class BackgroundService:
         except Refused as refused:
             raise RpcError(BUSY, "The background worker cannot take a task now", {"kind": refused.kind}) from None
         try:
-            earlier = self._history.get(old.turn_id) if old.turn_id else None
             turn_id = self._history.add(
                 session_id=old.session_id,
                 question=old.text,
@@ -1513,6 +1520,10 @@ class BackgroundService:
                 member_id=old.member_id,
                 # an exchange handed to the background stays one with the member who asked
                 peer_id=earlier.peer_id if earlier is not None else None,
+                scope=earlier.scope if earlier is not None else "private",
+                room_id=earlier.room_id if earlier is not None else None,
+                thread_id=earlier.thread_id if earlier is not None else None,
+                source_turn_id=earlier.source_turn_id if earlier is not None else None,
             )
             self._store.attach_turn(new_id, turn_id)
         except sqlite3.Error as exc:

@@ -43,7 +43,7 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
         await until(lambda: rooms._exchanges.latest(room["id"])["state"] == "done", timeout=10)
         messages = (await rig.rpc.call("rooms.messages", {"room_id":room["id"]}))["messages"]
         assert [m["member_id"] for m in messages] == [None,0,alice.id,bob.id,alice.id,0]
-        assert [m["reply_to_member"] for m in messages[2:]] == [0,alice.id,bob.id,alice.id]
+        assert [m["reply_to_member"] for m in messages[2:]] == [0,alice.id,bob.id,None]
         assert messages[-1]["kind"] == "wrapup" and "Alice owns testing" in messages[-1]["text"]
         assert len(rig.client.chat_calls) == 5 and not rig.client.replies and rig.reports() == []
         assert "PRECISE-PLANNER" in rig.client.chat_calls[1]["messages"][0]["content"]

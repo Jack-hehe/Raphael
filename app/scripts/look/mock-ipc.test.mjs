@@ -4,6 +4,17 @@ import { installMock } from "./mock-ipc.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("settles an approval in its source conversation after quick history is prepended", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { adminApproval: "draft" } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const question = await invoke("agent_question_open");
+    const quickBefore = structuredClone(target.__look.data.turns.find(turn => turn.conversation_id === 4));
+    await invoke("agent_question_answer", { id: question.id, approved: true, drafts: question.drafts });
+    const formal = (await invoke("core_call", { method: "agent.history.list", params: { member_id: 0, conversation_id: 1 } })).turns;
+    expect(formal.some(turn => turn.status === "done" && turn.text.startsWith("已建立"))).toBe(true);
+    expect(target.__look.data.turns.find(turn => turn.conversation_id === 4)).toEqual(quickBefore);
+  });
   it("keeps reports out of today's work in both default and expanded home fixtures", async () => {
     for (const homeManyQuestions of [false, true]) {
       const target = {};

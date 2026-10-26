@@ -94,8 +94,8 @@ async def test_invalid_periods_are_invalid_params(conn, params):
 def turn(conn, member=0, model="plain/model", source="app", cost=1):
     return conn.execute(
         "INSERT INTO agent_turns (created_at_ms,session_id,question,route,prefix,text,status,"
-        "member_id,model,source,cost_usd) VALUES (?,'s','private','chat','','private','ok',?,?,?,?)",
-        (NOW, member, model, source, cost),
+        "member_id,model,source,cost_usd,scope) VALUES (?,'s','private','chat','','private','ok',?,?,?,?,?)",
+        (NOW, member, model, source, cost, "exchange" if source == "member" else "private"),
     ).lastrowid
 
 

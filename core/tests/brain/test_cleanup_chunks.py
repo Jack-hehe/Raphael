@@ -8,6 +8,7 @@ from one that kept its raw text.
 """
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -216,7 +217,9 @@ async def test_a_dictation_of_one_piece_is_one_call_whether_or_not_chunks_are_gi
     text = "hello there."
     plain = await svc.clean(text, audio_seconds=2.0)
     one = await svc.clean(text, audio_seconds=2.0, chunks=as_chunks([text]))
-    assert plain == one
+    # Independent calls may take different time while the full verification matrix runs.
+    assert plain.llm_ms >= 0 and one.llm_ms >= 0
+    assert replace(plain, llm_ms=0) == replace(one, llm_ms=0)
     assert plain.text == "HELLO THERE." and plain.cleaned and plain.parts == ()
     assert [transcript_of(call["user"]) for call in client.calls] == [text, text]
     assert client.calls[0]["timeout_s"] == client.calls[1]["timeout_s"] == cleanup.timeout_for(2.0)

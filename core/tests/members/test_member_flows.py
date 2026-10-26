@@ -33,8 +33,10 @@ async def test_member_contact_preference_uses_inline_yes_before_contact(setup, c
     assert asked["status"] == "confirm"
     assert AgentHistory(rig.conn).list(member_id=team.members.store.by_name("Researcher").id) == []
     await rig.confirm(asked["confirm"]["id"], approved=approved)
-    research = AgentHistory(rig.conn).list(member_id=team.members.store.by_name("Researcher").id)
+    research = rig.conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'",
+                               (team.members.store.by_name("Researcher").id,)).fetchall()
     assert bool(research) is approved
+    assert AgentHistory(rig.conn).list(member_id=team.members.store.by_name("Researcher").id) == []
 
 
 async def test_skills_are_scoped_enabled_metadata_and_lazy_untrusted_document(setup, client):

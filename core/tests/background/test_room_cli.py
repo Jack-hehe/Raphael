@@ -11,8 +11,11 @@ from .conftest import Clock, until
 
 def submit_room(rig):
     history = AgentHistory(rig.conn)
+    with rig.conn:
+        room = rig.conn.execute("INSERT INTO rooms(name,created) VALUES ('Room',1)").lastrowid
+    thread = rig.conn.execute("SELECT id FROM room_threads WHERE room_id=?",(room,)).fetchone()[0]
     turn = history.add(session_id="room:1:1:0", question="Plan", route="room", prefix="",
-                       text="", status="running", source="room")
+                       text="", status="running", source="room", scope="room", room_id=room, thread_id=thread)
     rig.service.use_cli(object())
     task = rig.service.submit(session_id="room:1:1:0", text="Plan", language="en", model="cli:codex:gpt-5.6-terra")
     rig.service.attach_turn(task, turn)

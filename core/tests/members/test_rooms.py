@@ -15,6 +15,9 @@ async def rooms(rig):
     await service.aclose()
 
 async def create(rig, ids, **kwargs):
+    if ids == [0] and not kwargs.get("is_team"):
+        member = (await rig.call("members.create", {"name":"Room peer"}))["member"]
+        ids = [0, member["id"]]
     return (await rig.call("rooms.create", {"name":"Team", "member_ids":ids, **kwargs}))["room"]
 
 
@@ -41,7 +44,7 @@ async def test_hidden_passes_do_not_truncate_visible_history_pages(rig, rooms):
     for i in range(101):
         rig.conn.execute("INSERT INTO room_messages (room_id,text,created) VALUES (?,?,?)", (room["id"],str(i),i))
     for i in range(110):
-        turn = rooms._history.add(session_id=f"pass:{i}", question="Status", route="room", prefix="", text="(pass)", status="done")
+        turn = rooms._history.add(session_id=f"pass:{i}", question="Status", route="room", prefix="", text="(pass)", status="done", scope="room", room_id=room["id"], thread_id=rooms._thread(room))
         rig.conn.execute("INSERT INTO room_messages (room_id,member_id,text,created,turn_id) VALUES (?,0,'',?,?)", (room["id"],i,turn))
     rig.conn.commit()
     page = (await rig.call("rooms.messages", {"room_id":room["id"]}))["messages"]
@@ -125,9 +128,9 @@ async def test_validates_room_members_payload_and_pagination(rig, rooms):
 async def test_room_management_validates_and_persists_changes(rig, rooms):
     member = (await rig.call("members.create", {"name":"Alice"}))["member"]
     room = await create(rig, [0, member["id"]])
-    updated = (await rig.call("rooms.update", {"room_id":room["id"], "name":"Planning", "member_ids":[member["id"]]}))["room"]
-    assert updated["name"] == "Planning" and updated["member_ids"] == [member["id"]]
-    for payload in ({"name":""}, {"member_ids":[]}, {"member_ids":[True]}, {"member_ids":[999]}):
+    updated = (await rig.call("rooms.update", {"room_id":room["id"], "name":"Planning", "member_ids":[0,member["id"]]}))["room"]
+    assert updated["name"] == "Planning" and updated["member_ids"] == [0,member["id"]]
+    for payload in ({"name":""}, {"member_ids":[]}, {"member_ids":[True]}, {"member_ids":[999]}, {"member_ids":[member["id"]]}):
         with pytest.raises(RpcError):
             await rig.call("rooms.update", {"room_id":room["id"], **payload})
     assert (await rig.call("rooms.list", {}))["rooms"][0]["name"] == "Planning"
