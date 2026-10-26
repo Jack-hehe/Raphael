@@ -838,5 +838,53 @@ export function checkRendered(name) {
     require(own.textContent.includes("專案每週三檢查原型") && !shared.textContent.includes("專案每週三檢查原型"), "the member's own note stays in its own memory");
     return { check: name };
   }
+  if (name.startsWith("connector-")) {
+    // A connector card (connector-card.ts): the app's own bare mark, its name, where its sign-in stands and at most
+    // one framed action, all inside the card, below the reply that asked for it.
+    const cards = [...document.querySelectorAll('.connector-card')].filter(visible);
+    require(cards.length === 1, `one connector card is visible, found ${cards.length}`);
+    const [card] = cards, box = card.getBoundingClientRect(), column = card.closest('.ra-body').getBoundingClientRect();
+    require(box.left >= column.left - 1 && box.right <= column.right + 1, "R-UI-29: the card fits the reply column");
+    require(box.width >= Math.min(300, column.width) - 1, `the card keeps a card's width, not a chip's (${Math.round(box.width)}px)`);
+    const mark = card.querySelector('.mono'), markStyle = getComputedStyle(mark);
+    require(visible(mark) && mark.querySelector('svg.logo path'), "R-UI-34: the app's own drawn mark");
+    require(markStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(markStyle.borderTopWidth) === 0, "R-UI-34: the mark is bare, on no tile");
+    const reply = [...card.closest('.tn').querySelectorAll('.chat-message[data-expandable]')].filter(visible).at(-1);
+    require(reply && reply.getBoundingClientRect().bottom <= box.top + 1, "the card sits below the reply that asked for it");
+    const buttons = [...card.querySelectorAll('button')].filter(visible);
+    for (const button of buttons) {
+      const inside = button.getBoundingClientRect();
+      require(inside.left >= box.left && inside.right <= box.right && inside.bottom <= box.bottom, "R-UI-25: the action is inside its card");
+    }
+    const said = card.querySelector('.cc-state').textContent.trim(), app = card.querySelector('.cc-name').textContent;
+    const expected = {
+      "connector-card": ["pending", "連結後繼續這項工作", "連結", true],
+      "connector-authorizing": ["authorizing", "等你在瀏覽器登入…", "取消", false],
+      "connector-expired": ["pending", "授權已過期", "重新連結", true],
+      "connector-reconnected": ["connected", "已重新連結 · 2 個工具", null, false],
+    }[name];
+    require(expected, `no expectation for ${name}`);
+    const [state, words, action, primary] = expected;
+    require(card.dataset.cardState === state && said === words, `${app}'s card reads "${words}" (${card.dataset.cardState}: "${said}")`);
+    require(action === null ? buttons.length === 0 : buttons.length === 1 && buttons[0].textContent.trim() === action
+      && buttons[0].classList.contains('pri') === primary, `the card's one action is ${action ?? "none"}`);
+    if (name === "connector-authorizing") {
+      require(visible(card.querySelector('.spin')), "the card shows the sign-in under way");
+      require(window.__look.calls.some(call => call.method === "integrations.card_connect" && call.params?.id === "card-gmail"),
+        "Connect reached the core with the card's id");
+    }
+    if (name === "connector-reconnected") {
+      const [line] = eventLines(1), resumed = document.querySelector('.tn[data-id="121"]');
+      require(line.textContent === "Gmail 已連結，繼續原本的工作", `the resumed task opens with one line naming the app: ${line.textContent}`);
+      const markBox = line.querySelector('.mono').getBoundingClientRect();
+      require(markBox.width <= 20 && markBox.height <= 20, `the line's mark is no larger than its icons (${markBox.width}x${markBox.height})`);
+      require(line.getBoundingClientRect().top >= box.bottom, "the resumed task comes after the card");
+      require(!resumed.querySelector('.owner-message'), "the owner's request is not repeated as a new bubble");
+      require([...resumed.querySelectorAll('.message-text')].some(text => visible(text) && text.textContent.includes("MC-4F2A")), "the resumed task's answer is shown");
+      require(visible(card.querySelector('.cc-done')), "the connected card carries its check");
+      plainWords();
+    }
+    return { check: name, app, state: card.dataset.cardState, words: said };
+  }
   throw new Error(`Unknown rendered check: ${name}`);
 }

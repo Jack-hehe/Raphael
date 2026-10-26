@@ -1,4 +1,171 @@
 {
+  "connectorTurns": {
+    "gmail": {
+      "id": 120,
+      "session_id": "look-connect-gmail",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "需要先連結 Gmail，連好後就繼續找這封信。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。需要先連結 Gmail，連好後就繼續找這封信。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-gmail",
+          "app": "gmail",
+          "name": "Gmail",
+          "state": "pending",
+          "error": null,
+          "reconnect": false,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    },
+    "expired": {
+      "id": 120,
+      "session_id": "look-connect-gmail",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "Gmail 的授權過期了，重新連結後就繼續找這封信。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。Gmail 的授權過期了，重新連結後就繼續找這封信。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-gmail",
+          "app": "gmail",
+          "name": "Gmail",
+          "state": "pending",
+          "error": null,
+          "reconnect": true,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    },
+    "calendar": {
+      "id": 122,
+      "session_id": "look-connect-calendar",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "幫我看下週二下午有沒有空檔，再跟客戶約會議。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "",
+      "text": "需要先連結 Google Calendar，連好後就查下週二的空檔。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0008,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "需要先連結 Google Calendar，連好後就查下週二的空檔。",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-calendar",
+          "app": "googlecalendar",
+          "name": "Google Calendar",
+          "state": "pending",
+          "error": null,
+          "reconnect": false,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    }
+  },
+  "connectorResume": {
+    "id": 121,
+    "session_id": "connect-120",
+    "member_id": 0,
+    "conversation_id": 1,
+    "created_at_ms": 1792807195000,
+    "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "答",
+    "text": "找到了，信裡的確認碼是 MC-4F2A。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_apps": [
+      "gmail"
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "gmail_search",
+        "server": "Google (private)",
+        "outcome": "ok",
+        "at_ms": 1792807196000,
+        "ms": 640,
+        "reason": null
+      },
+      {
+        "kind": "tool",
+        "tool": "gmail_get_message",
+        "server": "Google (private)",
+        "outcome": "ok",
+        "at_ms": 1792807197000,
+        "ms": 520,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "《答。找到了，信裡的確認碼是 MC-4F2A。》",
+        "at_ms": 1792807198000
+      }
+    ]
+  },
   "p02MeetingEvent": { "type": "meeting", "room_id": 1, "name": "產品方向討論" },
   "p02BlockedIntents": [
     { "id": 100, "origin_message_id": 1, "source_message_id": 1, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cli_rate_limited" },

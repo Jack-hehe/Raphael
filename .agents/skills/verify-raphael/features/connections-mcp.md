@@ -41,7 +41,8 @@ API/CLI MCP definitions for Raphael and members without a restart.
 ## Gotchas
 
 Composio opens the login in the core and polls there; no frontend OAuth URL or token
-is stored. connectors.changed maps to ConnectionsChanged. Status reads here use
+is stored. A chat's connector card (see [Conversation](conversation.md)) signs in through these same
+`connectors.google.connect` and `connectors.connect` methods, so their lock and value-free failures apply. connectors.changed maps to ConnectionsChanged. Status reads here use
 refresh:false to avoid account refresh/notification loops. tools reads can notify;
 the controller keeps the in-flight tool state when reloading the list. A whole
 service switch preserves individual exclusions via connectors.set_tools.enabled.
@@ -65,7 +66,8 @@ remote logos load under native CSP, and logs contain no key/token/payload.
 For private Google use an owner-provided Desktop client: configure through the
 existing core RPC, sign in, exercise partial consent and refresh, and verify Gmail
 and Calendar tool switches and revocation. Home calendar reads only through the
-enabled private calendar_list_events tool. Test a custom local MCP server with
+enabled private calendar_list_events tool. From a chat, ask for a nonce mail, connect from its Gmail card,
+cancel once, finish once and reconnect once; only that task resumes and reads the mail. Test a custom local MCP server with
 add/test/edit/paste/discover, a harmless call and removal; stop only that test server.
 
 ## UI audit regression coverage

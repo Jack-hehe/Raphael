@@ -3,7 +3,8 @@
 ## Sub-features
 
 Named conversations per member; new/rename/delete; public work/event chips; answers,
-attachments, reply quoting, message actions, search and composer menus.
+attachments, reply quoting, message actions, search and composer menus; connector cards for an app a
+task needs, and the one resume of that task (see Connecting an app from the chat below).
 A member's main conversation lists what colleagues asked or handed it where each came, as one closed
 centred line; previews, search, unread state, other conversations and every model read exclude those
 exchanges, and room turns. Room answers stay in their room/thread and have no shortcut into private history.
@@ -159,6 +160,29 @@ quick questions and checks that Raphael's answer model stays. The existing `quic
 `quick-model-menu` and `quick-effort-menu` scenes cover opening the stored quick thread and the two
 quick setting menus. Rendered fixtures do not prove the native hotkey, routing or a live model:
 core tests and Guardian S16 cover those, and the native Alt+Space entry needs its own live check.
+
+## Connecting an app from the chat (P08a)
+
+When a typed request in Raphael's or a member's private chat needs Gmail or Google Calendar and the app is not
+connected (or its sign-in expired), the brain calls `connect_app`. The turn shows that app's card below its reply
+and calls nothing else. Connect (`integrations.card_connect`) answers at once and signs in in the background
+through the owner's own Google authorization (loopback, PKCE, `state`) or Composio; Cancel
+(`integrations.card_cancel`) ends it. The card reads pending, authorizing, connected with the real tool count,
+failed with its reason (Open Connections when nothing is set up), cancelled, or expired after 24 hours; an expired
+grant shows Reconnect. When every card of the turn is connected, the request runs once more in the same thread as a
+`connector` turn: one centred line with the app's mark names the apps in place of the owner's words, the apps'
+tools are offered, and an action the task did before its card is refused if repeated with the same arguments. A
+replayed callback or a second Connect resumes nothing. No URL, code, `state` or token reaches the card, a model,
+the history or a log, and each member's TeamContextSnapshot counts the app's usable tools.
+
+```powershell
+npm run look -- chat-connect-gmail chat-connect-calendar connector-authorizing connector-expired connector-reconnected --theme both --width 1120,720,1920x1080
+```
+
+The scenes press the real card buttons; the IPC fixture reports the card's states as the core does. They cannot
+prove a sign-in. Core tests (`core/tests/test_connect_cards.py`) and Guardian `S14.gmail` run the core's own
+loopback sign-in against an automatic Google fixture on both brain paths. A real Google account stays an
+owner-approved smoke, and Instagram (P08d) keeps the parent S14 open.
 
 ## P04 task lifecycle
 

@@ -68,6 +68,9 @@ export function installMock(fixture, config = {}, target = window) {
     turn.handoffs = [{ ...data.roomHandoff, state: "done" }, { ...data.roomHandoff, task_id: 43, member_id: 2, member_name: "小森", mode: "consult", state: "running", result: "", evidence: [] }];
     turn.messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
   }
+  // A task that waits for an app shows its connector card; `cardSignIn` "approve" finishes the sign-in the
+  // way the core reports it (authorizing, then connected) and adds the turn that resumes the task.
+  if (variant.connectorCard) data.turns.push(structuredClone(data.connectorTurns[variant.connectorCard]));
   if (variant.colleagues) {
     // 小森 asked 小晴 from its own chat; 小晴's main chat shows each question where it came.
     data.conversations.push(data.colleagueConversation);
@@ -278,6 +281,30 @@ export function installMock(fixture, config = {}, target = window) {
       }
       case "connectors.google.connect": return { connected: true };
       case "connectors.disconnect": data.managedConnectors = data.managedConnectors.filter(c => c.id !== p.id); state.emit({ type: "ConnectionsChanged" }); return { disconnected: true };
+      case "integrations.card_connect": {
+        const turn = data.turns.find(item => item.connectors?.some(card => card.id === p.id));
+        const card = turn?.connectors.find(item => item.id === p.id);
+        if (!card) throw new Error(`Fixture card not found: ${p.id}`);
+        if (!["pending", "failed", "cancelled"].includes(card.state)) return { card: copy(card), started: false };
+        Object.assign(card, { state: "authorizing", error: null });
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        if (variant.cardSignIn === "approve") {
+          setTimeout(() => {
+            Object.assign(card, { state: "connected", tool_count: 2, resumed: true });
+            data.turns.push(structuredClone(data.connectorResume));
+            state.emit({ type: "AgentTurn", turn_id: turn.id, member_id: turn.member_id });
+          }, 0);
+        }
+        return { card: copy(card), started: true };
+      }
+      case "integrations.card_cancel": {
+        const turn = data.turns.find(item => item.connectors?.some(card => card.id === p.id));
+        const card = turn?.connectors.find(item => item.id === p.id);
+        if (card?.state !== "authorizing") return { cancelled: false };
+        card.state = "cancelled";
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        return { cancelled: true };
+      }
       case "toolsets.list": return { groups: data.servers };
       case "integrations.catalog": return { services: data.services };
       case "integrations.audit": return { entries: [] };
