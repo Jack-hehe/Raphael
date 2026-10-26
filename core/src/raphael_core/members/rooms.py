@@ -125,6 +125,7 @@ class RoomsService:
         room = dict(row)
         room["member_ids"] = self._ids(room)
         room["roles"] = json.loads(room["roles"]) if isinstance(room.get("roles"), str) else room.get("roles", {})
+        room.pop("meeting_pending", None)
         if not room["is_team"] and (0 not in room["member_ids"] or not 2 <= len(room["member_ids"]) <= 6):
             room["membership_state"] = "needs_adjustment"
         if room["default_responder"].startswith("member:") and int(room["default_responder"][7:]) not in room["member_ids"]:
@@ -213,6 +214,8 @@ class RoomsService:
         with self._conn:
             self._conn.execute("UPDATE rooms SET name = ?, default_responder = ?, membership_state='ready' WHERE id = ?", (name, responder, room["id"]))
             self._conn.execute("UPDATE rooms SET roles=? WHERE id=?", (json.dumps(roles), room['id']))
+            if "roles" in params:
+                self._conn.execute("UPDATE rooms SET meeting_pending=? WHERE id=?", (int('moderator' in roles.values()), room['id']))
             if "member_ids" in params:
                 self._conn.execute("DELETE FROM room_members WHERE room_id = ? AND member_id != 0", (room["id"],))
                 self._conn.executemany("INSERT OR IGNORE INTO room_members VALUES (?, ?)", [(room["id"], i) for i in sorted(set(ids))])

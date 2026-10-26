@@ -836,6 +836,13 @@ BEGIN SELECT RAISE(ABORT,'invalid room message scope or reply'); END;
 PRAGMA user_version = 33;
 COMMIT;
 """
+# A room's parts open one meeting: the owner's next message after they are saved, not every message after.
+_MIGRATIONS[34] = """
+BEGIN;
+ALTER TABLE rooms ADD COLUMN meeting_pending INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 34;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

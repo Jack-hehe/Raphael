@@ -229,14 +229,19 @@ class RoomExchanges:
                               "VALUES (?, ?, 'queued', ?, ?)",
                               (origin, room["id"], language, json.dumps([{"member":recipient,"reply_to_member":None,
                                "reply_to":origin,"handoff":False}]) if recipient is not None else None))
-        targets = list(dict.fromkeys(([recipient] if recipient is not None else []) + self.rooms._targets(room,
-            self.conn.execute("SELECT text FROM room_messages WHERE id=?", (origin,)).fetchone()[0])))
+        text, request = self.conn.execute("SELECT text, request_id FROM room_messages WHERE id=?", (origin,)).fetchone()
+        targets = list(dict.fromkeys(([recipient] if recipient is not None else []) + self.rooms._targets(room, text)))
         self.intents(origin, origin, targets)
         if targets:
             self.update(origin, pending="[]")
         roles = self.rooms._view(room).get('roles', {})
         moderator = next((int(i) for i, role in roles.items() if role == 'moderator'), None)
-        if moderator is not None:
+        # A meeting's agenda, or the owner's first message after the parts are saved, is a meeting; later messages are not.
+        meeting = (str(request or '').startswith('meeting_') or
+                   self.conn.execute("SELECT meeting_pending FROM rooms WHERE id=?", (room["id"],)).fetchone()[0])
+        if moderator is not None and meeting:
+            with self.conn:
+                self.conn.execute("UPDATE rooms SET meeting_pending=0 WHERE id=?", (room["id"],))
             speakers = [moderator] + [i for i in self.rooms._ids(room) if i not in (0, moderator)]
             plan = [{"member":i, "reply_to_member":None, "reply_to":origin, "handoff":False, "round":round_no}
                     for round_no in (1, 2) for i in speakers]

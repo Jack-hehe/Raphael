@@ -343,6 +343,25 @@ async def test_a_meeting_runs_two_rounds_then_the_moderator_closes_and_raphael_c
     assert 'Both rounds are complete' in prompts[6] and '@拉斐爾' in prompts[6]
 
 
+async def test_after_a_meeting_the_owners_next_message_is_not_another_debate(rig, exchange):
+    # 「開始做吧」 after a meeting started a fresh two-round debate, during which no one could hand off work.
+    room, ids = await team(rig)
+    await rig.call('rooms.update', {'room_id':room['id'], 'roles':{str(ids[0]):'moderator', str(ids[1]):'con'}})
+    await send(rig, room, 'Discuss the evidence')
+    while (await history(rig, room))['exchange']['state'] != 'done':
+        await finish(rig, exchange, 'Evidence reviewed')
+    asked = len(rig.background.submitted)
+    await send(rig, room, '@Bob start on the plan now', 'two')
+    assert [s['member_id'] for s in rig.background.submitted[asked:]] == [ids[1]]
+    assert 'Open round' not in rig.background.submitted[-1]['text']
+    await finish(rig, exchange, 'Started.')
+    assert (await history(rig, room))['exchange']['pending'] == '[]'
+    while (await history(rig, room))['exchange']['state'] != 'done':
+        await finish(rig, exchange, 'Noted.')
+    meeting = await exchange.meeting({'member_ids':[0,*ids], 'agenda':'Discuss the next release'}, 'en', 45)
+    assert meeting['room_id'] == room['id'] and 'Open round 1' in rig.background.submitted[-1]['text']
+
+
 @pytest.mark.parametrize('plan,member,phase', [
     ([{'member':1, 'round':2}, {'member':2, 'round':2}], 2, 'aside'),
     ([{'member':2, 'round':1}, {'member':1, 'round':2}, {'member':2, 'round':2}], 1, 'floor'),
