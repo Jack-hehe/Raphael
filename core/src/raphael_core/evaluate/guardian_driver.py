@@ -16,10 +16,12 @@ from uuid import uuid4
 
 from ..agent.cli.discovery import brain_ref
 from ..agent.device import NullActions
+from ..agent.service import RESUMED
 from ..brain.settings import SettingsStore
 from ..integrations.client import CallOutcome, McpFailure
 from ..integrations.config import ServerConfig, ToolRecord, fingerprint
 from ..worker.loop import Stop
+from .google_fixture import CLIENT_ID, GoogleFixture
 from .guardian import BudgetClient, check_reply, Scenario
 from .guardian_registry import digest
 
@@ -36,13 +38,22 @@ class RecordingConnector:
 
     No connection is opened, command started or URL fetched. Unknown fixture
     tools fail closed. Declined/expired approvals never reach this boundary.
+    With `production` (a cell whose managed connector talks to a recorded fixture,
+    S14's Google), that connector's calls go on to it: its HTTP boundary is the fixture.
     """
 
-    def __init__(self, *, failure="", nonce=""):
-        self.failure, self.nonce = failure, nonce
+    def __init__(self, *, failure="", nonce="", production=None):
+        self.failure, self.nonce, self.production = failure, nonce, production
         self.receipts = []
 
+    def __getattr__(self, name):
+        if self.production is None:
+            raise AttributeError(name)
+        return getattr(self.production, name)
+
     async def call_tool(self, server, name, arguments, *, expected, **kwargs):
+        if server.managed_by == "google" and self.production is not None:
+            return await self.production.call_tool(server, name, arguments, expected=expected, **kwargs)
         tool = server.tool(name)
         if not server.id.startswith("guardian-") or tool is None or expected != tool.fingerprint:
             raise McpFailure("gone")
@@ -88,12 +99,15 @@ class ModelTransport(BudgetClient):
     def __init__(self, client, budget):
         super().__init__(client, budget)
         self.models, self.first_response_ms = [], None
+        self.sent = []
         self.started = time.perf_counter()
         self.cost, self.tokens = 0.0, {"prompt": 0, "completion": 0}
         self.cost_known = True
 
     async def chat_tools(self, **kwargs):
         self.budget.take()
+        # What the model was shown, in memory for this cell only: a cell may check that no secret reached it.
+        self.sent.append(json.dumps(kwargs.get("messages", []), ensure_ascii=False, default=str))
         turn = await self.client.chat_tools(**kwargs)
         self.models.append(turn.model)
         if self.first_response_ms is None:
@@ -142,7 +156,9 @@ class RpcDriver:
                        agent_tool_observer=self.observe, agent_model_observer=self.actual_cli_models.append)
         self.app.set_notifier(lambda method, params: self.events.append((method, params)))
         # This is the connector transport boundary, downstream of both production gates.
+        self.production_connector = self.app.integrations._connector
         self.app.integrations._connector = self.recorder
+        self.google = None
         for server in servers:
             self.app.integrations._config.add(copy.deepcopy(server))
         settings = SettingsStore(self.app._conn)
@@ -202,7 +218,8 @@ class RpcDriver:
         for turn in turns:
             if turn.get("scope", "private") == "exchange":
                 continue  # a colleague's question in this chat is that colleague's, drawn as one line
-            if turn.get("member_id", 0) != member or turn.get("source") != source:
+            # A task resumed after its connector card carries on the owner's own request in this chat.
+            if turn.get("member_id", 0) != member or turn.get("source") not in (source, RESUMED):
                 reasons.append("wrong_conversation_scope")
             for message in turn.get("messages", []):
                 kind, text = message.get("kind"), message.get("text", "")
@@ -234,6 +251,8 @@ class RpcDriver:
             reasons, result = await self.privacy_scenario()
         elif cell.driver == 'quick':
             reasons, result = await self.quick_scenario()
+        elif cell.driver == 'connect-gmail':
+            reasons, result = await self.connect_gmail_scenario()
         elif cell.driver == "team-setup":
             reasons = []
             async def team_state():
@@ -750,6 +769,80 @@ class RpcDriver:
         for reply in (asked, probed):
             reasons += check_reply(answer(reply), Scenario('quick-question', ''))
         return reasons, {**asked, 'viewer': 0, 'conversation': quick_id, 'source': 'voice'}
+
+    async def connect_gmail_scenario(self):
+        """S14 (Gmail): a task in 信件助理's chat that needs Gmail shows a card there. The owner abandons one
+        sign-in and cancels it, then finishes one through the automatic Google fixture (the core's own loopback,
+        `state` and PKCE); only that task resumes, once, and reads the mail with Gmail's read tools. A reloaded
+        callback tab and a second Connect change nothing, every member's roster then counts Gmail's tools, and no
+        part of the sign-in reaches a reply, the history, a room, a stored file or the model."""
+        ids = await self.seed_team()
+        mail = ids[1]
+        google = self.google = GoogleFixture(self.nonce, mode="hold")
+        self.app.connectors.google.http.transport = google.transport
+        self.app.connectors.open_browser = google.browser
+        self.recorder.production = self.production_connector
+        await self.app.call("connectors.google.configure", {"client_id": CLIENT_ID, "gmail": "read", "calendar": "read"})
+        asked = await self.ask(f"請用 Gmail 找出主旨含 {self.nonce} 的測試信，告訴我信裡的確認碼。"
+                               "Gmail 還沒連接就先在這裡給我連接卡片，連好後再繼續。", member=mail)
+
+        async def turn(turn_id):
+            turns = (await self.app.call("agent.history.list", {"member_id": mail}))["turns"]
+            return next((item for item in turns if item["id"] == turn_id), {})
+
+        def said(item):
+            return "\n".join([item.get("text") or "", *(m["text"] for m in item.get("messages", []) if m["kind"] == "reply")])
+
+        def resumed():
+            return self.app._conn.execute("SELECT * FROM agent_turns WHERE source=? AND source_turn_id=?",
+                                          (RESUMED, asked.get("turn_id"))).fetchall()
+
+        origin = await turn(asked.get("turn_id"))
+        cards = origin.get("connectors", [])
+        if [(card["app"], card["state"]) for card in cards] != [("gmail", "pending")]:
+            return ["connector_card"], {**asked, "viewer": mail}
+        reasons = []
+        if google.reads() or google.mail_code in said(origin):
+            reasons.append("connector_card")  # it claimed the mail before Gmail was connected
+        card_id = cards[0]["id"]
+
+        async def card():
+            await self.app.cards.idle()
+            return next(item for item in (await turn(asked["turn_id"]))["connectors"] if item["id"] == card_id)
+
+        await self.app.call("integrations.card_connect", {"id": card_id})
+        while not google.opened:
+            await asyncio.sleep(.02)
+        await self.app.call("integrations.card_cancel", {"id": card_id})
+        if (await card())["state"] != "cancelled" or resumed() or google.reads():
+            reasons.append("auth_callback")
+        google.mode = "approve"
+        await self.app.call("integrations.card_connect", {"id": card_id})
+        connected = await card()
+        replayed = await google.replay()
+        await self.app.call("integrations.card_connect", {"id": card_id})
+        if (connected["state"] != "connected" or await card() != connected or replayed is not None
+                or len(google.sign_ins) != 2 or not all(all(sign_in.values()) for sign_in in google.sign_ins)):
+            reasons.append("auth_callback")
+        rows = resumed()
+        if len(rows) != 1 or rows[0]["member_id"] != mail or rows[0]["status"] != "done" or rows[0]["scope"] != "private":
+            reasons.append("resume_once")
+        result = await turn(rows[0]["id"]) if rows else {}
+        read = [trace for trace in self.traces if trace["name"].endswith("/gmail_get_message") and trace["outcome"] == "ok"]
+        if "gmail_get_message" not in google.reads() or not read or google.mail_code not in said(result):
+            reasons.append("tool_receipt")
+        for member in [0, *ids]:
+            if not any(app["id"] == "google" and app["state"] == "ready" and app["tools"] >= connected["tool_count"]
+                       for app in self.app.members.team_context(member, "zh-TW")["apps"]):
+                reasons.append("roster_count_stale")
+                break
+        tables = [row[0] for row in self.app._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        stored = json.dumps([[list(row) for row in self.app._conn.execute(f'SELECT * FROM "{table}"')] for table in tables],
+                            ensure_ascii=False, default=str)
+        stored += "".join(path.read_text(encoding="utf-8") for path in (self.app.connectors.store.path.parent).glob("*.json"))
+        if any(secret in stored + json.dumps(self.events, default=str) + "".join(self.transport.sent) for secret in google.secrets):
+            reasons.append("sign_in_secret_leaked")
+        return reasons, {"status": result.get("status", "error"), "text": said(result), "turn_id": result.get("id"), "viewer": mail}
 
     async def meeting_scenario(self):
         ids = await self.seed_team()

@@ -33,6 +33,14 @@
         "production_state"
       ]
     },
+    "raphael/core/connect_app": {
+      "scenario_ids": [
+        "S14.gmail"
+      ],
+      "expected_assertions": [
+        "connector_card"
+      ]
+    },
     "raphael/core/computer_act": {
       "scenario_ids": [
         "S21.computer.act"
