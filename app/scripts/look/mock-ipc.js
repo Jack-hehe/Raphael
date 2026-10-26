@@ -25,6 +25,20 @@ export function installMock(fixture, config = {}, target = window) {
     runningTurn.text = "";
   }
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
+  if (variant.p03Handoff) {
+    const task = { ...data.roomHandoff, state: variant.p03Handoff };
+    data.messages = [data.messages[0], { ...data.messages[1], member_id: 0, text: "請小晴立即整理驗收報告。" }];
+    if (variant.p03SourceDates) data.messages[0].text = "來源寫明早截止、明天中午提交。現在就開始整理驗收報告。";
+    if (task.state !== "done") { task.result = ""; task.evidence = []; }
+    if (task.state === "failed") task.reason = "work_without_action";
+    data.roomHandoffs = [task];
+    if (task.state === "running") data.messages.push({ ...data.roomThinkingMessages[0], turn_id: task.work_turn_id });
+    if (task.state === "done") data.messages.push({ ...data.messages[1], id: 4, member_id: 1, turn_id: task.work_turn_id, text: task.result, created: task.created_at_ms + 1000 });
+    if (variant.p03Private) {
+      const source = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === 1);
+      data.turns = [{ ...source, question: "請小晴立即整理驗收報告。", text: "", detail: null, messages: [], handoffs: [task] }];
+    }
+  }
   if (variant.p02Meeting) data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === 1).messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
   if (variant.p02Roles) data.rooms[0].roles = data.p02Roles;
   if (variant.p02Blocked || variant.p02Fallback || variant.p02LongExchange) {
@@ -127,7 +141,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "routines.update": { const routine = update(data.routines, p.id, p); notify("RoutinesChanged", { member_id: routine.member_id }); return { routine }; }
       case "routines.delete": data.routines = data.routines.filter(item => item.id !== p.id); notify("RoutinesChanged", { member_id: 0 }); return { deleted: true };
       case "rooms.list": return { rooms: data.rooms };
-      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id), exchange: data.roomExchanges.filter(item => item.room_id === p.room_id).at(-1) ?? null };
+      case "rooms.messages": return { messages: data.messages.filter(item => item.room_id === p.room_id), exchange: data.roomExchanges.filter(item => item.room_id === p.room_id).at(-1) ?? null, handoffs: data.roomHandoffs };
       case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false), default_responder: p.default_responder ?? "auto" }; data.rooms.push(room); return { room }; }
       case "rooms.update": return { room: update(data.rooms, p.room_id, p) };
       case "rooms.delete": data.rooms = data.rooms.filter(item => item.id !== p.room_id); return { deleted: true };

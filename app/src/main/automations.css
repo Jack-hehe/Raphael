@@ -172,6 +172,13 @@
   .team-composer { flex-basis: 100%; }
 }
 .conversation-event-line { display: flex; justify-content: center; margin: 12px 0; color: var(--text-2); }
+.handoff-row { width: 100%; }
+.handoff-event { margin: var(--sp-3) 0; color: var(--text-2); font-size: var(--fs-xs); }
+.handoff-event > summary { cursor: pointer; list-style: none; display: flex; justify-content: center; }
+.handoff-event > summary::-webkit-details-marker { display: none; }
+.handoff-event-line { display: inline-flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: var(--sp-2); min-width: 0; }
+.handoff-state { color: var(--text-3); }
+.handoff-detail { margin: var(--sp-3) auto; max-width: 56ch; padding: var(--sp-3); border-block: 1px solid var(--line); overflow-wrap: anywhere; }
 .au-room-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .room-intent-blocked { font-size: var(--fs-xs); color: var(--text-2); }
 .room-picked { display: flex; flex-wrap: wrap; gap: 6px; }

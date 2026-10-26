@@ -1,6 +1,10 @@
 {
   "version": 1,
   "tools": {
+    "raphael/core/handoff": {
+      "scenario_ids": ["S03.immediate-start", "S08.immediate-start"],
+      "expected_assertions": ["immediate_start"]
+    },
     "raphael/core/room_meeting": {
       "scenario_ids": ["S07", "S21.meetings.create-reuse"],
       "expected_assertions": ["production_state"]

@@ -9,7 +9,7 @@ are part of, they are not pruned by age.
 `state` is one of:
 
 - "queued" and "running": not over;
-- "waiting": not over either: the task paused for the owner's yes to one of its calls, which is a
+- "waiting": not over either: the task waits for delegated children, or paused for the owner's yes to one of its calls, which is a
   row of `worker_questions` (the question as the card shows it). It goes on when the owner answers
   in the app, and ends when nobody has after 24 hours;
 - "done": the model reported;
@@ -29,6 +29,9 @@ Use it on the thread that owns `conn` (the event loop). Nothing here logs a task
 """
 
 import sqlite3
+import hashlib
+import json
+from pathlib import Path
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -73,6 +76,19 @@ class Task:
     scope: str = "private"
     room_id: int | None = None
     thread_id: int | None = None
+    parent_task_id: int | None = None
+    root_task_id: int | None = None
+    stage_id: str | None = None
+    from_member_id: int | None = None
+    source_turn_id: int | None = None
+    model_ref: str | None = None
+    mode: str | None = None
+    done_when: str = ""
+    idempotency_key: str | None = None
+    ready_at_ms: int | None = None
+    dispatch_policy: str = "immediate"
+    schedule_provenance: str = "{}"
+    continuation: str | None = None
 
     @property
     def quiet(self) -> bool:
@@ -123,7 +139,9 @@ _QUESTION_COLUMNS = (
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
-    " announced, rerun_of, member_id, routine_id, scope, room_id, thread_id"
+    " announced, rerun_of, member_id, routine_id, scope, room_id, thread_id,"
+    " parent_task_id, root_task_id, stage_id, from_member_id, source_turn_id, model_ref, mode,"
+    " done_when, idempotency_key, ready_at_ms, dispatch_policy, schedule_provenance, continuation"
 )
 _STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason, detail"
 
@@ -171,6 +189,80 @@ class TaskStore:
                 "UPDATE worker_tasks SET state = 'running', started_at_ms = ? WHERE id = ?",
                 (self._now_ms(), task_id),
             )
+            self._conn.execute("INSERT INTO task_executions(task_id,attempt,state,effective_model,started_at_ms) "
+                "SELECT id,(SELECT COALESCE(MAX(attempt),0)+1 FROM task_executions WHERE task_id=?),"
+                "'running',model_ref,? FROM worker_tasks WHERE id=?", (task_id,self._now_ms(),task_id))
+
+    def accept_handoff(self, *, source, parent, assignee, model, request, stage, mode, done_when, language):
+        """Commit the receipt, isolated work turn and queued event together; source dates never defer work."""
+        key = hashlib.sha256(json.dumps([source.id, stage], ensure_ascii=False).encode()).hexdigest()
+        existing = self._conn.execute("SELECT id,member_id,text,mode,done_when FROM worker_tasks WHERE idempotency_key=?", (key,)).fetchone()
+        if existing:
+            if (existing['member_id'],existing['text'],existing['mode'],existing['done_when']) != (assignee,request,mode,done_when):
+                raise Refused('stage_conflict')
+            return existing['id'], True
+        now = self._now_ms()
+        with self._conn:
+            cursor = self._conn.execute("INSERT INTO worker_tasks(created_at_ms,state,session_id,language,text,member_id,"
+                "scope,room_id,thread_id,parent_task_id,root_task_id,stage_id,from_member_id,source_turn_id,model_ref,"
+                "mode,done_when,idempotency_key,ready_at_ms,schedule_provenance) VALUES (?,'queued',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now,source.session_id,language,request,assignee,'room' if source.scope=='room' else 'exchange',
+                 source.room_id,source.thread_id,parent.id if parent else None,(parent.root_task_id or parent.id) if parent else None,
+                 stage,source.member_id,source.id,model,mode,done_when,key,now,
+                 json.dumps({'kind':'owner_or_discussion_work','source_turn_id':source.id,'authorization':'immediate_only'})))
+            task_id = cursor.lastrowid
+            self._conn.execute("UPDATE worker_tasks SET root_task_id=COALESCE(root_task_id,id) WHERE id=?", (task_id,))
+            cursor = self._conn.execute("INSERT INTO agent_turns(created_at_ms,session_id,question,route,prefix,text,status,"
+                "source,member_id,peer_id,scope,room_id,thread_id,source_turn_id,model) "
+                "VALUES (?,?,?,'exchange','','','running','member',?,?,?,?,?,?,?)",
+                (now,f'work:{task_id}',request,assignee,source.member_id,'room' if source.scope=='room' else 'exchange',
+                 source.room_id,source.thread_id,source.id,model))
+            self._conn.execute("UPDATE worker_tasks SET turn_id=? WHERE id=?", (cursor.lastrowid,task_id))
+            self._conn.execute("INSERT INTO task_outbox VALUES (?,?, 'queued',?,?,?,?,NULL,NULL)",
+                (f'{task_id}:queued',task_id,source.id,source.room_id,source.thread_id,now))
+        return task_id, False
+
+    def handoffs(self, source_turn_id):
+        return [Task(**dict(row)) for row in self._conn.execute(
+            f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE source_turn_id=? ORDER BY id", (source_turn_id,))]
+
+    def pause_for_children(self, task_id, continuation):
+        with self._conn:
+            self._conn.execute("UPDATE worker_tasks SET state='waiting',continuation=? WHERE id=? AND state='running'",
+                               (json.dumps(continuation,ensure_ascii=False),task_id))
+            self._conn.execute("UPDATE task_executions SET state='waiting',ended_at_ms=? WHERE task_id=? AND state='running'",
+                               (self._now_ms(),task_id))
+
+    def resume_from_inbox(self, parent_id):
+        """Consume each result once and wake one waiting parent only after every child is terminal."""
+        with self._conn:
+            pending = self._conn.execute("SELECT 1 FROM worker_tasks WHERE parent_task_id=? AND state IN ('queued','running','waiting')", (parent_id,)).fetchone()
+            if pending:
+                return False
+            cursor = self._conn.execute("UPDATE worker_tasks SET state='queued' WHERE id=? AND state='waiting' AND continuation IS NOT NULL", (parent_id,))
+            if not cursor.rowcount:
+                return False
+            self._conn.execute("UPDATE task_inbox SET consumed_at_ms=? WHERE parent_task_id=? AND consumed_at_ms IS NULL", (self._now_ms(),parent_id))
+            return True
+
+    def evidence(self, task_id):
+        return [dict(row) for row in self._conn.execute("SELECT * FROM task_evidence WHERE task_id=? ORDER BY id", (task_id,))]
+
+    def record_evidence(self, task_id, call_id, *, kind, uri, digest, mime):
+        with self._conn:
+            self._conn.execute("INSERT OR IGNORE INTO task_evidence(task_id,tool_call_id,kind,uri,digest,mime,scope,verified_at_ms,verdict) "
+                "SELECT id,?,?,?,?,?,scope,?,'verified' FROM worker_tasks WHERE id=?",
+                (call_id,kind,uri,digest,mime,self._now_ms(),task_id))
+
+    def verify_artifact(self,task_id,call_id,path,*,workspace,mime):
+        """Trusted executors verify actual bytes inside their authorized workspace, never stdout claims."""
+        root = Path(workspace).resolve(strict=True)
+        artifact = Path(path).resolve(strict=True)
+        if not artifact.is_file() or not artifact.is_relative_to(root):
+            raise ValueError('artifact_outside_workspace')
+        digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        self.record_evidence(task_id,call_id,kind='artifact',uri=artifact.relative_to(root).as_posix(),digest=digest,mime=mime)
+        return digest
 
 
     def set_state(self, task_id: int, state: str) -> None:
@@ -209,6 +301,11 @@ class TaskStore:
                 " report_text = ?, report_detail = ?, reason = ? WHERE id = ?",
                 (state, self._now_ms(), prefix, text, detail, reason, task_id),
             )
+            self._conn.execute("UPDATE task_executions SET state=?,ended_at_ms=?,outcome=? WHERE task_id=? AND state='running'",
+                               (state,self._now_ms(),reason or state,task_id))
+            self._conn.execute("INSERT OR IGNORE INTO task_outbox "
+                "SELECT CAST(id AS TEXT)||':result',id,'result',source_turn_id,room_id,thread_id,?,NULL,NULL "
+                "FROM worker_tasks WHERE id=? AND source_turn_id IS NOT NULL", (self._now_ms(),task_id))
 
     def add_step(
         self,
@@ -314,15 +411,20 @@ class TaskStore:
     ) -> list[Task]:
         """Mark the tasks that were queued, running or waiting as interrupted: the worker they ran
         in is gone (and the conversation a waiting one would go on with), and a task is never
-        started again by itself. Their questions are cancelled. With `report` (the task's language and
+        started again by itself. Safe queued handoffs and persisted waiting continuations remain
+        recoverable; uncertain running effects are never replayed. Their questions are cancelled. With `report` (the task's language and
         the tool calls it made, to a prefix and a line) each gets that report, to be said once
         (`announced` 0). Returns the tasks as they are now."""
         with self._conn:
             rows = self._conn.execute(
                 "SELECT id, language FROM worker_tasks"
                 " WHERE state IN ('queued', 'running', 'waiting')"
+                " AND NOT ((mode IS NOT NULL OR continuation IS NOT NULL) AND state='queued')"
+                " AND NOT (state='waiting' AND continuation IS NOT NULL)"
             ).fetchall()
             for row in rows:
+                self._conn.execute("UPDATE task_executions SET state='interrupted',ended_at_ms=?,outcome=? "
+                    "WHERE task_id=? AND state='running'",(self._now_ms(),reason,row['id']))
                 self._conn.execute(
                     "UPDATE worker_questions SET state = 'cancelled' WHERE task_id = ?"
                     " AND state = 'waiting'",
@@ -346,6 +448,9 @@ class TaskStore:
                     " reason = ?, report_prefix = ?, report_text = ?, announced = 0 WHERE id = ?",
                     (self._now_ms(), reason, prefix, text, row["id"]),
                 )
+                self._conn.execute("INSERT OR IGNORE INTO task_outbox "
+                    "SELECT CAST(id AS TEXT)||':result',id,'result',source_turn_id,room_id,thread_id,?,NULL,NULL "
+                    "FROM worker_tasks WHERE id=? AND source_turn_id IS NOT NULL", (self._now_ms(),row['id']))
         return [task for task in (self.get(row["id"]) for row in rows) if task is not None]
 
     def for_brief(self, since_ms: int, limit: int, *, member_id: int = 0) -> list[Task]:
@@ -392,9 +497,17 @@ class TaskStore:
     def delete(self, task_id: int) -> None:
         """Delete a task, its steps and its questions, whatever state it is in."""
         with self._conn:
+            self._delete_handoff_records(task_id)
             self._conn.execute("DELETE FROM worker_steps WHERE task_id = ?", (task_id,))
             self._conn.execute("DELETE FROM worker_questions WHERE task_id = ?", (task_id,))
             self._conn.execute("DELETE FROM worker_tasks WHERE id = ?", (task_id,))
+
+    def _delete_handoff_records(self, task_id: int) -> None:
+        # Connections do not enable SQLite foreign keys; cleanup must be explicit.
+        self._conn.execute("DELETE FROM task_inbox WHERE parent_task_id=? OR event_id IN "
+                           "(SELECT event_id FROM task_outbox WHERE task_id=?)", (task_id,task_id))
+        for table in ('task_executions','task_evidence','task_outbox'):
+            self._conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
 
     def scrub(self, task_id: int) -> None:
         """Take what the user said, and anything reported, out of a task's row."""
@@ -417,6 +530,8 @@ class TaskStore:
         """Delete every task that is not queued or running, with its steps and its questions (a
         task that waits for the owner goes too); one that is queued or running stays."""
         with self._conn:
+            for row in self._conn.execute("SELECT id FROM worker_tasks WHERE state NOT IN ('queued','running')").fetchall():
+                self._delete_handoff_records(row[0])
             self._conn.execute(
                 "DELETE FROM worker_questions WHERE task_id IN (SELECT id FROM worker_tasks"
                 " WHERE state NOT IN ('queued', 'running'))"

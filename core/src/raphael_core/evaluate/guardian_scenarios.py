@@ -55,6 +55,11 @@ SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(","
 def cells(registry=(), catalog=(), *, servers=()):
     """Expand operations explicitly; missing inventories get sentinel failures."""
     result = list(SCENARIOS)
+    for identifier in ('S03','S08'):
+        result.append(ScenarioCell(identifier+'.immediate-start','Immediate durable work (P03 scope)',
+            '現在派工；來源文件的「明早截止、明天中午提交」不是排程。',
+            ('dispatch_receipt','immediate_start','work_thread','result_destination','no_implicit_schedule'),
+            'P03/P03a','immediate-dispatch' if identifier=='S03' else 'immediate-room-work'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,
                                   "請用 Guardian 服務讀取測試信件；如果無法讀取，用一句話說明所缺的連接或權限，不能宣稱完成。",

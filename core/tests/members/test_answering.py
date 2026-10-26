@@ -427,14 +427,14 @@ async def test_a_chain_is_at_most_two_deep_and_never_comes_back(setup):
     assert team.members.find("x") is None
 
 
-async def test_the_fast_tier_offers_ask_member_only_for_someone_it_may_ask(setup):
+async def test_the_fast_tier_separates_durable_handoffs_from_bounded_consultation(setup):
     rig, team = setup
     a, b = (member(team, name=n).speaker() for n in ("小財務", "小研究"))
-    assert team_tools_for(team.members, a, "問小研究") == ["ask_member"]
+    assert team_tools_for(team.members, a, "問小研究") == ["handoff", "ask_member"]
     assert team_tools_for(team.members, a, "問小財務") == []  # itself
-    assert team_tools_for(team.members, b.asked_by(a), "問小財務") == []  # already in the chain
+    assert team_tools_for(team.members, b.asked_by(a), "問小財務") == ["handoff"]  # a work graph has its own durable bound
     assert team_tools_for(team.members, a, "今天天氣") == []
-    assert team_tools_for(team.members, a, always=True) == ["ask_member"]
+    assert team_tools_for(team.members, a, always=True) == ["handoff", "ask_member"]
 
 
 @pytest.mark.parametrize("text", ["幫我找行銷跟 PM 開個會議", "大家一起商量上架的事", "schedule a meeting about launch"])

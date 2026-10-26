@@ -3,6 +3,10 @@ import { homeJa } from "./home-catalogs";
 import type { Messages } from './zh-TW';
 
 export const ja = {
+  "handoff.forwarded": "{p0} に引き継ぎました", "handoff.asked": "{p0} に確認しました",
+  "handoff.queued": "待機中", "handoff.running": "実行中", "handoff.waiting": "結果待ち",
+  "handoff.done": "完了", "handoff.failed": "未完了", "handoff.withheld": "アクセス取消済み",
+  "handoff.task": "タスク #{p0}",
   ...navJa,
   ...homeJa,
   "conversations.untitled": "新しい会話",

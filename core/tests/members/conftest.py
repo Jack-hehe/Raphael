@@ -51,6 +51,9 @@ class FakeBackground:
         self.attached.append((task_id, turn_id))
         self.store.attach_turn(task_id, turn_id)
 
+    def handoff_views(self, **scope):
+        return []
+
     def forget_member(self, member_id):
         self.forgotten.append(member_id)
 

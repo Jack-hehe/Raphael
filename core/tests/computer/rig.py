@@ -59,6 +59,9 @@ def completion(data):
 class _Background:
     """A background worker that is never handed anything."""
 
+    def handoff_views(self, **scope):
+        return []
+
     def brief_for_assistant(self, limit=3, *, member_id=0):
         return []
 

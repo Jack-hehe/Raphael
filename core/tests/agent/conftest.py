@@ -25,6 +25,9 @@ class FakeBackground:
     a worker (the app always gives it one); this is the tests'. `refuse` makes `submit` refuse with
     that phrase's kind, `fail` makes it raise, and `briefs` is what it tells the assistant."""
 
+    def handoff_views(self, **scope):
+        return []
+
     def __init__(self):
         self.submitted = []
         self.attached = []

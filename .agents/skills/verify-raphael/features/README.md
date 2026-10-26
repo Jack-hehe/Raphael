@@ -3,7 +3,7 @@
 Use [the verification workflow](../SKILL.md) first. Commands run from `app/` and
 request both themes; feature commands use 720/1120 and the full hand-off matrix
 also requires 1920x1080. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 204 scenes, 1224 combinations across both themes and
+are the executable source: 211 scenes, 1266 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.

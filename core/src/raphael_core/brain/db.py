@@ -739,6 +739,49 @@ WHERE e.state IN ('queued','running') AND json_type(q.value,'$.member')='integer
 PRAGMA user_version = 30;
 COMMIT;
 """
+_MIGRATIONS[31] = """
+BEGIN;
+ALTER TABLE worker_tasks ADD COLUMN parent_task_id INTEGER;
+ALTER TABLE worker_tasks ADD COLUMN root_task_id INTEGER;
+ALTER TABLE worker_tasks ADD COLUMN stage_id TEXT;
+ALTER TABLE worker_tasks ADD COLUMN from_member_id INTEGER;
+ALTER TABLE worker_tasks ADD COLUMN source_turn_id INTEGER;
+ALTER TABLE worker_tasks ADD COLUMN model_ref TEXT;
+ALTER TABLE worker_tasks ADD COLUMN mode TEXT;
+ALTER TABLE worker_tasks ADD COLUMN done_when TEXT NOT NULL DEFAULT '';
+ALTER TABLE worker_tasks ADD COLUMN idempotency_key TEXT;
+ALTER TABLE worker_tasks ADD COLUMN ready_at_ms INTEGER;
+ALTER TABLE worker_tasks ADD COLUMN dispatch_policy TEXT NOT NULL DEFAULT 'immediate';
+ALTER TABLE worker_tasks ADD COLUMN schedule_provenance TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE worker_tasks ADD COLUMN continuation TEXT;
+CREATE UNIQUE INDEX worker_handoff_key ON worker_tasks(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE INDEX worker_task_parent ON worker_tasks(parent_task_id, state);
+CREATE TABLE task_executions (
+    id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES worker_tasks(id) ON DELETE CASCADE,
+    attempt INTEGER NOT NULL, state TEXT NOT NULL, effective_model TEXT,
+    started_at_ms INTEGER NOT NULL, ended_at_ms INTEGER, outcome TEXT,
+    UNIQUE(task_id, attempt)
+);
+CREATE UNIQUE INDEX task_one_execution ON task_executions(task_id) WHERE state='running';
+CREATE TABLE task_outbox (
+    event_id TEXT PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES worker_tasks(id) ON DELETE CASCADE,
+    type TEXT NOT NULL, destination_turn_id INTEGER NOT NULL, room_id INTEGER, thread_id INTEGER,
+    created_at_ms INTEGER NOT NULL, delivered_at_ms INTEGER, disposition TEXT
+);
+CREATE TABLE task_inbox (
+    event_id TEXT PRIMARY KEY REFERENCES task_outbox(event_id) ON DELETE CASCADE,
+    parent_task_id INTEGER REFERENCES worker_tasks(id) ON DELETE CASCADE,
+    consumed_at_ms INTEGER
+);
+CREATE TABLE task_evidence (
+    id INTEGER PRIMARY KEY, task_id INTEGER NOT NULL REFERENCES worker_tasks(id) ON DELETE CASCADE,
+    tool_call_id TEXT NOT NULL, kind TEXT NOT NULL, uri TEXT NOT NULL, digest TEXT NOT NULL,
+    mime TEXT NOT NULL, scope TEXT NOT NULL, verified_at_ms INTEGER NOT NULL, verdict TEXT NOT NULL,
+    UNIQUE(task_id, tool_call_id, uri)
+);
+PRAGMA user_version = 31;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

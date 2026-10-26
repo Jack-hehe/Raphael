@@ -1,4 +1,5 @@
 import { fileKind, sentFileHTML } from "./attachments";
+import { handoffLineHTML } from "./handoff-line";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
 // in order. Events are small chips, questions mount inline, and pending work shows three dots.
@@ -829,6 +830,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
+    (turn.handoffs ?? []).map(handoffLineHTML).join("") +
     `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span><div class="ra-body">` +
     (hasMsgs
       ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
