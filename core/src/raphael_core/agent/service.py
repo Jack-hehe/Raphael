@@ -3625,16 +3625,13 @@ class AgentService:
     ) -> int:
         """Write a turn to the history, in the thread of the request's speaker, with the steps of
         its request; 0 if that fails, since the answer matters more. A request one member handed
-        another is written as an exchange with the asker (`peer_id`)."""
+        another is written as an exchange with the asker (`peer_id`): the plain request and answer,
+        which the exchange's line shows; the asker's model is handed the answer with its speaker."""
         member_id = ask.speaker.id
         question = ask.original_text if ask.original_text is not None else ask.text
         if ask.exchange_speakers is not None:
-            requester, respondent = ask.exchange_speakers
-            question = labelled_lines(requester, question)
-            text = relayed_answer(respondent, "\n".join(ask.replies) if ask.replies else text, ask.exchange_owner_sources)
-            ask.exchange_answer = text
-            if detail:
-                detail = relayed_answer(respondent, detail, ask.exchange_owner_sources)
+            text = "\n".join(ask.replies) if ask.replies else text
+            ask.exchange_answer = relayed_answer(ask.exchange_speakers[1], text, ask.exchange_owner_sources)
         try:
             cost = max(ledger.total - ask.cost_base, 0.0)
             if ask.turn_id:

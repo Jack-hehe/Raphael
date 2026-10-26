@@ -232,9 +232,11 @@ async def test_raphael_asks_a_member_and_exchange_is_audit_only(setup, client, c
     history = AgentHistory(conn)
     assert history.list(member_id=one.id) == []
     (theirs,) = [history.get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'", (one.id,))]
+    # The record keeps the plain words for the exchange's line; the asker's model gets them attributed.
     assert (theirs.route, theirs.source, theirs.peer_id, theirs.question, theirs.text) == (
-        "exchange", "member", 0, "Raphael: 主人明天有什麼行程？", "小行程: 明天九點開會。",
+        "exchange", "member", 0, "主人明天有什麼行程？", "明天九點開會。",
     )  # fmt: skip
+    assert "小行程: 明天九點開會。" in raphael_call["user"]
     mine = history.list(member_id=0)
     assert [t.route for t in mine] == ["answer"]
     steps = (await rig.turns())[0]["steps"]
@@ -408,7 +410,7 @@ async def test_a_member_asks_another_and_only_those_two_threads_hold_it(setup, c
     history = AgentHistory(conn)
     assert history.list(member_id=b.id) == []
     (bs,) = [history.get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'", (b.id,))]
-    assert (bs.route, bs.peer_id, bs.question) == ("exchange", a.id, "小財務: PRIVATE-REQUEST 上季的數字")
+    assert (bs.route, bs.peer_id, bs.question) == ("exchange", a.id, "PRIVATE-REQUEST 上季的數字")
     assert {(t.route, t.peer_id) for t in history.list(member_id=a.id)} == {("answer", None)}
     # A third member, and Raphael, see nothing of it.
     assert history.list(member_id=c.id) == [] and history.list(member_id=0) == []
@@ -472,7 +474,7 @@ async def test_raphael_asked_for_the_desktop_says_the_owner_must_ask_him(setup, 
     await typed(rig, "請拉斐爾打開小算盤", one.id)
     assert AgentHistory(conn).list(member_id=0) == []
     (raphaels,) = [AgentHistory(conn).get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=0 AND scope='exchange'")]
-    assert raphaels.text == "Raphael: 需要主人在電腦前直接要求操作。"
+    assert raphaels.text == "需要主人在電腦前直接要求操作。"
     assert rig.actions.calls == []
 
 
