@@ -1,11 +1,15 @@
 """Shell-free children, private run files and bounded process-tree cleanup."""
 
 import asyncio
+import logging
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 API_KEYS = frozenset({"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"})
 
@@ -30,8 +34,18 @@ class PrivateFiles:
             stream.write(text)
         return str(path)
 
-    def close(self):
-        self._directory.cleanup()
+    async def aclose(self):
+        """Remove the run's private files. Windows keeps a killed child's files open for a moment, so this
+        tries again briefly rather than let that error replace how the run ended (live, a PermissionError
+        replaced a cancellation one run in fifteen and the files stayed)."""
+        for _ in range(40):
+            try:
+                self._directory.cleanup()
+                return
+            except PermissionError:
+                await asyncio.sleep(.05)
+        shutil.rmtree(self.path, ignore_errors=True)
+        logger.warning("Could not remove a CLI run's private files at once")
 
 
 async def secure_directory(path):

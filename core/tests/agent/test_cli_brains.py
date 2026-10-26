@@ -552,6 +552,25 @@ time.sleep(300)
     assert not Path(config).parent.exists()
 
 
+async def test_private_files_are_removed_once_a_dying_child_lets_go(monkeypatch):
+    # One run in fifteen, Windows still held a killed child's file: the cleanup's PermissionError
+    # replaced the cancellation and the private files (with their bearer token) stayed.
+    import tempfile
+    from pathlib import Path
+    from raphael_core.agent.cli.process import PrivateFiles
+    files = PrivateFiles()
+    files.write("token.txt", "private-token")
+    cleanup, attempts = tempfile.TemporaryDirectory.cleanup, []
+    def held_once(directory):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise PermissionError(13, "The process cannot access the file because it is being used by another process")
+        cleanup(directory)
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "cleanup", held_once)
+    await files.aclose()
+    assert len(attempts) == 2 and not Path(files.path).exists()
+
+
 def test_login_launches_only_the_unwrapped_command_in_a_visible_console(tmp_path, monkeypatch):
     from raphael_core.agent.cli import discovery
     calls = []

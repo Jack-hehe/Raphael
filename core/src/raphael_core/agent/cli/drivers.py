@@ -177,7 +177,7 @@ class Driver:
             finally:
                 if codex_auth is not None:
                     codex_auth.unlink(missing_ok=True)
-                files.close()
+                await files.aclose()
                 if self.name == "gemini":
                     forget_antigravity_server(cwd or str(files.path))
 
