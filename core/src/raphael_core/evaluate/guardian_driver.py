@@ -197,7 +197,11 @@ class RpcDriver:
         return turns, reasons
 
     async def execute(self, cell):
-        if cell.driver in ('immediate-dispatch','immediate-room-work'):
+        if cell.driver == 'task-stop':
+            reasons,result = await self.stop_scenario()
+        elif cell.driver == 'short-wrapup':
+            reasons,result = await self.short_wrapup_scenario()
+        elif cell.driver in ('immediate-dispatch','immediate-room-work'):
             reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
         elif cell.driver in ('roster', 'meeting'):
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
@@ -298,7 +302,7 @@ class RpcDriver:
                 reasons.append("routine_readback_failed")
         else:
             return ["not implemented: " + cell.dependency], []
-        if cell.driver == 'immediate-room-work':
+        if cell.driver in ('immediate-room-work','short-wrapup','task-stop'):
             # This owner entered through rooms.send; do not invent a private conversation.
             turns = [{'source':'room','scope':'room','text':result.get('text','')}]
             owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
@@ -354,8 +358,73 @@ class RpcDriver:
         if not self.recorder.receipts or self.app._conn.execute('SELECT COUNT(*) FROM routines').fetchone()[0]:
             reasons.append('no_action_or_implicit_schedule')
         if room:
+            messages=(await self.app.call('rooms.messages',{'room_id':room_id}))['messages']
+            if not messages or messages[-1]['member_id']!=0 or messages[-1]['kind']!='wrapup':
+                reasons.append('chief_not_last')
+            if any(m['kind']=='progress' for m in self.app._conn.execute("SELECT kind FROM agent_messages WHERE turn_id IN (SELECT turn_id FROM room_messages WHERE room_id=?)",(room_id,))):
+                reasons.append('progress_in_messages')
             result['text']=' '.join(m['text'] for m in (await self.app.call('rooms.messages',{'room_id':room_id}))['messages'] if m['member_id'] is not None)
         return reasons,result
+
+    async def short_wrapup_scenario(self):
+        ids = await self.seed_team()
+        room = (await self.app.call('rooms.create',{'name':'短討論','member_ids':[0,ids[0]],
+            'default_responder':f'member:{ids[0]}'}))['room']
+        await self.app.call('rooms.send',{'room_id':room['id'],'request_id':self.nonce,
+            'text':'@行銷 請簡短回報：目前沒有交付成果，不要承諾未執行的工作。'})
+        while self.app.rooms._exchanges.latest(room['id'])['state'] in ('queued','running'):
+            await asyncio.sleep(.02)
+        messages=(await self.app.call('rooms.messages',{'room_id':room['id']}))['messages']
+        wrapups=[m for m in messages if m['kind']=='wrapup']
+        reasons=[] if len(wrapups)==1 and messages[-1]['member_id']==0 and messages[-1]['status']=='done' else ['short_wrapup_missing']
+        return reasons,{'status':'done','text':' '.join(m['text'] for m in messages if m['member_id'] is not None)}
+
+    async def stop_scenario(self):
+        """Hold only external I/O; production loops and tree cancellation stay authoritative."""
+        ids=await self.seed_team()
+        await self.install_fixture()
+        room=(await self.app.call('rooms.create',{'name':'停止驗收','member_ids':[0,ids[1]]}))['room']
+        entered,release=asyncio.Event(),asyncio.Event()
+        original=self.recorder.call_tool
+        async def delayed(*args,**kwargs):
+            if self.recorder.receipts:
+                entered.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    # Model a provider that returns after cancellation.
+                    await release.wait()
+            return await original(*args,**kwargs)
+        self.recorder.call_tool=delayed
+        await self.app.call('rooms.send',{'room_id':room['id'],'request_id':self.nonce,
+            'text':'@信件助理 現在連續呼叫 Guardian read 兩次，再回報結果。'})
+        await entered.wait()
+        before=len(self.recorder.receipts)
+        old=self.app._conn.execute("SELECT id,generation FROM worker_tasks WHERE room_id=? AND state='running'",(room['id'],)).fetchone()
+        started=time.perf_counter()
+        await self.app.call('rooms.send',{'room_id':room['id'],'request_id':self.nonce+'-redirect',
+            'text':'@信件助理 改為停止前只回報目前狀態。'})
+        redirect_ms=round((time.perf_counter()-started)*1000)
+        await self.app.call('rooms.stop',{'room_id':room['id']})
+        ack_ms=round((time.perf_counter()-started)*1000)
+        release.set()
+        while self.app._conn.execute("SELECT 1 FROM worker_tasks WHERE room_id=? AND state IN ('queued','running','waiting')",(room['id'],)).fetchone():
+            await asyncio.sleep(.02)
+        reasons=[]
+        current=self.app.background._store.get(old['id']) if old else None
+        if not current or current.state!='cancelled' or current.generation<=old['generation']:
+            reasons.append('generation_priority')
+        if len(self.recorder.receipts)<before:
+            reasons.append('completed_actions_lost')
+        if self.app._conn.execute("SELECT 1 FROM worker_tasks WHERE room_id=? AND state='done' AND generation>0",(room['id'],)).fetchone():
+            reasons.append('late_completion')
+        await self.app.rooms.wait_idle()
+        messages=(await self.app.call('rooms.messages',{'room_id':room['id']}))['messages']
+        if not messages or messages[-1]['member_id']!=0 or messages[-1]['kind']!='wrapup':
+            reasons.append('chief_not_last_after_stop')
+        self.events.append(('guardian.stop_timings',{'redirect_ms':redirect_ms,'stop_ack_ms':ack_ms,
+            'terminal_ms':round((time.perf_counter()-started)*1000)}))
+        return reasons,{'status':'done','text':'已停止工作，已完成的動作保留。'}
 
     async def roster_scenario(self):
         ids = await self.seed_team()

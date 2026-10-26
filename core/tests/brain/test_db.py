@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 31
+LATEST = 32
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -389,6 +389,15 @@ SCHEMA_V31 = {
 }
 
 
+SCHEMA_V32 = {
+    **SCHEMA_V31,
+    'worker_tasks': [*SCHEMA_V31['worker_tasks'], 'generation INTEGER NOT NULL DEFAULT 0'],
+    'task_evidence': [*SCHEMA_V31['task_evidence'], 'workspace TEXT'],
+    'task_stage_owners': ['scope_key TEXT PK NOT NULL', 'stage_id TEXT PK NOT NULL',
+        'owner_task_id INTEGER NOT NULL', "state TEXT NOT NULL DEFAULT 'queued'", "reason TEXT NOT NULL DEFAULT ''"],
+}
+
+
 def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
     path = tmp_path / 'v29.db'
     raw = sqlite3.connect(path)
@@ -432,7 +441,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V31) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V32) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -446,7 +455,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V31.items():
+    for table, columns in SCHEMA_V32.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

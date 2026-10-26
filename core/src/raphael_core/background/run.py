@@ -245,6 +245,8 @@ class TaskRun:
         self._gate = gate
         self._tools = tools
         self._store = store
+        initial = store.get(task_id)
+        self.generation = initial.generation if initial else 0
         self._spend = spend
         self._monthly_limit = monthly_limit
         self._city = city
@@ -290,7 +292,8 @@ class TaskRun:
 
     def _check(self, *, model: bool = False, tool: bool = False, paid: bool = False) -> None:
         """Refuse a call the task may not make: `stopped(kind)`."""
-        if self.cancelled:
+        current = self._store.get(self.task_id)
+        if self.cancelled or (current and (current.generation != self.generation or current.state in ("cancelled", "interrupted"))):
             raise stopped("cancelled")
         if self._clock() >= self.deadline:
             raise stopped("limit_time")
@@ -480,6 +483,7 @@ class TaskRun:
             reply, outcome, tier = self._find(arguments)
         else:
             reply, outcome, tier, detail = await self._builtin(ref, arguments, name, call_id)
+        self._check()
         if reply.get("ok") and isinstance(reply.get("content"), str):
             self.seen_urls.add_from(reply["content"])  # what it returned may be read next
         if ref.name == 'handoff' and reply.get('ok'):

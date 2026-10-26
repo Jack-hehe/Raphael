@@ -1,7 +1,21 @@
-// Browser assertions run against the real app after the scene's user interactions.
+﻿// Browser assertions run against the real app after the scene's user interactions.
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if(name.startsWith("p04-")) {
+    const messages=[...document.querySelectorAll('.au-room-thread .message-text')];
+    if(name==='p04-blocked')require(document.querySelector('[data-handoff]').textContent.includes('缺少驗收所需的檔案'),'missing artifact reason is actionable');
+    if(name==='p04-chief-last')require(document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup'),'chief is last');
+    if(name==='p04-status-only')require(!messages.some(message=>message.textContent.includes('正在發言')),'progress never enters final bodies');
+    if(name==='p04-addresses')require(!messages.some(message=>/@(?:\s|$)/u.test(message.textContent)),'no dangling address');
+    if(name==='p04-short')require(document.querySelector('.au-room-wrapup').textContent.includes('沒有可驗收的成果'),'zero results are explicit');
+    if(name==='p04-task-slot'){
+      const form=document.querySelector('.composer[data-task-state="running"]');
+      require(visible(form.querySelector('.cmp-voice'))&&!visible(form.querySelector('.cmp-send')),'only Stop occupies the slot');
+      require(form.querySelector('.cmp-voice').getAttribute('aria-label')==='停止','Stop is accessible');
+    }
+    return {check:name,matched:true};
+  }
   if (name.startsWith("p02-")) {
     const data = window.__look.data, calls = window.__look.calls;
     if (name === "p02-roster") require(calls.some(c => c.method === "members.list"), "shared roster boundary is read");
@@ -212,7 +226,8 @@ export function checkRendered(name) {
   }
   if (name === "room-stop") {
     require(window.__look.calls.some(call => call.method === 'rooms.stop' && call.params.room_id === 1), "stop reaches the core");
-    require(document.querySelector('[data-room-act="stop"]')?.disabled, "stop stays disabled until the speaker finishes");
+    require(!document.querySelector('[data-room-act="stop"]'), "no separate Stop pill remains");
+    require(!document.querySelector('.au-room-pane .composer[data-task-state="running"]'), "terminal snapshot releases Stop");
     return { check: name, stopRequested: true };
   }
   if (name === "room-replies") {

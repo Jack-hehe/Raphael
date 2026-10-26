@@ -782,6 +782,18 @@ CREATE TABLE task_evidence (
 PRAGMA user_version = 31;
 COMMIT;
 """
+_MIGRATIONS[32] = """
+BEGIN;
+ALTER TABLE worker_tasks ADD COLUMN generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE task_evidence ADD COLUMN workspace TEXT;
+CREATE TABLE task_stage_owners (
+    scope_key TEXT NOT NULL, stage_id TEXT NOT NULL, owner_task_id INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued', reason TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY(scope_key, stage_id)
+);
+PRAGMA user_version = 32;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

@@ -67,3 +67,14 @@ test("voice records until manual Escape and learns an edited transcript only on 
 test("WAV encoding produces mono PCM with correct sample rate and clipping",()=>{
  const bytes=wavBytes([new Float32Array([-2,0,2])],16000),view=new DataView(bytes.buffer);expect(new TextDecoder().decode(bytes.slice(0,4))).toBe("RIFF");expect(view.getUint32(24,true)).toBe(16000);expect(view.getUint16(22,true)).toBe(1);expect(view.getInt16(44,true)).toBe(-32768);expect(view.getInt16(48,true)).toBe(32767);
 });
+
+test("task Stop owns the slot through ack, running and waiting, independently of send completion",async()=>{
+ const stopTask=vi.fn().mockResolvedValue(undefined),send=vi.fn().mockResolvedValue(undefined);
+ const view=createChatComposer({placeholder:()=>"Message",send,stopTask});document.body.append(view.el);
+ view.setDraft("Start");view.el.requestSubmit();expect(view.el.dataset.taskState).toBe("ack");
+ await flush();expect(view.el.dataset.taskState).toBe("ack");
+ for(const state of ["running","waiting"] as const){view.setTaskState(state);expect(view.el.querySelector(".cmp-voice")!.getAttribute("aria-label")).toBe("Stop");}
+ view.el.querySelector<HTMLButtonElement>(".cmp-voice")!.click();await flush();expect(stopTask).toHaveBeenCalledOnce();
+ expect(send).toHaveBeenCalledOnce();view.setTaskState("idle");expect(view.el.dataset.taskState).toBe("idle");
+ expect(view.el.querySelector<HTMLElement>(".cmp-voice")!.dataset.tooltip).not.toBe("Stop");
+});

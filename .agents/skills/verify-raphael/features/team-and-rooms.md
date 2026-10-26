@@ -26,8 +26,7 @@ and require owner adjustment before sending. Room turns and exchanges remain out
 history, preview, search, badges and worker context. Reply chips use server-derived source
 authors, including the owner; missing sources display an unavailable label.
 Reply on a member message directs the next owner message to that member; the composer
-shows the recipient and lets the owner cancel the reply. Stop finishes the current speaker
-and marks queued recipients blocked. A new owner message takes priority after the current speaker; prior accepted explicit replies survive.
+shows the recipient and lets the owner cancel the reply. Stop immediately cancels the task tree and blocks queued recipients. Completed actions remain; a deterministic chief summary closes the stopped generation. A new owner message immediately invalidates the previous task generation and blocks its queued reply intents; completed actions are retained.
 
 Team's mention menu follows the typed @ character, including text before it and
 newlines. A mirror copies the field's font, wrapping, padding and scroll offsets;
@@ -95,3 +94,21 @@ live role reasoning or provider acceptance.
 
 Team installs the same custom composer tooltip as member/room conversations and
 hides it on navigation. Every composer-hover scene waits for the visible tooltip.
+
+## P04 evidence, final messages and Stop
+
+Stages have one durable owner; completion requires executor evidence and required artifact bytes.
+Failed acceptance has a named blocked/incomplete stage verdict. Progress is a typed status event,
+never persisted as a message. Terminal publication and its task/outbox event share one transaction.
+The chief waits for accepted replies and child work, then concludes once. Stopped/blocked exchanges receive an atomic deterministic summary after all work is terminal, without another paid call. This includes short
+discussions with zero deliverables. New instructions invalidate prior task generations.
+Room, private and Team composers show Stop in the existing gold slot through acknowledgement,
+running and waiting; task Stop and microphone Stop keep distinct lifecycles.
+
+```powershell
+npm run look -- room-workflow-blocked room-final-owner composer-task-stop room-progress-status-only room-no-dangling-mention room-short-wrapup room-stop room-wrapup running --theme both --width 1120,720,1920x1080
+```
+
+Inspect every sheet and full-size Stop, blocked and short-wrap-up image. These scenes use IPC
+fixtures; P00 S07.short-wrapup, S08.completion and S11 use production loops with offline API/CLI
+brains. Native controller/microphone behavior and paid providers require separate acceptance.

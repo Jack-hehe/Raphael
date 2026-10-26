@@ -47,7 +47,7 @@ BASE = (
 )
 
 SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr,
-                               {1: "team-setup", 2: "roster", 7: "meeting"}.get(i, ""))
+                               {1: "team-setup", 2: "roster", 7: "meeting", 11: "task-stop"}.get(i, ""))
                   for i, (title, prompt, checks, pr) in enumerate(BASE, 1))
 
 
@@ -59,6 +59,10 @@ def cells(registry=(), catalog=(), *, servers=()):
             '現在派工；來源文件的「明早截止、明天中午提交」不是排程。',
             ('dispatch_receipt','immediate_start','work_thread','result_destination','no_implicit_schedule'),
             'P03/P03a','immediate-dispatch' if identifier=='S03' else 'immediate-room-work'))
+    result.append(ScenarioCell('S07.short-wrapup','Short discussion conclusion (P04 scope)',
+        '請簡短回報，然後由幕僚長結論。',('chief_last','single_wrapup','reply_relation'),'P04','short-wrapup'))
+    result.append(ScenarioCell('S08.completion','Evidence completion (P04 scope)',
+        '現在完成工作並回報證據。',('evidence','chief_last','status_only'),'P04','immediate-room-work'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,
                                   "請用 Guardian 服務讀取測試信件；如果無法讀取，用一句話說明所缺的連接或權限，不能宣稱完成。",

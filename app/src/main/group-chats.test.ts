@@ -20,6 +20,19 @@ test("failed send retains the draft and reuses its idempotency key on retry",asy
  api.roomSend.mockRejectedValueOnce(new Error("offline"));await pane();const input=draft("@Alice hello");document.querySelector<HTMLElement>('.cmp-send')!.click();await flush();const id=api.roomSend.mock.calls[0][2];expect(input.value).toBe("@Alice hello");document.querySelector<HTMLElement>('.cmp-send')!.click();await flush();expect(api.roomSend.mock.calls[1][2]).toBe(id);expect(input.value).toBe("");
 });
 
+test("Stop during send acknowledgement also cancels the exchange once accepted",async()=>{
+ let accept!:(value:unknown)=>void;
+ api.roomSend.mockImplementationOnce(()=>new Promise(resolve=>{accept=resolve;}));
+ api.roomStop.mockResolvedValue({stopped:true});await pane();draft("Start work");
+ document.querySelector<HTMLElement>('.cmp-send')!.click();
+ expect(document.querySelector<HTMLElement>('.composer')!.dataset.taskState).toBe('ack');
+ document.querySelector<HTMLButtonElement>('.cmp-voice')!.click();await flush();
+ expect(api.roomStop).toHaveBeenCalledOnce();
+ accept({message_id:1,duplicate:false});await flush();
+ expect(api.roomStop).toHaveBeenCalledTimes(2);
+ expect(document.querySelector<HTMLElement>('.composer')!.dataset.taskState).toBe('idle');
+});
+
 test("generated room names preserve owner edits and creation retries reuse the request",async()=>{
  api.roomsCreate.mockRejectedValueOnce(new Error("offline"));
  await openNewGroupChat();
@@ -161,9 +174,9 @@ test("active exchanges expose stop and Raphael's distinct wrap-up card",async()=
  await pane();expect(document.querySelector('.au-room-wrapup')!.textContent).toContain('Wrap-up');
  expect(document.querySelector('.au-room-wrapup h3')!.textContent).toBe('Conclusion');
  expect(document.querySelector('.au-room-crown')!.getAttribute('aria-label')).toBe('Chief of staff');
- document.querySelector<HTMLElement>('[data-room-act="stop"]')!.click();await flush();expect(api.roomStop).toHaveBeenCalledWith(1);
+ document.querySelector<HTMLElement>('.au-room-pane .composer[data-task-state="running"] .cmp-voice')!.click();await flush();expect(api.roomStop).toHaveBeenCalledWith(1);
  api.roomMessages.mockResolvedValue({messages:[],exchange:{state:'stopped',stop_requested:1}});event({type:'RoomsChanged',room_id:1});await flush();
- expect(document.querySelector('[data-room-act="stop"]')).toBeNull();
+ expect(document.querySelector('.au-room-pane .composer[data-task-state="running"] .cmp-voice')).toBeNull();
 });
 
 test("wrap-up renders three labelled sections and escaped owners without Markdown markers",async()=>{

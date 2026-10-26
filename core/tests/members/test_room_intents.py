@@ -78,7 +78,12 @@ async def test_accepted_intents_become_named_blocks(rig, exchange, action, reaso
     blocked = [i for i in result['exchange']['reply_intents'] if i['state']=='blocked']
     assert [(i['recipient_id'],i['reason']) for i in blocked] == [(ids[1],reason)]
     assert result['exchange']['state'] == 'stopped'
-    assert not any(m['kind']=='wrapup' for m in result['messages'])
+    summaries=[m for m in result['messages'] if m['kind']=='wrapup']
+    assert len(summaries)==1 and summaries[0]['member_id']==0
+    assert result['messages'][-1]['kind']=='wrapup'
+    assert 'Completed actions are preserved' in summaries[0]['text'] or '已完成的動作保留' in summaries[0]['text']
+    await exchange._exchanges.drive(room['id'])
+    assert len([m for m in (await history(rig,room))['messages'] if m['kind']=='wrapup'])==1
 
 
 async def test_restart_settles_completed_source_once_and_preserves_queued_intents(rig, exchange):
@@ -94,6 +99,31 @@ async def test_restart_settles_completed_source_once_and_preserves_queued_intent
     await restored._exchanges.drive(room['id'])
     assert len(rig.background.submitted) == 2
     await restored.aclose()
+
+
+async def test_blocked_wrapup_publication_is_atomic_and_retriable(rig, exchange):
+    room, ids = await team(rig)
+    await send(rig,room,'@Alice inspect')
+    rig.conn.execute("CREATE TRIGGER fail_wrapup BEFORE INSERT ON room_messages WHEN NEW.kind='wrapup' BEGIN SELECT RAISE(ABORT,'fixture publication failure'); END")
+    with pytest.raises(sqlite3.IntegrityError,match='fixture publication failure'):
+        await finish(rig,exchange,'No result',cost=10)
+    assert not rig.conn.execute("SELECT 1 FROM agent_turns WHERE session_id LIKE 'room-stop:%'").fetchone()
+    rig.conn.execute('DROP TRIGGER fail_wrapup')
+    await exchange._exchanges.drive(room['id'])
+    result=await history(rig,room)
+    assert result['messages'][-1]['member_id']==0 and result['messages'][-1]['kind']=='wrapup'
+    assert 'No verified deliverables' in result['messages'][-1]['text'] or '沒有已驗證的交付成果' in result['messages'][-1]['text']
+
+
+async def test_served_mentions_remain_visible_after_the_recipient_is_renamed(rig,exchange):
+    room,ids=await team(rig)
+    await send(rig,room,'@Alice begin')
+    await finish(rig,exchange,'@Bob inspect')
+    await finish(rig,exchange,'Delivered')
+    await finish(rig,exchange,'Conclusion')
+    await rig.call('members.update',{'id':ids[1],'name':'Robert'})
+    result=await history(rig,room)
+    assert any(m['text']=='@Bob inspect' and m['status']=='done' for m in result['messages'])
 
 
 async def test_source_settlement_is_atomic_with_its_reply_intent(rig, exchange):

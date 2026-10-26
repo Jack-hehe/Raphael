@@ -31,7 +31,7 @@ def selected(identifier):
     return next(cell for cell in cells() if cell.id == identifier)
 
 
-@pytest.mark.parametrize('identifier',['S03.immediate-start','S08.immediate-start'])
+@pytest.mark.parametrize('identifier',['S03.immediate-start','S08.immediate-start','S08.completion'])
 @pytest.mark.parametrize('brain',['api','cli'])
 async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,monkeypatch,identifier,brain):
     from raphael_core.agent.cli import loop
@@ -409,5 +409,44 @@ async def test_rpc_cli_brain_reaches_the_production_authenticated_mcp(tmp_path, 
         assert driver.traces[0]["name"] == "routine_create"
         assert driver.recorder.receipts == []
         assert driver.actual_cli_models == ["owner-model"]
+    finally:
+        await driver.aclose()
+
+
+@pytest.mark.parametrize('brain',['api','cli'])
+@pytest.mark.parametrize('identifier',['S07.short-wrapup','S11'])
+async def test_p04_short_wrapup_and_stop_through_production_paths(tmp_path,monkeypatch,brain,identifier):
+    from raphael_core.agent.cli import loop
+    from raphael_core.background.host import WorkerHost
+    from background.conftest import Links
+    model='cli:codex:owner-model?effort=high' if brain=='cli' else 'fake/model'
+    stopping=identifier=="S11"
+    class Client(FakeClient):
+        async def chat_tools(self,**kwargs):
+            tools=sum(message['role']=='tool' for message in kwargs['messages'])
+            calls=[('Guardian__read',{})] if stopping and tools<2 else []
+            self.turns=iter([('已核對目前沒有交付成果。' if not calls else '',calls)])
+            return await super().chat_tools(**kwargs)
+    class Driver:
+        def __init__(self,*args,**kwargs):
+            pass
+        async def run(self,*,endpoint,token,**kwargs):
+            if stopping:
+                async with httpx.AsyncClient() as http:
+                    for index in range(2):
+                        await http.post(endpoint,headers={'Authorization':'Bearer '+token},json={
+                            'jsonrpc':'2.0','id':index,'method':'tools/call',
+                            'params':{'name':'Guardian__read','arguments':{}}})
+            yield Event('final','已核對目前沒有交付成果。')
+        async def interrupt(self):
+            pass
+    monkeypatch.setattr(loop,'Driver',Driver)
+    driver=RpcDriver(tmp_path,model,Client([]),Budget(40),brains=FakeBrains(tmp_path) if brain=='cli' else None)
+    driver.app.background._host=WorkerHost(connect=Links(),grace_s=.1)
+    try:
+        reasons,_=await asyncio.wait_for(driver.execute(selected(identifier)),15)
+        assert not reasons,reasons
+        if stopping:
+            assert any(event[0]=='guardian.stop_timings' for event in driver.events)
     finally:
         await driver.aclose()

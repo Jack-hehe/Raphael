@@ -31,6 +31,7 @@ Use it on the thread that owns `conn` (the event loop). Nothing here logs a task
 import sqlite3
 import hashlib
 import json
+import re
 from pathlib import Path
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -89,6 +90,7 @@ class Task:
     dispatch_policy: str = "immediate"
     schedule_provenance: str = "{}"
     continuation: str | None = None
+    generation: int = 0
 
     @property
     def quiet(self) -> bool:
@@ -141,7 +143,7 @@ _TASK_COLUMNS = (
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
     " announced, rerun_of, member_id, routine_id, scope, room_id, thread_id,"
     " parent_task_id, root_task_id, stage_id, from_member_id, source_turn_id, model_ref, mode,"
-    " done_when, idempotency_key, ready_at_ms, dispatch_policy, schedule_provenance, continuation"
+    " done_when, idempotency_key, ready_at_ms, dispatch_policy, schedule_provenance, continuation, generation"
 )
 _STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason, detail"
 
@@ -189,6 +191,7 @@ class TaskStore:
                 "UPDATE worker_tasks SET state = 'running', started_at_ms = ? WHERE id = ?",
                 (self._now_ms(), task_id),
             )
+            self._conn.execute("UPDATE task_stage_owners SET state='running' WHERE owner_task_id=?",(task_id,))
             self._conn.execute("INSERT INTO task_executions(task_id,attempt,state,effective_model,started_at_ms) "
                 "SELECT id,(SELECT COALESCE(MAX(attempt),0)+1 FROM task_executions WHERE task_id=?),"
                 "'running',model_ref,? FROM worker_tasks WHERE id=?", (task_id,self._now_ms(),task_id))
@@ -201,6 +204,14 @@ class TaskStore:
             if (existing['member_id'],existing['text'],existing['mode'],existing['done_when']) != (assignee,request,mode,done_when):
                 raise Refused('stage_conflict')
             return existing['id'], True
+        scope_key = f"root:{parent.root_task_id or parent.id}" if parent else f"turn:{source.id}"
+        with self._conn:
+            owner = self._conn.execute("SELECT owner_task_id FROM task_stage_owners WHERE scope_key=? AND stage_id=?",
+                                       (scope_key, stage)).fetchone()
+            if owner and (parent is None or owner[0] != parent.id or mode == 'consult'):
+                raise Refused('stage_conflict')
+            if parent and self.get(parent.id).state not in ('running', 'queued'):
+                raise Refused('cancelled')
         now = self._now_ms()
         with self._conn:
             cursor = self._conn.execute("INSERT INTO worker_tasks(created_at_ms,state,session_id,language,text,member_id,"
@@ -211,6 +222,14 @@ class TaskStore:
                  stage,source.member_id,source.id,model,mode,done_when,key,now,
                  json.dumps({'kind':'owner_or_discussion_work','source_turn_id':source.id,'authorization':'immediate_only'})))
             task_id = cursor.lastrowid
+            if owner:
+                changed = self._conn.execute("UPDATE task_stage_owners SET owner_task_id=? WHERE scope_key=? AND stage_id=? AND owner_task_id=?",
+                    (task_id, scope_key, stage, parent.id)).rowcount
+            else:
+                changed = self._conn.execute("INSERT OR IGNORE INTO task_stage_owners(scope_key,stage_id,owner_task_id) VALUES (?,?,?)",
+                    (scope_key, stage, task_id)).rowcount
+            if not changed:
+                raise Refused('stage_conflict')
             self._conn.execute("UPDATE worker_tasks SET root_task_id=COALESCE(root_task_id,id) WHERE id=?", (task_id,))
             cursor = self._conn.execute("INSERT INTO agent_turns(created_at_ms,session_id,question,route,prefix,text,status,"
                 "source,member_id,peer_id,scope,room_id,thread_id,source_turn_id,model) "
@@ -262,8 +281,41 @@ class TaskStore:
             raise ValueError('artifact_outside_workspace')
         digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
         self.record_evidence(task_id,call_id,kind='artifact',uri=artifact.relative_to(root).as_posix(),digest=digest,mime=mime)
+        with self._conn:
+            self._conn.execute("UPDATE task_evidence SET workspace=? WHERE task_id=? AND tool_call_id=? AND uri=?",
+                               (str(root),task_id,call_id,artifact.relative_to(root).as_posix()))
         return digest
 
+    def completion_reason(self, task):
+        """Validate executor receipts and required artifacts; prose alone never proves work."""
+        evidence = self.evidence(task.id)
+        if not evidence:
+            return 'work_without_action'
+        artifacts = [item for item in evidence if item['kind'] == 'artifact']
+        requires_artifact = bool(re.search(r'(?i)\b(html|xlsx|pdf|artifact|file)\b|檔案|產物', task.done_when))
+        if requires_artifact and not artifacts:
+            return 'missing_artifact'
+        for item in artifacts:
+            try:
+                root = Path(item['workspace']).resolve(strict=True)
+                path = (root / item['uri']).resolve(strict=True)
+                if not path.is_relative_to(root) or hashlib.sha256(path.read_bytes()).hexdigest() != item['digest']:
+                    return 'artifact_changed'
+            except (OSError, TypeError, ValueError):
+                return 'missing_artifact'
+        expected = re.findall(r'(?i)(?<![\w/])([\w.-]+\.(?:html|xlsx|pdf|csv|txt|json))(?!\w)',task.done_when)
+        if any(not any(Path(item['uri']).name == name for item in artifacts) for name in expected):
+            return 'missing_artifact'
+        return None
+
+    def invalidate_tree(self, task_id):
+        """Invalidate before cancelling transports so late results cannot dispatch more work."""
+        rows = self._conn.execute("WITH RECURSIVE tree(id) AS (SELECT id FROM worker_tasks WHERE id=? UNION ALL "
+            "SELECT t.id FROM worker_tasks t JOIN tree ON t.parent_task_id=tree.id) SELECT id FROM tree", (task_id,)).fetchall()
+        with self._conn:
+            for row in rows:
+                self._conn.execute("UPDATE worker_tasks SET generation=generation+1 WHERE id=? AND state IN ('queued','running','waiting')", (row[0],))
+        return [row[0] for row in rows]
 
     def set_state(self, task_id: int, state: str) -> None:
         """Move a task that is not over to another state that is not over: it pauses
@@ -291,6 +343,7 @@ class TaskStore:
         text: str,
         detail: str | None,
         reason: str | None,
+        publish=None,
     ) -> None:
         if state not in FINAL_STATES:
             raise ValueError(f"{state!r} is not a state a task ends in")
@@ -301,6 +354,12 @@ class TaskStore:
                 " report_text = ?, report_detail = ?, reason = ? WHERE id = ?",
                 (state, self._now_ms(), prefix, text, detail, reason, task_id),
             )
+            stage_state = 'done' if state == 'done' else 'cancelled' if state == 'cancelled' else 'incomplete' if reason in (
+                'missing_artifact','artifact_changed','work_without_action','missing_terminal','dangling_mention','child_work_incomplete') else 'blocked'
+            self._conn.execute('UPDATE task_stage_owners SET state=?,reason=? WHERE owner_task_id=?',
+                               (stage_state,reason or '',task_id))
+            if publish is not None:
+                publish()
             self._conn.execute("UPDATE task_executions SET state=?,ended_at_ms=?,outcome=? WHERE task_id=? AND state='running'",
                                (state,self._now_ms(),reason or state,task_id))
             self._conn.execute("INSERT OR IGNORE INTO task_outbox "
@@ -506,6 +565,7 @@ class TaskStore:
         # Connections do not enable SQLite foreign keys; cleanup must be explicit.
         self._conn.execute("DELETE FROM task_inbox WHERE parent_task_id=? OR event_id IN "
                            "(SELECT event_id FROM task_outbox WHERE task_id=?)", (task_id,task_id))
+        self._conn.execute('DELETE FROM task_stage_owners WHERE owner_task_id=?', (task_id,))
         for table in ('task_executions','task_evidence','task_outbox'):
             self._conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
 

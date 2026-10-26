@@ -632,6 +632,7 @@ class AgentService:
             "agent.history.search": self._history_search,
             "agent.history.clear": self._history_clear,
             "agent.history.retract": self._history_retract,
+            "agent.history.stop": self._history_stop,
             "agent.history.delete": self._history_delete,
             "conversations.list": self._conversations_list,
             "quota.list": self._quota_list,
@@ -3030,6 +3031,17 @@ class AgentService:
             self._outcome(pending, "negative", phrase(pending.language, "expired"), "expired")
 
     # --- agent.cancel ---------------------------------------------------------------------------
+
+    async def _history_stop(self, params):
+        session = _str(params, 'session_id')
+        member = self._member_param(params)
+        rows = self._conn.execute("SELECT member_id,scope FROM agent_turns WHERE session_id=?", (session,)).fetchall()
+        if any(row['member_id'] != member or row['scope'] != 'private' for row in rows):
+            raise invalid_params('stop must identify this private conversation')
+        await self._cancel({'session_id':session})
+        if self._background:
+            await self._background.cancel_session(session)
+        return {'stopped':True}
 
     async def _cancel(self, params: dict) -> dict:
         session_id = _str(params, "session_id")

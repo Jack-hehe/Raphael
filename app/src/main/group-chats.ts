@@ -181,7 +181,8 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
   let exchange:RoomExchange|null|undefined,replyTo:RoomMessage|undefined,stopping=false;
   let handoffs: HandoffView[] = [];
   const drafts=new Map<number,string>();
-  const composer=createChatComposer({placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;composer.seedDictation(text);}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files,replyTo?.id]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();await api.roomSend(id,text,requestId,getLocale(),files,replyTo?.id);requestId=undefined;if(room?.id===id){replyTo=undefined;await refresh();}changed();}});
+  const sendingRooms=new Set<number>(),pendingStops=new Set<number>();
+  const composer=createChatComposer({stopTask:stopRoom,placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;composer.seedDictation(text);}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files,replyTo?.id]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();sendingRooms.add(id);try{await api.roomSend(id,text,requestId,getLocale(),files,replyTo?.id);if(pendingStops.delete(id))await api.roomStop(id);}finally{sendingRooms.delete(id);pendingStops.delete(id);}requestId=undefined;if(room?.id===id){replyTo=undefined;await refresh();}changed();}});
   composer.input.addEventListener("input", () => teamMentions(composer.input, list, room?.member_ids));
   composer.input.id="room-message";el.querySelector('.ra-dock')!.append(composer.el);
   composer.el.querySelector('.cmp-quote')!.addEventListener('click',e=>{if((e.target as Element).closest('[data-room-act="cancel-reply"]')){replyTo=undefined;draw();composer.input.focus();}});
@@ -191,7 +192,8 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     if(!room)return;
     el.querySelector('.au-room-heading')!.innerHTML=`<b>${esc(room.name)}</b><div class="au-room-faces">${room.member_ids.map(id=>{const m=person(id);return m?`<span class="au-room-participant">${faceHTML(m,24)}${id===0?`<span class="au-room-crown" role="img" aria-label="${esc(t("rooms.chief"))}">${ico("crown")}</span>`:""}</span>`:"";}).join("")}</div>`;
     const active=exchange&&["queued","running"].includes(exchange.state);
-    status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):active?btn(esc(t(exchange?.stop_requested?"rooms.stopping":"rooms.stop")),"sm",` data-room-act="stop"${stopping||exchange?.stop_requested?" disabled":""}`):"";
+    composer.setTaskState(active || handoffs.some(task=>["queued","running","waiting"].includes(task.state)) ? "running" : sendingRooms.has(room.id) ? "ack" : "idle");
+    status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):"";
     const quote=composer.el.querySelector<HTMLElement>('.cmp-quote')!;quote.hidden=!replyTo;
     quote.innerHTML=replyTo?`<span>${esc(t("rooms.replyTo",{p0:person(replyTo.member_id)?.name??t("members.title")}))}</span>${iconButton("x",t("common.cancel"),' data-room-act="cancel-reply"')}`:"";
     const notices = (exchange?.reply_intents ?? []).filter(intent => intent.state === "blocked");
@@ -220,6 +222,7 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     scroll.scrollTop=follow?scroll.scrollHeight:top;composer.draw();onRender();
   }
   async function refresh():Promise<void>{const mine=++generation,id=room?.id;if(!opened||!id)return;try{const [people,rooms,history]=await Promise.all([api.membersList(getLocale()),api.roomsList(),api.roomMessages(id)]);if(mine!==generation||!opened)return;const found=rooms.rooms.find(r=>r.id===id);if(!found){close();toaster.info(t("rooms.deleted"));return;}list=people;room=found;exchange=history.exchange;handoffs=history.handoffs??[];const first=history.messages[0]?.id??Infinity;messages=[...messages.filter(m=>m.id<first),...history.messages];draw();}catch(error){if(opened&&mine===generation)toaster.info(describeError(error));}}
+  async function stopRoom():Promise<void>{if(!room||stopping)return;stopping=true;const id=room.id;if(sendingRooms.has(id))pendingStops.add(id);try{await api.roomStop(id);await refresh();}finally{stopping=false;}}
   function close():void{if(room)drafts.set(room.id,composer.input.value);opened=false;generation++;el.hidden=true;clearRoomSelection();onClose();}
   el.querySelector('[data-room-menu]')!.addEventListener('click',e=>{if(room)roomActions(e.currentTarget as HTMLElement,room,()=>void refresh(),close);});
   el.addEventListener('click',e=>{const target=(e.target as Element).closest<HTMLElement>('[data-room-act],[data-act]');if(!target)return;const act=target.dataset.roomAct??target.dataset.act;if(["turn","copy-message","copy-code","attachment-open","older"].includes(act??""))e.stopPropagation();

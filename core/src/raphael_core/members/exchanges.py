@@ -187,7 +187,10 @@ class RoomExchanges:
                             routing=json.dumps(asdict(decision)))
 
     async def start(self, room, origin, language, attachments, recipient=None):
-        # A new owner message takes priority after the current speaker, without replaying old work.
+        if hasattr(self.rooms._background, 'cancel_room'):
+            self.stop(room['id'])
+            await self.rooms._background.cancel_room(room['id'])
+        # A new owner message takes priority without replaying completed actions.
         with self.conn:
             # Owner interjections take priority, but already accepted explicit addresses survive.
             self.conn.execute("UPDATE room_exchanges SET chime_ins = ?, pending = '[]', reason='interjection' "
@@ -242,6 +245,7 @@ class RoomExchanges:
                 row = self.conn.execute("SELECT * FROM room_exchanges WHERE room_id = ? AND state IN ('queued','running') "
                                         "ORDER BY (active_turn IS NULL), origin_message_id DESC LIMIT 1", (room_id,)).fetchone()
                 if row is None:
+                    self.rooms._close_stopped(room_id)
                     return
                 exchange = Exchange(**dict(row))
                 room_row = self.conn.execute("SELECT * FROM rooms WHERE id = ?", (room_id,)).fetchone()
@@ -265,9 +269,15 @@ class RoomExchanges:
                         continue
                     pending = json.loads(exchange.pending or "[]")
                     spoken = set(json.loads(exchange.spoken)) | {message["member_id"]}
+                    projected = self.rooms._message(message)
+                    if projected['status'] == 'incomplete':
+                        self.block(exchange.origin_message_id, projected['reason'])
+                        self.update(exchange.origin_message_id,state='stopped',active_turn=None,reason=projected['reason'])
+                        self.rooms._changed(room_id)
+                        continue
                     if turn.status == 'done' and message['kind'] != 'wrapup' and not exchange.stop_requested and not is_pass(turn.detail or turn.text):
                         self.intents(exchange.origin_message_id, message['id'],
-                            [i for i in self.rooms._targets(room, turn.detail or turn.text) if i != message['member_id']])
+                            [i for i in self.rooms._targets(room, projected['text']) if i != message['member_id']])
                     with self.conn:
                         self.conn.execute("UPDATE room_messages SET exchange_settled = 1 WHERE id = ?", (message["id"],))
                         self.conn.execute("UPDATE room_exchanges SET active_turn=NULL, cost=?, spoken=? WHERE origin_message_id=?",
@@ -345,6 +355,11 @@ class RoomExchanges:
                                      (room_id, exchange.origin_message_id)).fetchone():
                     self.update(exchange.origin_message_id, pending=json.dumps(planned))
                     continue
+                work = self.conn.execute("SELECT state FROM worker_tasks WHERE room_id=? AND source_turn_id IN "
+                    "(SELECT turn_id FROM room_messages WHERE origin_message_id=?) AND mode IS NOT NULL",
+                    (room_id,exchange.origin_message_id)).fetchall()
+                if not pending and any(row['state'] in ('queued','running','waiting') for row in work):
+                    return
                 wrapup = (exchange.turns_taken >= 1 and 0 in ids and not exchange.wrapup_sent and
                           not pending and not self.conn.execute("SELECT 1 FROM room_reply_intents WHERE origin_message_id=? AND state='blocked'", (exchange.origin_message_id,)).fetchone())
                 if wrapup:
