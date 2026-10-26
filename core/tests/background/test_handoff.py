@@ -73,6 +73,25 @@ async def test_a_result_reaches_the_room_after_its_worker_already_replied_there(
     assert tuple(result)==(target.id,asked,'Consulted answer')
 
 
+async def test_one_undeliverable_result_leaves_the_others_and_is_delivered_once_fixed(make_rig):
+    rig=make_rig()
+    target,source=setup(rig)
+    rig.client.replies.extend([report('First answer'),report('Second answer'),report('Later task')])
+    first=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='one'),source_turn_id=source.id,language='en').data['task_id']
+    second=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='two'),source_turn_id=source.id,language='en').data['task_id']
+    rig.conn.execute(f"CREATE TRIGGER fail_delivery BEFORE INSERT ON room_messages WHEN NEW.request_id='handoff-{first}' "
+                     "BEGIN SELECT RAISE(ABORT,'fixture delivery failure'); END")
+    later=rig.submit()
+    await until(lambda:rig.task(later).state=='done')
+    delivered=lambda task:rig.conn.execute('SELECT delivered_at_ms FROM task_outbox WHERE event_id=?',(f'{task}:result',)).fetchone()[0]
+    assert rig.task(first).state==rig.task(second).state=='done'
+    assert delivered(first) is None and delivered(second) is not None
+    rig.conn.execute('DROP TRIGGER fail_delivery')
+    rig.service._deliver_handoffs()
+    assert delivered(first) is not None
+    assert rig.conn.execute('SELECT text FROM room_messages WHERE request_id=?',(f'handoff-{first}',)).fetchone()[0]=='First answer'
+
+
 async def test_receipt_dedupe_stage_conflict_and_removed_member(make_rig):
     rig=make_rig()
     target,source=setup(rig)

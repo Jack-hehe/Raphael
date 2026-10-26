@@ -115,7 +115,7 @@ from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import NOT_MADE_WHILE_WAITING, MemoryReader, RunLimits, TaskRun, Waiting
 from ..agent.toolpick import ToolPicker
 from .snapshot import BUILTIN_SERVER, refine, take_snapshot
-from .tasks import QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
+from .tasks import FINAL_STATES, QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -584,36 +584,42 @@ class BackgroundService:
 
     def _deliver_handoffs(self):
         """At-least-once outbox delivery with an atomic, idempotent room/result inbox projection."""
-        conn = self._metrics_conn
         parents = set()
-        for event in conn.execute('SELECT * FROM task_outbox WHERE delivered_at_ms IS NULL ORDER BY created_at_ms,event_id').fetchall():
-            task = self._store.get(event['task_id'])
-            source = self._history.get(event['destination_turn_id'])
-            allowed = source is not None and self._speaker(task.member_id) is not None and task.reason != 'member_unknown_or_removed'
-            if task.room_id is not None:
-                allowed = allowed and self._handoff_member_allowed(task.room_id,task.member_id) and self._handoff_member_allowed(task.room_id,task.from_member_id)
-            disposition = 'delivered' if allowed else 'withheld'
-            with conn:
-                if event['type']=='result':
-                    conn.execute('INSERT OR IGNORE INTO task_inbox(event_id,parent_task_id) VALUES (?,?)',(event['event_id'],task.parent_task_id))
-                    if allowed and task.room_id is not None:
-                        source_message=conn.execute('SELECT id,member_id,origin_message_id FROM room_messages WHERE turn_id=? AND room_id=? AND thread_id=?',
-                            (task.source_turn_id,task.room_id,task.thread_id)).fetchone()
-                        conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id,reply_to,reply_to_member,origin_message_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
-                            (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id),
-                             source_message['id'] if source_message else None,source_message['member_id'] if source_message else None,
-                             source_message['origin_message_id'] if source_message else None))
-                    if task.parent_task_id:
-                        parents.add(task.parent_task_id)
-                conn.execute('UPDATE task_outbox SET delivered_at_ms=?,disposition=? WHERE event_id=? AND delivered_at_ms IS NULL', (self._now_ms(),disposition,event['event_id']))
-            if allowed:
-                self._notify('agent.turn',{'turn_id':source.id,'member_id':source.member_id})
-                if task.room_id:
-                    self._notify('rooms.changed',{'room_id':task.room_id})
+        for event in self._metrics_conn.execute('SELECT * FROM task_outbox WHERE delivered_at_ms IS NULL ORDER BY created_at_ms,event_id').fetchall():
+            try:
+                self._deliver(event, parents)
+            except Exception as exc:  # stays undelivered for a later delivery; the other events go on
+                logger.warning("Could not deliver hand-off event %s: %s", event['event_id'], type(exc).__name__)
         for parent in parents:
             if self._store.resume_from_inbox(parent):
                 self._queue.append(parent)
                 self._changed(parent,QUEUED)
+
+    def _deliver(self, event, parents):
+        conn = self._metrics_conn
+        task = self._store.get(event['task_id'])
+        source = self._history.get(event['destination_turn_id'])
+        allowed = source is not None and self._speaker(task.member_id) is not None and task.reason != 'member_unknown_or_removed'
+        if task.room_id is not None:
+            allowed = allowed and self._handoff_member_allowed(task.room_id,task.member_id) and self._handoff_member_allowed(task.room_id,task.from_member_id)
+        disposition = 'delivered' if allowed else 'withheld'
+        with conn:
+            if event['type']=='result':
+                conn.execute('INSERT OR IGNORE INTO task_inbox(event_id,parent_task_id) VALUES (?,?)',(event['event_id'],task.parent_task_id))
+                if allowed and task.room_id is not None:
+                    source_message=conn.execute('SELECT id,member_id,origin_message_id FROM room_messages WHERE turn_id=? AND room_id=? AND thread_id=?',
+                        (task.source_turn_id,task.room_id,task.thread_id)).fetchone()
+                    conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id,reply_to,reply_to_member,origin_message_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
+                        (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id),
+                         source_message['id'] if source_message else None,source_message['member_id'] if source_message else None,
+                         source_message['origin_message_id'] if source_message else None))
+            conn.execute('UPDATE task_outbox SET delivered_at_ms=?,disposition=? WHERE event_id=? AND delivered_at_ms IS NULL', (self._now_ms(),disposition,event['event_id']))
+        if event['type']=='result' and task.parent_task_id:
+            parents.add(task.parent_task_id)
+        if allowed:
+            self._notify('agent.turn',{'turn_id':source.id,'member_id':source.member_id})
+            if task.room_id:
+                self._notify('rooms.changed',{'room_id':task.room_id})
 
     def handoff_views(self, *, room_id=None, thread_id=None, source_turn_id=None):
         rows = self._metrics_conn.execute("SELECT id FROM worker_tasks WHERE mode IS NOT NULL AND "
@@ -865,10 +871,15 @@ class BackgroundService:
                 raise
             except Exception as exc:  # a bug here must not stop the tasks after this one
                 logger.warning("A background task failed unexpectedly: %s", type(exc).__name__)
-                self._conclude(
-                    task, None, "failed", PREFIXES[task.language].negative,
-                    phrase(task.language, "error"), None, "error",
-                )  # fmt: skip
+                try:
+                    current = self._store.get(task.id)
+                    if current is None or current.state not in FINAL_STATES:  # an end already written stays
+                        self._conclude(
+                            task, None, "failed", PREFIXES[task.language].negative,
+                            phrase(task.language, "error"), None, "error",
+                        )  # fmt: skip
+                except Exception as again:
+                    logger.warning("Could not end a background task that failed: %s", type(again).__name__)
             finally:
                 self._executing = False
 
