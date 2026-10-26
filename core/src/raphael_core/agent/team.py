@@ -80,6 +80,8 @@ HANDOFF_REFUSALS = {
     "member_removed_from_room": "That colleague is not in this room; hand the work to a member of this room, or do it yourself.",
     "bad_arguments": "Give member_id as a colleague's id, request, stage_id and done_when as short non-empty text, and mode work or consult.",
     "handoff_depth_limit": "This work has been handed on too many times; do this part yourself.",
+    "handoff_cycle": "That colleague is already waiting on this work; finish it with what you have and name anything missing in your result.",
+    "meeting_in_progress": "A meeting is under way here: answer in your reply and give a colleague the floor with an @mention; hand-offs wait until the meeting has concluded.",
     "worker_disabled": "Background work is switched off, so nothing can be handed off; do the work yourself or tell the owner.",
     "source_unavailable": "Work cannot be handed off from this conversation; do it yourself or reply here.",
     "blocked": "Hand-offs are not allowed here; do the work yourself or reply here.",

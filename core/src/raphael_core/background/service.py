@@ -545,6 +545,8 @@ class BackgroundService:
             return refused('bad_arguments')
         if member == speaker.id:
             return refused('self_handoff')
+        if source.scope == 'room' and self._in_meeting(source.id):
+            return refused('meeting_in_progress')
         target = self._speaker(member)
         if target is None:
             return refused('member_unknown_or_removed')
@@ -557,11 +559,17 @@ class BackgroundService:
         # Bound durable task chains independently from conversational @ reply hops.
         ancestor = parent
         depth = 0
+        waiting = set()
         while ancestor is not None:
             depth += 1
             if depth >= 16:
                 return refused('handoff_depth_limit')
+            waiting.add(ancestor.from_member_id)
             ancestor = self._store.get(ancestor.parent_task_id) if ancestor.parent_task_id else None
+        # Asking back someone who waits on this chain bounced one request between members live;
+        # a stopped task is refused as stopped when its hand-off is accepted below.
+        if member in waiting and parent.state in ('queued', 'running'):
+            return refused('handoff_cycle')
         model = getattr(target, 'model', None) or self._settings.get('agent_model') or DEFAULTS['agent_model']
         try:
             task_id, duplicate = self._store.accept_handoff(source=source,parent=parent,assignee=member,
@@ -578,6 +586,13 @@ class BackgroundService:
         return ToolResult(name,True,{'task_id':task_id,'state':task.state,'duplicate':duplicate,
             'work_turn_id':task.turn_id,'root_task_id':task.root_task_id,'ready_at_ms':task.ready_at_ms,
             'dispatch_policy':'immediate','member_id':member})
+
+    def _in_meeting(self, turn_id):
+        """Whether a room turn speaks in a live exchange of a room that a moderator runs."""
+        row = self._metrics_conn.execute(
+            "SELECT r.roles, m.kind FROM room_messages m JOIN room_exchanges e ON e.origin_message_id=m.origin_message_id "
+            "JOIN rooms r ON r.id=m.room_id WHERE m.turn_id=? AND e.state IN ('queued','running')", (turn_id,)).fetchone()
+        return bool(row) and row['kind'] == 'message' and 'moderator' in json.loads(row['roles'] or '{}').values()
 
     def _handoff_member_allowed(self, room_id, member):
         room = self._metrics_conn.execute('SELECT * FROM rooms WHERE id=?',(room_id,)).fetchone()

@@ -19,14 +19,20 @@ from raphael_core.worker.loop import Outcome
 from .conftest import call, report, turn, until
 
 
+async def unused(*args,**kwargs):
+    pytest.fail('handoff must use the shared background contract')
+
+
+def team_of(target,*others):
+    found = {person.id:person for person in (RAPHAEL,target,*others)}
+    return SimpleNamespace(speaker=found.get,roster=lambda:list(found.values()),has_members=lambda:True,
+        named_in=lambda text:[target])
+
+
 def setup(rig, *, model='fake/model', room=True):
     member = MemberStore(rig.conn).create_member(name='Writer',role='Writer')
     target = Speaker(id=member.id,name=member.name,model=model)
-    team = SimpleNamespace(speaker=lambda mid: RAPHAEL if mid==0 else target if mid==target.id else None,
-        roster=lambda:[RAPHAEL,target],has_members=lambda:True,named_in=lambda text:[target])
-    async def unused(*args,**kwargs):
-        pytest.fail('handoff must use the shared background contract')
-    rig.service.use_team(team,unused)
+    rig.service.use_team(team_of(target),unused)
     history = AgentHistory(rig.conn,rig.wall)
     room_id = thread_id = None
     if room:
@@ -38,6 +44,16 @@ def setup(rig, *, model='fake/model', room=True):
         route='room' if room else 'answer',source='room' if room else 'app',scope='room' if room else 'private',
         room_id=room_id,thread_id=thread_id,prefix='',text='',status='running')
     return target,history.get(source)
+
+
+def colleague(rig,source,target,name):
+    """Another member of the setup room, so nested work need not go back to someone waiting upstream."""
+    member = MemberStore(rig.conn).create_member(name=name,role=name)
+    other = Speaker(id=member.id,name=member.name,model=target.model)
+    rig.service.use_team(team_of(target,other),unused)
+    with rig.conn:
+        rig.conn.execute('INSERT INTO room_members VALUES (?,?)',(source.room_id,other.id))
+    return other
 
 
 def args(target,**changes):
@@ -116,6 +132,34 @@ async def test_a_refused_handoff_tells_the_model_what_to_do_instead_of_a_code(ma
     assert 'You cannot hand work to yourself; reply in the room or hand it to a colleague.' in shown[0]
     assert 'self_handoff' not in shown[0]
     assert 'self_handoff' in caplog.text
+
+
+async def test_a_handoff_back_to_a_colleague_waiting_upstream_is_refused(make_rig):
+    # Live, members bounced one verification request between them ten times.
+    rig=make_rig()
+    target,source=setup(rig)
+    first=rig.service.handoff(RAPHAEL,args(target,mode='consult'),source_turn_id=source.id,language='en')
+    back=rig.service.handoff(target,args(target,member_id=0,stage_id='back'),source_turn_id=first.data['work_turn_id'],language='en')
+    assert (back.ok,back.error)==(False,'handoff_cycle') and back.instruction
+
+
+async def test_a_meeting_turn_gives_the_floor_with_a_mention_instead_of_a_handoff(make_rig):
+    # Live, a moderator handed the next speaker a work task and the meeting became a chain of hand-offs.
+    rig=make_rig()
+    target,source=setup(rig)
+    with rig.conn:
+        rig.conn.execute('UPDATE rooms SET roles=? WHERE id=?',(json.dumps({str(target.id):'moderator'}),source.room_id))
+        origin=rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,text,created) VALUES (?,?,'Debate the launch',1)",
+            (source.room_id,source.thread_id)).lastrowid
+        rig.conn.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language) VALUES (?,?,'running','en')",
+            (origin,source.room_id))
+        rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,origin_message_id,kind) "
+            "VALUES (?,?,0,'',2,?,?,'message')",(source.room_id,source.thread_id,source.id,origin))
+    refused=rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='en')
+    assert (refused.ok,refused.error)==(False,'meeting_in_progress') and '@mention' in refused.instruction
+    with rig.conn:
+        rig.conn.execute("UPDATE room_exchanges SET state='done' WHERE origin_message_id=?",(origin,))
+    assert rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='en').ok
 
 
 async def test_receipt_dedupe_stage_conflict_and_removed_member(make_rig):
@@ -329,7 +373,8 @@ async def test_deleting_running_assignee_withholds_any_late_result(make_rig):
 async def test_failed_nested_work_cannot_be_reported_as_success(make_rig):
     rig=make_rig()
     target,source=setup(rig)
-    rig.client.replies.extend([turn(calls=[call('handoff',args(target,member_id=0,stage_id='verify'))]),
+    checker=colleague(rig,source,target,'Checker')
+    rig.client.replies.extend([turn(calls=[call('handoff',args(checker,stage_id='verify'))]),
         report('我明早會查核。'),report('全部完成。')])
     accepted=rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='zh-TW')
     parent=accepted.data['task_id']
