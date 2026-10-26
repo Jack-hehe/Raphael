@@ -74,6 +74,16 @@ def names_raphael(text: str) -> bool:
     return any(name.casefold() in folded for name in RAPHAEL_NAMES.values())
 
 
+# What an asked member is told, by either way of asking (`ask_member`, a hand-off in consult mode).
+# Live, a member asked by a teammate refused what the owner had told it, not knowing whose behalf
+# the question was on.
+CONSULTED = (
+    "Answer it from what you know: what the owner told you in your own conversation (shown here, "
+    "with history_search for earlier turns) and your notes (memory_read). It is the owner's own "
+    "information, shared within the owner's team. Give only what answers the question, never your "
+    "conversation itself; if you do not know, say so plainly."
+)
+
 # What the model is told when the hand-off tool refuses, by the refusal's code.
 HANDOFF_REFUSALS = {
     "self_handoff": "You cannot hand work to yourself; reply in the room or hand it to a colleague.",

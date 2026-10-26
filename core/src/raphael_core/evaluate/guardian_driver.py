@@ -478,11 +478,11 @@ class RpcDriver:
         ids = await self.seed_team()
         marketing, mail = ids[0], ids[1]
         code, other = 'NX-' + self.nonce, 'TR-' + self.nonce[::-1]
-        await self.ask(f'新品代號是 {code}，這件事目前只有你知道。另外，我週五的私人行程代碼是 {other}。', member=marketing)
+        await self.ask(f'下週上市的新品代號是 {code}。另外，我週五要看的房子編號是 {other}。', member=marketing)
         await self.settled()
-        result = await self.ask('請向行銷詢問新品代號，問到後告訴我代號。', member=mail)
+        result = await self.ask('請向行銷詢問下週上市的新品代號，問到後告訴我。', member=mail)
         await self.settled()
-        reasons = []
+        reasons = list((await self.owner_view(marketing))[1])
         asked, answered = self.consulted(marketing, mail, code)
         if not answered:
             reasons.append('consult_answer_missing')
@@ -513,7 +513,7 @@ class RpcDriver:
         ids = await self.seed_team()
         marketing, pm = ids[0], ids[3]
         brand, secret = 'BC-' + self.nonce, 'PV-' + self.nonce[::-1]
-        told = await self.ask(f'請記住，這是全團隊都要知道的共同資訊：我們的品牌主色是金色，識別碼 {brand}。')
+        told = await self.ask(f'請記住，這是全團隊都要知道的共同資訊：我們的品牌主色是金色，色號 {brand}。')
         await self.settled()
         reasons = []
         shared = [note for note in self.app.memory.shared.all() if brand in note.description + note.body]
@@ -525,22 +525,24 @@ class RpcDriver:
         listed = (await self.app.call('memory.list', {'space': 'shared', 'member_id': marketing}))['memories']
         if shared and not any(item['name'] == shared[0].name and item['member'] == 0 for item in listed):
             reasons.append('provenance_not_listed')
-        await self.ask('我們的品牌主色和識別碼是什麼？', member=marketing)
+        await self.ask('我們的品牌主色和色號是什麼？', member=marketing)
         await self.settled()
         if brand not in await self.said_to(marketing):
             reasons.append('global_recall')
-        await self.ask(f'這是只給你的私密代號：{secret}。', member=marketing)
+        await self.ask(f'跟你說一件我自己的事：我週五要看的房子編號是 {secret}。', member=marketing)
         await self.settled()
-        await self.ask('行銷的私密代號是什麼？只根據你自己知道的回答，這次不要問任何人。', member=pm)
+        await self.ask('我週五要看的房子編號是多少？只根據你自己知道的回答，這次不要問任何人。', member=pm)
         await self.settled()
         if secret in await self.said_to(pm) or self.consulted(marketing, pm, '')[0]:
             reasons.append('private_isolation')
         if any(secret in note.description + note.body for note in [*self.app.memory.shared.all(), *self.app.memory.store_for(pm).all()]):
             reasons.append('private_fact_shared')
-        result = await self.ask('請向行銷詢問他的私密代號，問到後告訴我代號。', member=pm)
+        result = await self.ask('請向行銷詢問我週五要看的房子編號，問到後告訴我。', member=pm)
         await self.settled()
         if not self.consulted(marketing, pm, secret)[1] or secret not in await self.said_to(pm):
             reasons.append('authorized_consult')
+        for member in (0, marketing):
+            reasons += (await self.owner_view(member))[1]
         return reasons, {**result, 'viewer': pm}
 
     async def meeting_scenario(self):

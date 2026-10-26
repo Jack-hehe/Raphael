@@ -223,6 +223,7 @@ from .targets import OpenTargets
 from .team import (
     ANSWER_MAX_CHARS,
     ASK_MEMBER,
+    CONSULTED,
     CREATE_MEMBER,
     REQUEST_MAX_CHARS,
     TEAM_SERVER,
@@ -1481,6 +1482,8 @@ class AgentService:
                     memory_index=index, narrated=True,
                 )
             system += roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings)
+            if ask.exchange_speakers is not None:
+                system += "\nA colleague, another of the owner's assistants, asks you this for the owner. " + CONSULTED
             if ask.speaker.is_raphael:
                 system += LEADERSHIP
                 if ask.speaker.name:

@@ -96,7 +96,7 @@ from ..agent.plugins import preview
 from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
 from ..agent.safety import asked_with
 from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
-from ..agent.team import Team, handoff_refused, team_tools_for, roster_prompt
+from ..agent.team import CONSULTED, Team, handoff_refused, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
 from ..brain.providers.base import ModelProvider
 from ..brain.settings import DEFAULTS, SettingsStore, api_model
@@ -317,7 +317,8 @@ def _prompts(
             )
         else:
             blocks = f"<memory_index>\n{neutralize(memory_index)}\n</memory_index>"
-        parts.append(f"{whose}, one line each, the name last; read one with memory_read:\n{blocks}")
+        parts.append(f"{whose}, one line each, the name last; read one with memory_read when its line "
+                     f"lacks the detail asked for:\n{blocks}")
     parts.append(f"<task>\n{neutralize(text)}\n</task>")
     if attachments:
         files = "\n".join(
@@ -1065,9 +1066,7 @@ class BackgroundService:
         if task.mode == 'consult':
             asker = self._speaker(task.from_member_id) if task.from_member_id is not None else None
             system += ('\nThe task is a question from your colleague ' + neutralize(asker.name if asker and asker.name else 'Raphael')
-                       + ', not from the owner. Answer it from what you know: your notes (memory_read), your conversation '
-                       'with the owner shown above and history_search for earlier turns. Give only what answers the '
-                       'question, never your conversation itself; if you do not know, say so plainly.')
+                       + ', another of the owner\'s assistants, who asks it for the owner. ' + CONSULTED)
         if answering:
             system += ('\nYou consulted colleagues for this request and their answers are in the results below. '
                        'Answer the owner now with what they said, in your own words; do not ask them again.')

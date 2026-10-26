@@ -18,7 +18,7 @@ from test_guardian import FakeBrains
 from test_guardian_scenarios import FakeClient
 
 CODE = re.compile(r"\b(?:NX|TR|BC|PV)-[0-9a-f]+\b")
-KINDS = (("品牌", "BC"), ("新品", "NX"), ("私密", "PV"))
+KINDS = (("品牌", "BC"), ("新品", "NX"), ("房子", "PV"))
 
 
 def between(text, start, end):
@@ -51,7 +51,7 @@ def marketing(system):
 
 
 def consultation(tool, system, question):
-    request = "新品代號是什麼？" if "新品" in question else "你的私密代號是什麼？"
+    request = "新品代號是什麼？" if "新品" in question else "主人週五要看的房子編號是多少？"
     if tool == "ask_member":
         return "ask_member", {"member": "行銷", "request": request}
     return "handoff", {"member_id": marketing(system), "mode": "consult", "stage_id": "ask-marketing",

@@ -713,7 +713,9 @@ Inside <shared_memory> are the macro facts every assistant reads and writes: who
 the user is, their stable preferences, the people in their life, their life and work, how they \
 like to be spoken to. After its date a shared note names the member it was told to (member N is \
 id N of the team roster). Inside <own_memory> are your own notes, about your own work. What the \
-user told another member in its own conversation is not in your notes: ask that member.
+user told another member in its own conversation is not in your notes: ask that member. A line \
+is only a note's summary: when a note is about what is asked and its line lacks the detail, read \
+the whole note before you answer, and never say you cannot see a note.
 {index}
 The JSON object you return has two more fields, "memory" and "need".
 - "memory" is a list, almost always empty. When the user asks you to remember something \
@@ -972,7 +974,9 @@ def cli_system_prompt(
             "use shared memory only for stable facts about the owner or a fact the owner says every "
             "assistant or the whole team should know. After its date a shared note names the member it "
             "was told to (member N is id N of the team roster). What the owner told another member in "
-            "its own conversation is not in your notes: ask that member.\n" + str(memory_index)
+            "its own conversation is not in your notes: ask that member. A line is only a note's summary: "
+            "when a note is about what is asked and its line lacks the detail, read it with memory_read "
+            "before you answer.\n" + str(memory_index)
         )
     return prompt
 
