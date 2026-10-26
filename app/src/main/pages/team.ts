@@ -19,12 +19,14 @@ import "../automations.css";
 export function createTeamPage(app: AppContext): Page {
   const el = document.createElement("section"); el.className = "au-page team-page page-agent";
   el.innerHTML = `<header class="page-head"></header><div class="team-board-scroll"><div class="team-board"></div></div><div class="team-bottom"><div class="team-composer"></div><div class="team-zoom"></div></div>`;
-  const composer = createChatComposer({ placeholder: () => t("team.composer"), send });
+  const composer = createChatComposer({ placeholder: () => t("team.composer"), send, stopTask });
   el.querySelector(".team-composer")!.append(composer.el);
   const hideTooltip = messageTooltip(el);
   const board = el.querySelector<HTMLElement>(".team-board")!, input = composer.input;
   let list: MembersList = { members: [], groups: [] }, model = "", zoom = 1, visible = false, loads = 0, sending = false;
-  let requestId: string | undefined, retryText = "";
+  let requestId: string | undefined, retryText = "", activeRoom: number | undefined, stopPending = false;
+  async function stopTask():Promise<void>{stopPending=true;if(activeRoom){await api.roomStop(activeRoom);await syncTask();}}
+  async function syncTask():Promise<void>{const id=activeRoom;if(!id)return;const snapshot=await api.roomMessages(id);if(id!==activeRoom)return;composer.setTaskState(snapshot.exchange && ["queued","running"].includes(snapshot.exchange.state) || snapshot.handoffs?.some(task=>["queued","running","waiting"].includes(task.state)) ? "running" : sending ? "ack" : "idle");}
   function card(m: Member): string {
     return `<article class="team-member"${m.id ? ` draggable="true" data-team-member="${m.id}"` : ""}><div class="team-member-head">${faceHTML(m, 40)}<div><b>${esc(m.name)}</b><span>${esc(m.id === 0 ? t("team.chief") : m.role)}</span></div></div><footer>${btn(ico("chat") + esc(t("team.chat")), "sm", ` data-team="chat" data-member="${m.id}"`)}<span class="team-model" title="${esc(model)}">${modelMark({ id: model })}<span>${esc(model.split("/").pop() ?? model)}</span></span></footer></article>`;
   }
@@ -61,9 +63,9 @@ export function createTeamPage(app: AppContext): Page {
   async function send(text: string, files: WireAttachment[]): Promise<void> {
     if ((!text && !files.length) || sending) return;
     if (JSON.stringify([text,files]) !== retryText) requestId = undefined;
-    retryText = JSON.stringify([text,files]); requestId ??= crypto.randomUUID(); sending = true; draw();
-    try { const { room } = await api.roomsCreate({ name: t("rooms.team"), member_ids: list.members.map(m => m.id), is_team: true }); await api.roomSend(room.id, text, requestId, getLocale(), files); requestId = undefined; void openGroupChat(room.id); }
-    finally { sending = false; draw(); }
+    retryText = JSON.stringify([text,files]); requestId ??= crypto.randomUUID(); sending = true; activeRoom=undefined;stopPending=false;draw();
+    try { const { room } = await api.roomsCreate({ name: t("rooms.team"), member_ids: list.members.map(m => m.id), is_team: true }); activeRoom=room.id;await api.roomSend(room.id, text, requestId, getLocale(), files);if(stopPending){await api.roomStop(room.id);stopPending=false;}await syncTask(); requestId = undefined; void openGroupChat(room.id); }
+    finally { sending = false; draw();void syncTask().catch(error=>toaster.info(describeError(error))); }
   }
   el.addEventListener("click", e => {
     const target = (e.target as Element).closest<HTMLElement>("[data-team]"); if (!target) return;
@@ -86,7 +88,7 @@ export function createTeamPage(app: AppContext): Page {
   board.addEventListener("dragend", () => { const target=board.querySelector<HTMLElement>(".team-drop-empty");if(target)target.hidden=true; });
   board.addEventListener("dragover", e => { if ((e.target as Element).closest("[data-team-group]") && e.dataTransfer?.types.includes("application/x-raphael-member")) e.preventDefault(); });
   board.addEventListener("drop", e => { const g = (e.target as Element).closest<HTMLElement>("[data-team-group]"); if (!g) return; e.preventDefault(); const id = Number(e.dataTransfer?.getData("application/x-raphael-member")); if (!id || !list.members.some(m => m.id === id)) return; void api.membersUpdate(id, { group_id: g.dataset.teamGroup === "none" ? null : Number(g.dataset.teamGroup) }).then(() => load()).catch(error => toaster.info(describeError(error))); });
-  app.onEvent(event => { if (visible && ["MembersChanged", "ConnectionsChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
+  app.onEvent(event => { if(event.type==="RoomsChanged")void syncTask().catch(error=>toaster.info(describeError(error))); if (visible && ["MembersChanged", "ConnectionsChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
   onLocaleChange(() => { if (visible) { draw(); void load(); } });
   return { id: "team", el, show() { visible = true; draw(); void load(); }, hide() { visible = false; loads++; hideTooltip(); } };
 }

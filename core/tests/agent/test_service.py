@@ -42,6 +42,7 @@ METHODS = [
     "agent.history.list",
     "agent.history.retract",
     "agent.history.search",
+    "agent.history.stop",
     "agent.speak",
     "agent.speech.status",
     "brains.cli",
@@ -1679,3 +1680,25 @@ async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(
     client.decisions.append(decision("chat"))
     client.replies.append(spoken("答", "好。"))
     assert (await rig.ask("你好"))["text"] == "好。"
+
+
+async def test_stop_keeps_history_and_cancels_only_the_named_session(rig):
+    stopped=[]
+    async def cancel_session(session):
+        stopped.append(session)
+    rig.service._background.cancel_session=cancel_session
+    turn=rig.history.add(session_id='typed-stop',question='Work',route='answer',prefix='',text='Completed action',status='done',source='app')
+    assert (await rig.call('agent.history.stop',{'session_id':'typed-stop','member_id':0}))['stopped']
+    assert stopped==['typed-stop']
+    assert rig.history.get(turn).text=='Completed action'
+    assert rig.service._was_cancelled('typed-stop')
+
+
+async def test_private_stop_rejects_a_room_source(rig):
+    with rig.conn:
+        room=rig.conn.execute("INSERT INTO rooms(name,created) VALUES ('Stop scope',1)").lastrowid
+    thread=rig.conn.execute('SELECT id FROM room_threads WHERE room_id=?',(room,)).fetchone()[0]
+    rig.history.add(session_id='room-task',question='Work',route='room',prefix='',text='',status='running',scope='room',room_id=room,thread_id=thread)
+    with pytest.raises(RpcError):
+        await rig.call('agent.history.stop',{'session_id':'room-task','member_id':0})
+    assert not rig.service._was_cancelled('room-task')

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, expect, test, vi } from "vitest";
 import type { AppContext, Member, Routine } from "./types";
-const api = vi.hoisted(() => ({ membersList:vi.fn(), routinesList:vi.fn(), routineRuns:vi.fn(), routinesCreate:vi.fn(), routinesUpdate:vi.fn(), routinesDelete:vi.fn(), keepAwakeGet:vi.fn(), keepAwakeSet:vi.fn(), roomsList:vi.fn(), settingsGet:vi.fn(), groupsCreate:vi.fn(), groupsUpdate:vi.fn(), groupsDelete:vi.fn(), membersUpdate:vi.fn(), roomsCreate:vi.fn(), roomSend:vi.fn(), roomMessages:vi.fn() }));
+const api = vi.hoisted(() => ({ membersList:vi.fn(), routinesList:vi.fn(), routineRuns:vi.fn(), routinesCreate:vi.fn(), routinesUpdate:vi.fn(), routinesDelete:vi.fn(), keepAwakeGet:vi.fn(), keepAwakeSet:vi.fn(), roomsList:vi.fn(), settingsGet:vi.fn(), groupsCreate:vi.fn(), groupsUpdate:vi.fn(), groupsDelete:vi.fn(), membersUpdate:vi.fn(), roomsCreate:vi.fn(), roomSend:vi.fn(), roomStop:vi.fn(), roomMessages:vi.fn() }));
 vi.mock("./api",()=>api);
 import { openRoutineDialog } from "./routine-dialog";
 import { occurrences } from "./automation-calendar";
@@ -183,4 +183,20 @@ test("routine destination uses an app dropdown",()=>{
 test("empty ungrouped column is available only while dragging",async()=>{
  const page=createTeamPage(app());document.body.append(page.el);page.show();await flush();const target=page.el.querySelector<HTMLElement>('.team-drop-empty')!;expect(target.hidden).toBe(true);
  const card=page.el.querySelector<HTMLElement>('[data-team-member="1"]')!;card.dispatchEvent(new Event('dragstart',{bubbles:true}));expect(target.hidden).toBe(false);card.dispatchEvent(new Event('dragend',{bubbles:true}));expect(target.hidden).toBe(true);page.hide();
+});
+
+
+test("Team Stop during room creation survives acknowledgement and reaches only its room",async()=>{
+ let created!:(value:unknown)=>void;
+ api.roomsCreate.mockImplementationOnce(()=>new Promise(resolve=>{created=resolve;}));
+ api.roomSend.mockResolvedValue({message_id:1,duplicate:false});
+ api.roomStop.mockResolvedValue({stopped:true});api.roomMessages.mockResolvedValue({messages:[],exchange:{state:'stopped'}});
+ const page=createTeamPage(app());document.body.append(page.el);page.show();await flush();
+ const input=page.el.querySelector<HTMLTextAreaElement>('textarea')!;input.value='Start work';input.dispatchEvent(new Event('input'));
+ page.el.querySelector<HTMLButtonElement>('.cmp-send')!.click();
+ expect(page.el.querySelector<HTMLElement>('.composer')!.dataset.taskState).toBe('ack');
+ page.el.querySelector<HTMLButtonElement>('.cmp-voice')!.click();await flush();expect(api.roomStop).not.toHaveBeenCalled();
+ created({room:{id:17,name:'Team',member_ids:[0,1,2],created:1,is_team:1}});await flush();await flush();
+ expect(api.roomStop).toHaveBeenCalledExactlyOnceWith(17);
+ expect(page.el.querySelector<HTMLElement>('.composer')!.dataset.taskState).toBe('idle');page.hide();
 });

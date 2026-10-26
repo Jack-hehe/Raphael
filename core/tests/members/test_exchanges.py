@@ -48,8 +48,9 @@ async def send(rig, room, text, key="one", **patch):
 
 
 async def finish(rig, exchange, text, cost=.001):
-    turn = rig.background.attached[-1][1]
+    task_id, turn = rig.background.attached[-1]
     AgentHistory(rig.conn).resolve(turn, prefix="", text=text, status="done", cost_usd=cost)
+    rig.background.store.finish(task_id,'done',prefix='',text=text,detail=None,reason=None)
     exchange.turn_arrived(turn)
     await exchange.wait_idle()
 

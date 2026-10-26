@@ -512,3 +512,10 @@
 @media (prefers-reduced-motion: reduce) {
   .draft-more-toggle .steps-chev .i, .draft-done-sum .steps-chev .i { transition: none !important; }
 }
+
+/* Active work owns the existing gold slot, including drafts and acknowledgement. */
+.composer[data-task-state]:not([data-task-state="idle"]) .cmp-pair .cmp-send { display: none; }
+/* The gold emblem turns into a gold Stop button of the same size, so it still reads as that one control. */
+.composer[data-task-state]:not([data-task-state="idle"]) .cmp-pair .cmp-voice { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r-pill); background: var(--rg-btn); color: var(--rg-on); }
+.composer[data-task-state]:not([data-task-state="idle"]) .cmp-pair .cmp-voice:disabled { opacity: .6; }
+.composer[data-task-state]:not([data-task-state="idle"]) .cmp-voice .i { width: 20px; height: 20px; fill: currentColor; stroke: none; }

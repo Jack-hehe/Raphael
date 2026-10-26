@@ -181,15 +181,15 @@ async def test_the_report_is_in_the_language_of_the_request(make_rig):
     assert "Traditional Chinese" in rig.client.chat_calls[0]["messages"][0]["content"]
 
 
-async def test_public_progress_reaches_the_linked_turn_before_the_next_model_call(make_rig, conn):
+async def test_public_progress_reaches_status_only_before_the_next_model_call(make_rig, conn):
     rig = make_rig()
     history = AgentHistory(conn, rig.wall)
     turn_id = history.add(session_id="s", question=TASK_TEXT, route="delegate", prefix="",
                           text="", status="running")
 
     async def finish(**kwargs):
-        assert history.messages([turn_id])[turn_id][0]["text"] == "《Notice. I will check the time.》"
-        assert any(method == "agent.turn" and data["turn_id"] == turn_id for method, data in rig.notifications)
+        assert not history.messages([turn_id])[turn_id]
+        assert any(method == "worker.progress" and data["turn_id"] == turn_id for method, data in rig.notifications)
         assert "I will check the time." in str(kwargs["messages"])
         return report("Done.")
 
@@ -197,7 +197,7 @@ async def test_public_progress_reaches_the_linked_turn_before_the_next_model_cal
     task_id = rig.submit()
     rig.service.attach_turn(task_id, turn_id)
     await rig.wait_for_reports()
-    assert [m["kind"] for m in history.messages([turn_id])[turn_id]] == ["progress", "reply"]
+    assert [m["kind"] for m in history.messages([turn_id])[turn_id]] == ["reply"]
 
 
 async def test_the_context_is_the_last_turns_of_the_conversation_without_the_task_itself(
@@ -247,12 +247,13 @@ def test_a_long_report_is_one_line_and_the_rest_goes_to_the_detail():
     assert len(reply.text) <= 81 and reply.detail == "字" * 200
 
 
-async def test_a_report_with_no_words_is_the_fixed_line_that_the_task_is_complete(make_rig):
+async def test_a_report_with_no_words_is_incomplete_instead_of_claiming_success(make_rig):
     rig = make_rig()
     rig.client.replies = [turn("   ")]
-    rig.submit()
+    task_id = rig.submit()
     [done] = await rig.wait_for_reports()
-    assert (done["state"], done["text"]) == ("done", phrase("en", "worker_done"))
+    assert (done["state"], done["text"]) == ("failed", phrase("en", "error"))
+    assert rig.task(task_id).reason == 'missing_terminal'
 
 
 # --- the limits -----------------------------------------------------------------------------------

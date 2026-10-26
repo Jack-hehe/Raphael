@@ -30,6 +30,15 @@ export function installMock(fixture, config = {}, target = window) {
     runningTurn.messages = runningTurn.messages.filter(message => message.kind !== "reply");
     runningTurn.text = "";
   }
+  if (variant.p04Blocked) {
+    data.roomHandoffs=[{...data.roomHandoff,state:"failed",reason:"missing_artifact",result:"",evidence:[]}];
+    data.messages.at(-1).text="尚未取得檔案，目前沒有可驗收結果。";
+    data.messages.push({...data.roomWrapupMessage,reply_to:null,reply_to_member:null,text:"### 結論\n目前沒有可驗收的成果。\n\n### 待決定\n小晴的檔案尚未完成，請決定是否重試。\n\n### 下一步\n- 小晴：補齊檔案後重新驗收。"});
+  }
+  if (variant.p04Short) {
+    data.messages=[data.messages[0],{...data.messages[1],text:"目前沒有交付成果，需要先取得來源權限。"},
+      {...data.roomWrapupMessage,reply_to:null,reply_to_member:null,text:"### 結論\n目前沒有可驗收的成果。\n\n### 待決定\n請提供來源權限。\n\n### 下一步\n- 小晴：取得權限後處理。"}];
+  }
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
   if (variant.p03Handoff) {
     const task = { ...data.roomHandoff, state: variant.p03Handoff };
@@ -151,7 +160,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "rooms.create": { const room = { ...p, id: nextId(data.rooms), created: data.now, group_id: p.group_id ?? null, is_team: Number(p.is_team ?? false), default_responder: p.default_responder ?? "auto" }; data.rooms.push(room); return { room }; }
       case "rooms.update": return { room: update(data.rooms, p.room_id, p) };
       case "rooms.delete": data.rooms = data.rooms.filter(item => item.id !== p.room_id); return { deleted: true };
-      case "rooms.stop": { for (const exchange of data.roomExchanges.filter(item => item.room_id === p.room_id && ["running", "queued"].includes(item.state))) exchange.stop_requested = 1; notify("RoomsChanged", { room_id: p.room_id }); return { stopped: true }; }
+      case "rooms.stop": { for (const exchange of data.roomExchanges.filter(item => item.room_id === p.room_id && ["running", "queued"].includes(item.state))) exchange.stop_requested = 1; for(const exchange of data.roomExchanges.filter(item=>item.room_id===p.room_id)){exchange.state="stopped";exchange.active_turn=null;}for(const message of data.messages.filter(item=>item.room_id===p.room_id&&item.status==="running")){message.status="error";message.text="已停止工作。";}for(const task of data.roomHandoffs.filter(item=>["queued","running","waiting"].includes(item.state)))task.state="cancelled";data.messages.push({...data.roomWrapupMessage,id:nextId(data.messages),reply_to:null,reply_to_member:null,text:"### 結論\n已停止本次工作，已完成的動作保留。\n\n### 待決定\n尚未完成的工作已取消。\n\n### 下一步\n等待你的新指示。"});notify("RoomsChanged", { room_id: p.room_id }); return { stopped: true }; }
       case "rooms.send": { const message = { id: nextId(data.messages), room_id: p.room_id, member_id: null, text: p.text, request_id: p.request_id, status: "done", created: data.now, reply_to: p.reply_to ?? null, turn_id: null, reply_to_member: data.messages.find(item => item.id === p.reply_to)?.member_id ?? null, origin_message_id: nextId(data.messages), kind: "message" }; data.messages.push(message); return { message_id: message.id, duplicate: false }; }
       case "brains.cli": return { clis: data.clis };
       case "brains.cli_disconnect": {

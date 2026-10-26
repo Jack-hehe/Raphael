@@ -274,3 +274,132 @@ async def test_failed_nested_work_cannot_be_reported_as_success(make_rig):
     assert rig.task(parent).reason=='child_work_incomplete'
     [child]=rig.conn.execute('SELECT * FROM worker_tasks WHERE parent_task_id=?',(parent,)).fetchall()
     assert child['reason']=='work_without_action'
+
+
+async def test_required_artifact_and_modified_artifact_cannot_complete(make_rig,tmp_path):
+    rig=make_rig()
+    target,source=setup(rig)
+    task_id,_=rig.service._store.accept_handoff(source=source,parent=None,assignee=target.id,model='fake/model',
+        request='Write the report',stage='artifact',mode='work',done_when='A verified HTML file',language='en')
+    store=rig.service._store
+    store.record_evidence(task_id,'read',kind='tool_receipt',uri='read',digest='receipt',mime='text/plain')
+    assert store.completion_reason(store.get(task_id))=='missing_artifact'
+    artifact=tmp_path/'report.html'
+    artifact.write_text('<p>verified</p>',encoding='utf8')
+    store.verify_artifact(task_id,'write',artifact,workspace=tmp_path,mime='text/html')
+    assert store.completion_reason(store.get(task_id)) is None
+    artifact.write_text('changed',encoding='utf8')
+    assert store.completion_reason(store.get(task_id))=='artifact_changed'
+    artifact.unlink()
+    assert store.completion_reason(store.get(task_id))=='missing_artifact'
+
+
+async def test_stage_owner_cas_prevents_two_sources_claiming_one_stage(make_rig):
+    rig=make_rig()
+    target,source=setup(rig)
+    store=rig.service._store
+    parent=rig.submit()
+    rig.service._queue.remove(parent)
+    rig.service.attach_turn(parent,source.id)
+    store.start(parent)
+    first,_=store.accept_handoff(source=source,parent=store.get(parent),assignee=target.id,model='fake/model',
+        request='Work',stage='one-owner',mode='work',done_when='Receipt',language='en')
+    other=replace(source,id=source.id+100)
+    from raphael_core.background.tasks import Refused
+    with pytest.raises(Refused,match='stage_conflict'):
+        store.accept_handoff(source=other,parent=store.get(parent),assignee=0,model='fake/model',
+            request='Duplicate owner',stage='one-owner',mode='work',done_when='Receipt',language='en')
+    assert rig.conn.execute('SELECT owner_task_id FROM task_stage_owners').fetchone()[0]==first
+
+
+@pytest.mark.parametrize('brain',['api','cli'])
+async def test_stop_tree_preserves_receipts_and_rejects_late_terminal(make_rig,monkeypatch,brain):
+    rig=make_rig()
+    model='cli:codex:gpt-5.6-terra' if brain=='cli' else 'fake/model'
+    SettingsStore(rig.conn).set('agent_model',model)
+    target,source=setup(rig,model=model)
+    started=asyncio.Event()
+    async def late(**kwargs):
+        started.set()
+        await asyncio.Event().wait()
+    if brain=='api':
+        rig.client.replies.extend([turn(calls=[call('handoff',args(target))]),turn(calls=[call('local_time',{})]),late])
+    else:
+        rig.service.use_cli(object())
+        async def work(loop):
+            if loop.member_id==0:
+                await loop._tool('handoff','handoff',args(target))
+            else:
+                assert (await loop._tool('clock','local_time',{})).ok
+                started.set()
+                await asyncio.Event().wait()
+        monkeypatch.setattr(CliLoop,'_work',work)
+    parent=rig.submit(model=model)
+    rig.service.attach_turn(parent,source.id)
+    await asyncio.wait_for(started.wait(),5)
+    [child]=rig.service._store.handoffs(source.id)
+    evidence=rig.service._store.evidence(child.id)
+    assert evidence
+    run=rig.service._run
+    assert (await rig.service._cancel({'task_id':parent}))['cancelled']
+    await until(lambda:rig.task(child.id).state=='cancelled')
+    assert rig.task(parent).state=='cancelled'
+    assert rig.task(parent).generation>0 and rig.task(child.id).generation>0
+    rig.service._conclude_run(child,run,{'status':'done','final':'Late result @Writer'})
+    assert rig.task(child.id).state=='cancelled'
+    assert rig.service._store.evidence(child.id)==evidence
+    refused=rig.service.handoff(target,args(target,member_id=0,stage_id='late'),source_turn_id=child.turn_id,language='en')
+    assert not refused.ok and refused.error=='cancelled'
+
+
+async def test_terminal_publication_rolls_back_task_history_and_outbox_together(make_rig,monkeypatch):
+    rig=make_rig()
+    target,source=setup(rig)
+    store=rig.service._store
+    task_id,_=store.accept_handoff(source=source,parent=None,assignee=target.id,model='fake/model',
+        request='Work',stage='atomic',mode='consult',done_when='Answer',language='en')
+    import sqlite3
+    def broken():
+        rig.conn.execute("UPDATE agent_turns SET text='partial' WHERE id=?",(store.get(task_id).turn_id,))
+        raise sqlite3.OperationalError('injected publication failure')
+    with pytest.raises(sqlite3.OperationalError):
+        store.finish(task_id,'done',prefix='',text='terminal',detail=None,reason=None,publish=broken)
+    assert store.get(task_id).state=='queued'
+    assert AgentHistory(rig.conn).get(store.get(task_id).turn_id).text==''
+    assert not rig.conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result'",(task_id,)).fetchone()
+
+
+async def test_room_progress_is_status_only_and_dangling_final_is_never_published(make_rig):
+    rig=make_rig()
+    target,source=setup(rig)
+    async def response(**kwargs):
+        task=rig.service._store.get(rig.service._run.task_id)
+        for index in range(3):
+            rig.service._progress(task,f'Progress chunk {index}')
+        return report('Delivered @')
+    rig.client.replies.append(response)
+    accepted=rig.service.handoff(RAPHAEL,args(target,mode='consult'),source_turn_id=source.id,language='en')
+    await until(lambda:rig.task(accepted.data['task_id']).state=='failed')
+    task=rig.task(accepted.data['task_id'])
+    assert task.reason=='dangling_mention'
+    assert len([event for event in rig.notifications if event[0]=='worker.progress'])==3
+    saved=AgentHistory(rig.conn).messages([task.turn_id])[task.turn_id]
+    assert all(message['kind']!='progress' and 'Delivered @' not in message['text'] for message in saved)
+    assert all('Delivered @' not in row[0] for row in rig.conn.execute('SELECT text FROM room_messages'))
+
+
+async def test_failed_terminal_transaction_never_emits_a_success_event(make_rig,monkeypatch):
+    rig=make_rig()
+    target,source=setup(rig)
+    store=rig.service._store
+    task_id,_=store.accept_handoff(source=source,parent=None,assignee=target.id,model='fake/model',
+        request='Work',stage='publication',mode='consult',done_when='Answer',language='en')
+    import sqlite3
+    def fail(*args,**kwargs):
+        raise sqlite3.OperationalError('publication unavailable')
+    monkeypatch.setattr(rig.service._history,'publish_terminal',fail)
+    before=len(rig.notifications)
+    rig.service._conclude(store.get(task_id),None,'done','','Delivered',None,None)
+    assert store.get(task_id).state=='queued'
+    assert not rig.notifications[before:]
+    assert not rig.conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result'",(task_id,)).fetchone()

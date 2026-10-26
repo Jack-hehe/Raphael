@@ -8,6 +8,12 @@ const team = [page("team"), wait(".team-member"), check("team-header")];
 const tools = [...calendar, { action: "calendar-tools" }, check("calendar-tools")];
 const groupMenu = [...team, click('[data-team="group-menu"]')];
 export default [
+  scene("room-workflow-blocked", "Missing artifact has a named incomplete reason", [room(1),click('[data-handoff] summary'),check('p04-blocked')], {p04Blocked:true}),
+  scene("room-final-owner", "Chief is last after delivered work", [room(1),check('room-wrapup'),check('p04-chief-last')], {p03Handoff:'done',roomWrapup:true}),
+  scene("room-progress-status-only", "Work progress stays in its status row", [room(1),check('room-thinking'),check('p04-status-only')], {roomThinking:true}),
+  scene("room-no-dangling-mention", "Published final has no incomplete address", [room(1),check('p04-addresses')]),
+  scene("room-short-wrapup", "Short blocked discussion closes honestly with zero deliverables", [room(1),wait('.au-room-wrapup'),check('p04-short')], {p04Short:true}),
+
   ...["queued", "running", "result", "failed"].map(state => scene(`room-handoff-${state}`, `Durable work ${state}`, [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: state === "result" ? "done" : state })),
   scene("room-immediate-work", "Assigned work starts immediately", [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: "running" }),
   scene("room-source-dates-not-schedule", "Document deadlines never defer assigned work", [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: "running", p03SourceDates: true }),
@@ -71,7 +77,7 @@ export default [
   scene("room-reply-source-missing", "Deleted reply source stays unavailable", [room(1), check("room-reply-source-missing")], { roomMissingSource: true }),
   scene("room-reply-send", "Reply to a specific member through the composer", [room(1), hover('[data-room-message="2"] .chat-message'), click('[data-room-message="2"] [data-room-act="reply"]'), click('[data-room-act="cancel-reply"]'), check("room-reply-cancel"), click('[data-room-message="2"] [data-room-act="reply"]'), type('#room-message', '請補充檢查結果。'), key("Enter"), check("room-reply-send")]),
   scene("room-thinking", "One speaking row for queued member replies", [room(1), wait(".au-room-thinking"), check("room-thinking")], { roomThinking: true }),
-  scene("room-stop", "Stop after the current speaker", [room(1), wait('[data-room-act="stop"]'), click('[data-room-act="stop"]'), check("room-stop")], { roomThinking: true }),
+  scene("room-stop", "Stop immediately through the composer slot", [room(1), wait('.au-room-pane .composer[data-task-state="running"] .cmp-voice'), click('.au-room-pane .cmp-voice'), check("room-stop")], { roomThinking: true }),
   scene("room-row-menu", "Room row actions, with header actions on compact screens", [{ action: "room-row-menu", id: 1 }, check("room-row-menu")]),
   ...["rename", "members", "delete"].map(action => scene(`room-${action}`, `Room ${action} dialog`, [room(1), click("[data-room-menu]"), click(`[data-pick="${action}"]`)])),
   scene("room-hover", "Room answer toolbar", [room(1), hover(".au-room-thread .ra .chat-message")]),

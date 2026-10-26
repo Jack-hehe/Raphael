@@ -80,7 +80,7 @@ import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, GroupDraft, Memb
 import { createFirstBot } from "../first-bot";
 import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
-import { composerHTML, openComposerMenu } from "../chat-composer";
+import { composerHTML, drawTaskSlot, openComposerMenu } from "../chat-composer";
 import { bindComposerLearning, learnComposerCorrections } from "../composer-learning";
 import type { DictationBaseline } from "../composer-learning";
 import { createProblemNotice } from "../problem-notice";
@@ -683,6 +683,10 @@ export function createAgent(app: AppContext): Page {
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
     selectQuestion();
+    const active = outgoing.some(belongs) || turns.some(turn=>turn.status==="running" || turn.status==="confirm" || isLive(turn.task) || turn.task?.state==="waiting");
+    voiceButton.innerHTML = avatarHTML({size:32,avatar:null});
+    voiceButton.setAttribute("aria-label",t("agent.voice"));
+    drawTaskSlot(composer, active ? question ? "waiting" : outgoing.some(belongs) ? "ack" : "running" : "idle");
     firstBot.sync(inRaphael() && members.member().profile_ready === false && isEmpty() && !question && !pending);
     hero.hidden = hi.hidden = !firstBot.el.hidden;
     const home = empty.hidden ? dock : slot;
@@ -698,7 +702,7 @@ export function createAgent(app: AppContext): Page {
       if (voice.isUp) voice.drop();
       askCard.hidden = true;
       delete askCard.dataset.id;
-      composer.hidden = true;
+      composer.hidden = false;
       if (draftPanel.el.parentElement !== cardHome) cardHome.append(draftPanel.el);
       draftPanel.sync(question, answering);
       return;
@@ -708,7 +712,7 @@ export function createAgent(app: AppContext): Page {
     askCard.classList.toggle("is-member", !inRaphael());
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
     askCard.hidden = !asking;
-    composer.hidden = asking || !firstBot.el.hidden;
+    composer.hidden = !firstBot.el.hidden;
     if (!asking) {
       delete askCard.dataset.id;
       return;
@@ -1162,7 +1166,9 @@ export function createAgent(app: AppContext): Page {
    * The picture flies at once; if the app does not start listening (it is busy with something
    * else, say), it comes back down.
    */
+  let taskStopPressed=false;
   function voiceDown(): void {
+    if(composer.dataset.taskState && composer.dataset.taskState!=="idle"){taskStopPressed=true;void stopComposerTask().catch(error=>toaster.info(describeError(error)));return;}
     if (question) return;
     pressedMember = memberId();
     const starting = !listening;
@@ -1183,7 +1189,7 @@ export function createAgent(app: AppContext): Page {
       toaster.info(describeError(err));
     });
   }
-  const voiceUp = (): void => void sendVoice("up", pressedMember).catch(() => {});
+  const voiceUp = (): void => {if(taskStopPressed){taskStopPressed=false;return;}void sendVoice("up", pressedMember).catch(() => {});};
 
   /** A click on the flyer: in toggle mode, a second press of the key ends the recording. */
   async function endVoice(): Promise<void> {
@@ -1661,6 +1667,15 @@ export function createAgent(app: AppContext): Page {
     const member = memberId(), epoch = attachmentEpoch;
     const draft = await draftFor(source.turn);
     if (memberId() === member && attachmentEpoch === epoch) restoreDraft({ ...draft, replacing: source.turn.id });
+  }
+
+  async function stopComposerTask(): Promise<void> {
+    const task=turns.find(turn=>isLive(turn.task)||turn.task?.state==="waiting")?.task;
+    if(task){await api.workerCancel(task.id);void load(false);return;}
+    const turn=turns.find(turn=>turn.status==="running" || turn.status==="confirm");
+    const request=outgoing.find(belongs)?.requestId ?? turn?.session_id;
+    if(request)await api.agentStop(request,memberId());
+    void load(false);
   }
 
   async function cancelMessage(control?: HTMLElement): Promise<void> {

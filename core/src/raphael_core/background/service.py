@@ -597,8 +597,12 @@ class BackgroundService:
                 if event['type']=='result':
                     conn.execute('INSERT OR IGNORE INTO task_inbox(event_id,parent_task_id) VALUES (?,?)',(event['event_id'],task.parent_task_id))
                     if allowed and task.room_id is not None:
-                        conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id) VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
-                            (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id)))
+                        source_message=conn.execute('SELECT id,member_id,origin_message_id FROM room_messages WHERE turn_id=? AND room_id=? AND thread_id=?',
+                            (task.source_turn_id,task.room_id,task.thread_id)).fetchone()
+                        conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id,reply_to,reply_to_member,origin_message_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
+                            (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id),
+                             source_message['id'] if source_message else None,source_message['member_id'] if source_message else None,
+                             source_message['origin_message_id'] if source_message else None))
                     if task.parent_task_id:
                         parents.add(task.parent_task_id)
                 conn.execute('UPDATE task_outbox SET delivered_at_ms=?,disposition=? WHERE event_id=? AND delivered_at_ms IS NULL', (self._now_ms(),disposition,event['event_id']))
@@ -625,7 +629,8 @@ class BackgroundService:
                 'state':'withheld' if withheld else task.state,'reason':task.reason,'created_at_ms':task.created_at_ms,
                 'ready_at_ms':task.ready_at_ms,'dispatch_policy':task.dispatch_policy,'mode':task.mode,
                 'result':(task.report_detail or task.report_text or '') if not withheld and task.state=='done' else '',
-                'evidence':self._store.evidence(task.id) if not withheld else []})
+                'evidence':self._store.evidence(task.id) if not withheld else [],
+                'completion_state':(stage['state'] if (stage:=self._metrics_conn.execute('SELECT state FROM task_stage_owners WHERE owner_task_id=?',(task.id,)).fetchone()) else task.state)})
         return result
 
     def attach_turn(self, task_id: int, turn_id: int) -> None:
@@ -1542,12 +1547,7 @@ class BackgroundService:
     def _progress(self, task: Task, text: str) -> None:
         if task.id in self._discarded or not self._has_linked_turn(task):
             return
-        prefix = PREFIXES[task.language].notice if task.member_id == 0 else ""
-        try:
-            self._history.add_message(task.turn_id, "progress", compose(prefix, text, None))
-        except sqlite3.Error as exc:
-            logger.warning("Could not save public progress: %s", type(exc).__name__)
-        self._notify("agent.turn", {"turn_id": task.turn_id, "member_id": task.member_id})
+        self._notify('worker.progress', {'task_id':task.id,'turn_id':task.turn_id,'room_id':task.room_id,'text':text,'kind':'progress'})
 
     def _conclude_run(self, task: Task, run: TaskRun, reply: dict) -> None:
         """Turn how the worker said the task ended into the task's state and report."""
@@ -1555,24 +1555,40 @@ class BackgroundService:
         status, kind = reply.get("status"), reply.get("kind")
         steps = str(run.tool_calls)
         notice, negative = PREFIXES[language].notice, PREFIXES[language].negative
+        current = self._store.get(task.id)
+        if current is None or current.state in ('done','failed','limit','cancelled','interrupted'):
+            return
+        if (run.cancelled and not run.timed_out) or current.generation != run.generation:
+            status = 'cancelled'
         if status == "done":
+            from .final import validate_terminal
+            names,wrapup=None,task.room_id is None
+            if task.room_id is not None and self._team is not None:
+                names=[speaker.name for speaker in self._team.roster() if speaker.id!=task.member_id and self._handoff_member_allowed(task.room_id,speaker.id)]
+                if task.member_id!=0:
+                    names+=['Raphael','拉斐爾','ラファエル']
+                names+=['everyone','所有人','全員']
+                message=self._metrics_conn.execute('SELECT kind FROM room_messages WHERE turn_id=?',(task.turn_id,)).fetchone()
+                wrapup=task.mode is not None or bool(message and message['kind']=='wrapup')
+            report = report_from(str(reply.get('final') or ''),language,plain=task.member_id!=0)
+            terminal = validate_terminal((report.detail or report.text) if report else None,names=names,wrapup=wrapup)
+            if report:
+                for line in [report.text,*report.messages]:
+                    checked=validate_terminal(line,names=names,wrapup=wrapup)
+                    if checked.reason:
+                        terminal=checked
+                        break
+            if terminal.reason:
+                self._conclude(task,run,'failed','',phrase(language,'error'),None,terminal.reason)
+                return
             if task.mode == 'work' and any(child['state']!='done' for child in self._child_results(task.id)):
                 self._conclude(task,run,'failed','',phrase(language,'error'),None,'child_work_incomplete')
                 return
-            if task.mode == 'work' and not self._store.evidence(task.id):
-                self._conclude(task,run,'failed','',phrase(language,'error'),None,'work_without_action')
+            if task.mode == 'work' and (failure := self._store.completion_reason(task)):
+                self._conclude(task,run,'failed','',phrase(language,'error'),None,failure)
                 return
-            if task.session_id.startswith("room:") and not str(reply.get("final") or "").strip():
-                self._conclude(task, run, "done", "", "", None, None)
-                return
-            report = report_from(str(reply.get("final") or ""), language, plain=task.member_id != 0)
-            if report is None:
-                self._conclude(
-                    task, run, "done", notice, phrase(language, "worker_done"), None, None
-                )
-            else:
-                self._conclude(task, run, "done", report.prefix, report.text, report.detail, None,
-                               replies=report.messages)
+            self._conclude(task, run, "done", report.prefix, report.text, report.detail, None,
+                           replies=report.messages)
         elif status == "cancelled":
             key = "worker_cancelled_unsure" if run.call_cut_off else "worker_cancelled"
             self._conclude(
@@ -1628,29 +1644,21 @@ class BackgroundService:
                 self._store.progress(
                     task.id, model_calls=run.model_calls, tool_calls=run.tool_calls, cost_usd=cost
                 )
-            self._store.finish(task.id, state, prefix=prefix, text=text, detail=detail, reason=reason)
+            def publish():
+                if self._has_linked_turn(task):
+                    self._history.publish_terminal(task.turn_id,prefix=prefix,text=text,detail=detail,
+                        status=_TURN_STATUS.get(state,'error'),cost_usd=cost,
+                        replies=[compose(prefix,line,None) for line in replies or [text] if line])
+            self._store.finish(task.id, state, prefix=prefix, text=text, detail=detail, reason=reason,publish=publish)
             if run is not None:
                 from ..brain.runs import save_metrics
                 save_metrics(self._metrics_conn, "task", task.id, task.started_at_ms or task.created_at_ms,
                              self._now_ms(), run.ledger.calls)
         except sqlite3.Error as exc:
             logger.warning("Could not write down the end of a task: %s", type(exc).__name__)
+            return
         if self._has_linked_turn(task):
-            try:
-                self._history.resolve(
-                    task.turn_id,
-                    prefix=prefix,
-                    text=text,
-                    detail=detail,
-                    status=_TURN_STATUS.get(state, "error"),
-                    cost_usd=cost,
-                )
-                for line in replies or [text]:
-                    if line:
-                        self._history.add_message(task.turn_id, "reply", compose(prefix, line, None))
-                self._notify("agent.turn", {"turn_id": task.turn_id, "member_id": task.member_id})
-            except sqlite3.Error as exc:
-                logger.warning("Could not complete the turn of a task: %s", type(exc).__name__)
+            self._notify("agent.turn", {"turn_id":task.turn_id,"member_id":task.member_id})
         logger.info(
             "Background task %d ended: state=%s reason=%s model_calls=%s tool_calls=%s cost=%.5f",
             task.id,
@@ -1750,13 +1758,21 @@ class BackgroundService:
         task_id = params.get("task_id")
         if task_id is not None and type(task_id) is not int:
             raise invalid_params("task_id must be a whole number or null")
+        if task_id is None and self._run is not None:
+            task_id = self._run.task_id
+        if task_id is not None and not params.get('_tree'):
+            tree = self._store.invalidate_tree(task_id)
+            stopped_tree = False
+            for child_id in reversed(tree):
+                stopped_tree = bool((await self._cancel({'task_id':child_id,'_tree':True}))['cancelled']) or stopped_tree
+            return {'cancelled':stopped_tree}
         if task_id in self._handoff_runs or (task_id is not None and (waiting_task:=self._store.get(task_id)) is not None and waiting_task.state=='waiting' and waiting_task.continuation):
             suspended=self._handoff_runs.pop(task_id,None)
             task=self._store.get(task_id)
             self._conclude(task,suspended[0] if suspended else None,'cancelled','',
                 phrase(task.language,'worker_cancelled',steps=str(task.tool_calls)),None,'cancelled')
             for child in self._metrics_conn.execute("SELECT id FROM worker_tasks WHERE parent_task_id=? AND state IN ('queued','running','waiting')",(task_id,)).fetchall():
-                await self._cancel({'task_id':child[0]})
+                await self._cancel({'task_id':child[0],'_tree':True})
             return {'cancelled':True}
         run = self._run
         if run is not None and task_id in (None, run.task_id):
@@ -1786,6 +1802,11 @@ class BackgroundService:
                 )
             return {"cancelled": True}
         return {"cancelled": False}
+
+    async def cancel_room(self, room_id):
+        rows = self._metrics_conn.execute("SELECT id FROM worker_tasks WHERE room_id=? AND state IN ('queued','running','waiting')", (room_id,)).fetchall()
+        for row in rows:
+            await self._cancel({'task_id':row[0]})
 
     async def cancel_session(self, session_id: str) -> bool:
         """Stop the task of this session that runs and take its queued ones out of the queue; the

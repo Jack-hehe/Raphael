@@ -30,6 +30,7 @@ export default [
   scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
+  scene("composer-task-stop", "Running private task uses the same composer slot", [wait('.composer[data-task-state="running"] .cmp-voice'), check('p04-task-slot')], {running:true}),
   scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),
   scene("admin-approval", "Raphael's approval survives a concurrent member question", [
     wait('.ask-card:not([hidden])'),

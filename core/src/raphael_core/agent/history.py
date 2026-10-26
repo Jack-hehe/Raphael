@@ -329,6 +329,20 @@ class AgentHistory:
                 found.setdefault(data.pop("turn_id"), []).append(data)
         return found
 
+    def publish_terminal(self, turn_id, *, prefix, text, detail, status, cost_usd, replies):
+        """Publish inside TaskStore's transaction, together with its terminal outbox event."""
+        cursor = self._conn.execute("UPDATE agent_turns SET prefix=?,text=?,detail=?,status=?,cost_usd=cost_usd+? WHERE id=?",
+                                    (prefix,text,detail,status,cost_usd,turn_id))
+        if not cursor.rowcount:
+            return
+        row = self._conn.execute('SELECT question FROM agent_turns WHERE id=?',(turn_id,)).fetchone()
+        self._index(turn_id,row[0],text,detail)
+        for line in replies:
+            if line:
+                self._conn.execute("INSERT INTO agent_messages(turn_id,seq,kind,text,at_ms) "
+                    "SELECT ?,COALESCE(MAX(seq),0)+1,'reply',?,? FROM agent_messages WHERE turn_id=?",
+                    (turn_id,line,self._now_ms(),turn_id))
+
     def resolve(
         self,
         turn_id: int,
