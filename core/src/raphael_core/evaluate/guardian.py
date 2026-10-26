@@ -161,7 +161,9 @@ def check_reply(text, scenario):
     reasons = []
     if not text.strip():
         reasons.append("empty_reply")
-    if not re.search(r"[\u3400-\u9fff]", text):
+    # A code or a number is in no language: live, Codex answered \u300c\u8acb\u5728\u5feb\u554f\u56de\u7b54\u672c\u6b21\u4ee3\u865f\u300d with the code alone.
+    words = re.sub(r"[A-Za-z0-9_-]*\d[A-Za-z0-9_-]*", "", text)
+    if not re.search(r"[\u3400-\u9fff]", text) and (re.search(r"[A-Za-z]", words) or not text.strip()):
         reasons.append("reply_not_zh_TW")
     prose = re.sub(r"https?://\S+|\b[\w.-]+\.(?:html|png|pdf|txt)\b", "", text)
     prose = re.sub(r"\b(?:Raphael|OpenRouter|OpenAI|Codex|Claude|Gemini|Antigravity|GitHub|Telegram|Google|Notion|MCP|PDF|CLI|HTML|YES|NO)\b", "", prose, flags=re.I)

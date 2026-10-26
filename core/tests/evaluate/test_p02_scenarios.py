@@ -29,6 +29,14 @@ def test_taiwan_writing_accepts_tai_in_either_form():
     assert 'reply_not_traditional_Taiwan' in check_reply('在台湾的平台上架。', Scenario('owner-view', ''))
 
 
+def test_a_code_or_a_number_alone_is_in_no_language():
+    # Live, Codex answered 「請在快問回答本次代號」 with the code alone and failed as not zh-TW.
+    assert not check_reply('QK-46107bba5c87', Scenario('quick-question', ''))
+    assert not check_reply('408', Scenario('quick-question', ''))
+    assert 'reply_not_zh_TW' in check_reply('The code is QK-46107bba5c87', Scenario('quick-question', ''))
+    assert 'reply_not_zh_TW' in check_reply('Done', Scenario('quick-question', ''))
+
+
 def test_a_removed_app_is_stale_only_when_a_reply_still_calls_it_on():
     from raphael_core.evaluate.guardian_driver import claims_on
     assert claims_on('主要窗口：拉斐爾。\n應用程式 Guardian：已啟用，連線狀態尚未檢查。', 'Guardian')
