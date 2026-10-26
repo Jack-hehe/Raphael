@@ -876,6 +876,55 @@ CREATE TABLE connect_cards (
 PRAGMA user_version = 36;
 COMMIT;
 """
+# The two cards that pause a chat's task for the owner and resume it once: a secret the task needs
+# (`connectors.secret_cards`) and the owner's turn at the computer (`computer.handback`). A card names
+# the connection and the secret it declares, and the app of the window; no row ever holds a value
+# the owner typed or anything seen on a screen. `done` holds digests of what the task already did.
+_MIGRATIONS[37] = """
+BEGIN;
+CREATE TABLE secret_cards (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL,
+    member_id INTEGER NOT NULL,
+    conversation_id INTEGER,
+    server_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('env','header')),
+    secret TEXT NOT NULL,
+    name TEXT NOT NULL,
+    language TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','failed','saved','resuming','resumed','cancelled','expired')),
+    error TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    done TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    resumed_at_ms INTEGER,
+    UNIQUE(turn_id, server_id, kind, secret)
+);
+CREATE TABLE handback_cards (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    member_id INTEGER NOT NULL,
+    conversation_id INTEGER,
+    run_id TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    app TEXT NOT NULL DEFAULT '',
+    language TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('control','returning','done','stopped','expired','failed')),
+    error TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    done TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    returned_at_ms INTEGER,
+    UNIQUE(turn_id, seq)
+);
+PRAGMA user_version = 37;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

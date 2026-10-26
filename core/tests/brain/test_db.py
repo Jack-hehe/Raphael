@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 36
+LATEST = 37
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -409,6 +409,20 @@ SCHEMA_V36 = {**SCHEMA_V35, "connect_cards": [
     "error TEXT NOT NULL DEFAULT ''", "tool_count INTEGER", "done TEXT NOT NULL DEFAULT '[]'",
     "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL",
     "resumed_at_ms INTEGER"]}
+# Schema v37: the secret card and the owner's turn at the computer, each with the one resume of its task.
+SCHEMA_V37 = {**SCHEMA_V36, "secret_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "member_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "server_id TEXT NOT NULL", "kind TEXT NOT NULL", "secret TEXT NOT NULL", "name TEXT NOT NULL",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "error TEXT NOT NULL DEFAULT ''",
+    "attempts INTEGER NOT NULL DEFAULT 0", "done TEXT NOT NULL DEFAULT '[]'",
+    "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL",
+    "resumed_at_ms INTEGER"],
+    "handback_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "seq INTEGER NOT NULL", "member_id INTEGER NOT NULL",
+    "conversation_id INTEGER", "run_id TEXT NOT NULL", "reason TEXT NOT NULL", "app TEXT NOT NULL DEFAULT ''",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "error TEXT NOT NULL DEFAULT ''",
+    "note TEXT NOT NULL DEFAULT ''", "done TEXT NOT NULL DEFAULT '[]'", "created_at_ms INTEGER NOT NULL",
+    "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL", "returned_at_ms INTEGER"]}
 
 
 def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
@@ -454,7 +468,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V36) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V37) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -468,7 +482,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V36.items():
+    for table, columns in SCHEMA_V37.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
