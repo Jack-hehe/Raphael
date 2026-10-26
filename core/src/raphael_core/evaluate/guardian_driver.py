@@ -224,6 +224,8 @@ class RpcDriver:
             reasons,result = await self.short_wrapup_scenario()
         elif cell.driver in ('immediate-dispatch','immediate-room-work'):
             reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
+        elif cell.driver == 'meeting-actions':
+            reasons, result = await self.meeting_actions_scenario()
         elif cell.driver in ('roster', 'meeting'):
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
         elif cell.driver in ('consult', 'memory'):
@@ -329,7 +331,7 @@ class RpcDriver:
                 reasons.append("routine_readback_failed")
         else:
             return ["not implemented: " + cell.dependency], []
-        if cell.driver in ('immediate-room-work','short-wrapup','task-stop'):
+        if cell.driver in ('immediate-room-work','short-wrapup','task-stop','meeting-actions'):
             # This owner entered through rooms.send; do not invent a private conversation. The room's
             # turns are what the owner saw, each with the model that answered it.
             turns = [{'source':'room','scope':'room',**dict(row)} for row in self.app._conn.execute(
@@ -400,6 +402,54 @@ class RpcDriver:
                 reasons.append('progress_in_messages')
             result['text']=' '.join(m['text'] for m in (await self.app.call('rooms.messages',{'room_id':room_id}))['messages'] if m['member_id'] is not None)
         return reasons,result
+
+    async def meeting_actions_scenario(self):
+        """S08: once a meeting has named the owners, the owner's 「現在執行」 starts every item at once as one hand-off
+        to its single owner; each result comes back to the room and Raphael closes. A source's 「明早截止、明天中午提交」
+        is no schedule, and a promise without action is no result."""
+        ids = await self.seed_team()
+        mail, pm = ids[1], ids[3]
+        await self.install_fixture()
+        agenda = (f'請分工處理今天的 Guardian 測試信件（議題代碼 {self.nonce}）。信件助理負責用 Guardian 讀信，回報信中的 nonce；'
+                  'PM 負責用 Guardian 讀同一封信，列出要回覆的重點，並附上信中的 nonce。來源文件寫「明早截止、明天中午提交」。'
+                  'PM 主持兩輪討論分工，最後由拉斐爾整理每項工作與唯一負責人。')
+        room_id = (await self.app.rooms.meeting({'member_ids': [0, mail, pm], 'agenda': agenda,
+                                                 'roles': {str(pm): 'moderator', str(mail): 'participant'}},
+                                                'zh-TW', 2**50 - 1))['room_id']
+
+        async def settled_room():
+            while self.app.rooms._exchanges.latest(room_id)['state'] not in ('done', 'stopped'):
+                await asyncio.sleep(.02)
+            await self.settled()
+            return (await self.app.call('rooms.messages', {'room_id': room_id}))['messages']
+
+        await settled_room()
+        await self.app.call('rooms.send', {'room_id': room_id, 'request_id': 'actions-' + self.nonce, 'ui_language': 'zh-TW',
+            'text': '@拉斐爾 請現在執行會議的每一項工作，每項交給它唯一的負責人。來源文件寫「明早截止、明天中午提交」，仍現在做；不要建立例行任務。'})
+        messages = await settled_room()
+        reasons = []
+        tasks = self.app._conn.execute("SELECT * FROM worker_tasks WHERE mode='work' AND room_id=?", (room_id,)).fetchall()
+        owners = [task['member_id'] for task in tasks]
+        if len(owners) != len(set(owners)) or set(owners) != {mail, pm}:
+            reasons.append('one_task_per_owner')
+        for task in tasks:
+            if task['ready_at_ms'] != task['created_at_ms'] or task['dispatch_policy'] != 'immediate' or task['started_at_ms'] is None:
+                reasons.append('immediate_start')
+            if task['state'] != 'done' or self.nonce not in (task['report_text'] or '') + (task['report_detail'] or ''):
+                reasons.append('work_done_with_evidence')
+            if not self.app._conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result' AND disposition='delivered'",
+                                          (task['id'],)).fetchone() or not self.app._conn.execute(
+                    'SELECT 1 FROM room_messages WHERE room_id=? AND thread_id=? AND turn_id=?',
+                    (room_id, task['thread_id'], task['turn_id'])).fetchone():
+                reasons.append('result_to_room')
+        if len(self.recorder.receipts) < 2 or self.app._conn.execute('SELECT COUNT(*) FROM routines').fetchone()[0]:
+            reasons.append('no_action_or_implicit_schedule')
+        if not messages or messages[-1]['member_id'] != 0 or messages[-1]['kind'] != 'wrapup':
+            reasons.append('chief_not_last')
+        if self.app._conn.execute("SELECT 1 FROM agent_messages WHERE kind='progress' AND turn_id IN "
+                                  "(SELECT turn_id FROM room_messages WHERE room_id=?)", (room_id,)).fetchone():
+            reasons.append('progress_in_messages')
+        return reasons, {'status': 'done', 'text': ' '.join(m['text'] for m in messages if m['member_id'] is not None)}
 
     async def short_wrapup_scenario(self):
         ids = await self.seed_team()

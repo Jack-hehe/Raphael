@@ -68,6 +68,8 @@ def cells(registry=(), catalog=(), *, servers=()):
         '請簡短回報，然後由幕僚長結論。',('chief_last','single_wrapup','reply_relation'),'P04','short-wrapup'))
     result.append(ScenarioCell('S08.completion','Evidence completion (P04 scope)',
         '現在完成工作並回報證據。',('evidence','chief_last','status_only'),'P04','immediate-room-work'))
+    result.append(ScenarioCell('S08.meeting-actions', 'Meeting actions start now', SCENARIOS[7].prompt,
+        SCENARIOS[7].assertions, 'P03a/P04', 'meeting-actions'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,
                                   "請用 Guardian 服務讀取測試信件；如果無法讀取，用一句話說明所缺的連接或權限，不能宣稱完成。",

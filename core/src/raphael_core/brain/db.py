@@ -843,6 +843,13 @@ ALTER TABLE rooms ADD COLUMN meeting_pending INTEGER NOT NULL DEFAULT 0;
 PRAGMA user_version = 34;
 COMMIT;
 """
+# An exchange remembers that it is a meeting: the room keeps its moderator after one, and later work is handed off.
+_MIGRATIONS[35] = """
+BEGIN;
+ALTER TABLE room_exchanges ADD COLUMN meeting INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version = 35;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 
