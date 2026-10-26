@@ -22,7 +22,7 @@ the compact picker's search action, for messages.
 ## Driving it with look
 
 ```powershell
-npm run look -- chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
+npm run look -- composer-task-stop chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
 npm run look -- quick-conversation-list quick-conversation --theme both --width 1120,720,1920x1080
 npm run look -- live-scenario-owner-view --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
@@ -93,3 +93,15 @@ data folded into the requesting assistant reply. Room history remains outside pr
 ```powershell
 npm run look -- meeting-open-room meeting-chief-event member-mentions-bots-apps --theme both --width 1120,720,1920x1080
 ```
+
+
+## P04 task lifecycle
+
+Background narration uses the typed worker.progress status channel and is never appended to
+agent_messages. Legacy stored progress remains readable. Terminal replies are separately validated
+and published atomically with the task verdict and result outbox. Private Stop calls
+agent.history.stop and preserves completed history and tool evidence; ack, running and owner-question
+waiting all retain Stop in the existing gold slot. Microphone release never follows task Stop.
+The shared composer tests cover IME Enter, Stop acknowledgement races, independent send completion
+and the return to the voice emblem/tooltip at idle. Native microphone/controller behavior remains
+unverified by rendered fixtures.

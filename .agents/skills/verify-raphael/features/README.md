@@ -3,7 +3,7 @@
 Use [the verification workflow](../SKILL.md) first. Commands run from `app/` and
 request both themes; feature commands use 720/1120 and the full hand-off matrix
 also requires 1920x1080. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 219 scenes, 1314 combinations across both themes and
+are the executable source: 225 scenes, 1350 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.
@@ -11,7 +11,7 @@ behavior the fixture cannot prove.
 | Feature | User-facing scope |
 | --- | --- |
 | [Home](home.md) | Startup overview, pending work, reports, calendar, usage and dictation totals |
-| [Conversation](conversation.md) | Threads, details panel, replies, public progress, search and composer |
+| [Conversation](conversation.md) | Threads, details panel, replies, progress status, search and composer |
 | [Members](members.md) | Identity, resources, voice and Raphael's approved team administration |
 | [Automations](automations.md) | Home-owned day/week calendar, schedules, advanced options and deletion |
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |
