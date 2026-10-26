@@ -19,7 +19,9 @@ are answered as usual. The moderator always opens round one: the @ addresses in 
 「@拉斐爾 作最後結論」) are not calls to speak first. Room-only moderator/pro/con roles run two rounds: each turn is told its round and who still has to speak, an addressed
 member takes their planned place in the open round, the moderator closes after the second, and Raphael called on then
 gives the single conclusion. During a moderated meeting no one hands off work, and no hand-off ever goes back to a
-colleague waiting upstream on it. Empty and (pass) replies stay hidden.
+colleague waiting upstream on it. The room keeps its parts afterwards, but the owner's next message is no meeting:
+Raphael hands each of the meeting's items to its single owner, all in one turn, and every item starts at once
+(Guardian S08.meeting-actions). Empty and (pass) replies stay hidden.
 Explicit mentions use whole names, prefer the longest matching name, ignore email addresses,
 and run in the order they occur in the message. The same rule applies to peer handoffs.
 
