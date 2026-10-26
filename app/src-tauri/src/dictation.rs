@@ -6276,7 +6276,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(c.core().call_params("agent.ask")["conversation_id"], 42);
-        assert!(c.core().call_params("agent.ask").get("destination").is_none());
+        assert!(
+            c.core()
+                .call_params("agent.ask")
+                .get("destination")
+                .is_none()
+        );
         let c = agent(answer("Answer", "Hello"));
         c.ask_typed("Hi").unwrap().await.unwrap();
         assert!(
@@ -6392,7 +6397,11 @@ mod tests {
         let params = c.core().call_params("agent.ask");
         assert_eq!(params["member_id"], json!(3));
         assert_eq!(params.get("source"), None);
-        assert_eq!(params.get("destination"), None, "a member's voice goes to its own thread");
+        assert_eq!(
+            params.get("destination"),
+            None,
+            "a member's voice goes to its own thread"
+        );
         assert_eq!(c.agent_stage(), None);
         assert_eq!(
             *phases.lock().unwrap(),
