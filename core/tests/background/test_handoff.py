@@ -185,6 +185,43 @@ async def test_receipt_dedupe_stage_conflict_and_removed_member(make_rig):
 
 
 @pytest.mark.parametrize('brain',['api','cli'])
+async def test_a_turn_hands_off_every_item_at_once_and_resumes_once(make_rig,monkeypatch,brain):
+    # Live, a turn stopped at its first hand-off, so a meeting's items could only start one after another.
+    rig=make_rig()
+    model='cli:codex:gpt-5.6-terra' if brain=='cli' else 'fake/model'
+    SettingsStore(rig.conn).set('agent_model',model)
+    target,source=setup(rig,model=model)
+    other=colleague(rig,source,target,'Reviewer')
+    items=[args(target),args(other,stage_id='review',request='Review the source now.')]
+    parent=rig.service.submit(session_id='parent',text='Start both items now',language='zh-TW',model=model)
+    rig.service.attach_turn(parent,source.id)
+    if brain=='api':
+        rig.client.replies.extend([turn(calls=[*(call('handoff',item,f'h{n}') for n,item in enumerate(items)),call('local_time',{},'t')]),
+            report('明早我會完成。'),report('明早我會完成。'),report('兩項都已交辦。')])
+    else:
+        rig.service.use_cli(object())
+        async def work(loop):
+            if loop.member_id==0 and 'Delegated work results' not in loop.user:
+                for n,item in enumerate(items):
+                    assert (await loop._tool(f'h{n}','handoff',item)).ok
+                assert (await loop._tool('t','local_time',{})).kind=='waiting_for_handoff'
+                assert loop._handed_off()
+            elif loop.member_id in (target.id,other.id):
+                loop._queue.put_nowait(Outcome('done',final='明早我會完成。'))
+            else:
+                loop._queue.put_nowait(Outcome('done',final='兩項都已交辦。'))
+        monkeypatch.setattr(CliLoop,'_work',work)
+    await until(lambda:rig.task(parent).state in ('done','failed'),timeout=10)
+    children=rig.service._store.handoffs(source.id)
+    assert {child.member_id for child in children}=={target.id,other.id}
+    assert all(child.parent_task_id==parent and child.ready_at_ms==child.created_at_ms for child in children)
+    assert rig.conn.execute('SELECT COUNT(*) FROM task_executions WHERE task_id=?',(parent,)).fetchone()[0]==2
+    if brain=='api':
+        unmade=next(m for m in rig.client.chat_calls[-1]['messages'] if m.get('tool_call_id')=='t')
+        assert 'waiting for delegated work' in unmade['content']
+
+
+@pytest.mark.parametrize('brain',['api','cli'])
 @pytest.mark.parametrize('deadline',['明早截止','明天中午提交'])
 async def test_parent_releases_slot_real_file_result_and_resume_once(make_rig,tmp_path,monkeypatch,brain,deadline):
     rig=make_rig()
@@ -214,6 +251,7 @@ async def test_parent_releases_slot_real_file_result_and_resume_once(make_rig,tm
                 assert outcome.ok and 'task_id' in outcome.content
                 unmade=await loop._tool('unmade','local_time',{})
                 assert not unmade.ok and unmade.kind=='waiting_for_handoff'
+                assert loop._handed_off()
             elif loop.member_id==target.id:
                 assert (await loop._tool('file','Notes__look',{'topic':nonce})).ok
                 loop._queue.put_nowait(Outcome('done',final='已產生驗收檔 '+nonce))

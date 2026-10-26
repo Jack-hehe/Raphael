@@ -139,7 +139,8 @@ class CliLoop:
 
     async def _tool(self, identifier, name, args):
         async with self._serial:
-            if self._handoff_pending:
+            # Every hand-off of a turn starts now; anything else waits for the delegated work.
+            if self._handoff_pending and name != "handoff":
                 return ToolOutcome(False, 'waiting_for_handoff')
             self._calls += 1
             if self._calls > 200:
@@ -160,7 +161,6 @@ class CliLoop:
             result = await self._execute(identifier, name, args)
             if result.ok and result.kind == 'handoff':
                 self._handoff_pending = True
-                self._queue.put_nowait(Outcome('stopped',kind='handoff'))
             return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.instruction or result.content or result.kind or "", ok=result.ok))
 
     async def _execute(self, identifier, name, args):
@@ -204,7 +204,8 @@ class CliLoop:
                 # turn would wait forever.
                 if self.task.exception() is not None:
                     logger.warning("CLI turn work failed before an outcome: %s", type(self.task.exception()).__name__)
-                self._failure("error", NAMES[brain_ref(self.model)[0]])
+                if not self._handed_off():
+                    self._failure("error", NAMES[brain_ref(self.model)[0]])
             outcome = await getter
             if outcome.kind not in (WAITING, 'handoff'):
                 if self.response is not None:
@@ -261,6 +262,13 @@ class CliLoop:
         self.event(messages[reason])
         self._queue.put_nowait(Outcome("done", final=messages[reason]))
 
+    def _handed_off(self):
+        """Whether the turn handed work off. If so, the task now waits for that work, however the turn ended:
+        live, a turn cut at its first hand-off could start only one of a meeting's action items."""
+        if self._handoff_pending:
+            self._queue.put_nowait(Outcome('stopped', kind='handoff'))
+        return self._handoff_pending
+
     def _rate_limit_wait(self, name, seconds):
         seconds = f"{seconds:g}"
         if str(self.language).startswith("ja"):
@@ -310,7 +318,8 @@ class CliLoop:
                 # Protocol errors never publish provider diagnostics or private packet contents.
                 frame = traceback.extract_tb(error.__traceback__)[-1]
                 logger.warning("CLI turn failed: %s at %s:%d", type(error).__name__, frame.name, frame.lineno)
-                self._failure("error", NAMES[name])
+                if not self._handed_off():
+                    self._failure("error", NAMES[name])
             finally:
                 if self.driver:
                     await self.driver.interrupt()
@@ -349,15 +358,19 @@ class CliLoop:
                 elif event.kind == "tool_end" and event.data.get("effect") and event.data.get("ok"):
                     self.event("CLI 回報檔案已變更" if self.language == "zh-TW" else "CLI reported a file change")
                 elif event.kind == "error":
+                    if self._handed_off():
+                        return None
                     return event.text if event.text in ("quota", "rate_limited") else "error"
                 elif event.kind == "final":
+                    if self._handed_off():
+                        return None
                     final = event.text.strip()
                     if final:
                         self._queue.put_nowait(Outcome("done", final=final))
                         return None
                     self._progress()
                     return "error"
-        return "error"
+        return None if self._handed_off() else "error"
 
     async def _native_permission(self, args):
         async with self._serial:

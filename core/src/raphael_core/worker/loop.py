@@ -51,6 +51,7 @@ REPEATED = (
     "This exact call has been made twice already, with the same arguments. Do not make it again: "
     "use what you have, or try something else, or report."
 )
+WAITING_FOR_WORK = "Not made: waiting for delegated work."
 
 
 @dataclass(frozen=True)
@@ -226,8 +227,10 @@ async def run_task(
             if not turn.calls:
                 return Outcome("done", turn.content, None, None, model_calls, tool_calls)
             steer = False
+            dispatched = False
             for call in turn.calls:
-                refusal = _refusal(call, offered, repeats)
+                # Every hand-off of a batch starts now; anything else in it waits for the delegated work.
+                refusal = WAITING_FOR_WORK if dispatched and call.name != "handoff" else _refusal(call, offered, repeats)
                 if refusal is None:
                     check_before("limit_tool", tool_calls, limits.tool_calls)
                     tool_calls += 1
@@ -259,13 +262,10 @@ async def run_task(
                 else:
                     content = wrap_untrusted(call.name, refusal, ok=False)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
-                if refusal is None and outcome.ok and outcome.kind == 'handoff':
-                    # The receipt has returned. Persist this continuation and release the worker;
-                    # calls later in the same model batch have not run.
-                    for unmade in turn.calls[turn.calls.index(call)+1:]:
-                        messages.append({"role":"tool","tool_call_id":unmade.id,
-                            "content":wrap_untrusted(unmade.name,'Not made: waiting for delegated work.',ok=False)})
-                    return Outcome('stopped',kind='handoff',model_calls=model_calls,tool_calls=tool_calls,messages=list(messages))
+                dispatched = dispatched or (refusal is None and outcome.ok and outcome.kind == 'handoff')
+            if dispatched:
+                # The receipts have returned. Persist this continuation and release the worker.
+                return Outcome('stopped',kind='handoff',model_calls=model_calls,tool_calls=tool_calls,messages=list(messages))
             if steer:
                 # told after the results of this round, so that it reads them first
                 messages.append({"role": "user", "content": STEER_NOTE})
