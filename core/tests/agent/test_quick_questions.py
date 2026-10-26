@@ -199,6 +199,47 @@ async def test_quick_cli_passes_effort_without_resuming_unbounded_native_history
     assert not client.decide_calls and not client.json_calls
 
 
+async def test_cli_turns_record_the_model_that_answered_and_keep_separate_sessions(make_rig, client, tmp_path, monkeypatch):
+    from raphael_core.agent.cli.discovery import CliBrains
+    from raphael_core.agent.cli.drivers import Event
+    from raphael_core.agent.cli import loop as production
+
+    runs = []
+
+    class Driver:
+        def __init__(self, *args, model, effort, **kwargs):
+            self.model, self.effort = model, effort
+
+        async def run(self, *, session, **kwargs):
+            runs.append((self.model, self.effort, session))
+            # The CLI's thread names the model that really answers, which need not be the one asked for.
+            yield Event("model", {"fast": "fast-2026"}.get(self.model, self.model))
+            yield Event("session", session or f"thread-{len(runs)}")
+            yield Event("final", "Answer.")
+
+        async def interrupt(self):
+            pass
+
+    monkeypatch.setattr(production, "Driver", Driver)
+    brains = CliBrains(home=tmp_path, environ={}, commands={"codex": ["never-spawn"]})
+    monkeypatch.setattr(brains, "available", lambda *args, **kwargs: True)
+    brains._models["codex"] = [{"id": "cli:codex:fast", "reasoning_efforts": ["low", "medium"]},
+                               {"id": "cli:codex:deep", "reasoning_efforts": ["high"]}]
+    rig = make_rig(cli_brains=brains)
+    rig.settings.set("agent_model", "cli:codex:deep?effort=high")
+    rig.settings.set("quick_model", "cli:codex:fast")
+    rig.settings.set("quick_effort", "low")
+    quick, formal = rig.service.conversations.quick(), rig.service.conversations.main()
+    for n in range(2):
+        await rig.call("agent.ask", asking(session=f"quick-{n}", destination="quick"))
+        await rig.call("agent.ask", asking(session=f"formal-{n}", source="app", conversation_id=formal))
+    assert runs == [("fast", "low", None), ("deep", "high", None), ("fast", "low", None), ("deep", "high", "thread-2")]
+    assert {turn.model for turn in rig.history.list(conversation_id=quick)} == {"cli:codex:fast-2026?effort=low"}
+    assert {turn.model for turn in rig.history.list(conversation_id=formal)} == {"cli:codex:deep?effort=high"}
+    assert rig.service._cli_sessions.get(0, "cli:codex:fast?effort=low", quick) is None
+    assert rig.service._cli_sessions.get(0, "cli:codex:deep?effort=high", formal) == "thread-2"
+
+
 def answered(text):
     """A model's reply that names the model it was, as a provider's response does."""
     return lambda **kwargs: ChatTurn(json.dumps({"prefix": "Answer", "text": text}), [], kwargs["model"], .001, 10, 10, 1)

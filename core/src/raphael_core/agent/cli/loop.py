@@ -132,6 +132,15 @@ class CliLoop:
         self.expire = expire
         self.wait_timeout_s = CONFIRM_TIMEOUT_S if wait_timeout_s is None else wait_timeout_s
 
+    @property
+    def answered_by(self):
+        """The model the turn records: the one the CLI's thread said answered, at the effort asked
+        for, or the one asked for when the CLI names none."""
+        if not self.actual_model:
+            return self.model
+        effort = brain_effort(self.model)
+        return f"cli:{brain_ref(self.model)[0]}:{self.actual_model}" + (f"?effort={effort}" if effort else "")
+
     def _progress(self):
         if line := public_line(self._buffer, self.language):
             self.progress(line[:400])
@@ -317,7 +326,7 @@ class CliLoop:
                 def tokens(*keys):
                     value = next((self._usage[key] for key in keys if key in self._usage), 0)
                     return value if type(value) is int and 0 <= value < 10**10 else 0
-                self.ledger.add(model=self.model, cost_usd=0,
+                self.ledger.add(model=self.answered_by, cost_usd=0,
                     ms=int((time.perf_counter() - began) * 1000),
                     prompt_tokens=tokens("input_tokens", "inputTokens", "promptTokenCount"),
                     completion_tokens=tokens("output_tokens", "outputTokens", "candidatesTokenCount"))
