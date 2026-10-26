@@ -223,8 +223,8 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
         return `<li class="tn room-intent-blocked" role="status">${eventLineHTML(t("rooms.intentBlocked",{p0:NAME,p1:t(BLOCKED[intent.reason as keyof typeof BLOCKED]??"rooms.blockedWorker")}),faceOf(intent.recipient_id,name),name)}</li>`;
       }
       if("task" in entry){
-        const source=messages.find(m=>m.turn_id===entry.task.source_turn_id);
-        return `<li class="tn handoff-row">${handoffLineHTML(entry.task,faceOf(entry.task.member_id,entry.task.member_name),source&&{author:source.member_id===null?t("rooms.owner"):person(source.member_id)?.name??"",text:source.text})}</li>`;
+        const source=messages.find(m=>m.turn_id===entry.task.source_turn_id&&m.member_id===entry.task.from_member_id&&m.kind!=="wrapup");
+        return `<li class="tn handoff-row">${handoffLineHTML(entry.task,faceOf(entry.task.member_id,entry.task.member_name),source&&{author:person(source.member_id)?.name??"",text:source.text})}</li>`;
       }
       const m=entry.message;
       if(m.member_id!==null&&m.status==="running") {
