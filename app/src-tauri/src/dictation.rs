@@ -62,7 +62,7 @@
 //!   session, so whatever begins next replaces it.
 //!
 //! The main window takes part in two ways ([`Desk`]). A question typed in its composer
-//! ([`DictationController::ask_typed_with`]) is an independent agent turn without a recording: it goes to
+//! ([`DictationController::ask_composed_in`]) is an independent agent turn without a recording: it goes to
 //! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
 //! answer and any YES/NO question only once the person has left the window (see below), and never
 //! the reports of the wait (the window shows its own). And
@@ -114,7 +114,7 @@ use crate::hotkey::{CancelSwitch, HotkeyEvent};
 use crate::learn::AfterPaste;
 use crate::media::{MediaHold, MediaPauser};
 use crate::notices::{self, LanguageCell, Notice};
-use crate::overlay::{AskPrompt, Mode, OverlayApi, Progress, Stage, Tier};
+use crate::overlay::{AskPrompt, Confirmation, Mode, OverlayApi, Progress, Stage, Tier};
 use crate::paste::{CopyReason, PasteDelivery, PasteOutcome, Paster, Target};
 use crate::rpc::{CORE_EXITED, CoreApi, Notification, RpcError, TIMEOUT, lock};
 
@@ -269,7 +269,7 @@ pub const MAX_QUESTIONS_IN_A_TURN: usize = 12;
 /// main window hears of it: the card of the 拉斐爾 page shows it while it is open.
 #[derive(Clone, Debug, PartialEq)]
 pub enum QuestionNews {
-    Open(AskPrompt),
+    Open(Box<AskPrompt>),
     Closed(String),
 }
 
@@ -280,11 +280,35 @@ pub type QuestionReport = Arc<dyn Fn(QuestionNews) + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Busy;
 
+/// A question from the composer, including its attachments and conversation context.
+pub struct TypedQuestion<'a> {
+    pub text: &'a str,
+    pub attachments: Vec<Value>,
+    pub member: u64,
+    pub request_id: Option<String>,
+    pub replace_turn_id: Option<u64>,
+    pub quote: Option<Value>,
+    pub conversation_id: Option<u64>,
+}
+
+/// The first agent call for a typed or spoken question, with optional transcription timing.
+struct AgentQuestion<'a> {
+    text: &'a str,
+    target_app: Option<String>,
+    source: Option<&'a str>,
+    attachments: Vec<Value>,
+    member: u64,
+    replace_turn_id: Option<u64>,
+    quote: Option<Value>,
+    conversation_id: Option<u64>,
+    transcript_ms: Option<f64>,
+}
+
 /// What the main window may ask of the controller (commands.rs). Kept in the app state as a
 /// [`DeskHandle`], so that the commands need not know the controller's types.
 pub trait Desk: Send + Sync {
     /// Asks Raphael `text`, typed in the composer, with the images and PDFs attached to it, or the
-    /// member `member` (not 0) in its own thread (see [`DictationController::ask_typed_with`]).
+    /// member `member` (not 0) in its own thread (see [`DictationController::ask_composed_in`]).
     fn ask_typed(
         &self,
         text: &str,
@@ -294,23 +318,14 @@ pub trait Desk: Send + Sync {
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy>;
-    fn ask_conversation(
-        &self,
-        text: &str,
-        attachments: Vec<Value>,
-        member: u64,
-        request_id: Option<String>,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-        _conversation_id: Option<u64>,
-    ) -> Result<JoinHandle<()>, Busy> {
+    fn ask_conversation(&self, question: TypedQuestion<'_>) -> Result<JoinHandle<()>, Busy> {
         self.ask_typed(
-            text,
-            attachments,
-            member,
-            request_id,
-            replace_turn_id,
-            quote,
+            question.text,
+            question.attachments,
+            question.member,
+            question.request_id,
+            question.replace_turn_id,
+            question.quote,
         )
     }
     fn retract(
@@ -409,7 +424,7 @@ impl State {
     /// Puts a YES/NO question on screen, and tells the main window.
     fn open_ask(&mut self, ask: PendingAsk) {
         if let Some(report) = &self.questions {
-            report(QuestionNews::Open(ask.prompt.clone()));
+            report(QuestionNews::Open(Box::new(ask.prompt.clone())));
         }
         self.ask = Some(ask);
     }
@@ -1699,17 +1714,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             return;
         }
         let transcript_ms = released.elapsed().as_secs_f64() * 1000.0;
-        self.converse_with_timing(
+        self.converse(
             &id,
-            question,
-            target_app,
-            None,
-            Vec::new(),
-            session.member,
-            None,
-            None,
-            None,
-            Some(transcript_ms),
+            AgentQuestion {
+                text: question,
+                target_app,
+                source: None,
+                attachments: Vec::new(),
+                member: session.member,
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: None,
+                transcript_ms: Some(transcript_ms),
+            },
         )
         .await;
     }
@@ -1718,6 +1735,37 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     #[cfg(test)]
     pub fn ask_typed(&self, text: &str) -> Result<JoinHandle<()>, Busy> {
         self.ask_typed_with(text, Vec::new(), 0)
+    }
+
+    /// A typed question with attachments and no conversation context: a test helper.
+    #[cfg(test)]
+    pub fn ask_typed_with(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+    ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed(text, attachments, member, None, None, None)
+    }
+
+    pub fn ask_composed(
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+    ) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed_in(TypedQuestion {
+            text,
+            attachments,
+            member,
+            request_id,
+            replace_turn_id,
+            quote,
+            conversation_id: None,
+        })
     }
 
     /// A question typed in the main window's composer: an agent session without a recording, which
@@ -1737,45 +1785,16 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// Refused ([`Busy`]) only for a duplicate active request id. Independent of recordings and
     /// other typed turns, including other conversations of the same member. Never logs the words. Returns the task
     /// that runs the question, which ends when its turn is over.
-    pub fn ask_typed_with(
-        &self,
-        text: &str,
-        attachments: Vec<Value>,
-        member: u64,
-    ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed(text, attachments, member, None, None, None)
-    }
-
-    pub fn ask_composed(
-        &self,
-        text: &str,
-        attachments: Vec<Value>,
-        member: u64,
-        request_id: Option<String>,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-    ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed_in(
+    pub fn ask_composed_in(&self, question: TypedQuestion<'_>) -> Result<JoinHandle<()>, Busy> {
+        let TypedQuestion {
             text,
             attachments,
             member,
             request_id,
             replace_turn_id,
             quote,
-            None,
-        )
-    }
-
-    pub fn ask_composed_in(
-        &self,
-        text: &str,
-        attachments: Vec<Value>,
-        member: u64,
-        request_id: Option<String>,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-        conversation_id: Option<u64>,
-    ) -> Result<JoinHandle<()>, Busy> {
+            conversation_id,
+        } = question;
         let _transition = lock(&self.transitions);
         let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if lock(&self.typed).contains_key(&id) {
@@ -1817,41 +1836,32 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         Ok(tokio::spawn(async move {
             this.converse(
                 &id,
-                &text,
-                None,
-                Some(TYPED_SOURCE),
-                attachments,
-                member,
-                replace_turn_id,
-                quote,
-                conversation_id,
+                AgentQuestion {
+                    text: &text,
+                    target_app: None,
+                    source: Some(TYPED_SOURCE),
+                    attachments,
+                    member,
+                    replace_turn_id,
+                    quote,
+                    conversation_id,
+                    transcript_ms: None,
+                },
             )
             .await;
         }))
     }
 
-    /// The question `question` of the session `id` with the agent: `agent.ask` (with `source`
+    /// The `question` of the session `id` with the agent: `agent.ask` (with `source`
     /// when it is not the voice, the core's default), the reply shown, and for a YES/NO question
     /// its answer sent with `agent.confirm` and that reply shown, which may be another question
     /// (a run on the desktop asks about the app, then about each step that sends), up to
     /// [`MAX_QUESTIONS_IN_A_TURN`]. The `attachments` of a typed question go with the first call
     /// only when there are some, and a member's `member_id` only when it is not 0. Never logs the
     /// words, nor anything of the attachments.
-    async fn converse(
-        &self,
-        id: &str,
-        question: &str,
-        target_app: Option<String>,
-        source: Option<&str>,
-        attachments: Vec<Value>,
-        member: u64,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-        conversation_id: Option<u64>,
-    ) {
-        self.converse_with_timing(
-            id,
-            question,
+    async fn converse(&self, id: &str, question: AgentQuestion<'_>) {
+        let AgentQuestion {
+            text,
             target_app,
             source,
             attachments,
@@ -1859,27 +1869,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             replace_turn_id,
             quote,
             conversation_id,
-            None,
-        )
-        .await;
-    }
-
-    async fn converse_with_timing(
-        &self,
-        id: &str,
-        question: &str,
-        target_app: Option<String>,
-        source: Option<&str>,
-        attachments: Vec<Value>,
-        member: u64,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-        conversation_id: Option<u64>,
-        transcript_ms: Option<f64>,
-    ) {
+            transcript_ms,
+        } = question;
         let mut params = json!({
             "session_id": id,
-            "text": question,
+            "text": text,
             "ui_language": self.language.get(),
             "target_app": target_app,
         });
@@ -2167,7 +2161,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// a question that is gone) is dropped. (The app answers through [`Self::on_answer`].)
     #[cfg(test)]
     pub fn on_confirm(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, false, false, None, None);
+        self.on_answer(id, approved, false, false);
     }
 
     /// The main window's answer to the question on screen: a button of the card that mirrors the
@@ -2175,7 +2169,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// the long press of a `T3` YES included; the focus the window has is left with it.
     #[cfg(test)]
     pub fn on_confirm_in_app(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, true, false, None, None);
+        self.on_answer(id, approved, false, true);
     }
 
     /// An answer of either page, the third answer of a question that has one (`always`)
@@ -2183,42 +2177,37 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// answer is a plain YES.
     #[cfg(test)]
     pub fn on_answer(&self, id: &str, approved: bool, always: bool, in_app: bool) {
-        self.confirm(id, approved, in_app, always, None, None);
+        self.on_answer_with_drafts(Confirmation {
+            id: id.to_owned(),
+            approved,
+            in_app,
+            always,
+            drafts: None,
+            groups: None,
+        });
     }
 
-    pub fn on_answer_with_drafts(
-        &self,
-        id: &str,
-        approved: bool,
-        always: bool,
-        in_app: bool,
-        drafts: Option<Vec<Value>>,
-        groups: Option<Vec<Value>>,
-    ) {
-        self.confirm(id, approved, in_app, always, drafts, groups);
-    }
-
-    fn confirm(
-        &self,
-        id: &str,
-        approved: bool,
-        in_app: bool,
-        always: bool,
-        drafts: Option<Vec<Value>>,
-        groups: Option<Vec<Value>>,
-    ) {
+    pub fn on_answer_with_drafts(&self, confirmation: Confirmation) {
         if self.voice.is_none() {
             let turn = self.typed_contexts().into_iter().find(|turn| {
                 lock(&turn.state)
                     .ask
                     .as_ref()
-                    .is_some_and(|ask| ask.prompt.id == id)
+                    .is_some_and(|ask| ask.prompt.id == confirmation.id)
             });
             if let Some(turn) = turn {
-                turn.confirm(id, approved, in_app, always, drafts, groups);
+                turn.on_answer_with_drafts(confirmation);
                 return;
             }
         }
+        let Confirmation {
+            id,
+            approved,
+            in_app,
+            always,
+            drafts,
+            groups,
+        } = confirmation;
         let pending = {
             let mut state = lock(&self.state);
             let Some(ask) = state.ask.as_ref().filter(|ask| ask.prompt.id == id) else {
@@ -2444,25 +2433,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         )
     }
 
-    fn ask_conversation(
-        &self,
-        text: &str,
-        attachments: Vec<Value>,
-        member: u64,
-        request_id: Option<String>,
-        replace_turn_id: Option<u64>,
-        quote: Option<Value>,
-        conversation_id: Option<u64>,
-    ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed_in(
-            text,
-            attachments,
-            member,
-            request_id,
-            replace_turn_id,
-            quote,
-            conversation_id,
-        )
+    fn ask_conversation(&self, question: TypedQuestion<'_>) -> Result<JoinHandle<()>, Busy> {
+        self.ask_composed_in(question)
     }
 
     fn retract(
@@ -2971,8 +2943,8 @@ mod app {
                     }
                 }
                 answer = next(&mut confirmations) => match answer {
-                    Some(Confirmation { id, approved, in_app, always, drafts, groups }) => match &controller {
-                        Some(controller) => controller.on_answer_with_drafts(&id, approved, always, in_app, drafts, groups),
+                    Some(confirmation) => match &controller {
+                        Some(controller) => controller.on_answer_with_drafts(confirmation),
 
                         None => log::info!("an answer to a question is dropped: the core is not running"),
                     },
@@ -6272,15 +6244,15 @@ mod tests {
     #[tokio::test]
     async fn a_composed_request_names_its_conversation_and_voice_keeps_the_default() {
         let c = agent(answer("Answer", "Hello"));
-        c.ask_composed_in(
-            "Explain",
-            Vec::new(),
-            3,
-            Some("conversation-1".into()),
-            None,
-            None,
-            Some(42),
-        )
+        c.ask_composed_in(TypedQuestion {
+            text: "Explain",
+            attachments: Vec::new(),
+            member: 3,
+            request_id: Some("conversation-1".into()),
+            replace_turn_id: None,
+            quote: None,
+            conversation_id: Some(42),
+        })
         .unwrap()
         .await
         .unwrap();
@@ -6458,7 +6430,15 @@ mod tests {
         let (c, heard) = questioning(question("typed-confirm", 30_000));
         run(&c, DictationDown, 0).await;
         let typed = c
-            .ask_composed_in("Confirm", Vec::new(), 3, None, None, None, Some(42))
+            .ask_composed_in(TypedQuestion {
+                text: "Confirm",
+                attachments: Vec::new(),
+                member: 3,
+                request_id: None,
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: Some(42),
+            })
             .unwrap();
         until_stage(&c, AgentStage::Asking).await;
         let shown = c.overlay().events();
@@ -6518,15 +6498,15 @@ mod tests {
             let (core, gate) = agent_core(answer("Answer", "Done")).gated("agent.ask");
             let c = controller_in(mode, core, FakePaster::pasting("notepad.exe"));
             let typed = c
-                .ask_composed_in(
-                    "Typed",
-                    Vec::new(),
-                    0,
-                    Some("typed".into()),
-                    None,
-                    None,
-                    Some(42),
-                )
+                .ask_composed_in(TypedQuestion {
+                    text: "Typed",
+                    attachments: Vec::new(),
+                    member: 0,
+                    request_id: Some("typed".into()),
+                    replace_turn_id: None,
+                    quote: None,
+                    conversation_id: Some(42),
+                })
                 .unwrap();
             settle().await;
             run(&c, DictationDown, 0).await;
@@ -6553,26 +6533,26 @@ mod tests {
         let (core, gate) = agent_core(answer("", "Done")).gated("agent.ask");
         let c = controller(core, FakePaster::pasting("notepad.exe"));
         let first = c
-            .ask_composed_in(
-                "First",
-                Vec::new(),
-                3,
-                Some("first".into()),
-                None,
-                None,
-                Some(41),
-            )
+            .ask_composed_in(TypedQuestion {
+                text: "First",
+                attachments: Vec::new(),
+                member: 3,
+                request_id: Some("first".into()),
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: Some(41),
+            })
             .unwrap();
         let second = c
-            .ask_composed_in(
-                "Second",
-                Vec::new(),
-                3,
-                Some("second".into()),
-                None,
-                None,
-                Some(42),
-            )
+            .ask_composed_in(TypedQuestion {
+                text: "Second",
+                attachments: Vec::new(),
+                member: 3,
+                request_id: Some("second".into()),
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: Some(42),
+            })
             .unwrap();
         assert_eq!(
             c.ask_composed("Duplicate", Vec::new(), 3, Some("first".into()), None, None)
@@ -6674,27 +6654,27 @@ mod tests {
         core.script("agent.confirm", Ok(answer("", "Done")));
         let c = controller(core, FakePaster::pasting("notepad.exe"));
         let first = c
-            .ask_composed_in(
-                "First",
-                Vec::new(),
-                3,
-                Some("first".into()),
-                None,
-                None,
-                Some(41),
-            )
+            .ask_composed_in(TypedQuestion {
+                text: "First",
+                attachments: Vec::new(),
+                member: 3,
+                request_id: Some("first".into()),
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: Some(41),
+            })
             .unwrap();
         until_stage(&c, AgentStage::Asking).await;
         let second = c
-            .ask_composed_in(
-                "Second",
-                Vec::new(),
-                3,
-                Some("second".into()),
-                None,
-                None,
-                Some(42),
-            )
+            .ask_composed_in(TypedQuestion {
+                text: "Second",
+                attachments: Vec::new(),
+                member: 3,
+                request_id: Some("second".into()),
+                replace_turn_id: None,
+                quote: None,
+                conversation_id: Some(42),
+            })
             .unwrap();
         settle().await;
         assert_eq!(c.overlay().events(), [asked("first-question", 30_000)]);
@@ -6802,10 +6782,10 @@ mod tests {
         until_stage(&c, AgentStage::Asking).await;
         assert_eq!(
             *heard.lock().unwrap(),
-            [QuestionNews::Open(AskPrompt {
+            [QuestionNews::Open(Box::new(AskPrompt {
                 member_id: Some(0),
                 ..prompt("c-1", 30_000)
-            })]
+            }))]
         );
         assert_eq!(
             c.open_question(),
@@ -6819,10 +6799,10 @@ mod tests {
         assert_eq!(
             *heard.lock().unwrap(),
             [
-                QuestionNews::Open(AskPrompt {
+                QuestionNews::Open(Box::new(AskPrompt {
                     member_id: Some(0),
                     ..prompt("c-1", 30_000)
-                }),
+                })),
                 QuestionNews::Closed("c-1".to_owned())
             ]
         );
@@ -6912,7 +6892,7 @@ mod tests {
         assert_eq!(
             *heard.lock().unwrap(),
             [
-                QuestionNews::Open(prompt("c-2", 30_000)),
+                QuestionNews::Open(Box::new(prompt("c-2", 30_000))),
                 QuestionNews::Closed("c-2".to_owned())
             ]
         );
@@ -7764,15 +7744,22 @@ mod tests {
         let (c, turn) = question_on_screen(30_000).await;
         let drafts = vec![json!({"id": "draft-1", "name": "Research", "group": "Studio"})];
         let groups = vec![json!({"id": "group-1", "name": "Studio", "group_id": null})];
-        c.on_answer_with_drafts(
-            "c-1",
-            true,
-            false,
-            true,
-            Some(drafts.clone()),
-            Some(groups.clone()),
-        );
-        c.on_answer_with_drafts("c-1", true, false, true, Some(vec![]), Some(vec![]));
+        c.on_answer_with_drafts(Confirmation {
+            id: "c-1".into(),
+            approved: true,
+            always: false,
+            in_app: true,
+            drafts: Some(drafts.clone()),
+            groups: Some(groups.clone()),
+        });
+        c.on_answer_with_drafts(Confirmation {
+            id: "c-1".into(),
+            approved: true,
+            always: false,
+            in_app: true,
+            drafts: Some(vec![]),
+            groups: Some(vec![]),
+        });
         turn.await.unwrap();
         assert_eq!(
             c.core().all_params("agent.confirm"),
@@ -9478,10 +9465,10 @@ mod tests {
         let (c, _front, heard, turn) = question_in_front(30_000).await;
         assert_eq!(
             *heard.lock().unwrap(),
-            vec![QuestionNews::Open(AskPrompt {
+            vec![QuestionNews::Open(Box::new(AskPrompt {
                 member_id: Some(0),
                 ..prompt("c-1", 30_000)
-            })]
+            }))]
         );
         assert_eq!(c.overlay().events(), Vec::<String>::new());
         c.on_confirm_in_app("c-1", true);
