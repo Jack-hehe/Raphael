@@ -102,6 +102,7 @@ def scripted_cli(monkeypatch, *runs, waits=(0.0, 0.0)):
             pass
     monkeypatch.setattr("raphael_core.agent.cli.loop.Driver", Driver)
     monkeypatch.setattr("raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S", waits)
+    monkeypatch.setattr("raphael_core.agent.cli.loop.ROOM_RATE_LIMIT_WAITS_S", waits)
     return played
 
 
@@ -117,6 +118,18 @@ async def test_cli_room_turn_waits_out_one_rate_limit_and_answers(make_rig, monk
     await until(lambda: rig.task(task).state in ("done", "failed"))
     assert rig.task(task).state == "done" and AgentHistory(rig.conn).get(turn).text == "The plan is ready."
     assert len(played) == 2 and progress(rig, task) == ["Codex CLI is rate-limited; retrying in 0 s."]
+
+
+async def test_cli_room_turn_rides_out_a_longer_throttle_than_a_private_turn(make_rig, monkeypatch, tmp_path):
+    # Live, Codex 429s lasted minutes: a room turn, which no one sits waiting on, keeps trying for longer.
+    rig = make_rig()
+    played = scripted_cli(monkeypatch, [Event("error", "rate_limited")])
+    monkeypatch.setattr("raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S", (0.0,))
+    monkeypatch.setattr("raphael_core.agent.cli.loop.ROOM_RATE_LIMIT_WAITS_S", (0.0, 0.0, 0.0, 0.0))
+    task, turn = submit_room(rig)
+    rig.service.use_cli(Brains(tmp_path))
+    await until(lambda: rig.task(task).state in ("done", "failed"))
+    assert rig.task(task).reason == "cli_rate_limited" and len(played) == 5
 
 
 @pytest.mark.parametrize("first", [[], [Event("tool_start", data={"name": "local_time"})]])

@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 MESSAGE_BREAK = "<<<next message>>>"
 # A rate-limited turn that has not acted yet runs again after each of these waits.
 RATE_LIMIT_WAITS_S = (20.0, 60.0)
+# A room or background turn has no one sitting on it: it rides out a throttle of minutes (live, 429s lasted several).
+ROOM_RATE_LIMIT_WAITS_S = (30.0, 60.0, 120.0, 240.0)
 
 APPROVE = {"type": "function", "function": {"name": "approve", "description": "Ask the owner for permission. Never grants permission by itself.",
            "parameters": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"}}, "additionalProperties": True}}}
@@ -81,12 +83,14 @@ class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
                  system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
                  conversation_id=None, quota=None, attachments=(), wait_timeout_s=None, resume_session=True,
-                 retry_rate_limits=True):
+                 rate_limit_waits=None):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
         self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
         self.quota = quota
         self.resume_session = resume_session
-        self.retry_rate_limits = retry_rate_limits
+        # The waits before running a rate-limited request again: None waits as for a turn someone is reading
+        # (RATE_LIMIT_WAITS_S), () never waits.
+        self.rate_limit_waits = rate_limit_waits
         self.ledger, self.language, self.plain = ledger, language, plain
         self.spoken = spoken
         self.system = system + "\n" + PUBLIC_PROGRESS_RULES + "\nUse only Raphael MCP tools for actions and lookups. "
@@ -288,7 +292,7 @@ class CliLoop:
                 await secure_directory(workspace)
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
                     session = self.sessions.get(self.member_id, self.model, self.conversation_id) if self.resume_session else None
-                    waits = list(RATE_LIMIT_WAITS_S) if self.retry_rate_limits else []
+                    waits = list(RATE_LIMIT_WAITS_S if self.rate_limit_waits is None else self.rate_limit_waits)
                     failure = await self._attempt(name, command, model, server, session, workspace)
                     # Running the request again is safe only while nothing of it has happened yet.
                     while failure == "rate_limited" and waits and not (self._acted or self._calls):

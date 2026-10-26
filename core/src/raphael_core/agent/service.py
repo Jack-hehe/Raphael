@@ -1674,7 +1674,7 @@ class AgentService:
                 common["execute"] = cli_execute
                 loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
                     attachments=ask.attachments, resume_session=not ask.quick and not ask.nested,
-                    retry_rate_limits=not ask.quick,
+                    rate_limit_waits=() if ask.quick else None,
                     conversation_id=ask.conversation_id, quota=self.quotas.record,
                     member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
                     expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)

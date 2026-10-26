@@ -162,7 +162,7 @@ async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monke
 async def test_s07_meeting_goes_on_when_one_cli_member_is_rate_limited(tmp_path, monkeypatch):
     client = P02Brain('S07.meeting')
     cli_brain(monkeypatch, client, 'S07.meeting', limited={5})
-    monkeypatch.setattr('raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S', (0.0, 0.0))
+    monkeypatch.setattr('raphael_core.agent.cli.loop.ROOM_RATE_LIMIT_WAITS_S', (0.0, 0.0))
     driver = RpcDriver(tmp_path, 'cli:codex:owner-model', client, Budget(200), brains=FakeBrains(tmp_path))
     driver.app.background._host = WorkerHost(connect=Links())
     try:
