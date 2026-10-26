@@ -785,6 +785,9 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     ? `<div class="tn-foot">${btn(ico("down"), "sm icon tn-more", ` data-act="detail" aria-expanded="${detailOpen}" aria-controls="tn-detail-${id}" aria-label="${esc(t("agent.detail"))}" title="${esc(t("agent.detail"))}"`)}</div>`
     : "";
   const regenerate = !live && said && turn.id === look.regenerateTurnId;
+  // A turn without reply messages answers in its text: a question spoken to Raphael with public progress has no other.
+  const textAnswer = turn.status === "confirm" || settledDraft || !turn.text.trim()
+    ? "" : messageBlockHTML(turn, "reply", turn.text, turn.created_at_ms, query, state, true, regenerate);
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
@@ -798,9 +801,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, regenerate)
-      : workSectionHTML(turn, state, query) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)
-        ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", turn.text, turn.created_at_ms, query, state, true, regenerate) : "")) +
+      ? turnMessagesHTML(turn, state, query, regenerate) + (turn.messages!.some(m => m.kind === "reply") ? "" : textAnswer)
+      : workSectionHTML(turn, state, query) + textAnswer) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +

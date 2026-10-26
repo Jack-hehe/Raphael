@@ -58,6 +58,16 @@ const visible = (html: string): string =>
 
 const running = (over: Partial<AgentTask> = {}): AgentTask => ({ id: 41, state: "running", started_at_ms: T0, finished_at_ms: null, ...over });
 
+test("a spoken quick answer with public progress shows its answer after the work line", () => {
+  // The core writes no reply message for a question spoken to Raphael: its answer is the turn's text.
+  const spoken = turn(7, { text: "下午兩點有專案會議。", messages: [{ seq: 1, kind: "progress", text: "《告。正在查看今天下午的行程。》", at_ms: T0 + 500 }] });
+  const html = turnHTML(spoken, emptyTimelineState(), false, { face: () => "" });
+  expect(visible(html)).toContain("下午兩點有專案會議。");
+  expect(html.indexOf("work-section")).toBeLessThan(html.indexOf("下午兩點有專案會議。"));
+  const stopped = turnHTML({ ...spoken, status: "running", text: "" }, emptyTimelineState(), false, { face: () => "" });
+  expect(stopped).not.toContain("data-expandable");
+});
+
 test("a live turn renders ordered public bubbles and event chips without raw steps", () => {
   const html = turnHTML(turn(1, { status: "running", text: "", steps: THREE, messages: [
     { seq: 1, kind: "progress", text: "I will check the examples.", at_ms: T0 },
