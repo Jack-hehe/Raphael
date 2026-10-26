@@ -400,6 +400,9 @@ class RoomsService:
                     message.update(status='incomplete',text='',reason=terminal.reason)
                 elif not terminal.reason:
                     message['text'] = terminal.text
+                # A wrap-up is its three parts: live, one opened by narrating what it was about to do.
+                if message['kind'] == 'wrapup' and (start := message['text'].find('### ')) > 0:
+                    message['text'] = message['text'][start:]
             message["cost"] = turn.cost_usd
         elif turn:
             message["status"] = "error"

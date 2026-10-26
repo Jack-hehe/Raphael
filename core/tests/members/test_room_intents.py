@@ -85,6 +85,17 @@ async def test_a_trailing_pass_is_not_shown_and_the_wrapup_asks_for_the_owners_h
     assert all(f"'### {heading}'" in wrapup for heading in ('結論', '待你決定', '下一步'))
 
 
+async def test_a_wrapup_starts_at_its_first_heading(rig, exchange):
+    # Live, a wrap-up opened with 「我會依交付紀錄核對完成項目…」, narration the owner never wants to read.
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice review', ui_language='zh-TW')
+    await finish(rig, exchange, '看過了。')
+    assert rig.background.submitted[-1]['member_id'] == 0
+    await finish(rig, exchange, '我會依交付紀錄整理。\n\n### 結論\n完成。\n### 待你決定\n無。\n### 下一步\nAlice：無。')
+    [wrapup] = [m for m in (await history(rig, room))['messages'] if m['kind'] == 'wrapup']
+    assert wrapup['text'].startswith('### 結論\n完成。')
+
+
 async def test_timeout_and_invalid_choice_are_observable(rig, exchange, monkeypatch):
     room, ids = await team(rig)
     class Slow:
