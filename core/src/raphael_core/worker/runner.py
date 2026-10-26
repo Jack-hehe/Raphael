@@ -76,12 +76,14 @@ class CoreHost:
         )
         content = reply.get("content")
         kind = reply.get("kind")
+        instruction = reply.get("instruction")
         return ToolOutcome(
             ok=reply.get("ok") is True,
             kind=kind if isinstance(kind, str) else None,
             content=content if isinstance(content, str) else "",
             truncated=reply.get("truncated") is True,
             tools=[t for t in (reply.get("tools") or []) if _is_tool(t)],
+            instruction=instruction if isinstance(instruction, str) else "",
         )
 
 

@@ -96,7 +96,7 @@ from ..agent.plugins import preview
 from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
 from ..agent.safety import asked_with
 from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
-from ..agent.team import Team, team_tools_for, roster_prompt
+from ..agent.team import Team, handoff_refused, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
 from ..brain.providers.base import ModelProvider
 from ..brain.settings import DEFAULTS, SettingsStore, api_model
@@ -524,29 +524,34 @@ class BackgroundService:
         """The single API/CLI hand-off contract. Never wait for the assignee in this call."""
         from ..agent.policy import NotApproved, UnknownTool
         name = 'handoff'
+
+        def refused(kind):
+            logger.info("A hand-off was refused: %s", kind)
+            return handoff_refused(kind)
+
         try:
             self._gate.check(Action(name, arguments), None, worker=True)
         except (NotApproved, UnknownTool):
-            return ToolResult(name, False, None, 'blocked')
+            return refused('blocked')
         source = self._history.get(source_turn_id) if source_turn_id else None
         if source is None or source.member_id != speaker.id or source.scope not in ('private','room','exchange'):
-            return ToolResult(name, False, None, 'source_unavailable')
+            return refused('source_unavailable')
         member = arguments.get('member_id')
         request, stage, done_when = (arguments.get(key) for key in ('request','stage_id','done_when'))
         mode = arguments.get('mode','work')
         if (type(member) is not int or not all(isinstance(value,str) and value.strip() for value in (request,stage,done_when))
                 or len(request)>2000 or len(stage)>100 or len(done_when)>2000 or mode not in ('work','consult')
                 or set(arguments)-{'member_id','request','stage_id','done_when','mode'}):
-            return ToolResult(name, False, None, 'bad_arguments')
+            return refused('bad_arguments')
         if member == speaker.id:
-            return ToolResult(name, False, None, 'self_handoff')
+            return refused('self_handoff')
         target = self._speaker(member)
         if target is None:
-            return ToolResult(name, False, None, 'member_unknown_or_removed')
+            return refused('member_unknown_or_removed')
         if source.room_id is not None and not self._handoff_member_allowed(source.room_id,member):
-            return ToolResult(name, False, None, 'member_removed_from_room')
+            return refused('member_removed_from_room')
         if self._host.disabled:
-            return ToolResult(name, False, None, 'worker_disabled')
+            return refused('worker_disabled')
         parents = self._store.for_turns([source.id])
         parent = parents.get(source.id)
         # Bound durable task chains independently from conversational @ reply hops.
@@ -555,14 +560,14 @@ class BackgroundService:
         while ancestor is not None:
             depth += 1
             if depth >= 16:
-                return ToolResult(name, False, None, 'handoff_depth_limit')
+                return refused('handoff_depth_limit')
             ancestor = self._store.get(ancestor.parent_task_id) if ancestor.parent_task_id else None
         model = getattr(target, 'model', None) or self._settings.get('agent_model') or DEFAULTS['agent_model']
         try:
             task_id, duplicate = self._store.accept_handoff(source=source,parent=parent,assignee=member,
                 model=model,request=request.strip(),stage=stage.strip(),mode=mode,done_when=done_when.strip(),language=language)
         except Refused as error:
-            return ToolResult(name,False,None,error.kind)
+            return refused(error.kind)
         task = self._store.get(task_id)
         if not duplicate:
             self._models[task_id] = model

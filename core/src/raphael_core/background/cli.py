@@ -43,4 +43,5 @@ def member_loop(brains, quota, task, run, spec, *, wait_s, progress):
 def tool_outcome(result):
     if isinstance(result, str):
         return ToolOutcome('status="ok"' in result, content=result)
-    return ToolOutcome(bool(result.get("ok")), result.get("kind"), result.get("content", ""))
+    return ToolOutcome(bool(result.get("ok")), result.get("kind"), result.get("content", ""),
+                       instruction=result.get("instruction") or "")

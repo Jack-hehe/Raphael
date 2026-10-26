@@ -107,6 +107,7 @@ class ToolOutcome:
     content: str = ""
     truncated: bool = False
     tools: list[dict] = field(default_factory=list)  # tools the call made available from now on
+    instruction: str = ""  # a refusal of Raphael's own tool: what the model is told instead of `kind`
 
 
 class Host(Protocol):
@@ -292,6 +293,8 @@ def result_text(name: str, outcome: ToolOutcome) -> str:
     untrusted data. The core uses it too, for the call a paused task waited on."""
     if outcome.ok:
         return wrap_untrusted(name, outcome.content, ok=True)
+    if outcome.instruction:
+        return wrap_untrusted(name, f"The call was refused. {outcome.instruction}", ok=False)
     reason = outcome.kind or "error"
     text = f"The call failed ({reason})."
     if outcome.content:  # a tool that says why it failed: its words are data too

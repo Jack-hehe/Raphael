@@ -155,7 +155,7 @@ class CliLoop:
             if result.ok and result.kind == 'handoff':
                 self._handoff_pending = True
                 self._queue.put_nowait(Outcome('stopped',kind='handoff'))
-            return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.content or result.kind or "", ok=result.ok))
+            return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.instruction or result.content or result.kind or "", ok=result.ok))
 
     async def _execute(self, identifier, name, args):
         self.batch_calls = [Call(identifier, name, args)]

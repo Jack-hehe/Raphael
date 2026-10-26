@@ -143,6 +143,9 @@ class ToolResult:
     untrusted: bool = False
     # The service it came from, for its step (agent.steps.Step.detail), or None.
     detail: str | None = None
+    # For a refusal of Raphael's own tool: fixed words telling the model what to do instead, which
+    # it is shown in place of `error` (that stays in logs and receipts).
+    instruction: str | None = None
 
 
 def _number(value: Any) -> float | int | None:

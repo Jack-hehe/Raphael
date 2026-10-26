@@ -52,6 +52,7 @@ async def test_refused_handoff_has_named_reason_and_no_receipt(make_rig,bad,reas
     target,source=setup(rig)
     result=rig.service.handoff(RAPHAEL,args(target,**bad),source_turn_id=source.id,language='zh-TW')
     assert not result.ok and result.error==reason
+    assert result.instruction and reason not in result.instruction
     assert rig.conn.execute('SELECT COUNT(*) FROM task_outbox').fetchone()[0]==0
 
 
@@ -90,6 +91,31 @@ async def test_one_undeliverable_result_leaves_the_others_and_is_delivered_once_
     rig.service._deliver_handoffs()
     assert delivered(first) is not None
     assert rig.conn.execute('SELECT text FROM room_messages WHERE request_id=?',(f'handoff-{first}',)).fetchone()[0]=='First answer'
+
+
+@pytest.mark.parametrize('brain',['api','cli'])
+async def test_a_refused_handoff_tells_the_model_what_to_do_instead_of_a_code(make_rig,monkeypatch,caplog,brain):
+    rig=make_rig()
+    model='cli:codex:gpt-5.6-terra' if brain=='cli' else 'fake/model'
+    SettingsStore(rig.conn).set('agent_model',model)
+    target,source=setup(rig,model=model)
+    shown=[]
+    if brain=='api':
+        rig.client.replies.extend([turn(calls=[call('handoff',args(target,member_id=target.id,stage_id='self'))]),report('Answered in place')])
+    else:
+        rig.service.use_cli(object())
+        async def work(loop):
+            shown.append((await loop._tool('self','handoff',args(target,member_id=target.id,stage_id='self'))).content)
+            loop._queue.put_nowait(Outcome('done',final='Answered in place'))
+        monkeypatch.setattr(CliLoop,'_work',work)
+    caplog.set_level('INFO')
+    accepted=rig.service.handoff(RAPHAEL,args(target,mode='consult'),source_turn_id=source.id,language='en')
+    await until(lambda:rig.task(accepted.data['task_id']).state in ('done','failed'))
+    if brain=='api':
+        shown.append(rig.client.chat_calls[-1]['messages'][-1]['content'])
+    assert 'You cannot hand work to yourself; reply in the room or hand it to a colleague.' in shown[0]
+    assert 'self_handoff' not in shown[0]
+    assert 'self_handoff' in caplog.text
 
 
 async def test_receipt_dedupe_stage_conflict_and_removed_member(make_rig):
