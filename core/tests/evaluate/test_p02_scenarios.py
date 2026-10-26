@@ -29,6 +29,14 @@ def test_taiwan_writing_accepts_tai_in_either_form():
     assert 'reply_not_traditional_Taiwan' in check_reply('在台湾的平台上架。', Scenario('owner-view', ''))
 
 
+def test_a_removed_app_is_stale_only_when_a_reply_still_calls_it_on():
+    from raphael_core.evaluate.guardian_driver import claims_on
+    assert claims_on('主要窗口：拉斐爾。\n應用程式 Guardian：已啟用，連線狀態尚未檢查。', 'Guardian')
+    # Live, Raphael said the snapshot no longer lists Guardian and the cell failed as stale.
+    assert not claims_on('應用程式：清單為空；連線狀態不適用，快照未提供 Guardian 狀態。', 'Guardian')
+    assert not claims_on('Guardian 已中斷連線。', 'Guardian')
+
+
 def test_taiwan_writing_keeps_items_and_registered_apps():
     # Live, 「完成項目」 (items) and 「已登錄的應用程式」 (registered) failed: OpenCC reads them as project and log-in.
     assert not check_reply('核對完成項目，目前沒有已登錄的應用程式。', Scenario('owner-view', ''))

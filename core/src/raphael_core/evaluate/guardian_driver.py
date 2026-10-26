@@ -24,6 +24,13 @@ from .guardian import BudgetClient, check_reply, Scenario
 from .guardian_registry import digest
 
 
+def claims_on(reply, app):
+    """Whether `reply` still says `app` is on: a line that names it and calls it enabled or connected.
+    Saying that it is gone is not stale (live: 「快照未提供 Guardian 狀態」)."""
+    return any(re.search(r'已啟用|已連線|已連接|(?<!dis)connected|\benabled', line, re.I)
+               for line in reply.splitlines() if app in line)
+
+
 class RecordingConnector:
     """External executor installed after ToolGate and IntegrationsService checks.
 
@@ -464,7 +471,7 @@ class RpcDriver:
                     reasons.append('roster_count_or_apps_missing')
                 if not all(word in reply for word in ('主要窗口', '幕僚長')):
                     reasons.append('roster_primary_or_chief_missing')
-                if refresh and 'Guardian' in reply:
+                if refresh and claims_on(reply, 'Guardian'):
                     reasons.append('roster_disconnected_app_stale')
         return reasons, result
 
