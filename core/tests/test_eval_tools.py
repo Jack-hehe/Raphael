@@ -836,11 +836,11 @@ def test_the_prompt_holds_no_case_input_and_none_of_the_old_examples():
 def test_the_prompt_still_has_its_general_rules():
     prompt = brain_cleanup.build_system_prompt([], [])
     for kept in (
-        "Restore known product, model, and technical names",
+        "Product, model and technical names in their usual spelling",
         "Claude, ChatGPT, Gemini, Cursor, GitHub, OpenRouter, Hermes Agent, Tauri, Python",
-        "keep only the final complete form",
-        "wrong Simplified-to-Traditional conversions",
-        "Keep only the final self-correction",
+        "keep only the final form",
+        "Wrong Simplified-to-Traditional conversions",
+        "On a self-correction keep only the correction",
     ):
         assert kept in prompt, kept
     assert len(prompt) < 7_000, "the examples were swapped, not added to"
