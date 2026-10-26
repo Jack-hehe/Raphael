@@ -126,6 +126,8 @@ export interface Choice {
   desc?: string;
   /** A small tag after the label in a menu: 「建議」, say. */
   tag?: string;
+  /** A face or an icon before the label in a menu, as markup from the app's own helpers (faceHTML, ico). */
+  lead?: string;
 }
 
 /** The text on a closed dropdown for `choice`, and its tooltip: the whole text. */
@@ -586,6 +588,7 @@ export function openMenu(
           `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}"` +
           `${o.title ? ` title="${esc(o.title)}"` : ""}>` +
           (placement?.selectionIndicator === false ? "" : `<span class="ck">${o.value === current ? CHECK : ""}</span>`) +
+          (o.lead ? `<span class="mlead" aria-hidden="true">${o.lead}</span>` : "") +
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
             : `<span class="mt">${esc(o.label)}</span>`) +

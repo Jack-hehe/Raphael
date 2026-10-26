@@ -45,6 +45,12 @@ export function checkRendered(name) {
       require(visible(menu), "mention menu is visible");
       require(menu.textContent.includes(data.members[1].name), "bot comes from the roster");
       require(data.servers.some(app => menu.textContent.includes(app.name)), "app comes from the same snapshot");
+      const rows = [...menu.querySelectorAll('button')], row = label => rows.find(item => item.querySelector('.mt').textContent === label);
+      for (const item of rows) require(visible(item.querySelector('.mlead > *')), `${item.textContent} leads with a face or a mark`);
+      require(row("@" + data.members[1].name)?.querySelector('.mlead .av'), "a bot shows its member face");
+      for (const app of data.servers) require(row("@" + app.name)?.querySelector('.mlead .mono'), `${app.name} shows its connection mark`);
+      const columns = selector => rows.map(item => item.querySelector(selector).getBoundingClientRect().left);
+      for (const selector of ['.mlead', '.mt']) require(Math.max(...columns(selector)) - Math.min(...columns(selector)) <= 1, `${selector} aligns in one column`);
     }
     if (name === "p02-picker") require(document.querySelectorAll(".room-picked span").length === 2, "Raphael and the selected colleague have chips");
     if (name === "p02-fallback") require(document.querySelector(".au-room-controls").textContent.includes("群組預設"), "fallback is visible");
@@ -399,8 +405,8 @@ export function checkRendered(name) {
     require(box.left >= 8 && box.right <= innerWidth - 8, "the menu stays inside the viewport");
     for (const item of menu.querySelectorAll('button')) {
       require(!item.querySelector('.ck'), "text completions do not reserve an empty icon/check column");
-      const label = item.querySelector('.mt'), itemBox = item.getBoundingClientRect();
-      require(label && label.getBoundingClientRect().left - itemBox.left <= 12, "completion text starts at the row padding");
+      const lead = item.querySelector('.mlead'), first = lead ?? item.querySelector('.mt'), itemBox = item.getBoundingClientRect();
+      require(first && first.getBoundingClientRect().left - itemBox.left <= 12 && (!lead || lead.childElementCount > 0), "a completion starts at the row padding with its face, mark or text");
     }
     return { check: name, menuLeft: box.left, characterX: expected, delta: Math.abs(box.left - expected) };
   }
