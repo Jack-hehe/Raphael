@@ -285,6 +285,16 @@ async def test_meeting_reuses_exact_members_and_has_one_agenda(rig, exchange):
     assert len([m for m in (await history(rig, room))['messages'] if m['member_id'] is None]) == 1
 
 
+async def test_meeting_roles_accept_names_and_a_supporting_part(rig, exchange):
+    # Live, a model keyed roles by name or gave a colleague a part outside the enum, and the meeting never opened.
+    room, ids = await team(rig)
+    result = await exchange.meeting({'member_ids':[0,*ids], 'agenda':'Plan the launch',
+                                     'roles':{'Alice':'moderator', 'Bob':'social content'}}, 'en', 43)
+    assert result['room_id'] == room['id']
+    roles = (await rig.call('rooms.list'))['rooms'][0]['roles']
+    assert roles == {str(ids[0]):'moderator', str(ids[1]):'participant'}
+
+
 async def test_snapshot_schema_is_current_and_secret_free(rig):
     first = rig.service.team_context(0, 'en')
     assert first['count'] == len(first['members']) == 1 and first['self_id'] == 0

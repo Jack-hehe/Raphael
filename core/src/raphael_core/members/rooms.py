@@ -174,6 +174,17 @@ class RoomsService:
         self._changed(room["id"])
         return {"room":self._view(self._conn.execute("SELECT * FROM rooms WHERE id = ?", (room["id"],)).fetchone())}
 
+    def _meeting_roles(self, roles, ids):
+        """A model's roles as a room keeps them: a member's name may stand for its id, and a part
+        outside the room's four is taking part (「HiKari 從社群內容補充」)."""
+        if not isinstance(roles, dict):
+            return roles
+        names = {(s.name or '').casefold(): s.id for s in self._members.roster() if s.id in ids and s.name}
+        names.update({'raphael': 0, '拉斐爾': 0, 'ラファエル': 0})
+        return {str(names.get(str(key).strip().casefold(), key)):
+                role if role in ('moderator', 'pro', 'con', 'participant') else 'participant'
+                for key, role in roles.items()}
+
     @staticmethod
     def _roles(roles, ids):
         if (not isinstance(roles, dict) or any(str(i) not in {str(n) for n in ids} or role not in
@@ -187,7 +198,7 @@ class RoomsService:
         agenda = arguments.get('agenda')
         if not isinstance(agenda, str) or not agenda.strip() or len(agenda) > 9000:
             raise invalid_params('agenda must contain 1 to 9000 characters')
-        roles = self._roles(arguments.get('roles', {}), ids)
+        roles = self._roles(self._meeting_roles(arguments.get('roles', {}), ids), ids)
         room = next((self._view(r) for r in self._conn.execute('SELECT * FROM rooms WHERE is_team=0 ORDER BY id')
                      if set(self._ids(dict(r))) == set(ids)), None)
         if room is None:

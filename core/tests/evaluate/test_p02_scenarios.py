@@ -67,6 +67,31 @@ class P02Brain(FakeClient):
         return ChatTurn(text, [ChatToolCall(str(n), name, args, json.dumps(args)) for n,(name,args) in enumerate(calls)], kwargs['model'], .001, 10, 10, 1)
 
 
+async def test_a_refused_meeting_call_tells_the_model_what_to_fix(tmp_path):
+    # Live, the model only saw "bad_arguments", repeated the same call and the meeting never opened.
+    seen, members = [], []
+
+    class Brain(P02Brain):
+        async def chat_tools(self, **kwargs):
+            results = [str(m['content']) for m in kwargs['messages'] if m.get('role') == 'tool']
+            seen[:] = results
+            calls = ([('room_meeting', {'member_ids': [0, 999], 'agenda': 'Plan the launch'})] if not results else
+                     [('room_meeting', {'member_ids': [0, *members], 'agenda': 'Plan the launch'})] if len(results) == 1 else [])
+            return ChatTurn('' if calls else '已開啟會議。', [ChatToolCall(str(n), name, args, json.dumps(args))
+                            for n, (name, args) in enumerate(calls)], kwargs['model'], .001, 10, 10, 1)
+
+    driver = RpcDriver(tmp_path, 'fake/model', Brain('S07.meeting'), Budget(40))
+    try:
+        ids = await driver.seed_team()
+        members.extend([ids[0], ids[3]])
+        await driver.ask('請開會討論上架後的行銷計畫，邀行銷和 PM。')
+        assert 'Fix the arguments' in seen[0] and 'bad_arguments' not in seen[0]
+        assert [set(room['member_ids']) for room in (await driver.app.call('rooms.list'))['rooms']] == [{0, *members}]
+    finally:
+        await driver.app.rooms._stop({'room_id': 1})
+        await driver.aclose()
+
+
 def cli_brain(monkeypatch, client, scenario, limited=()):
     """A CLI that answers as the fixture brain; the members in `limited` are always rate-limited."""
     class Driver:

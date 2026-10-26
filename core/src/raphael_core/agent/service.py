@@ -2347,8 +2347,12 @@ class AgentService:
                 return ToolResult(name, False, None, 'blocked')
             try:
                 result = await rooms.meeting(dict(arguments), language, source_turn_id)
-            except RpcError:
-                return ToolResult(name, False, None, 'bad_arguments')
+            except RpcError as error:
+                # The room's own validation names what to fix, never a value; "bad_arguments" alone
+                # left the model repeating the same call.
+                return ToolResult(name, False, None, 'bad_arguments',
+                                  instruction=error.message.removeprefix('Invalid params: ')
+                                  + '. Fix the arguments and call room_meeting again.')
             if not result['duplicate']:
                 self._history.add_message(source_turn_id, 'event', json.dumps({
                     'type': 'meeting', 'room_id': result['room_id'], 'name': result['name']}, ensure_ascii=False))
