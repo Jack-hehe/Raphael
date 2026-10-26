@@ -139,7 +139,7 @@ def make_run(conn, shell):
     """A run of the request "在小算盤按七" against the fake shell, with `model`'s replies."""
 
     def make(model, *, language="zh-TW", limits=RunLimits(), over_budget=lambda: False,
-             open_app=None, clock=None):  # fmt: skip
+             open_app=None, clock=None, handback=False):  # fmt: skip
         async def no_app(name):
             return None
 
@@ -155,6 +155,7 @@ def make_run(conn, shell):
             over_budget=over_budget,
             open_app=open_app or no_app,
             limits=limits,
+            handback=handback,
             **({} if clock is None else {"clock": clock}),
         )
 
