@@ -2110,7 +2110,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     .is_some_and(|ask| ask.prompt.id == id)
             });
             if let Some(turn) = turn {
-                turn.confirm(id, approved, in_app, always, drafts);
+                turn.confirm(id, approved, in_app, always, drafts, groups);
                 return;
             }
         }
