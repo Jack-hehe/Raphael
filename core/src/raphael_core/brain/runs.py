@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..protocol import invalid_params
+from .spend import SpendTracker
 
 
 def save_metrics(conn, kind, run_id, started, finished, calls):
@@ -23,8 +24,10 @@ def save_metrics(conn, kind, run_id, started, finished, calls):
 
 
 class RunAnalytics:
-    def __init__(self, conn, now_ms, providers=None):
+    def __init__(self, conn, now_ms, providers=None, *, spend=None, settings=None):
         self.conn, self.now_ms, self.providers = conn, now_ms, providers
+        self.spend = spend if spend is not None else SpendTracker(conn, now_ms)
+        self.settings = settings
 
     def _period(self, params):
         period = params.get("range", "month")
@@ -157,7 +160,10 @@ class RunAnalytics:
                 entry["runs"] += 1
             groups[grouping] = sorted([{"label": label, **value} for label, value in values.items()], key=lambda v: (-v["tokens"], -v["cost_usd"], v["label"]))
         return {"range": period, "start_day": start.isoformat() if start else None, "end_day": (end-timedelta(days=1)).isoformat(),
-                "summary": self.summary(rows), "groups": groups, "total": len(rows)}
+                "summary": self.summary(rows), "groups": groups, "total": len(rows),
+                "bill": self.spend.bill(period),
+                "fish_voice": bool(self.settings and self.settings.get("tts_enabled")
+                                   and self.settings.get("tts_service") == "fish")}
 
     async def export(self, params):
         _, _, _, _, lower, upper = self._period(params)

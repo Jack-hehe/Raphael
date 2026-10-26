@@ -5,7 +5,7 @@ const add = [...connections, click('[data-k="conn-add"]')];
 const custom = [...add, click('.menu [data-value="custom"]')];
 const serverDetail = [...connections, click('[data-conn="open"][data-id="notes"]')];
 const store = [...connections, click('[data-conn="tab"][data-id="store"]'), wait('.cs-card')];
-const usage = [...settings("models"), click('[data-models-tab="usage"]'), wait(".run-tile"), check("usage-summary")];
+const usage = [...settings("models"), click('[data-models-tab="usage"]'), wait(".run-tile"), wait(".run-bill-total"), check("usage-summary")];
 const cliMenu = [...settings("models"), scroll(".cli-accounts"), click('[data-cli-menu="codex"]')];
 const cliDisconnected = [...cliMenu, click('#app-popover [data-pick="disconnect"]'), wait('[data-cli="codex"]')];
 const dictation = tab => [page("dictation"), click(`[data-dictation-tab="${tab}"]`), check("dictation-navigation"), ...(tab === "overview" ? [wait('.page-overview .icard'), check("dictation-overview")] : [])];
@@ -41,10 +41,11 @@ export default [
   scene("connections-empty", "Connections without servers", [...connections, click('[data-conn="tab"][data-id="installed"]')], { servers: [], managedConnectors: [] }),
   scene("connections-discover-empty", "Discovery without candidates", [...add, click('.menu [data-value="import"]')], { servers: [], candidates: [] }),
   scene("usage", "Usage summary and grouping", usage),
+  scene("usage-bill-breakdown", "Ledger purposes reconcile exactly with the sidebar", [...usage, check("usage-bill-breakdown")], { usageFishVoice: true }),
   scene("usage-members", "Expanded member usage", [...usage, click('[data-run-act="members"]'), scroll(".run-members")]),
   scene("usage-period", "Usage period menu", [...usage, click('[data-run-act="period"]')]),
   ...["day", "provider", "routine"].map(group => scene(`usage-group-${group}`, `Usage grouped by ${group}`, [...usage, click(`[data-run-group="${group}"]`), scroll(".run-groups")])),
-  scene("usage-allowances", "Allowances for Claude, Codex and Gemini CLIs", [...usage, scroll(".run-allowance")]),
+  scene("usage-allowances", "Subscription exclusion opens Claude, Codex and Gemini allowances", [...usage, click('[data-run-act="show-allowance"]'), check("usage-allowance-link")]),
   scene("usage-empty", "Usage without runs", usage, { usageEmpty: true }),
   ...["overview", "history", "dictionary"].map(tab => scene(`dictation-${tab}`, `Dictation ${tab}`, [...dictation(tab), ...(tab === "dictionary" ? [wait(".wrow"), click('[data-act="word-menu"]'), wait('#app-popover [data-pick="delete"]'), key("Escape")] : [])])),
   scene("dictation-keyboard", "Horizontal dictation navigation with keyboard focus", [...dictation("overview"), key("ArrowRight"), wait('[data-dictation-tab="history"][aria-selected="true"]'), key("ArrowLeft"), wait('[data-dictation-tab="overview"][aria-selected="true"]'), key("End"), key("Home"), wait('[data-dictation-tab="overview"][aria-selected="true"]'), key("End"), wait('[data-dictation-tab="dictionary"][aria-selected="true"]'), check("dictation-navigation")]),

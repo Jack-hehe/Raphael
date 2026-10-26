@@ -57,7 +57,10 @@ export function installMock(fixture, config = {}, target = window) {
   if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);
   if (variant.roomWrapup) data.messages.push(data.roomWrapupMessage);
   if (variant.roomMissingSource) data.messages[2].reply_reference = { message_id: 999, unavailable: true };
+  if (variant.usageFishVoice) { data.settings.tts_enabled = true; data.settings.tts_service = "fish"; }
   if (variant.usageEmpty) {
+    data.spendRows = [];
+    data.status.spend.month_usd = 0;
     data.usage.total = 0;
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));
     data.usage.groups = Object.fromEntries(Object.keys(data.usage.groups).map(key => [key, []]));
@@ -74,6 +77,29 @@ export function installMock(fixture, config = {}, target = window) {
     data.status.spend = { ...data.status.spend, month_usd: 0, today_usd: 0, daily: Array(14).fill(0) };
     data.home.dictation = { words: 0, audio_seconds: 0, time_saved_seconds: 0, speed_wpm: null, daily: Array(14).fill(0) };
   }
+  function usageBill(period) {
+    // The shared fixture clock and browser run in Asia/Taipei.
+    const local = new Date(data.now + 8 * 3600000);
+    const midnight = (year, month, day) => Date.UTC(year, month, day) - 8 * 3600000;
+    const year = local.getUTCFullYear(), month = local.getUTCMonth(), day = local.getUTCDate();
+    let lower = -Infinity, upper = Infinity;
+    if (period === "month") { lower = midnight(year, month, 1); upper = midnight(year, month + 1, 1); }
+    if (period === "last_month") { lower = midnight(year, month - 1, 1); upper = midnight(year, month, 1); }
+    if (period === "week") {
+      const monday = day - (local.getUTCDay() + 6) % 7;
+      lower = midnight(year, month, monday); upper = midnight(year, month, monday + 7);
+    }
+    const rows = data.spendRows.filter(row => row.created_at_ms >= lower && row.created_at_ms < upper);
+    const total = rows.reduce((sum, row) => sum + row.cost_usd, 0);
+    const amounts = { agent: 0, stt: 0, cleanup: 0, memory: 0 };
+    for (const row of rows) {
+      const purpose = ["agent", "stt", "cleanup", "memory"].includes(row.purpose) ? row.purpose : "other";
+      amounts[purpose] = (amounts[purpose] ?? 0) + row.cost_usd;
+    }
+    return { cost_usd: total, purposes: Object.entries(amounts).map(([purpose, cost_usd]) => ({ purpose, cost_usd, share: total ? cost_usd / total : 0 })) };
+  }
+  // Sidebar and overview use the same ledger rows, including floating-point totals.
+  if (!variant.homeEmpty) data.status.spend.month_usd = usageBill("month").cost_usd;
   const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
   let maximized = false;
   target.__look = state;
@@ -225,7 +251,7 @@ export function installMock(fixture, config = {}, target = window) {
         return {};
       }
       case "integrations.disconnect": update(data.servers, p.id, { enabled: false, status: "disconnected", auth: "none" }); return { disconnected: true };
-      case "usage.runs": return { ...data.usage, range: p.range ?? data.usage.range };
+      case "usage.runs": return { ...data.usage, range: p.range ?? data.usage.range, bill: usageBill(p.range ?? "month"), fish_voice: !!(data.settings.tts_enabled && data.settings.tts_service === "fish") };
       case "usage.allowances": return data.allowances;
       case "usage.analytics": return { ...data.analytics, range: p.range ?? data.analytics.range };
       case "usage.export": return { csv: data.usageCsv };

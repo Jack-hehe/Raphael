@@ -5,6 +5,26 @@ import { checkRendered } from "./checks.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("reconciles the month bill exactly with sidebar ledger spend, including fractional costs", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { usageFishVoice: true } }, target);
+    const call = (method, params = {}) => target.__TAURI_INTERNALS__.invoke("core_call", { method, params });
+    const month = await call("usage.runs", { range: "month" });
+    expect(month.bill.cost_usd).toBe((await call("status.get")).spend.month_usd);
+    expect(month.bill.purposes.map(row => row.purpose)).toEqual(["agent", "stt", "cleanup", "memory", "other"]);
+    expect(month.bill.purposes.find(row => row.purpose === "stt").share).toBeCloseTo(.4);
+    expect(month.fish_voice).toBe(true);
+    expect((await call("usage.runs", { range: "last_month" })).bill.cost_usd).toBe(.25);
+    expect((await call("usage.runs", { range: "all" })).bill.cost_usd).toBeCloseTo(1.49);
+  });
+  it("keeps a finite empty bill and omits disabled Fish Audio voice", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { usageEmpty: true } }, target);
+    const report = await target.__TAURI_INTERNALS__.invoke("core_call", { method:"usage.runs", params:{range:"month"} });
+    expect(report.bill.cost_usd).toBe(0);
+    expect(report.bill.purposes.every(row => row.cost_usd === 0 && row.share === 0)).toBe(true);
+    expect(report.fish_voice).toBe(false);
+  });
   it.each([undefined, -1])("rejects an approval without an explicit existing source turn (%s)", turn_id => {
     const data = structuredClone(fixture);
     data.adminQuestions.draft.turn_id = turn_id;

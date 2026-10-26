@@ -31,6 +31,32 @@ async def test_runs_have_real_metrics_and_local_calendar_periods(runs):
     assert (await runs.read({'range':'last_month','tz':'UTC'}))['total'] == 0
 
 
+async def test_bill_survives_deleted_runs_and_uses_the_sidebar_tracker(conn):
+    from datetime import timedelta, timezone
+    from raphael_core.brain.settings import SettingsStore
+    from raphael_core.brain.spend import SpendTracker
+
+    now = lambda: at('2026-09-30T18:00:00')
+    ledger = SpendTracker(conn, now, timezone(timedelta(hours=8)))
+    for purpose in ('agent', 'stt', 'cleanup', 'memory', 'new-purpose'):
+        ledger.record(purpose=purpose, model='m', cost_usd=.1, prompt_tokens=1, completion_tokens=1)
+    settings = SettingsStore(conn)
+    reader = RunAnalytics(conn, now, spend=ledger, settings=settings)
+    conn.execute("INSERT INTO agent_turns(created_at_ms,session_id,question,route,prefix,text,status,cost_usd) VALUES(?,'s','Retained work','answer','','ok','done',.1)", (now(),))
+    # The report's requested display zone cannot move the sidebar's bill into September.
+    result = await reader.read({'range':'month', 'tz':'UTC'})
+    assert result['bill']['cost_usd'] == ledger.month_total() == .5
+    assert result['summary']['cost_usd'] == .1
+    assert not result['fish_voice']
+    settings.set('tts_enabled', True)
+    result = await reader.read({'range':'month', 'tz':'UTC'})
+    assert result['fish_voice']
+    conn.execute('DELETE FROM agent_turns')
+    after = await reader.read({'range':'month'})
+    assert after['bill'] == result['bill']
+    assert after['summary']['cost_usd'] == 0
+
+
 async def test_csv_exports_every_run_and_prevents_spreadsheet_formulas(runs, conn):
     result = await runs.export({'range':'all','tz':'UTC'})
     rows = list(csv.DictReader(io.StringIO(result['csv'])))

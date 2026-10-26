@@ -720,6 +720,38 @@
       "cost": 0
     }
   ],
+  "spendRows": [
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "agent",
+      "cost_usd": 0.6
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "stt",
+      "cost_usd": 0.496
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "cleanup",
+      "cost_usd": 0.08
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "memory",
+      "cost_usd": 0.04
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "future-service",
+      "cost_usd": 0.024
+    },
+    {
+      "created_at_ms": 1790697600000,
+      "purpose": "agent",
+      "cost_usd": 0.25
+    }
+  ],
   "usage": {
     "range": "week",
     "start_day": "2026-10-18",

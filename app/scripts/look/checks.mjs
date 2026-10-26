@@ -545,10 +545,26 @@ export function checkRendered(name) {
     }
     return { check: name, collapsed, width: column.getBoundingClientRect().width, members: rows.length };
   }
+  if (name === "usage-allowance-link") {
+    const heading = document.querySelector(".run-allowance h3");
+    require(document.activeElement === heading, "subscription link moves keyboard focus to allowances");
+    require(document.querySelectorAll(".run-subscription").length === 3, "all subscription allowances remain available");
+    return { check: name, heading: heading.textContent };
+  }
+  if (name === "usage-bill-breakdown") {
+    const bill = document.querySelector(".run-bill-total");
+    const sidebar = document.querySelector(".usage-num");
+    require(Number(bill.dataset.billTotal) === window.__look.data.status.spend.month_usd, "month bill uses the sidebar ledger total");
+    require(sidebar.textContent.split("/")[0].trim() === bill.textContent, "formatted overview bill equals the sidebar amount exactly");
+    require(document.querySelectorAll("[data-bill-purpose]").length === 5, "all four purposes and unknown spend are included");
+    require(document.querySelector(".run-exclusions").textContent.includes("Fish Audio"), "enabled Fish Audio voice is excluded explicitly");
+    require(document.querySelector('[data-run-act="show-allowance"]'), "subscription exclusion links to allowances");
+    return { check: name, bill: bill.textContent, sidebar: sidebar.textContent };
+  }
   if (name === "usage-summary") {
-    require(document.querySelectorAll(".run-tile").length === 6, "overview totals remain available");
+    require(document.querySelectorAll(".run-tile").length === 5, "overview totals remain available");
     require(!document.querySelector(".run-list, .run-timeline, [data-run-id]"), "per-run navigation is absent");
-    const tracks = [...document.querySelectorAll(".run-bar-track")];
+    const tracks = [...document.querySelectorAll(".run-groups .run-bar-track, .run-allowance .run-bar-track")];
     for (const track of tracks) {
       const fill = track.querySelector("i"), box = track.getBoundingClientRect();
       require(box.width > 0 && box.height === 7, "grouping and allowance tracks retain their visible height");
