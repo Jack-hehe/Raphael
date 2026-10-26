@@ -395,6 +395,10 @@ class _Ask:
     text: str
     language: str
     conversation_id: int | None = None
+    source_turn_id: int | None = None
+    scope: str = "private"
+    room_id: int | None = None
+    thread_id: int | None = None
     original_text: str | None = None
     source: str = VOICE
     started_at_ms: int = field(default_factory=wall_clock_ms)
@@ -407,9 +411,9 @@ class _Ask:
     # Who answers: Raphael, or a member of the team (`speaker`), in whose thread the turn is.
     speaker: Speaker = RAPHAEL
     # For a request one member hands another (`answer_for`): the one who asked. The turn is then an
-    # exchange, written in both threads, and nothing in it is the owner's own words.
+    # exchange audit, outside private threads; nothing in it is the owner's own words.
     peer: int | None = None
-    # The same direction in both copies of an exchange, independent of whose thread owns it.
+    # Speaker direction retained by the exchange audit, independent of the requesting thread.
     exchange_speakers: tuple[str, str] | None = None
     exchange_owner_sources: tuple[str, ...] = ()
     exchange_answer: str = ""
@@ -1659,7 +1663,7 @@ class AgentService:
             if brain_ref(settings.model):
                 common["execute"] = cli_execute
                 loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
-                    attachments=ask.attachments, resume_session=not ask.quick,
+                    attachments=ask.attachments, resume_session=not ask.quick and not ask.nested,
                     conversation_id=ask.conversation_id, quota=self.quotas.record,
                     member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
                     expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)
@@ -2204,6 +2208,8 @@ class AgentService:
                 status="done",
                 source=EXCHANGE_SOURCE,
                 member_id=speaker.id, conversation_id=ask.conversation_id,
+                scope=ask.scope, room_id=ask.room_id, thread_id=ask.thread_id,
+                source_turn_id=ask.turn_id or ask.source_turn_id,
                 # who handed it over: the thread shows it as an exchange with that member
                 peer_id=ask.peer,
             )
@@ -2261,7 +2267,7 @@ class AgentService:
                 call.arguments,
                 language=ask.language,
                 ledger=ledger,
-                session_id=ask.session_id, conversation_id=ask.conversation_id, approval=approval, action=action,
+                session_id=ask.session_id, conversation_id=ask.conversation_id, source_turn_id=ask.turn_id or None, approval=approval, action=action,
             )
             if call.tool.key == CREATE_MEMBER and result.ok:
                 ask.member_creates += 1
@@ -2284,6 +2290,7 @@ class AgentService:
         session_id: str,
         conversation_id: int | None = None,
         approval: Approval | None = None,
+        source_turn_id: int | None = None,
         action: Action | None = None,
     ) -> ToolResult:
         """Make the team tool `name` (`team.ASK_MEMBER`, `team.CREATE_MEMBER`) for `speaker`, through
@@ -2338,6 +2345,7 @@ class AgentService:
                     ledger=ledger,
                     session_id=session_id,
                     asker_conversation_id=conversation_id,
+                    source_turn_id=source_turn_id,
                 ),
                 EXCHANGE_TIMEOUT_S,
             )
@@ -2357,6 +2365,7 @@ class AgentService:
         ledger: Ledger,
         session_id: str,
         asker_conversation_id: int | None = None,
+        source_turn_id: int | None = None,
     ) -> tuple[bool, str]:
         """`target` answers `request`, which `asker` handed it (`ask_member`): whether it could,
         and what it said. It answers through the same path as a question of the owner's (the
@@ -2367,9 +2376,11 @@ class AgentService:
         the owner's), asks no yes at the overlay (a call that needs one sends the request to the
         background, `ask_in_background`), and its costs go to
         `ledger`, the asker's, so they count toward the asker's limits and the month's. The
-        exchange is written in the two threads, one line each, and nowhere else."""
+        exchange is retained once as audit linked to its source, outside private history."""
         requester = asker.name or "Raphael"
         respondent = target.name or "Raphael"
+        origin = self._history.get(source_turn_id) if source_turn_id else next(
+            (t for t in reversed(self._history.for_session(session_id)) if t.member_id == asker.id and t.scope != "quarantine"), None)
         sources = owner_lines(self._conversation_of(target.id).context(quick=False).turns)
         ask = _Ask(
             session_id=session_id,
@@ -2378,6 +2389,10 @@ class AgentService:
             source=EXCHANGE_SOURCE,
             speaker=target.asked_by(asker),
             conversation_id=self.conversations.main(target.id),
+            source_turn_id=origin.id if origin else None,
+            scope="room" if origin and origin.scope == "room" else "exchange",
+            room_id=origin.room_id if origin and origin.scope == "room" else None,
+            thread_id=origin.thread_id if origin and origin.scope == "room" else None,
             peer=asker.id,
             exchange_speakers=(requester, respondent),
             exchange_owner_sources=sources,
@@ -2402,19 +2417,6 @@ class AgentService:
         assert result is not None
         # The saved exchange contains all final replies, with provenance added by _record.
         said = ask.exchange_answer or relayed_answer(respondent, result.get("text", ""), sources)
-        mirror = _Ask(
-            session_id=session_id,
-            text=request,
-            language=language,
-            source=EXCHANGE_SOURCE,
-            speaker=asker,
-            conversation_id=self.conversations.resolve(asker.id, asker_conversation_id),
-            peer=target.id,
-            cost_base=ledger.total,
-            call_base=len(ledger.calls),
-        )
-        mirror.text = labelled_lines(requester, request)
-        self._record(mirror, "exchange", "", said, "done" if ok else "error", None, ledger)
         logger.info("An exchange between members: ok=%s", ok)
         return ok, said
 
@@ -3121,7 +3123,7 @@ class AgentService:
         session = _str(params, "session_id")
         turn_id = _opt_int(params, "turn_id")
         turns = self._history.for_session(session)
-        own = [turn for turn in turns if turn.member_id == member and turn.source not in ("member", "routine")]
+        own = [turn for turn in turns if turn.scope == "private" and turn.member_id == member and turn.source not in ("member", "routine")]
         if (turn_id is not None and not any(turn.id == turn_id for turn in own)) or (turns and not own):
             raise invalid_params("the message does not belong to this session and thread")
         inflight = self._inflight.get(session)
@@ -3131,7 +3133,7 @@ class AgentService:
         await self._background.cancel_session(session)
         # Read again after stopping: a request may have written its first row before cancellation.
         own = [turn for turn in self._history.for_session(session)
-               if turn.member_id == member and turn.source not in ("member", "routine")]
+               if turn.scope == "private" and turn.member_id == member and turn.source not in ("member", "routine")]
         deleted = sum(self._history.delete(turn.id) for turn in own if turn.id is not None)
         if deleted:
             for conversation_id in {turn.conversation_id for turn in own}:
@@ -3219,6 +3221,9 @@ class AgentService:
                     # Whose thread it is in, and for an exchange the member on the other side.
                     "member_id": turn.member_id,
                     "conversation_id": turn.conversation_id,
+                    "scope": turn.scope,
+                    "room_id": turn.room_id,
+                    "thread_id": turn.thread_id,
                     "peer_id": turn.peer_id,
                     # The files handed with the request: their names and types, never more.
                     "attachments": list(turn.attachments or []),
@@ -3571,6 +3576,8 @@ class AgentService:
                     quote=ask.quote,
                     member_id=member_id, peer_id=ask.peer,
                     conversation_id=ask.conversation_id,
+                    source_turn_id=ask.source_turn_id,
+                    scope=ask.scope, room_id=ask.room_id, thread_id=ask.thread_id,
                 )
                 ask.turn_id = turn_id
             ask.recorded_cost = cost
@@ -3587,7 +3594,7 @@ class AgentService:
         self._turn_changed(turn_id, member_id, hold=hold)
         if hold and turn_id:
             ask.held = turn_id
-        if self._memory is not None and status not in ("running", "confirm"):
+        if self._memory is not None and not ask.nested and status not in ("running", "confirm"):
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.
                 if ask.conversation_id != self.conversations.main(member_id) and self._memory.may_spend():

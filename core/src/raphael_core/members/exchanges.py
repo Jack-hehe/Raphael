@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from ..agent.ledger import Ledger
 from ..brain.spend import SpendTracker
+from ..protocol import RpcError
 
 MAX_TURNS = 6
 MAX_HOPS = 3
@@ -77,10 +78,11 @@ class RoomExchanges:
                                                      ("PM", "專案經理", "產品經理"))) if any(w in role for w in words)), 3)
         return [min(ids, key=rank)] if ids else []
 
-    def transcript(self, room):
+    def transcript(self, room, thread_id=None):
         people = {s.id:s for s in self.rooms._members.roster()}
         result = []
-        for row in self.conn.execute("SELECT * FROM room_messages WHERE room_id = ? ORDER BY id", (room["id"],)):
+        thread_id = self.rooms._thread(room, thread_id)
+        for row in self.conn.execute("SELECT * FROM room_messages WHERE room_id = ? AND thread_id=? ORDER BY id", (room["id"],thread_id)):
             m = self.rooms._message(row)
             if m["status"] != "done" or (m["member_id"] is not None and is_pass(m["text"])):
                 continue
@@ -103,8 +105,12 @@ class RoomExchanges:
             return None
         ledger = Ledger(self.spend)
         try:
+            origin = self.conn.execute("SELECT thread_id FROM room_messages WHERE id=? AND room_id=?",
+                                       (exchange.origin_message_id, room['id'])).fetchone()
+            if origin is None:
+                return None
             answer = await self.decision.room_responder(
-                transcript=self.transcript(room),
+                transcript=self.transcript(room, origin['thread_id']),
                 members=[{"id":s.id, "name":s.name, "role":s.role, "personality":s.personality}
                          for s in self.rooms._members.roster() if s.id in candidates],
                 phase=phase, model=self.rooms._settings.get("agent_model"), ledger=ledger,
@@ -129,7 +135,7 @@ class RoomExchanges:
                               "WHERE room_id = ? AND state IN ('queued','running')", (room["id"],))
             self.conn.execute("INSERT INTO room_exchanges (origin_message_id, room_id, state, language, pending) "
                               "VALUES (?, ?, 'queued', ?, ?)",
-                              (origin, room["id"], language, json.dumps([{"member":recipient,"reply_to_member":recipient,
+                              (origin, room["id"], language, json.dumps([{"member":recipient,"reply_to_member":None,
                                "reply_to":origin,"handoff":False}]) if recipient is not None else None))
         self.attachments[origin] = attachments
         await self.drive(room["id"])
@@ -168,6 +174,10 @@ class RoomExchanges:
                 if room_row is None:
                     return
                 room = dict(room_row)
+                room = self.rooms._view(room)
+                if room["membership_state"] != "ready":
+                    self.update(exchange.origin_message_id, state="stopped", pending="[]", reason="membership")
+                    continue
                 if exchange.active_turn:
                     turn = self.rooms._history.get(exchange.active_turn)
                     if turn and turn.status == "running":
@@ -234,7 +244,7 @@ class RoomExchanges:
                 exchange = self.get(exchange.origin_message_id)
                 if not exchange or exchange.stop_requested or exchange.cost >= cap:
                     continue
-                wrapup = (exchange.turns_taken >= 3 and 0 in ids and not exchange.wrapup_sent and
+                wrapup = (exchange.turns_taken >= 1 and 0 in ids and not exchange.wrapup_sent and
                           (not pending or exchange.turns_taken == MAX_TURNS - 1))
                 if wrapup:
                     last = self.last_reply(exchange.origin_message_id)
@@ -254,8 +264,13 @@ class RoomExchanges:
                 self.update(exchange.origin_message_id, state="running", pending=json.dumps(remaining),
                             turns_taken=exchange.turns_taken + 1,
                             hops=exchange.hops + int(target["handoff"]), wrapup_sent=int(wrapup) or exchange.wrapup_sent)
-                turn = self.rooms._submit_exchange_turn(room, exchange, target, "wrapup" if wrapup else "message",
-                                                        self.attachments.get(exchange.origin_message_id, ()))
+                try:
+                    turn = self.rooms._submit_exchange_turn(room, exchange, target, "wrapup" if wrapup else "message",
+                                                            self.attachments.get(exchange.origin_message_id, ()))
+                except RpcError:
+                    self.update(exchange.origin_message_id, state="stopped", reason="source_unavailable", pending="[]")
+                    self.rooms._changed(room_id)
+                    continue
                 self.update(exchange.origin_message_id, active_turn=turn)
                 self.rooms._changed(room_id)
                 # Refused submissions resolve immediately and must not leave a stuck exchange.

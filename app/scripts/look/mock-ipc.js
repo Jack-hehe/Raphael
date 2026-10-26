@@ -10,8 +10,8 @@ export function installMock(fixture, config = {}, target = window) {
   if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
-  const formalConversation = data.conversations.find(conversation => conversation.member_id === 0 && conversation.is_default);
-  const adminTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === formalConversation?.id);
+  const adminTurn = adminQuestion ? data.turns.find(turn => turn.id === adminQuestion.turn_id) : null;
+  if (adminQuestion && !adminTurn) throw new Error("Approval fixture requires its explicit source turn");
   if (adminQuestion) {
     adminTurn.status = "confirm";
     adminTurn.messages = adminTurn.messages.filter(message => message.kind !== "reply");
@@ -25,6 +25,7 @@ export function installMock(fixture, config = {}, target = window) {
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
   if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);
   if (variant.roomWrapup) data.messages.push(data.roomWrapupMessage);
+  if (variant.roomMissingSource) data.messages[2].reply_reference = { message_id: 999, unavailable: true };
   if (variant.usageEmpty) {
     data.usage.total = 0;
     data.usage.summary = Object.fromEntries(Object.keys(data.usage.summary).map(key => [key, 0]));

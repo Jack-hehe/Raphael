@@ -1,6 +1,7 @@
 """Only the selected speaker's character reaches the answering model."""
 
 import pytest
+from raphael_core.agent.history import AgentHistory
 
 from agent.conftest import decision, tool_plan
 from agent.test_narration import chat
@@ -118,10 +119,11 @@ async def test_relaying_a_lesson_preserves_the_owner_as_the_japanese_quotes_spea
         if source == "voice" and member_id == 0:
             scope["conversation_id"] = rig.service.conversations.quick()
         turns = (await rig.call("agent.history.list", scope))["turns"]
-        exchange = next(t for t in turns if t["route"] == "exchange")
-        assert exchange["question"] == f"Raphael: {request}"
-        assert f"紫苑: {answer.splitlines()[0]}" in exchange["text"]
-        assert f"owner: {question}" in exchange["text"]
+        assert not any(t["route"] == "exchange" for t in turns)
+    [exchange] = [AgentHistory(rig.conn).get(r[0]) for r in rig.conn.execute("SELECT id FROM agent_turns WHERE scope='exchange'")]
+    assert exchange.question == f"Raphael: {request}"
+    assert f"紫苑: {answer.splitlines()[0]}" in exchange.text
+    assert f"owner: {question}" in exchange.text
 
 
 async def test_relay_keeps_all_messages_without_misidentifying_other_sources_as_the_owner(setup, client):
@@ -148,8 +150,9 @@ async def test_relay_keeps_all_messages_without_misidentifying_other_sources_as_
         assert f"owner: {line}" not in tool
     assert "PRIVATE-UNRELATED-QUESTION" not in tool
     turns = (await rig.call("agent.history.list", {"member_id": 0}))["turns"]
-    exchange = next(t for t in turns if t["route"] == "exchange")
-    assert "紫苑: ASSISTANT-REQUEST" in exchange["text"] and "紫苑: Second." in exchange["text"]
+    assert not any(t["route"] == "exchange" for t in turns)
+    exchange = AgentHistory(rig.conn).get(rig.conn.execute("SELECT id FROM agent_turns WHERE scope='exchange' ORDER BY id DESC").fetchone()[0])
+    assert "紫苑: ASSISTANT-REQUEST" in exchange.text and "紫苑: Second." in exchange.text
 
 
 @pytest.mark.parametrize("selected", ["raphael", "member"])

@@ -306,11 +306,14 @@ export interface AgentTurn {
   attachments?: TurnAttachment[];
   /** Whose thread the turn is in: 0 (or none, in a history from before the members) is Raphael's. */
   member_id?: number;
+  /** Explicit provenance; legacy fixtures may omit it. Private queries return only private turns. */
+  scope?: "private" | "room" | "exchange" | "quarantine";
+  room_id?: number | null;
+  thread_id?: number | null;
   /**
    * For an exchange between two members (`route` "exchange", `source` "member": one asked the other
-   * with `ask_member`, `question` what was asked and `text` the answer, written in both threads),
-   * the member on the other side: 0 is Raphael. The thread shows it as one collapsed line,
-   * 「N 則訊息往來：<name>」.
+   * with `ask_member`, `question` what was asked and `text` the answer), the requester: 0 is Raphael.
+   * Exchanges remain audit rows outside private histories.
    */
   peer_id?: number | null;
 }
@@ -761,12 +764,15 @@ export interface RoutineRun {
 export interface Room {
   id: number; name: string; group_id: number | null; created: number;
   is_team: number; member_ids: number[]; default_responder?: string;
+  membership_state?: "ready" | "needs_adjustment";
 }
 export interface RoomMessage {
   id: number; room_id: number; member_id: number | null; text: string; created: number;
   request_id: string | null; reply_to: number | null; turn_id: number | null;
   reply_to_member?: number | null; origin_message_id?: number | null; kind?: "message" | "wrapup";
   status: string; cost?: number; attachments?: TurnAttachment[];
+  scope?: "room"; thread_id?: number;
+  reply_reference?: { message_id: number; author_kind?: "owner" | "member"; author_member_id?: number | null; unavailable?: boolean } | null;
 }
 
 export interface RoomExchange {

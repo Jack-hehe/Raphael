@@ -119,7 +119,8 @@ async def test_a_member_asked_for_what_needs_a_yes_hands_it_to_the_background(wi
     assert (asked.id, asked.depth, asked.chain) == (one.id, 1, frozenset({0}))
     # What the member said back is that the question waits in its thread.
     assert "「小行程」的對話中等你處理" in client.json_calls[-1]["user"]
-    threads = AgentHistory(conn).list(member_id=one.id)
+    assert AgentHistory(conn).list(member_id=one.id) == []
+    threads = [AgentHistory(conn).get(row[0]) for row in conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'", (one.id,))]
     assert sorted(t.route for t in threads) == ["delegate", "exchange"]
     (handed,) = [t for t in threads if t.route == "delegate"]
     assert (handed.source, handed.prefix, handed.question) == ("member", "", "PRIVATE 記下明天的會")

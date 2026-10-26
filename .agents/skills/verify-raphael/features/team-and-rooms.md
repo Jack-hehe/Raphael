@@ -7,7 +7,7 @@ room creation/group assignment, membership and conversation actions. Room messag
 through bounded, persisted exchanges: explicit mentions/replies, saved automatic/member/everyone
 responders, sequential handoffs, up to two material chime-ins and Raphael's wrap-up.
 Each exchange has at most six member turns and three handoffs; the final turn is reserved
-for a wrap-up after three turns when Raphael participates. Empty and (pass) replies stay hidden.
+for a short wrap-up after at least one turn when Raphael participates. Empty and (pass) replies stay hidden.
 Explicit mentions use whole names, prefer the longest matching name, ignore email addresses,
 and run in the order they occur in the message. The same rule applies to peer handoffs.
 
@@ -16,7 +16,12 @@ and run in the order they occur in the message. The same rule applies to peer ha
 Choose Team for the board/creation menu. The padded header puts the title and Add on the same row without an attached member count. Conversation's sidebar lists rooms and a
 plus button. At compact width open the member picker, then Rooms. Open a room and
 use its header menu for rename/membership/delete. Wide sidebar rows expose the same actions
-through a hover/focus more button. New rooms choose 2-6 members and a default responder.
+through a hover/focus more button. New rooms choose 2-6 members including required Raphael,
+and a default responder. Their generated name follows selection until the owner edits it.
+Raphael cannot be deselected. Legacy six-member rooms without Raphael retain every member
+and require owner adjustment before sending. Room turns and exchanges remain outside private
+history, preview, search, badges and worker context. Reply chips use server-derived source
+authors, including the owner; missing sources display an unavailable label.
 Reply on a member message directs the next owner message to that member; the composer
 shows the recipient and lets the owner cancel the reply. Stop finishes the current speaker
 and discards queued turns. A new owner message takes priority after the current speaker.
@@ -34,6 +39,7 @@ npm run look -- team team-group-menu team-rename team-delete team-new-menu team-
 npm run look -- sidebar compact-rooms new-room room-group-menu room room-draft room-menu room-rename room-members room-delete room-hover --theme both --width 1120,720,1920x1080
 npm run look -- room-composer-empty room-text room-composer-hover team-composer-empty team-text team-composer-hover --theme both --width 1120,720,1920x1080
 npm run look -- room-replies room-discussion room-thinking room-wrapup room-row-menu new-room-responder room-reply-send room-stop --theme both --width 1120,720,1920x1080
+npm run look -- room-required-chief room-generated-name room-private-isolation room-reply-owner room-reply-peer room-reply-source-missing --theme both --width 1120,720,1920x1080
 ```
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,

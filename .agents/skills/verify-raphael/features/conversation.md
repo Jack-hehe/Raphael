@@ -4,6 +4,8 @@
 
 Named conversations per member; new/rename/delete; public work/event chips; answers,
 attachments, reply quoting, message actions, search and composer menus.
+Private history, previews, search and unread state exclude room and inter-member exchange
+audit rows. Room answers stay in their room/thread and have no shortcut into private history.
 Raphael's single persistent quick-question conversation is created on the first global
 voice question, pinned above formal conversations as 快速提問 / Quick questions / クイック質問.
 Its fixed title and permanent identity have no rename/delete menu; individual messages

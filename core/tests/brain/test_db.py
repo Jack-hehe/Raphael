@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 28
+LATEST = 29
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -352,6 +352,17 @@ def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(t
 
 
 SCHEMA_V28 = {**SCHEMA_V27, "conversations": [*SCHEMA_V27["conversations"], "kind TEXT NOT NULL DEFAULT 'standard'"]}
+SCHEMA_V29 = {
+    **SCHEMA_V28,
+    "rooms": [*SCHEMA_V28["rooms"], "membership_state TEXT NOT NULL DEFAULT 'ready'", "creation_request_id TEXT"],
+    "room_messages": [*SCHEMA_V28["room_messages"], "thread_id INTEGER"],
+    "agent_turns": [*SCHEMA_V28["agent_turns"], "scope TEXT NOT NULL DEFAULT 'private'", "room_id INTEGER", "thread_id INTEGER", "source_turn_id INTEGER"],
+    "worker_tasks": [*SCHEMA_V28["worker_tasks"], "scope TEXT NOT NULL DEFAULT 'private'", "room_id INTEGER", "thread_id INTEGER"],
+    "room_threads": ["id INTEGER PK", "room_id INTEGER NOT NULL", "title TEXT NOT NULL DEFAULT ''", "created INTEGER NOT NULL"],
+    "scope_migrations": ["turn_id INTEGER PK", "original TEXT NOT NULL", "disposition TEXT NOT NULL", "reason TEXT NOT NULL"],
+    "room_membership_migrations": ["room_id INTEGER PK", "original_members TEXT NOT NULL", "disposition TEXT NOT NULL"],
+    "scope_context_archive": ["kind TEXT NOT NULL", "original TEXT NOT NULL"],
+}
 
 
 def schema_names(conn, kind):
@@ -375,7 +386,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V28) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V29) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -389,7 +400,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V28.items():
+    for table, columns in SCHEMA_V29.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
@@ -592,7 +603,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V24["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V29["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]

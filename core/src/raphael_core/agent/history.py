@@ -22,9 +22,12 @@ Each turn is in the thread of one member of the owner's team (`member_id`, rapha
 the owner made. Every reading here is of one thread (Raphael's, unless another is named), so each
 member has a conversation, a summary and a search of its own. Two kinds of turn are not the owner's
 own words: an exchange (`route` "exchange", `source` "member"), where one member asked another
-something through `ask_member` and the other answered (it is written in both threads, `peer_id`
-naming the other one), and a routine's run (`route` and `source` "routine"), whose `question` is the
+something through `ask_member` and the other answered (kept as a separate exchange audit, `peer_id`
+naming the requester), and a routine's run (`route` and `source` "routine"), whose `question` is the
 routine's title and whose answer is what the run reported.
+
+Private reads always select scope=private. Room turns require a room/thread, never resolve or
+touch a private conversation, and remain available through the room service and internal audit.
 
 The conversation is not pruned: unlike the dictations, which go after the retention setting, the
 turns stay until the user clears them (`clear`). Nothing here logs a question or an answer.
@@ -72,11 +75,15 @@ class Turn:
     messages: list[str] = field(default_factory=list)
     quote: dict[str, str] | None = None
     conversation_id: int | None = None
+    scope: str = "private"
+    room_id: int | None = None
+    thread_id: int | None = None
+    source_turn_id: int | None = None
 
 
 _COLUMNS = (
     "id, created_at_ms, session_id, question, route, prefix, text, detail, status, cost_usd,"
-    " source, model, attachments, member_id, peer_id, quote, conversation_id"
+    " source, model, attachments, member_id, peer_id, quote, conversation_id, scope, room_id, thread_id, source_turn_id"
 )
 _STEP_COLUMNS = "turn_id, kind, tool, server, outcome, ms, reason, at_ms, detail"
 _TURN_COLUMNS = ", ".join(f"t.{name.strip()}" for name in _COLUMNS.split(","))
@@ -122,7 +129,10 @@ def _filters(
     """The conditions of a search besides its words, as SQL to add to its WHERE, and their params:
     the turns of the thread of `member_id`, made from `since_ms` on, and none of the ids of
     `exclude`."""
-    where, params = ("", []) if member_id is None else (" AND t.member_id = ?", [member_id])
+    where, params = (" AND t.scope = 'private'", [])
+    if member_id is not None:
+        where += " AND t.member_id = ?"
+        params.append(member_id)
     if conversation_id is not None:
         where += " AND t.conversation_id = ?"
         params.append(conversation_id)
@@ -164,18 +174,33 @@ class AgentHistory:
         peer_id: int | None = None,
         quote: dict[str, str] | None = None,
         conversation_id: int | None = None,
+        scope: str = "private",
+        room_id: int | None = None,
+        thread_id: int | None = None,
+        source_turn_id: int | None = None,
     ) -> int:
         """Store a new turn, made now, in the thread of `member_id`, with the steps taken for it,
         and return its id. `attachments` are the names and the types of the files handed with the
         request; `peer_id` is the other member of an exchange."""
         files = [{key: item[key] for key in ("name", "mime", "id", "size") if key in item} for item in attachments]
+        if scope == "private" and (source == "member" or route == "exchange"):
+            scope = "exchange"
+        if scope not in ("private", "room", "exchange", "quarantine"):
+            raise ValueError("unknown turn scope")
+        if scope == "room":
+            if not self._conn.execute("SELECT 1 FROM room_threads WHERE id=? AND room_id=?", (thread_id, room_id)).fetchone():
+                raise ValueError("room turns require a valid room thread")
+        elif room_id is not None or thread_id is not None:
+            raise ValueError("non-room turns cannot name a room")
+        if (source == "room" or route == "room") and scope != "room":
+            raise ValueError("room source requires room scope")
         with self._conn:
             conversations = Conversations(self._conn, self._now_ms)
-            conversation_id = conversations.resolve(member_id, conversation_id)
+            conversation_id = conversations.resolve(member_id, conversation_id) if scope == "private" else None
             cursor = self._conn.execute(
                 "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix,"
-                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id, quote, conversation_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " text, detail, status, cost_usd, source, model, attachments, member_id, peer_id, quote, conversation_id, scope, room_id, thread_id, source_turn_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     self._now_ms(),
                     session_id,
@@ -193,13 +218,15 @@ class AgentHistory:
                     peer_id,
                     json.dumps(quote, ensure_ascii=False) if quote else None,
                     conversation_id,
+                    scope, room_id, thread_id, source_turn_id,
                 ),
             )
             turn_id = cursor.lastrowid
             assert turn_id is not None
             self._insert_steps(turn_id, steps)
             self._index(turn_id, question, text, detail)
-            conversations.touch(conversation_id, question)
+            if conversation_id is not None:
+                conversations.touch(conversation_id, question)
         return turn_id
 
     def _index(self, turn_id: int, question: str, text: str, detail: str | None) -> None:
@@ -337,7 +364,7 @@ class AgentHistory:
     ) -> list[Turn]:
         """The thread of `member_id`, newest first. `before_id` keeps the turns made before that
         one: the cursor for the next page."""
-        conditions = " WHERE member_id = ?" + ("" if before_id is None else " AND id < ?")
+        conditions = " WHERE scope = 'private' AND member_id = ?" + ("" if before_id is None else " AND id < ?")
         params: list[object] = [member_id] if before_id is None else [member_id, before_id]
         if conversation_id is not None:
             conditions += " AND conversation_id = ?"
@@ -356,7 +383,7 @@ class AgentHistory:
             return []
         condition = "" if conversation_id is None else " AND conversation_id = ?"
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns WHERE status = 'done' AND member_id = ?"
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE scope = 'private' AND status = 'done' AND member_id = ?"
             + condition + " ORDER BY id DESC LIMIT ?",
             [member_id, *([] if conversation_id is None else [conversation_id]), count],
         )
@@ -372,14 +399,14 @@ class AgentHistory:
         params = [turn_id, member_id, *([] if conversation_id is None else [conversation_id])]
         if limit is None:
             rows = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ?" + condition + " ORDER BY id",
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE scope = 'private' AND id > ? AND member_id = ?" + condition + " ORDER BY id",
                 params,
             ).fetchall()
             return self._with_messages([_to_turn(row) for row in rows])
         if limit <= 0:
             return []
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns WHERE id > ? AND member_id = ?"
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE scope = 'private' AND id > ? AND member_id = ?"
             + condition + " ORDER BY id DESC LIMIT ?",
             [*params, limit],
         ).fetchall()
@@ -395,7 +422,7 @@ class AgentHistory:
         under each name."""
         rows = self._conn.execute(
             f"SELECT {_COLUMNS} FROM agent_turns WHERE id IN"
-            " (SELECT MAX(id) FROM agent_turns GROUP BY member_id)"
+            " (SELECT MAX(id) FROM agent_turns WHERE scope = 'private' GROUP BY member_id)"
         ).fetchall()
         return {turn.member_id: turn for turn in map(_to_turn, rows)}
 
@@ -507,16 +534,15 @@ class AgentHistory:
         return cursor.rowcount > 0
 
     def clear_member(self, member_id: int) -> int:
-        """Delete the thread of `member_id` and the exchanges of the other threads with it, with
-        their steps and their place in the search; return how many turns went."""
+        """Clear this member's private thread without deleting room or exchange audit rows."""
         both = (member_id, member_id)
-        ids = "SELECT id FROM agent_turns WHERE member_id = ? OR peer_id = ?"
+        ids = "SELECT id FROM agent_turns WHERE scope = 'private' AND (member_id = ? OR peer_id = ?)"
         with self._conn:
             self._conn.execute(f"DELETE FROM agent_messages WHERE turn_id IN ({ids})", both)
             self._conn.execute(f"DELETE FROM agent_steps WHERE turn_id IN ({ids})", both)
             self._conn.execute(f"DELETE FROM agent_turns_fts WHERE rowid IN ({ids})", both)
             cursor = self._conn.execute(
-                "DELETE FROM agent_turns WHERE member_id = ? OR peer_id = ?", both
+                "DELETE FROM agent_turns WHERE scope = 'private' AND (member_id = ? OR peer_id = ?)", both
             )
         return cursor.rowcount
 

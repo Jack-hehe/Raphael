@@ -70,12 +70,15 @@ class Task:
     rerun_of: int | None = None  # the task this one runs again
     member_id: int = 0  # whose task it is: 0 for Raphael's, else a member of the team's
     routine_id: int | None = None  # the routine that started it, if one did
+    scope: str = "private"
+    room_id: int | None = None
+    thread_id: int | None = None
 
     @property
     def quiet(self) -> bool:
         """Whether its report stays in its thread: a member's task, or a routine's run, is never
         said on the overlay (the owner reads it in the app)."""
-        return self.member_id != 0 or self.routine_id is not None or self.session_id.startswith("room:")
+        return self.member_id != 0 or self.routine_id is not None or self.scope != "private"
 
 
 @dataclass
@@ -120,7 +123,7 @@ _QUESTION_COLUMNS = (
 _TASK_COLUMNS = (
     "id, created_at_ms, started_at_ms, finished_at_ms, state, session_id, turn_id, language, text,"
     " report_prefix, report_text, report_detail, reason, model_calls, tool_calls, cost_usd,"
-    " announced, rerun_of, member_id, routine_id"
+    " announced, rerun_of, member_id, routine_id, scope, room_id, thread_id"
 )
 _STEP_COLUMNS = "n, at_ms, kind, tool, server, tier, outcome, cost_usd, ms, reason, detail"
 
@@ -156,7 +159,10 @@ class TaskStore:
     def attach_turn(self, task_id: int, turn_id: int) -> None:
         with self._conn:
             self._conn.execute(
-                "UPDATE worker_tasks SET turn_id = ? WHERE id = ?", (turn_id or None, task_id)
+                "UPDATE worker_tasks SET turn_id = ?, scope=COALESCE((SELECT scope FROM agent_turns WHERE id=?),scope),"
+                " room_id=COALESCE((SELECT room_id FROM agent_turns WHERE id=?),room_id),"
+                " thread_id=COALESCE((SELECT thread_id FROM agent_turns WHERE id=?),thread_id) WHERE id = ?",
+                (turn_id or None, turn_id, turn_id, turn_id, task_id)
             )
 
     def start(self, task_id: int) -> None:
@@ -347,6 +353,8 @@ class TaskStore:
         later, with something said (a cleared task keeps nothing)."""
         rows = self._conn.execute(
             f"SELECT {_TASK_COLUMNS} FROM worker_tasks WHERE text != '' AND member_id = ?"
+            " AND scope='private'"
+            " AND (turn_id IS NULL OR EXISTS(SELECT 1 FROM agent_turns t WHERE t.id=worker_tasks.turn_id AND t.scope='private'))"
             " AND (state IN ('queued', 'running', 'waiting') OR finished_at_ms >= ?)"
             " ORDER BY CASE WHEN state = 'running' THEN 0 ELSE 1 END, id DESC LIMIT ?",
             (member_id, since_ms, limit),

@@ -14,10 +14,31 @@ const pane=async()=>{const view=createRoomPane(app,vi.fn());document.body.append
 const draft=(text:string)=>{const input=document.querySelector<HTMLTextAreaElement>("#room-message")!;input.value=text;input.dispatchEvent(new Event("input"));return input;};
 beforeEach(()=>{document.body.innerHTML="";vi.clearAllMocks();setLocale("en");const members=[0,1].map(id=>({id,name:id?"Alice":"Raphael",avatar:""} as Member));api.membersList.mockResolvedValue({members,groups:[]});api.roomsCreate.mockResolvedValue({room});api.roomsList.mockResolvedValue({rooms:[room]});api.roomMessages.mockResolvedValue({messages:[]});api.roomSend.mockResolvedValue({message_id:1,duplicate:false});app={go:vi.fn(),onEvent:(fn:any)=>{event=fn;return()=>{};}} as unknown as AppContext;clearRoomSelection();configureRooms(app);api.roomsUpdate.mockResolvedValue({room});});
 test("new group requires members and saves checked identities",async()=>{
- await openNewGroupChat();document.querySelector<HTMLInputElement>('#room-name')!.value="Launch";document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();expect(api.roomsCreate).not.toHaveBeenCalled();expect(document.querySelector('input[type="checkbox"]')).toBeNull();expect(document.querySelector<HTMLInputElement>('#room-name')!.placeholder).toBeTruthy();document.querySelector<HTMLElement>('[data-member="1"]')!.click();expect(document.querySelector('[data-member="1"]')!.getAttribute('aria-pressed')).toBe('true');document.querySelector<HTMLElement>('[data-dlg="member"][data-member="0"]')!.click();document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();expect(api.roomsCreate).toHaveBeenCalledWith({name:"Launch",member_ids:[1,0],group_id:null,default_responder:"auto"});expect(app.go).toHaveBeenCalledWith('agent');expect(document.querySelector('.au-room-dialog')).toBeNull();
+ await openNewGroupChat();document.querySelector<HTMLInputElement>('#room-name')!.value="Launch";document.querySelector("#room-name")!.dispatchEvent(new Event("input"));document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();expect(api.roomsCreate).not.toHaveBeenCalled();expect(document.querySelector('input[type="checkbox"]')).toBeNull();expect(document.querySelector<HTMLInputElement>('#room-name')!.placeholder).toBeTruthy();document.querySelector<HTMLElement>('[data-member="1"]')!.click();expect(document.querySelector('[data-member="1"]')!.getAttribute('aria-pressed')).toBe('true');document.querySelector<HTMLElement>('[data-dlg="member"][data-member="0"]')!.click();document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();expect(api.roomsCreate).toHaveBeenCalledWith({name:"Launch",member_ids:[0,1],group_id:null,default_responder:"auto",request_id:expect.any(String)});expect(app.go).toHaveBeenCalledWith('agent');expect(document.querySelector('.au-room-dialog')).toBeNull();
 });
 test("failed send retains the draft and reuses its idempotency key on retry",async()=>{
  api.roomSend.mockRejectedValueOnce(new Error("offline"));await pane();const input=draft("@Alice hello");document.querySelector<HTMLElement>('.cmp-send')!.click();await flush();const id=api.roomSend.mock.calls[0][2];expect(input.value).toBe("@Alice hello");document.querySelector<HTMLElement>('.cmp-send')!.click();await flush();expect(api.roomSend.mock.calls[1][2]).toBe(id);expect(input.value).toBe("");
+});
+
+test("generated room names preserve owner edits and creation retries reuse the request",async()=>{
+ api.roomsCreate.mockRejectedValueOnce(new Error("offline"));
+ await openNewGroupChat();
+ expect(document.querySelector<HTMLButtonElement>('[data-dlg="member"][data-member="0"]')!.disabled).toBe(true);
+ document.querySelector<HTMLElement>('[data-dlg="member"][data-member="1"]')!.click();
+ const input=document.querySelector<HTMLInputElement>('#room-name')!;
+ expect(input.value).toBe('Raphael · Alice');input.value='Owner name';input.dispatchEvent(new Event('input'));
+ document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();
+ document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();
+ expect(api.roomsCreate.mock.calls[0][0]).toEqual(api.roomsCreate.mock.calls[1][0]);
+ expect(api.roomsCreate.mock.calls[1][0].name).toBe('Owner name');
+});
+
+test("reply labels distinguish owner sources from unavailable sources",async()=>{
+ api.roomMessages.mockResolvedValue({messages:[
+  {id:2,member_id:1,text:'Answer',created:1,status:'done',reply_reference:{message_id:1,author_kind:'owner',author_member_id:null}},
+  {id:3,member_id:1,text:'Kept reply',created:1,status:'done',reply_reference:{message_id:9,unavailable:true}},
+ ]});await pane();
+ expect([...document.querySelectorAll('.au-room-reply')].map(el=>el.textContent)).toEqual(['Reply to You','Source unavailable']);
 });
 
 test("the room voice target seeds correction learning while preserving reply delivery",async()=>{
@@ -62,16 +83,16 @@ test("compact rooms menu opens an existing room and offers creation",async()=>{
 });
 
 
-test("room thread uses owner bubbles, named replies and a hover action into the member conversation",async()=>{
+test("room thread uses owner bubbles and keeps room turns out of private navigation",async()=>{
  api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:null,text:"Hello",created:1,status:"done"},{id:2,member_id:1,text:"Done",created:2,status:"done",turn_id:23}]});
  await pane();expect(document.querySelector('.me .bubble')!.textContent).toBe("Hello");expect(document.querySelector('.ra .au-room-author')!.textContent).toBe("Alice");
- const action=document.querySelector<HTMLElement>('[data-room-act="turn"]')!;expect(action.closest('.message-actions')).not.toBeNull();expect(action.dataset.tooltip).toContain("Alice");expect(action.textContent).not.toContain("Open conversation");expect(document.querySelector('.cmp-attach')).not.toBeNull();expect(document.querySelector('.cmp-voice')).not.toBeNull();expect(document.querySelector('[role="dialog"]')).toBeNull();
+ expect(document.querySelector('[data-room-act="turn"]')).toBeNull();expect(document.querySelector('.cmp-attach')).not.toBeNull();expect(document.querySelector('.cmp-voice')).not.toBeNull();expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 test("room header members menu saves selected identities",async()=>{
  await pane();document.querySelector<HTMLElement>('[data-room-menu]')!.click();document.querySelector<HTMLElement>('#app-popover [data-pick="members"]')!.click();
  await flush();
- document.querySelector<HTMLElement>('[data-dlg="member"][data-member="0"]')!.click();document.querySelector<HTMLElement>('[data-dlg="save"]')!.click();await flush();expect(api.roomsUpdate).toHaveBeenCalledWith(1,{member_ids:[1],default_responder:"auto"});
+ document.querySelector<HTMLElement>('[data-dlg="member"][data-member="0"]')!.click();document.querySelector<HTMLElement>('[data-dlg="save"]')!.click();await flush();expect(api.roomsUpdate).toHaveBeenCalledWith(1,{member_ids:[0,1],default_responder:"auto"});
 });
 
 test("room rows expose rename, membership and confirmed deletion through more",async()=>{
@@ -91,7 +112,7 @@ test("room rows expose rename, membership and confirmed deletion through more",a
 
 test("reply chips identify their recipient including Raphael's zero id and escape names",async()=>{
  api.membersList.mockResolvedValue({members:[{id:0,name:'Raphael',avatar:''},{id:1,name:'<img src=x onerror=bad()>',avatar:''}],groups:[]});
- api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:0,text:'Agreed',reply_to_member:1,kind:'message',created:1,status:'done'},{id:2,member_id:1,text:'Thanks',reply_to_member:0,created:2,status:'done'}]});
+ api.roomMessages.mockResolvedValue({messages:[{id:1,member_id:0,text:'Agreed',reply_reference:{message_id:8,author_kind:'member',author_member_id:1},reply_to_member:1,kind:'message',created:1,status:'done'},{id:2,member_id:1,text:'Thanks',reply_reference:{message_id:9,author_kind:'member',author_member_id:0},reply_to_member:0,created:2,status:'done'}]});
  await pane();const chips=[...document.querySelectorAll('.au-room-reply')];
  expect(chips.map(el=>el.textContent)).toEqual(['Reply to <img src=x onerror=bad()>','Reply to Raphael']);
  expect(document.querySelector('.au-room-reply img')).toBeNull();
@@ -111,12 +132,12 @@ test("multiple queued replies show one speaking row which disappears when comple
 });
 
 test("new room saves a selected default responder and resets it when that member leaves",async()=>{
- await openNewGroupChat();document.querySelector<HTMLInputElement>('#room-name')!.value='Plans';
+ await openNewGroupChat();document.querySelector<HTMLInputElement>('#room-name')!.value='Plans';document.querySelector('#room-name')!.dispatchEvent(new Event('input'));
  for(const id of [0,1])document.querySelector<HTMLElement>(`[data-dlg="member"][data-member="${id}"]`)!.click();
  document.querySelector<HTMLElement>('[data-dlg="responder"]')!.click();
  document.querySelector<HTMLElement>('#app-popover [data-value="member:1"]')!.click();
  document.querySelector<HTMLElement>('[data-dlg="create"]')!.click();await flush();
- expect(api.roomsCreate).toHaveBeenCalledWith({name:'Plans',member_ids:[0,1],group_id:null,default_responder:'member:1'});
+ expect(api.roomsCreate).toHaveBeenCalledWith({name:'Plans',member_ids:[0,1],group_id:null,default_responder:'member:1',request_id:expect.any(String)});
  await openNewGroupChat();
  for(const id of [0,1])document.querySelector<HTMLElement>(`[data-dlg="member"][data-member="${id}"]`)!.click();
  document.querySelector<HTMLElement>('[data-dlg="responder"]')!.click();document.querySelector<HTMLElement>('#app-popover [data-value="member:1"]')!.click();

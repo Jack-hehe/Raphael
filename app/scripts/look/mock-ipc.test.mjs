@@ -5,6 +5,11 @@ import { checkRendered } from "./checks.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it.each([undefined, -1])("rejects an approval without an explicit existing source turn (%s)", turn_id => {
+    const data = structuredClone(fixture);
+    data.adminQuestions.draft.turn_id = turn_id;
+    expect(() => installMock(data, { fixture: { adminApproval: "draft" } }, {})).toThrow("Approval fixture requires its explicit source turn");
+  });
   it.each([true, false])("settles draft approval in the formal conversation while preserving quick history (%s)", async approved => {
     const target = {};
     installMock(fixture, { fixture: { adminApproval: "draft" } }, target);
@@ -40,6 +45,17 @@ describe("shared look IPC boundary", () => {
     expect(result.turns[0]).toMatchObject({ source: "app", member_id: 0, conversation_id: 1 });
     expect(result.turns[0].messages.map(message => message.kind)).toEqual(["progress", "reply"]);
     expect(result.turns[0].messages[1].text).not.toContain("正在");
+  });
+  it("settles an approval in its source conversation after quick history is prepended", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { adminApproval: "draft" } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const question = await invoke("agent_question_open");
+    const quickBefore = structuredClone(target.__look.data.turns.find(turn => turn.conversation_id === 4));
+    await invoke("agent_question_answer", { id: question.id, approved: true, drafts: question.drafts });
+    const formal = (await invoke("core_call", { method: "agent.history.list", params: { member_id: 0, conversation_id: 1 } })).turns;
+    expect(formal.some(turn => turn.status === "done" && turn.text.startsWith("已建立"))).toBe(true);
+    expect(target.__look.data.turns.find(turn => turn.conversation_id === 4)).toEqual(quickBefore);
   });
   it("keeps reports out of today's work in both default and expanded home fixtures", async () => {
     for (const homeManyQuestions of [false, true]) {

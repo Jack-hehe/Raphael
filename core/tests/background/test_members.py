@@ -166,8 +166,11 @@ async def test_a_room_reply_and_its_rerun_cannot_dispatch_to_other_members(make_
     team = Team()
     rig.service.use_team(team, team.tool)
     history = AgentHistory(conn, rig.wall)
+    with conn:
+        room = conn.execute("INSERT INTO rooms(name,created) VALUES ('Room',1)").lastrowid
+    thread = conn.execute("SELECT id FROM room_threads WHERE room_id=?", (room,)).fetchone()[0]
     turn_id = history.add(session_id="room:1:1:1", question="Status", route="room", prefix="",
-                          text="", status="running", source="room", member_id=MEMBER.id)
+                          text="", status="running", source="room", member_id=MEMBER.id, scope="room", room_id=room, thread_id=thread)
     task_id = rig.service.submit(session_id="room:1:1:1", text="Status", language="en", model="m", member_id=MEMBER.id)
     rig.service.attach_turn(task_id, turn_id)
     rig.client.replies.append(plain_report())

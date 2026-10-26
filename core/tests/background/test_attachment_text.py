@@ -17,7 +17,7 @@ async def test_room_html_reaches_the_speaker_without_a_tool_call(make_rig, conn,
     rig.service.use_team(members, None)
     rooms = RoomsService(conn, members=members, background=rig.service)
     rooms.register(rig.rpc)
-    room = (await rig.rpc.call("rooms.create", {"name": "Reading", "member_ids": [member_id]}))["room"]
+    room = (await rig.rpc.call("rooms.create", {"name": "Reading", "member_ids": [0,1], "default_responder":f"member:{member_id}"}))["room"]
     rig.client.replies = [report("Article received")]
     sent = await rig.rpc.call("rooms.send", {"room_id": room["id"], "request_id": "article",
         "text": "Explain this article", "ui_language": "en", "attachments": [{"name": "article.html",

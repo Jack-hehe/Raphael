@@ -285,6 +285,9 @@ async def test_a_command_is_done_at_once_and_answered_with_the_fixed_reply(rig, 
         "model": "typesafe/jev-1.14",
         "member_id": 0,
         "conversation_id": rig.service.conversations.quick(),
+        "scope": "private",
+        "room_id": None,
+        "thread_id": None,
         "peer_id": None,
         "attachments": [],
         "steps": [
@@ -1451,7 +1454,7 @@ async def test_the_history_lists_the_newest_turn_first_with_the_fields_the_app_r
     assert set(turns[0]) == {
         "id", "created_at_ms", "question", "route", "prefix", "text", "detail", "status",
         "session_id", "source", "cost_usd", "model", "attachments", "steps", "task", "member_id",
-        "peer_id", "messages", "conversation_id",
+        "peer_id", "messages", "conversation_id", "scope", "room_id", "thread_id",
     }  # fmt: skip
 
 

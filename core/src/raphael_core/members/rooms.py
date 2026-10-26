@@ -12,7 +12,7 @@ from ..background.tasks import Refused
 from ..brain.settings import SettingsStore, DEFAULTS
 from ..clock import wall_clock_ms
 from ..services.attachments import from_wire, AttachmentError
-from ..protocol import invalid_params
+from ..protocol import RpcError, invalid_params
 from .service import _whole, _rpc_error
 from .store import MemberError, clean_group_name
 from .exchanges import RoomExchanges, is_pass
@@ -61,14 +61,47 @@ class RoomsService:
     def _view(self, row):
         room = dict(row)
         room["member_ids"] = self._ids(room)
+        if not room["is_team"] and (0 not in room["member_ids"] or not 2 <= len(room["member_ids"]) <= 6):
+            room["membership_state"] = "needs_adjustment"
         if room["default_responder"].startswith("member:") and int(room["default_responder"][7:]) not in room["member_ids"]:
             room["default_responder"] = "auto"
         return room
+
+    def _validated_ids(self, ids, *, team=False):
+        if (not isinstance(ids, list) or any(type(i) is not int or not self._members.member_exists(i) for i in ids)
+                or len(set(ids)) != len(ids) or (not team and (0 not in ids or not 2 <= len(ids) <= 6))
+                or (team and len(ids) > 101)):
+            raise invalid_params("ordinary rooms require Raphael and 2 to 6 distinct members")
+        return ids
+
+    def _thread(self, room, thread_id=None):
+        row = self._conn.execute("SELECT id FROM room_threads WHERE room_id=? AND (? IS NULL OR id=?) ORDER BY id LIMIT 1",
+                                 (room["id"], thread_id, thread_id)).fetchone()
+        if row is None or (thread_id is not None and type(thread_id) is not int):
+            raise invalid_params("no such room thread")
+        return row[0]
+
+    def _reply_reference(self, room, thread_id, source_id, author):
+        if type(source_id) is not int:
+            raise invalid_params("reply_to must identify a source message")
+        row = self._conn.execute("SELECT * FROM room_messages WHERE id=? AND room_id=? AND thread_id=?",
+                                 (source_id, room["id"], thread_id)).fetchone()
+        if row is None or row["member_id"] == author:
+            raise invalid_params("missing, self or cross-scope reply source")
+        return {"message_id":row["id"], "author_kind":"owner" if row["member_id"] is None else "member",
+                "author_member_id":row["member_id"]}
 
     async def _list(self, params):
         return {"rooms":[self._view(r) for r in self._conn.execute("SELECT * FROM rooms ORDER BY id")]}
 
     async def _create(self, params):
+        request_id = params.get("request_id")
+        if request_id is not None:
+            if not isinstance(request_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", request_id):
+                raise invalid_params("request_id must be a short opaque id")
+            existing = self._conn.execute("SELECT * FROM rooms WHERE creation_request_id=?", (request_id,)).fetchone()
+            if existing is not None:
+                return {"room":self._view(existing)}
         team = params.get("is_team", False)
         if type(team) is not bool:
             raise invalid_params("is_team must be boolean")
@@ -78,23 +111,20 @@ class RoomsService:
                 return {"room":self._view(existing)}
         if self._conn.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] >= 100:
             raise invalid_params("room limit reached")
+        ids = self._validated_ids(params.get("member_ids", []), team=team)
+        generated = " · ".join((s.name or "Raphael") for s in self._members.roster() if s.id in ids)[:24]
         try:
-            name = clean_group_name(params.get("name"))
+            name = clean_group_name(params.get("name") or generated)
         except MemberError as error:
             raise _rpc_error(error) from None
         group_id = params.get("group_id")
         if group_id is not None and (type(group_id) is not int or self._members.store.group(group_id) is None):
             raise invalid_params("no such group")
-        ids = params.get("member_ids", [])
-        if not isinstance(ids, list) or len(ids) > (101 if team else 6) or any(
-            type(i) is not int or not self._members.member_exists(i) for i in ids
-        ) or (not ids and not team):
-            raise invalid_params("member_ids must name at least one member")
         responder = self._responder(params.get("default_responder", "auto"), ids if not team else [s.id for s in self._members.roster()])
         with self._conn:
             cursor = self._conn.execute(
-                "INSERT INTO rooms (name, group_id, created, is_team, default_responder) VALUES (?, ?, ?, ?, ?)",
-                (name, group_id, self._now(), int(team), responder),
+                "INSERT INTO rooms (name, group_id, created, is_team, default_responder, creation_request_id) VALUES (?, ?, ?, ?, ?, ?)",
+                (name, group_id, self._now(), int(team), responder, request_id),
             )
             room_id = cursor.lastrowid
             self._conn.executemany("INSERT INTO room_members VALUES (?, ?)", [(room_id,i) for i in sorted(set(ids))])
@@ -108,9 +138,7 @@ class RoomsService:
             name = clean_group_name(name)
         except MemberError as error:
             raise _rpc_error(error) from None
-        ids = params.get("member_ids", self._ids(room))
-        if not isinstance(ids, list) or not ids or len(ids) > (101 if room["is_team"] else 6) or any(type(i) is not int or not self._members.member_exists(i) for i in ids):
-            raise invalid_params("member_ids must name at least one member")
+        ids = self._validated_ids(params.get("member_ids", self._ids(room)), team=bool(room["is_team"]))
         if room["is_team"] and "member_ids" in params:
             raise invalid_params("the team room follows the whole team")
         responder = params.get("default_responder", room["default_responder"])
@@ -118,10 +146,10 @@ class RoomsService:
             responder = "auto"
         responder = self._responder(responder, ids)
         with self._conn:
-            self._conn.execute("UPDATE rooms SET name = ?, default_responder = ? WHERE id = ?", (name, responder, room["id"]))
+            self._conn.execute("UPDATE rooms SET name = ?, default_responder = ?, membership_state='ready' WHERE id = ?", (name, responder, room["id"]))
             if "member_ids" in params:
-                self._conn.execute("DELETE FROM room_members WHERE room_id = ?", (room["id"],))
-                self._conn.executemany("INSERT INTO room_members VALUES (?, ?)", [(room["id"], i) for i in sorted(set(ids))])
+                self._conn.execute("DELETE FROM room_members WHERE room_id = ? AND member_id != 0", (room["id"],))
+                self._conn.executemany("INSERT OR IGNORE INTO room_members VALUES (?, ?)", [(room["id"], i) for i in sorted(set(ids))])
         self._changed(room["id"])
         return {"room":self._view(self._conn.execute("SELECT * FROM rooms WHERE id = ?", (room["id"],)).fetchone())}
 
@@ -166,8 +194,8 @@ class RoomsService:
         with self._conn:
             self._conn.execute("DELETE FROM room_exchanges WHERE room_id = ?", (room["id"],))
             self._conn.execute("DELETE FROM room_messages WHERE room_id = ?", (room["id"],))
-            self._conn.execute("DELETE FROM room_members WHERE room_id = ?", (room["id"],))
             self._conn.execute("DELETE FROM rooms WHERE id = ?", (room["id"],))
+            self._conn.execute("DELETE FROM room_members WHERE room_id = ?", (room["id"],))
         for origin in origins:
             self._exchanges.attachments.pop(origin, None)
         self._changed(room["id"])
@@ -184,21 +212,34 @@ class RoomsService:
         message["attachments"] = json.loads(message.pop("attachments", None) or "[]")
         turn = self._history.get(message["turn_id"]) if message["turn_id"] else None
         message["status"] = "done" if message["member_id"] is None else (turn.status if turn else "error")
-        if turn:
+        message["scope"] = "room"
+        message["author_kind"] = "owner" if message["member_id"] is None else "member"
+        message["author_member_id"] = message["member_id"]
+        message["reply_reference"] = None
+        if message["reply_to"] is not None:
+            try:
+                message["reply_reference"] = self._reply_reference({"id":message["room_id"]}, message["thread_id"], message["reply_to"], message["member_id"])
+            except RpcError:
+                message["reply_reference"] = {"message_id":message["reply_to"], "unavailable":True}
+        if turn and turn.scope == "room" and turn.room_id == message["room_id"] and turn.thread_id == message["thread_id"] and turn.member_id == message["member_id"]:
             message["text"] = turn.detail or turn.text
             message["cost"] = turn.cost_usd
+        elif turn:
+            message["status"] = "error"
+            message["text"] = ""
         return message
 
     async def _messages(self, params):
         room = self._room(params)
+        thread_id = self._thread(room, params["thread_id"]) if "thread_id" in params else None
         before = params.get("before")
         if before is not None and (type(before) is not int or before < 1):
             raise invalid_params("before must be a positive message id")
         messages, cursor = [], before
         while len(messages) < 100:
             rows = self._conn.execute(
-                "SELECT * FROM room_messages WHERE room_id = ? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT 100",
-                (room["id"], cursor, cursor),
+                "SELECT * FROM room_messages WHERE room_id = ? AND (? IS NULL OR thread_id=?) AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT 100",
+                (room["id"], thread_id, thread_id, cursor, cursor),
             ).fetchall()
             for row in rows:
                 m = self._message(row)
@@ -238,6 +279,10 @@ class RoomsService:
 
     async def _send(self, params):
         room = self._room(params)
+        self._validated_ids(self._ids(room), team=bool(room["is_team"]))
+        if room["membership_state"] != "ready":
+            raise invalid_params("adjust room membership before sending")
+        thread_id = self._thread(room, params.get("thread_id"))
         try:
             attachments = from_wire(params.get("attachments"))
         except AttachmentError as error:
@@ -260,16 +305,14 @@ class RoomsService:
         reply_to = params.get("reply_to")
         recipient = None
         if reply_to is not None:
-            if type(reply_to) is not int:
+            reply = self._reply_reference(room, thread_id, reply_to, None)
+            if reply["author_member_id"] not in self._ids(room):
                 raise invalid_params("reply_to must identify a room member message")
-            reply = self._conn.execute("SELECT member_id FROM room_messages WHERE id = ? AND room_id = ?", (reply_to, room["id"])).fetchone()
-            if reply is None or reply[0] not in self._ids(room):
-                raise invalid_params("reply_to must identify a room member message")
-            recipient = reply[0]
+            recipient = reply["author_member_id"]
         with self._conn:
             cursor = self._conn.execute(
-                "INSERT INTO room_messages (room_id, text, created, request_id, attachments) VALUES (?, ?, ?, ?, ?)",
-                (room["id"], text.strip(), self._now(), request_id, json.dumps(metadata)),
+                "INSERT INTO room_messages (room_id, thread_id, text, created, request_id, attachments) VALUES (?, ?, ?, ?, ?, ?)",
+                (room["id"], thread_id, text.strip(), self._now(), request_id, json.dumps(metadata)),
             )
             owner_id = cursor.lastrowid
         with self._conn:
@@ -281,8 +324,12 @@ class RoomsService:
 
     def _submit_exchange_turn(self, room, exchange, target, kind, attachments):
         member_id = target["member"]
+        self._validated_ids(self._ids(room), team=bool(room["is_team"]))
+        thread_id = self._conn.execute("SELECT thread_id FROM room_messages WHERE id=?", (exchange.origin_message_id,)).fetchone()[0]
+        source_id = None if kind == "wrapup" else target["reply_to"]
+        reference = self._reply_reference(room, thread_id, source_id, member_id) if source_id is not None else None
         speaker = self._members.speaker(member_id)
-        transcript = self._exchanges.transcript(room)
+        transcript = self._exchanges.transcript(room, thread_id)
         roster = [{"id":s.id,"name":s.name,"role":s.role} for s in self._members.roster() if s.id in self._ids(room)]
         prompt = ("You are in a group chat with colleagues. Use your own persona and the owner's language. "
             "Read the full named transcript. Reply briefly, 1-4 sentences, TO your colleagues: you may agree, "
@@ -301,13 +348,14 @@ class RoomsService:
         session = f"room:{room['id']}:{exchange.origin_message_id}:{exchange.turns_taken}"
         metadata = [a.metadata() for a in attachments]
         turn_id = self._history.add(session_id=session, question=prompt, route="room", prefix="", text="", status="running",
-                                    source="room", member_id=member_id, attachments=metadata)
+                                    source="room", member_id=member_id, attachments=metadata,
+                                    scope="room", room_id=room["id"], thread_id=thread_id)
         with self._conn:
             # Wrap-ups belong to the exchange, outside the legacy one-reply-per-member key.
             self._conn.execute("INSERT INTO room_messages (room_id, member_id, text, created, reply_to, turn_id, "
-                "origin_message_id, reply_to_member, kind) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)",
-                (room["id"], member_id, self._now(), None if kind == "wrapup" else target["reply_to"], turn_id, exchange.origin_message_id,
-                 target["reply_to_member"], kind))
+                "origin_message_id, reply_to_member, kind, thread_id) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
+                (room["id"], member_id, self._now(), source_id, turn_id, exchange.origin_message_id,
+                 reference["author_member_id"] if reference else None, kind, thread_id))
         try:
             task_id = self._background.submit(session_id=session, text=prompt, language=exchange.language,
                 model=self._settings.get("agent_model") or DEFAULTS["agent_model"], member_id=member_id,

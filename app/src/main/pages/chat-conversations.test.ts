@@ -88,7 +88,7 @@ test("switching conversations scopes history, quotes the entire answer and sends
   page.hide();
 });
 
-test("rooms hide the member picker and a room reply opens its own named member conversation", async () => {
+test("rooms hide the member picker and keep replies outside private conversations", async () => {
   const people = { members: [{ id: 0, name: "Raphael", avatar: "", role: "", instructions: "", group_id: null }], groups: [] };
   const conversations = [{ id: 1, member_id: 0, title: "Main", is_default: 1 }, { id: 2, member_id: 0, title: "Research" }];
   api.membersList.mockResolvedValue(people);
@@ -107,9 +107,7 @@ test("rooms hide the member picker and a room reply opens its own named member c
   expect(page.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(false);
   expect(page.el.querySelector(".au-room-pane .conversation-trigger")).toBeNull();
   expect(page.el.querySelector(".au-room-pane [data-act='reply-message']")).toBeNull();
-  page.el.querySelector<HTMLButtonElement>('[data-room-act="turn"]')!.click(); await flush(); await flush();
-  expect(page.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(true);
-  expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ conversation_id: 2, around_id: 2 }));
-  expect(page.el.querySelector(".conversation-caption")!.textContent).toBe("Research");
+  expect(page.el.querySelector('[data-room-act="turn"]')).toBeNull();
+  expect(page.el.querySelector<HTMLElement>(".au-room-pane")!.hidden).toBe(false);
   page.hide();
 });
