@@ -29,6 +29,12 @@ def test_taiwan_writing_accepts_tai_in_either_form():
     assert 'reply_not_traditional_Taiwan' in check_reply('在台湾的平台上架。', Scenario('owner-view', ''))
 
 
+def test_taiwan_writing_keeps_items_and_registered_apps():
+    # Live, 「完成項目」 (items) and 「已登錄的應用程式」 (registered) failed: OpenCC reads them as project and log-in.
+    assert not check_reply('核對完成項目，目前沒有已登錄的應用程式。', Scenario('owner-view', ''))
+    assert 'reply_not_traditional_Taiwan' in check_reply('核对完成项目。', Scenario('owner-view', ''))
+
+
 class P02Brain(FakeClient):
     def __init__(self, scenario):
         super().__init__([])
