@@ -117,6 +117,24 @@ def test_a_note_goes_to_the_space_it_names(memory, members):
     assert memory.store.all() == []  # Raphael's own is untouched
 
 
+async def test_a_shared_note_says_who_was_told_it_and_when_to_every_member(memory, members, rpc, clock):
+    memory.apply_said([said("user-brand", space="shared", text="品牌主色是金色"),
+                       said("preference-format", space="own", kind="preference", text="行程用條列")], 5, 0)
+    told = memory.shared.get("user-brand")
+    assert (told.member, told.origin, told.turns, told.created[:10]) == (0, "said", (5,), "2026-10-22")
+    assert memory.store.get("preference-format").member is None  # an own note needs no provenance
+    for member in (0, A, B):
+        assert "品牌主色是金色 (10/22, member 0) → user-brand" in memory.index(member).shared
+    assert memory.read(["user-brand"], B).data["memories"][0]["member"] == 0
+    listed = await rpc.call("memory.list", {"space": "shared"})
+    assert [(m["name"], m["member"]) for m in listed["memories"]] == [("user-brand", 0)]
+    clock.advance(days=1)
+    await rpc.call("memory.update", {"name": "user-brand", "space": "shared", "body": "品牌主色是金色，輔色白。"})
+    assert memory.shared.get("user-brand").member == 0  # the owner's edit keeps who was told it
+    memory.apply_said([said("user-brand", space="shared", op="UPDATE", text="品牌主色改為黑金")], 9, A)
+    assert (memory.shared.get("user-brand").member, memory.shared.get("user-brand").turns) == (A, (5, 9))
+
+
 @pytest.mark.parametrize(
     "action",
     [
@@ -229,7 +247,7 @@ async def test_each_assistant_reflects_on_its_own_turns_into_its_own_memory_and_
     assert "我是工程師" in call["user"]
     assert "PRIVATE-B" not in call["user"] and "PRIVATE-RAPHAEL" not in call["user"]
     assert "小行程" in call["system"]  # the pass is for this member
-    assert [m.name for m in memory.shared.all()] == ["user-job"]
+    assert [(m.name, m.member) for m in memory.shared.all()] == [("user-job", A)]
     assert sorted(m.name for m in memory.store_for(A).all()) == ["preference-format", "user-deadline"]
     assert memory.reflected_through(A) > 0 and memory.reflected_through(B) == 0
     assert memory.reflected_through(0) == 0

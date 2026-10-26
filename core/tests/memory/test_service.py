@@ -70,7 +70,7 @@ async def test_list_get_update_and_delete(rpc, memory):
     assert listed["summary"] is None
     assert listed["memories"] == [
         {"name": "user-tea", "description": SECRET_WORDS, "type": "user", "origin": "inferred",
-         "updated": "2026-10-22T21:40:00+08:00", "expires": None}
+         "updated": "2026-10-22T21:40:00+08:00", "expires": None, "member": None}
     ]  # fmt: skip
     got = await rpc.call("memory.get", {"name": "user-tea"})
     assert got["body"] == "烏龍茶。" and got["turns"] == []
@@ -126,7 +126,7 @@ def test_read_gives_the_notes_and_names_the_missing(memory):
     result = memory.read(["user-tea", "user-none", "../x", "user-tea"])
     assert result.ok and result.name == "memory_read"
     assert result.data == {
-        "memories": [{"name": "user-tea", "description": SECRET_WORDS, "body": "烏龍茶。", "updated": "2026-10-22", "origin": "said", "space": "own"}],
+        "memories": [{"name": "user-tea", "description": SECRET_WORDS, "body": "烏龍茶。", "updated": "2026-10-22", "origin": "said", "space": "own", "member": None}],
         "missing": ["user-none", "../x"],
     }  # fmt: skip
 

@@ -137,7 +137,8 @@ turn carries its date and time), never from today: "明天有面試" said on 202
 - "origin" is "said" when the user stated it outright, "inferred" when you deduced it.
 - "space" is where it goes. "shared" is the memory every assistant of the user reads: only macro \
 knowledge about the user (who they are, their stable preferences, the people in their life, their \
-life and work, how they like to be spoken to), written as a statement about the user. "own" is \
+life and work, how they like to be spoken to), or a fact the user said every assistant or the whole \
+team should know, written as a statement about the user. "own" is \
 this assistant's own memory, about its own work: its role, what its routines found, how the user \
 wants this assistant to work, its character, speaking style or form of address, and anything tied \
 to this conversation. These are never shared. What was decided or \
@@ -282,6 +283,7 @@ def _write(
     *,
     turns: Sequence[int] = (),
     leaving: Sequence[str] = (),
+    member: int | None = None,
 ) -> str:
     """Write `action` (an ADD, or an UPDATE of `existing`); the name written. MemoryRefused with
     the reason when it may not be written: a guess over what the owner said ("said"), a type
@@ -301,6 +303,7 @@ def _write(
         origin=action.origin,
         turns=turns,
         leaving=leaving,
+        member=member,
     )
     return name
 
@@ -321,9 +324,11 @@ def apply_actions(
     turns: Sequence[int] = (),
     update_adds: bool = True,
     since: int | None = None,
+    member: int | None = None,
 ) -> Applied:
     """Apply what may be applied of `actions` to `store`, each checked (see the module); `turns`
-    are the ids of the turns they came from. One that is refused leaves the others.
+    are the ids of the turns they came from, `member` the assistant whose conversation they are
+    (a write keeps its note's when None). One that is refused leaves the others.
 
     `since` is the mark (`MemoryStore.mark`) taken before the model read the memory: an action on
     a memory that changed after it is refused ("changed"), every one after a clear. With
@@ -347,7 +352,7 @@ def apply_actions(
             applied.refused.append("not_found")
             continue
         try:
-            applied.written.append(_write(action, existing, store, turns=turns))
+            applied.written.append(_write(action, existing, store, turns=turns, member=member))
         except MemoryRefused as refused:
             applied.refused.append(refused.kind)
     return applied
@@ -361,11 +366,13 @@ def apply_spaced(
     turns: Sequence[int] = (),
     update_adds: bool = True,
     since: tuple[int, int] | None = None,
+    member: int | None = None,
 ) -> Applied:
     """Apply `actions` each to its space: the shared memory (`shared`) or the assistant's own
     (`own`), each checked as `apply_actions` checks it. A write to the shared space that is not
     macro knowledge about the owner (`about_the_owner`) is written to the own memory instead.
-    `since` is the marks of the two stores, own first, taken before the model read them."""
+    `since` is the marks of the two stores, own first, taken before the model read them; `member`
+    is the assistant whose conversation they are, the provenance every shared note keeps."""
     to_shared: list[Action] = []
     to_own: list[Action] = []
     for action in actions:
@@ -376,13 +383,13 @@ def apply_spaced(
                 logger.info("A note was kept to its assistant: it is not about the owner at large")
             to_own.append(action)
     applied = Applied()
-    for chosen, store, mark in (
-        (to_own, own, None if since is None else since[0]),
-        (to_shared, shared, None if since is None else since[1]),
+    for chosen, store, mark, told in (
+        (to_own, own, None if since is None else since[0], None),
+        (to_shared, shared, None if since is None else since[1], member),
     ):
         if not chosen:
             continue
-        done = apply_actions(chosen, store, turns=turns, update_adds=update_adds, since=mark)
+        done = apply_actions(chosen, store, turns=turns, update_adds=update_adds, since=mark, member=told)
         applied.written += done.written
         applied.deleted += done.deleted
         applied.refused += done.refused
@@ -571,9 +578,10 @@ class Reflector:
         current: Callable[[], bool] = lambda: True,
         shared: MemoryStore | None = None,
         agent: str = "Raphael",
+        member: int | None = None,
     ) -> Applied:
-        """One reflection pass over `turns` (oldest first), the turns of the assistant `agent`,
-        whose own memory is `store`; `shared` is the shared memory. Never raises for the model: a
+        """One reflection pass over `turns` (oldest first), the turns of the assistant `agent`
+        (`member`), whose own memory is `store`; `shared` is the shared memory. Never raises for the model: a
         model that fails changes nothing. What the model answers is applied only to the memories
         that did not change while it thought (see `apply_actions`), each to its space
         (`apply_spaced`), and not at all when `current` says that `turns` are no longer the
@@ -605,7 +613,8 @@ class Reflector:
             applied = apply_actions(own_only, store, turns=ids, update_adds=False, since=since)
         else:
             applied = apply_spaced(
-                actions, store, shared, turns=ids, update_adds=False, since=(since, shared_since)
+                actions, store, shared, turns=ids, update_adds=False, since=(since, shared_since),
+                member=member,
             )
         logger.info(
             "Reflection pass: turns=%d written=%d deleted=%d refused=%d",
