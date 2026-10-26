@@ -40,6 +40,50 @@ async def test_a_spaced_address_still_hands_the_turn_to_that_colleague(rig, exch
     assert (alice['status'], alice['text']) == ('done', 'Opening. @Bob please start')
 
 
+async def three(rig):
+    room, ids = await team(rig)
+    carol = (await rig.call('members.create', {'name':'Carol', 'role':'QA'}))['member']['id']
+    room = (await rig.call('rooms.create', {'name':'Review', 'member_ids':[0, *ids, carol]}))['room']
+    return room, [*ids, carol]
+
+
+async def test_two_colleagues_addressing_one_member_get_a_single_reply(rig, exchange):
+    # Live, RD answered three times in a row: once per @ and once more for the planned turn.
+    room, (alice, bob, carol) = await three(rig)
+    await send(rig, room, '@Alice @Bob review the launch plan')
+    await finish(rig, exchange, '@Carol please check the budget')
+    await finish(rig, exchange, '@Carol please check the timing')
+    assert rig.background.submitted[-1]['member_id'] == carol
+    await finish(rig, exchange, 'Budget and timing both hold.')
+    assert [s['member_id'] for s in rig.background.submitted].count(carol) == 1
+    intents = (await history(rig, room))['exchange']['reply_intents']
+    assert [i['state'] for i in intents if i['recipient_id'] == carol] == ['done', 'done']
+
+
+async def test_a_member_who_just_answered_is_not_also_given_the_next_planned_turn(rig, exchange):
+    room, (alice, bob, carol) = await three(rig)
+    await rig.call('rooms.update', {'room_id':room['id'], 'roles':{str(alice):'moderator'}})
+    await send(rig, room, 'Plan the launch')
+    await finish(rig, exchange, 'Round one: @Bob what is your view?')
+    assert rig.background.submitted[-1]['member_id'] == bob
+    await finish(rig, exchange, 'I favour a small test first.')
+    assert rig.background.submitted[-1]['member_id'] == carol
+
+
+async def test_a_trailing_pass_is_not_shown_and_the_wrapup_asks_for_the_owners_headings(rig, exchange):
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice review', ui_language='zh-TW')
+    await finish(rig, exchange, '看起來沒問題。 (pass)')
+    alice = next(m for m in (await history(rig, room))['messages'] if m['member_id'] == ids[0])
+    assert alice['text'] == '看起來沒問題。'
+    for _ in range(3):
+        if rig.background.submitted[-1]['member_id'] == 0:
+            break
+        await finish(rig, exchange, '同意。')
+    wrapup = rig.background.submitted[-1]['text']
+    assert all(f"'### {heading}'" in wrapup for heading in ('結論', '待你決定', '下一步'))
+
+
 async def test_timeout_and_invalid_choice_are_observable(rig, exchange, monkeypatch):
     room, ids = await team(rig)
     class Slow:

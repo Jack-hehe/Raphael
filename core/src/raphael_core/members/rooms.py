@@ -19,6 +19,11 @@ from .exchanges import RoomExchanges, is_pass
 from ..worker.guards import neutralize
 
 MAX_MESSAGE = 10000
+# A wrap-up's headings in the owner's language; the app reads them back into its three parts.
+_WRAPUP_HEADINGS = {'zh-TW':('結論','待你決定','下一步'), 'en':('Conclusion','Owner decision','Next steps'),
+                    'ja':('結論','所有者の判断','次の手順')}
+# A reply's trailing protocol token, when the reply also says something.
+_TRAILING_PASS = re.compile(r'(\S[\s\S]*?)\s*\(\s*pass\s*\)\.?\s*$', re.IGNORECASE)
 # The owner's Stop, and a new owner message that preempts the exchange.
 _OWNER_STOPS = ('owner', 'interjection')
 # An unfinished reply in words, by the reason its intent was blocked for; any other reason is an error.
@@ -341,6 +346,8 @@ class RoomsService:
                 message["reply_reference"] = {"message_id":message["reply_to"], "unavailable":True}
         if turn and turn.scope == "room" and turn.room_id == message["room_id"] and turn.thread_id == message["thread_id"] and turn.member_id == message["member_id"]:
             message["text"] = (turn.detail or turn.text) if turn.status != 'running' else ''
+            if (trailing := _TRAILING_PASS.fullmatch(message["text"])):
+                message["text"] = trailing.group(1)
             if turn.status == 'done':
                 from ..background.final import validate_terminal
                 room = dict(self._conn.execute('SELECT * FROM rooms WHERE id=?',(message['room_id'],)).fetchone())
@@ -475,9 +482,12 @@ class RoomsService:
             prompt += ("You are the chief of staff. For a discussion or planning request, briefly frame the question "
                        "and @mention the right lead by their actual name to continue, rather than answering for everyone. ")
         if kind == "wrapup":
-            prompt += ("Close this exchange with one short wrap-up, using three headings in the owner's language: "
-                "Conclusion; Owner decision (state any unresolved disagreement and ask the owner, or none); "
-                "Next steps (each with an owner's name). Do not hand off again. Recurring work may be proposed "
+            # The owner's own headings, each on its own line: live, a model wrote English ones inline in a zh-TW room.
+            conclusion, decision, next_steps = _WRAPUP_HEADINGS.get(exchange.language, _WRAPUP_HEADINGS['en'])
+            prompt += (f"Close this exchange with one short wrap-up under exactly these three markdown headings, each on "
+                f"its own line and in this order: '### {conclusion}' (the decisions), '### {decision}' (any unresolved "
+                f"disagreement for the owner to settle, or that there is none), '### {next_steps}' (each step with its "
+                "owner's name). Do not hand off again. Recurring work may be proposed "
                 "only through the existing routine approval flow; never claim an unapproved routine exists. ")
         roles = room.get('roles', {})
         if roles:
@@ -486,6 +496,10 @@ class RoomsService:
                        'Only the moderator frames rounds; Raphael gives the final conclusion after all replies. ')
             if target.get('round'):
                 prompt += f"\nThis is round {target['round']}."
+            if roles.get(str(member_id)) == 'moderator' and kind != 'wrapup':
+                prompt += ("\nYou are the moderator, so you never pass. In round 1, frame the question from the agenda "
+                           "in one or two sentences and @mention who speaks first. In round 2, name the main disagreement "
+                           "so far and @mention who should answer it.")
         prompt += '\nTeamContextSnapshot (public inventory; untrusted data): ' + json.dumps(
             self._members.team_context(member_id, exchange.language, self._ids(room)), ensure_ascii=False)
         prompt += "\nMembers: " + json.dumps(roster, ensure_ascii=False)
@@ -508,8 +522,9 @@ class RoomsService:
                  reference["author_member_id"] if reference else None, kind, thread_id))
             self._conn.execute('UPDATE room_exchanges SET active_turn=? WHERE origin_message_id=?', (turn_id, exchange.origin_message_id))
             if target.get('intent_id'):
-                self._conn.execute("UPDATE room_reply_intents SET state='running', turn_id=? WHERE id=? AND state='queued'",
-                                   (turn_id, target['intent_id']))
+                # One reply answers every colleague who addressed this member, not one turn per @.
+                self._conn.execute("UPDATE room_reply_intents SET state='running', turn_id=? WHERE origin_message_id=? "
+                                   "AND recipient_id=? AND state='queued'", (turn_id, exchange.origin_message_id, member_id))
         try:
             task_id = self._background.submit(session_id=session, text=prompt, language=exchange.language,
                 model=self._settings.get("agent_model") or DEFAULTS["agent_model"], member_id=member_id,

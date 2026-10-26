@@ -347,6 +347,11 @@ class RoomExchanges:
                     pending = [{"member":intent['recipient_id'], "reply_to_member":source[0],
                                 "reply_to":intent['source_message_id'], "handoff":source[0] is not None,
                                 "intent_id":intent['id']}]
+                else:
+                    # A member who has just answered an address has had its say for this planned turn.
+                    last = self.last_reply(exchange.origin_message_id)
+                    while pending and pending[0].get('round') and last and pending[0]['member'] == last[1]:
+                        pending = pending[1:]
                 if not pending and exchange.chime_ins < MAX_CHIME_INS and exchange.turns_taken < MAX_TURNS - 1 and exchange.hops < MAX_HOPS:
                     candidates = [i for i in ids if i not in spoken]
                     choice = await self.decide(room, exchange, "chime", candidates)
