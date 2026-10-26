@@ -30,6 +30,7 @@ def test_parser_fails_low_scores_and_hard_rule_downgrades():
     assert parse_review('{"score":3,"findings":[]}', RULES)["failed"]
     result = parse_review('{"score":5,"findings":[{"rule_id":"R-UI-01","hard":false,"detail":"Remove filler below the heading"}]}', RULES)
     assert result["failed"] and result["findings"][0]["hard"]
+    assert not parse_review('```json\n{"score":4,"findings":[]}\n```\n', RULES)["failed"]
     for text in ['{}', '{"score":true,"findings":[]}', '{"score":6,"findings":[]}', '{"score":4,"findings":[{"rule_id":"R-UI-99","hard":false,"detail":"Unknown"}]}', '```json\n{}\n```']:
         with pytest.raises(ValueError):
             parse_review(text, RULES)
