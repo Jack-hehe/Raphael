@@ -824,6 +824,15 @@ pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, 
     Ok(attachments)
 }
 
+/// Whether a typed question names the quick conversation: the only destination the page may name.
+pub fn typed_quick(destination: Option<&str>) -> Result<bool, String> {
+    match destination {
+        None => Ok(false),
+        Some(crate::dictation::QUICK_DESTINATION) => Ok(true),
+        Some(_) => Err("invalid destination".to_owned()),
+    }
+}
+
 /// The quote is data, never appended to the owner's question by the shell.
 pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
     let Some(quote) = quote else {
@@ -848,8 +857,9 @@ pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
 /// that is not 0, the member whose thread it was typed in (a member is reached only this way, with
 /// the source `app`). It goes the way a spoken one goes once its words are heard (`agent.ask` with
 /// the source `app`; the overlay shows the answer and any YES/NO question), and the call settles
-/// when the turn is over, its answer in the history or its failure shown. Refused while Raphael is
-/// busy with a recording or another question.
+/// when the turn is over, its answer in the history or its failure shown. `destination` is
+/// `"quick"` for a question typed in Raphael's quick conversation, and nothing else. Refused while
+/// Raphael is busy with a recording or another question.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri receives each named argument separately from IPC.
 pub async fn agent_ask_text(
@@ -862,11 +872,13 @@ pub async fn agent_ask_text(
     replace_turn_id: Option<u64>,
     quote: Option<Value>,
     conversation_id: Option<u64>,
+    destination: Option<String>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if request_id.as_deref().is_some_and(|id| !is_question_id(id)) {
         return Err("invalid request id".to_owned());
     }
+    let quick = typed_quick(destination.as_deref())?;
     let attachments = typed_attachments(attachments)?;
     let quote = typed_quote(quote)?;
     let text = typed_question_with(&text, !attachments.is_empty())?;
@@ -884,6 +896,7 @@ pub async fn agent_ask_text(
             replace_turn_id,
             quote,
             conversation_id,
+            quick,
         })
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
@@ -1933,6 +1946,15 @@ mod tests {
             json!({"text":"x".repeat(20_001), "author":"Teacher"}),
         ] {
             assert!(typed_quote(Some(bad)).is_err());
+        }
+    }
+
+    #[test]
+    fn a_typed_question_names_the_quick_destination_or_none() {
+        assert_eq!(typed_quick(None), Ok(false));
+        assert_eq!(typed_quick(Some("quick")), Ok(true));
+        for bad in ["", "Quick", "formal", "main"] {
+            assert!(typed_quick(Some(bad)).is_err(), "{bad}");
         }
     }
 

@@ -280,7 +280,8 @@ pub type QuestionReport = Arc<dyn Fn(QuestionNews) + Send + Sync>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Busy;
 
-/// A question from the composer, including its attachments and conversation context.
+/// A question from the composer, including its attachments and conversation context. `quick` is
+/// one typed in Raphael's quick conversation.
 pub struct TypedQuestion<'a> {
     pub text: &'a str,
     pub attachments: Vec<Value>,
@@ -289,6 +290,7 @@ pub struct TypedQuestion<'a> {
     pub replace_turn_id: Option<u64>,
     pub quote: Option<Value>,
     pub conversation_id: Option<u64>,
+    pub quick: bool,
 }
 
 /// The first agent call for a typed or spoken question, with optional transcription timing.
@@ -301,6 +303,7 @@ struct AgentQuestion<'a> {
     replace_turn_id: Option<u64>,
     quote: Option<Value>,
     conversation_id: Option<u64>,
+    quick: bool,
     transcript_ms: Option<f64>,
 }
 
@@ -356,6 +359,11 @@ const FRONT_POLL: Duration = Duration::from_millis(250);
 
 /// The source of a question typed in the main window (`agent.ask {source}`).
 pub const TYPED_SOURCE: &str = "app";
+
+/// The destination an Alt+Space question names (`agent.ask {destination}`): Raphael's quick
+/// conversation, answered by the quick model. The core refuses a spoken question to Raphael that
+/// names none, so nothing reaches quick or formal by default.
+pub const QUICK_DESTINATION: &str = "quick";
 
 struct State {
     phase: Phase,
@@ -1725,6 +1733,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: None,
+                // Raphael's key asks a quick question; a member's goes to its own thread.
+                quick: session.member == 0,
                 transcript_ms: Some(transcript_ms),
             },
         )
@@ -1765,6 +1775,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             replace_turn_id,
             quote,
             conversation_id: None,
+            quick: false,
         })
     }
 
@@ -1794,6 +1805,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             replace_turn_id,
             quote,
             conversation_id,
+            quick,
         } = question;
         let _transition = lock(&self.transitions);
         let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -1845,6 +1857,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                     replace_turn_id,
                     quote,
                     conversation_id,
+                    quick,
                     transcript_ms: None,
                 },
             )
@@ -1853,7 +1866,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     /// The `question` of the session `id` with the agent: `agent.ask` (with `source`
-    /// when it is not the voice, the core's default), the reply shown, and for a YES/NO question
+    /// when it is not the voice, the core's default, and the [`QUICK_DESTINATION`] for a quick
+    /// question), the reply shown, and for a YES/NO question
     /// its answer sent with `agent.confirm` and that reply shown, which may be another question
     /// (a run on the desktop asks about the app, then about each step that sends), up to
     /// [`MAX_QUESTIONS_IN_A_TURN`]. The `attachments` of a typed question go with the first call
@@ -1869,6 +1883,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             replace_turn_id,
             quote,
             conversation_id,
+            quick,
             transcript_ms,
         } = question;
         let mut params = json!({
@@ -1882,6 +1897,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         }
         if let Some(source) = source {
             params["source"] = json!(source);
+        }
+        if quick {
+            params["destination"] = json!(QUICK_DESTINATION);
         }
         if !attachments.is_empty() {
             params["attachments"] = Value::Array(attachments);
@@ -5927,7 +5945,7 @@ mod tests {
             ask,
             json!({
                 "session_id": id, "text": "幫我複製這句話", "ui_language": "zh-TW",
-                "target_app": "chrome.exe",
+                "target_app": "chrome.exe", "destination": "quick",
             })
         );
         assert_eq!(
@@ -6252,11 +6270,13 @@ mod tests {
             replace_turn_id: None,
             quote: None,
             conversation_id: Some(42),
+            quick: false,
         })
         .unwrap()
         .await
         .unwrap();
         assert_eq!(c.core().call_params("agent.ask")["conversation_id"], 42);
+        assert!(c.core().call_params("agent.ask").get("destination").is_none());
         let c = agent(answer("Answer", "Hello"));
         c.ask_typed("Hi").unwrap().await.unwrap();
         assert!(
@@ -6265,6 +6285,28 @@ mod tests {
                 .get("conversation_id")
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn a_question_typed_in_the_quick_conversation_names_the_quick_destination() {
+        let c = agent(answer("Answer", "Hello"));
+        c.ask_composed_in(TypedQuestion {
+            text: "And tomorrow?",
+            attachments: Vec::new(),
+            member: 0,
+            request_id: Some("quick-1".into()),
+            replace_turn_id: None,
+            quote: None,
+            conversation_id: Some(4),
+            quick: true,
+        })
+        .unwrap()
+        .await
+        .unwrap();
+        let params = c.core().call_params("agent.ask");
+        assert_eq!(params["destination"], QUICK_DESTINATION);
+        assert_eq!(params["conversation_id"], 4);
+        assert_eq!(params["source"], TYPED_SOURCE);
     }
 
     #[tokio::test]
@@ -6327,10 +6369,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_spoken_question_names_no_source_and_the_core_takes_it_for_the_voice() {
+    async fn a_spoken_question_to_raphael_names_the_quick_destination_and_no_source() {
         let c = agent(answer("答", "好"));
         ask_aloud(&c).await;
-        assert_eq!(c.core().call_params("agent.ask").get("source"), None);
+        let params = c.core().call_params("agent.ask");
+        assert_eq!(params.get("source"), None);
+        assert_eq!(params["destination"], QUICK_DESTINATION);
+        assert_eq!(params.get("conversation_id"), None);
     }
 
     #[tokio::test]
@@ -6347,6 +6392,7 @@ mod tests {
         let params = c.core().call_params("agent.ask");
         assert_eq!(params["member_id"], json!(3));
         assert_eq!(params.get("source"), None);
+        assert_eq!(params.get("destination"), None, "a member's voice goes to its own thread");
         assert_eq!(c.agent_stage(), None);
         assert_eq!(
             *phases.lock().unwrap(),
@@ -6369,6 +6415,10 @@ mod tests {
         run(&c, AgentDown, 2000).await;
         run(&c, AgentUp, 2900).await;
         assert_eq!(c.core().call_params("agent.ask").get("member_id"), None);
+        assert_eq!(
+            c.core().call_params("agent.ask")["destination"],
+            QUICK_DESTINATION
+        );
     }
 
     #[tokio::test]
@@ -6438,6 +6488,7 @@ mod tests {
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: Some(42),
+                quick: false,
             })
             .unwrap();
         until_stage(&c, AgentStage::Asking).await;
@@ -6506,6 +6557,7 @@ mod tests {
                     replace_turn_id: None,
                     quote: None,
                     conversation_id: Some(42),
+                    quick: false,
                 })
                 .unwrap();
             settle().await;
@@ -6541,6 +6593,7 @@ mod tests {
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: Some(41),
+                quick: false,
             })
             .unwrap();
         let second = c
@@ -6552,6 +6605,7 @@ mod tests {
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: Some(42),
+                quick: false,
             })
             .unwrap();
         assert_eq!(
@@ -6662,6 +6716,7 @@ mod tests {
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: Some(41),
+                quick: false,
             })
             .unwrap();
         until_stage(&c, AgentStage::Asking).await;
@@ -6674,6 +6729,7 @@ mod tests {
                 replace_turn_id: None,
                 quote: None,
                 conversation_id: Some(42),
+                quick: false,
             })
             .unwrap();
         settle().await;
