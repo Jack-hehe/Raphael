@@ -9,7 +9,9 @@ responders, sequential handoffs, up to two material chime-ins and Raphael's wrap
 Explicit addresses are durable source/recipient reply intents. Six-turn admission slices and
 three-hop limits bound optional chime-ins only; pending replies continue in scheduled slices
 before Raphael concludes. Stop, revoked membership, cost limits and uncertain restart work
-retain named blocked intents. Completed sources recover once without replaying work.
+retain named blocked intents. A blocked reply is a centred line in the thread after its exchange's last message,
+never a note above the composer, and names why in the window language, CLI rate limits, quota, sign-in, busy and
+errors included. Completed sources recover once without replaying work.
 Room-only moderator/pro/con roles run two sequential rounds before the chief concludes. Empty and (pass) replies stay hidden.
 Explicit mentions use whole names, prefer the longest matching name, ignore email addresses,
 and run in the order they occur in the message. The same rule applies to peer handoffs.
@@ -48,7 +50,7 @@ npm run look -- team-roster-aware mentions-bots-apps member-mentions-bots-apps p
 ```
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
-composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: at 1920x1080 the group panels occupy at least 80% of workspace width and 35% of workspace area, remain inside the scrollport, and keep names and roles at a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention/slash items start at normal row padding and reserve no empty icon/check column. For mutation work extend scenes through create,
+composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: at 1920x1080 the group panels occupy at least 80% of workspace width and 35% of workspace area, remain inside the scrollport, and keep names and roles at a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention items lead with the member's face, the app's connection mark or the team icon in one aligned column, with an app's state quiet on the right; slash items start at the row padding; neither reserves an empty icon/check column. For mutation work extend scenes through create,
 send, rename and membership changes; assert UI and mock boundary records. Native
 proof needs a harmless room message, actual recipient responses and persistence
 after reopening the isolated dev instance. Record recipients, states and cleanup.
@@ -67,8 +69,8 @@ results. Promises without action evidence cannot complete work.
 npm run look -- room-handoff-queued room-handoff-running room-handoff-result room-handoff-failed room-immediate-work room-source-dates-not-schedule handoff-centred-line room-thinking --theme both --width 1120,720,1920x1080
 ```
 
-Inspect the compact centered face/name/state line, expanded task/result detail and separate
-final member message. The `room-thinking` fixture uses actual active-turn/reply-intent state.
+Inspect the compact centred face/name/state line, the expanded request/result/file detail without task numbers
+and the separate final member message. The request is the delegating member's own message of the source turn. The `room-thinking` fixture uses actual active-turn/reply-intent state.
 `handoff-centred-line` covers the requesting private conversation even without public messages;
 the six room handoff scenes cover room dispatch and results.
 Offline P00 S03.immediate-start and S08.immediate-start exercise API/CLI dispatch; they do not
@@ -79,9 +81,10 @@ Room 1 has messages; room 2 is a team room. The compact picker is a different en
 point and needs 720 coverage. Synthetic drag scenes do not prove pointer/keyboard
 drag accessibility. A confirmation dialog is not proof of deletion or delivery. The row-menu scene uses the
 sidebar at wide widths and header actions in the compact picker. Inspect named reply chips,
-role tags, Raphael's crown, the single speaking row, wrap-up card and responder menu.
-The wrap-up has labelled conclusion, owner-decision and next-step sections; named
-next-step owners are emphasized. The global look audit rejects visible raw Markdown
+Raphael's crown, the header faces' name and role tooltips, the single speaking row, the wrap-up and the responder menu.
+A message shows face, name and reply chip only: roles stay in the member column and the header. The wrap-up is
+Raphael's ordinary message with face and name, no card, whose conclusion, owner-decision and next-step parts are
+light headings; named next-step owners are emphasized. The global look audit rejects visible raw Markdown
 headings, task markers, bold markers and fenced-code delimiters on every page.
 The room fixture is synthetic IPC only; core tests use a fake brain and shared worker/CLI
 loop with real approval gates. Paid provider discussion, installed CLI execution and native
