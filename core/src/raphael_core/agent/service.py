@@ -585,6 +585,9 @@ class AgentService:
         self._tool_support = ToolSupport(models, clock=clock)
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
+        # Conversation turns under way that consulted a colleague durably: when one ends, the
+        # background answers the owner once with what came back (`BackgroundService.settle_asker`).
+        self._consulting: set[int] = set()
         self._catalog = AppCatalog(actions, clock=clock)
         self._targets = OpenTargets(conn, now_ms)
         self._warming: set[asyncio.Task[None]] = set()
@@ -2339,8 +2342,11 @@ class AgentService:
         if name == "handoff":
             if self._background is None:
                 return handoff_refused("worker_disabled")
-            return self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
-                                            language=language)
+            result = self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
+                                              language=language)
+            if result.ok and arguments.get("mode") == "consult" and source_turn_id:
+                self._consulting.add(source_turn_id)
+            return result
         if name == "room_meeting":
             rooms = getattr(team, 'rooms', None)
             if rooms is None or not source_turn_id:
@@ -3695,6 +3701,9 @@ class AgentService:
         self._turn_changed(turn_id, member_id, hold=hold)
         if hold and turn_id:
             ask.held = turn_id
+        if turn_id in self._consulting and status not in ("running", "confirm"):
+            self._consulting.discard(turn_id)
+            self._background.settle_asker(turn_id, answered=status == "done")
         if self._memory is not None and not ask.nested and status not in ("running", "confirm"):
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.

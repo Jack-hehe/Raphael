@@ -301,6 +301,52 @@ async def test_a_consultation_answers_from_what_the_asked_member_knows_and_the_a
     assert '行銷說新品代號是 PRIVATE-CHAT' in AgentHistory(rig.conn).get(source.id).text
 
 
+@pytest.mark.parametrize('answer_first',[False,True])
+async def test_a_conversation_turn_that_consults_comes_back_once_with_the_answer(make_rig,tmp_path,answer_first):
+    rig=make_rig()
+    target,source=setup(rig,room=False)
+    knowing(rig,tmp_path,target)
+    seen={}
+    def resumed(**kwargs):
+        seen['asker']=json.dumps(kwargs['messages'],ensure_ascii=False)
+        return report('行銷說新品代號是 PRIVATE-CHAT。')
+    rig.client.replies.extend([report('新品代號是 PRIVATE-CHAT。'),resumed])
+    receipt=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='code',request='新品代號是什麼？'),
+                                source_turn_id=source.id,language='zh-TW')
+    child=rig.task(receipt.data['task_id'])
+    asker=rig.task(child.parent_task_id)
+    # While the turn is being answered its asker stays off the turn, so the chat shows no second task.
+    assert (asker.state,asker.member_id,asker.turn_id)==('running',0,None) and rig.service.tasks_for_turns([source.id])=={}
+    if answer_first:
+        await until(lambda:rig.task(child.id).state=='done')
+        assert rig.task(asker.id).state=='running'
+    AgentHistory(rig.conn,rig.wall).resolve(source.id,prefix='答',text='我去問 Writer。',status='done')
+    rig.service.settle_asker(source.id,answered=True)
+    await until(lambda:rig.task(asker.id).state in ('done','failed'))
+    assert rig.task(asker.id).state=='done' and rig.task(asker.id).turn_id==source.id
+    assert 'PRIVATE-CHAT' in seen['asker'] and 'PRIVATE-NOTE' not in seen['asker']
+    assert '行銷說新品代號是 PRIVATE-CHAT' in AgentHistory(rig.conn).get(source.id).text
+    rig.service._deliver_handoffs()
+    rig.service.settle_asker(source.id,answered=True)
+    assert not rig.service._store.resume_from_inbox(asker.id)
+    assert rig.conn.execute('SELECT COUNT(*) FROM task_executions WHERE task_id=?',(asker.id,)).fetchone()[0]==1
+    assert rig.client.replies==[]
+
+
+async def test_a_stopped_conversation_turn_stops_the_questions_it_sent(make_rig,tmp_path):
+    rig=make_rig()
+    target,source=setup(rig,room=False)
+    knowing(rig,tmp_path,target)
+    receipt=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='code',request='新品代號是什麼？'),
+                                source_turn_id=source.id,language='zh-TW')
+    child=rig.task(receipt.data['task_id'])
+    AgentHistory(rig.conn,rig.wall).resolve(source.id,prefix='答',text='已取消。',status='denied')
+    rig.service.settle_asker(source.id,answered=False)
+    assert rig.task(child.id).state=='cancelled' and rig.task(child.parent_task_id).state=='cancelled'
+    assert AgentHistory(rig.conn).get(source.id).text=='已取消。'
+    assert not rig.reports() and rig.client.chat_calls==[]
+
+
 async def test_assigned_work_never_reads_the_assignees_private_conversation_or_notes(make_rig,tmp_path):
     rig=make_rig()
     target,source=setup(rig,room=False)

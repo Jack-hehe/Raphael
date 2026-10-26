@@ -42,6 +42,10 @@ QUEUED, RUNNING, WAITING = "queued", "running", "waiting"
 FINAL_STATES = ("done", "failed", "limit", "cancelled", "interrupted")
 
 
+def _asker_key(turn_id: int) -> str:
+    return hashlib.sha256(json.dumps(["asker", turn_id]).encode()).hexdigest()
+
+
 class Refused(Exception):
     """A task cannot be taken. `kind` names the phrase that says why (`persona.Phrases`):
     "worker_busy" (the queue is full) or "worker_disabled" (the worker crashed too often)."""
@@ -240,6 +244,26 @@ class TaskStore:
             self._conn.execute("INSERT INTO task_outbox VALUES (?,?, 'queued',?,?,?,?,NULL,NULL)",
                 (f'{task_id}:queued',task_id,source.id,source.room_id,source.thread_id,now))
         return task_id, False
+
+    def asker(self, source, *, model, language):
+        """The task a conversation turn that consults colleagues waits as, made once for the turn.
+        It is the parent of the questions the turn sends; it runs while the turn does and is tied
+        to the turn only when the turn ends (`BackgroundService.settle_asker`), to answer the
+        owner there once every answer is in."""
+        key = _asker_key(source.id)
+        now = self._now_ms()
+        with self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO worker_tasks(created_at_ms,started_at_ms,state,session_id,language,text,member_id,"
+                "scope,model_ref,idempotency_key,ready_at_ms) VALUES (?,?,'running',?,?,?,?,'private',?,?,?)",
+                (now,now,source.session_id,language,source.question,source.member_id,model,key,now))
+        return self.get(self._conn.execute("SELECT id FROM worker_tasks WHERE idempotency_key=?", (key,)).fetchone()[0])
+
+    def asking(self, turn_id):
+        """The asker task of a conversation turn that is still under way, if the turn consulted."""
+        row = self._conn.execute("SELECT id FROM worker_tasks WHERE idempotency_key=? AND state='running'"
+                                 " AND continuation IS NULL", (_asker_key(turn_id),)).fetchone()
+        return None if row is None else self.get(row[0])
 
     def handoffs(self, source_turn_id):
         return [Task(**dict(row)) for row in self._conn.execute(
