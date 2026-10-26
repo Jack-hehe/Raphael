@@ -263,7 +263,8 @@ describe("a question of the background", () => {
     expect(api.core).toHaveBeenCalledWith("background.questions.list", { member_id: 0 });
     const card = document.querySelector<HTMLElement>('[data-mount="background-questions"] .bgq-card')!;
     expect(card).not.toBeNull();
-    expect(card.textContent).toContain("《問。是否讓「Notes」執行「note」？》");
+    expect(card.textContent).toContain("是否讓「Notes」執行「note」？");
+    expect(card.textContent).not.toContain("《");
     card.querySelector<HTMLButtonElement>(".bgq-yes")!.click();
     await flush();
     expect(api.core).toHaveBeenCalledWith("background.answer", { task_id: 4, question_id: "q-1", approved: true });
@@ -282,7 +283,8 @@ describe("a continuous typed turn", () => {
     live = { ...live, messages: [{ seq: 1, kind: "progress", text: "《告。先確認今天的日期。》", at_ms: 1 }] };
     send({ type: "AgentTurn", turn_id: 1 });
     await vi.advanceTimersByTimeAsync(200);
-    expect(document.querySelector('.tn[data-id="1"] .work-body')?.textContent).toContain("《告。先確認今天的日期。》");
+    expect(document.querySelector('.tn[data-id="1"] .work-body')?.textContent).toContain("先確認今天的日期。");
+    expect(document.querySelector('.tn[data-id="1"] .work-body')?.textContent).not.toContain("《");
     live = { ...live, status: "done", text: "今天星期五。", messages: [...live.messages!, { seq: 2, kind: "reply", text: "《答。今天星期五。》", at_ms: 2 }] };
     send({ type: "AgentTurn", turn_id: 1 });
     await vi.advanceTimersByTimeAsync(200);

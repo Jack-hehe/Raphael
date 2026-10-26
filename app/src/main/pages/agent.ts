@@ -22,10 +22,10 @@
 // The page is also where the members are (members-shell.ts): the member column on the left, the
 // details panel on the right, and the centred pill over the chat. Each member has one thread, as
 // Raphael has: picking a member loads its turns (`agent.history.list {member_id}`), and the composer
-// asks it (`agent_ask_text {memberId}`). A member's answers are plain bubbles, with none of Raphael's
-// 《prefix。》, its composer says 「傳訊息給 <name>」 and shares Raphael's emblem voice button,
-// and the gold card shows in the thread whose member asked. Raphael's thread is exactly as
-// it was. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
+// asks it (`agent_ask_text {memberId}`). Every thread reads like colleagues talking: answers and
+// questions are plain words, Raphael's 《prefix。》 included only on the desktop overlay. A member's
+// composer says 「傳訊息給 <name>」 and shares Raphael's emblem voice button, and the gold card
+// shows in the thread whose member asked. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
 // is the slot of the thread's questions from the background (background-mount.ts). A member's
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
 // the collapsed line of an exchange it had a part in.
@@ -39,7 +39,7 @@ import { mountSlashMenu } from "../slash-menu";
 import { getLocale, onLocaleChange, t } from "../i18n";
 import { isTopLayer, registerDismissal } from "../dismissals";
 
-import { replyLine } from "../../shared/anime";
+import { plainReplies } from "../../shared/anime";
 import * as api from "../api";
 import { createLinkPreviews, type LinkPreview } from "../link-previews";
 import { messagePlainText } from "../message-content";
@@ -533,7 +533,7 @@ export function createAgent(app: AppContext): Page {
     const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
-    return { ...shared, face: () => faceHTML(member, 26), plain: true };
+    return { ...shared, face: () => faceHTML(member, 26) };
   };
   /**
    * The question that waits now (null: none), and whose thread it is in: the member a typed or
@@ -722,8 +722,7 @@ export function createAgent(app: AppContext): Page {
     const q = question!;
     askCard.dataset.id = q.id;
     askCard.dataset.tier = q.tier;
-    // a member asks in plain words, Raphael in his 《prefix。》
-    askText.textContent = inRaphael() ? replyLine(q.prefix, q.text) : q.text;
+    askText.textContent = q.text;
     drawAskLabels();
     noButton.disabled = alwaysButton.disabled = yesButton.disabled = answering;
     yesButton.dataset.hold = "idle";
@@ -1548,8 +1547,10 @@ export function createAgent(app: AppContext): Page {
       return { turn, key, text: media ? [media.title, media.description, media.url].filter(Boolean).join("\n") : message.text, markdown: false };
     }
     const markdown = key === "reply" || message?.kind === "reply";
-    const text = message?.text ?? turn.text;
-    return { turn, key, text: markdown && inRaphael() && !text.startsWith("《") ? replyLine(turn.prefix, text) : text, markdown };
+    // Copy and quote take the words as the thread shows them, without Raphael's 《prefix。…》.
+    const replies = (turn.messages ?? []).filter(item => item.kind === "reply").sort((a, b) => a.seq - b.seq);
+    const text = message?.kind === "reply" ? plainReplies(replies.map(item => item.text))[replies.indexOf(message)] : plainReplies([message?.text ?? turn.text])[0];
+    return { turn, key, text, markdown };
   }
 
   async function copyMessage(control: HTMLElement): Promise<void> {
