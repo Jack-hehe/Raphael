@@ -34,6 +34,8 @@ export interface DialogOptions {
   title: string;
   /** The fields, as HTML. */
   body: string;
+  /** Plain-text content that describes the dialog to assistive technology. */
+  describedByBody?: boolean;
   /** The footer's actions, ordered by the shared action row. */
   actions: ActionRowOptions;
   /** A click on something with a `data-dlg` in the dialog. */
@@ -56,9 +58,9 @@ export function openDialog(o: DialogOptions): Dialog {
   scrim.className = "mb-scrim";
   const id = `mb-dlg-${Math.random().toString(36).slice(2, 8)}`;
   scrim.innerHTML =
-    `<div class="mb-dialog${o.cls ? ` ${o.cls}` : ""}" role="dialog" aria-modal="true" aria-labelledby="${id}">` +
+    `<div class="mb-dialog${o.cls ? ` ${o.cls}` : ""}" role="dialog" aria-modal="true" aria-labelledby="${id}"${o.describedByBody ? ` aria-describedby="${id}-body"` : ""}>` +
     `<div class="mb-dlg-head"><h2 id="${id}">${esc(o.title)}</h2>${iconButton("x", t("common.close"), ' data-dlg="close"')}</div>` +
-    `<div class="mb-dlg-body">${o.body}</div>` +
+    `<div class="mb-dlg-body" id="${id}-body">${o.body}</div>` +
     actionRow({ ...o.actions, cls: "mb-dlg-act" }) +
     `</div>`;
   let open = true;
@@ -137,9 +139,10 @@ export function confirmDelete(name: string): Promise<boolean> {
     let answer = false;
     openDialog({
       title: t("members.deleteConfirm", { p0: name }),
-      body: "",
+      body: `<p>${esc(t("members.deleteHint"))}</p>`,
+      describedByBody: true,
       cls: "mb-confirm",
-      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), destructive: { label: esc(t("members.delete")), attrs: ' data-dlg="delete"' } },
+      actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.delete")), attrs: ' data-dlg="delete"' } },
       onAct(act, _target, dialog) {
         answer = act === "delete";
         dialog.close();

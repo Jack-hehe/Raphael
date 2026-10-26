@@ -1050,6 +1050,7 @@ export const en = {
   "members.moveTo": "Move to group",
   "members.delete": "Delete",
   "members.deleteConfirm": "Delete {p0}?",
+  "members.deleteHint": "This action cannot be undone.",
   "members.deleted": "Deleted {p0}",
   "members.rename": "Rename",
   "members.groupName": "Group name",

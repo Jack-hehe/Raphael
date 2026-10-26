@@ -208,7 +208,10 @@ test("a picture of the PC is a PNG, JPG, WebP or GIF", () => {
 test("a delete is asked first: 刪除 says yes, 取消 no", async () => {
   const yes = confirmDelete("文書");
   expect(document.querySelector(".mb-dialog h2")!.textContent).toBe("刪除「文書」？");
-  expect([...document.querySelectorAll(".mb-dlg-act .btn")].map((b) => b.textContent)).toEqual(["刪除", "取消"]);
+  expect([...document.querySelectorAll(".mb-dlg-act .btn")].map((b) => b.textContent)).toEqual(["取消", "刪除"]);
+  const dialog = document.querySelector<HTMLElement>(".mb-dialog")!;
+  expect(document.getElementById(dialog.getAttribute("aria-describedby")!)?.textContent).toBe("此操作無法復原。");
+  expect(dialog.querySelector('[data-dlg="delete"]')?.classList.contains("pri")).toBe(true);
   expect(document.activeElement).toBe(document.querySelector('[data-dlg="cancel"]'));
   document.querySelector<HTMLElement>('[data-dlg="delete"]')!.click();
   expect(await yes).toBe(true);

@@ -9,6 +9,7 @@ ARCHITECTURE IDs: <!-- A-xx, or none -->
 
 ## Evidence
 
+- Selected verification scope and affected consumers (explain any full-project run):
 - Verify/core/Rust commands and exits:
 - UI look run/artifact (720, 1120, 1920x1080; light/dark):
 - Judge report/score, or explicit SKIP and reason:

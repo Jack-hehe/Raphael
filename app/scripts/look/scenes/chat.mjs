@@ -27,7 +27,7 @@ export default [
   scene("member-draft-done", "Confirmed drafts settle into a summary and add members to the column", [wait('.draft-panel:not([hidden])'), click('[data-draft-act="confirm"]'), wait('.draft-done'), click('[data-act="draft-done"]'), wait('.draft-done.is-open'), check("member-draft-done")], { adminApproval: "draft" }),
   scene("empty", "Conversation without turns", [], { turns: [] }),
   scene("row-menu", "Conversation actions in the details panel", [...details, click(".mb-det [data-conversation-more]"), wait("#app-popover [data-pick]")]),
-  ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog")])),
+  ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog"), ...(action === "delete" ? [check("delete-confirmation")] : [])])),
   scene("new-conversation", "Create a conversation", [...details, click(".mb-det [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
   scene("details", "Title opens member details", [...details, { action: "icon-interactions", selector: '.mb-det [data-det="close"]' }]),
   scene("raphael-details", "Title opens Raphael details", [{ action: "open-details" }, check("member-details")]),
