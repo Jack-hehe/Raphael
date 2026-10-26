@@ -149,6 +149,11 @@ class Recorder:
         return ToolOutcome(approved, None if approved else "denied", "已確認。" if approved else "已拒絕，未刪除。")
 
 
+# Words only the mainland writes, where Taiwan has its own: 影片, 軟體, 硬體, 螢幕, 滑鼠, 預設, 網路, 伺服器, 資料庫,
+# 資料夾, 部落格, 連結.
+_MAINLAND_WORDS = re.compile("視頻|軟件|硬件|屏幕|鼠標|默認|網絡|服務器|數據庫|文件夾|博客|鏈接")
+
+
 def check_reply(text, scenario):
     reasons = []
     if not text.strip():
@@ -160,13 +165,11 @@ def check_reply(text, scenario):
     if re.search(r"\b[A-Za-z]{2,}(?:[ ,.;:]+[A-Za-z]{2,}){2}", prose):
         reasons.append("english_sentence_in_zh_TW_reply")
     from opencc import OpenCC
-    # Preserve product terms: OpenCC otherwise rewrites permission and primary-contact
-    # wording as a regional synonym or an operating-system window, and a code (代碼) as program code.
-    # Taiwan writes 台 and 臺 alike (台灣, 新台幣, 平台), where OpenCC always prefers 臺; and 項目 (items)
-    # and 登錄 (registered) are Taiwan's own, where OpenCC reads the mainland's project and log-in.
-    traditional = text.replace("權限", "").replace("主要窗口", "").replace("代碼", "").replace("項目", "")
-    traditional = traditional.replace("登錄", "").replace("臺", "台")
-    if OpenCC("s2twp").convert(traditional).replace("臺", "台") != traditional:
+    # Taiwan writing is Traditional characters (台 and 臺 alike) without the mainland's unmistakable words.
+    # OpenCC's Taiwan phrases are not a test of it: live they rewrote Taiwan's own 權限, 主要窗口, 代碼,
+    # 項目, 登錄 and 對象 as other words, failing correct replies four times in one night.
+    traditional = text.replace("臺", "台")
+    if OpenCC("s2tw").convert(traditional).replace("臺", "台") != traditional or _MAINLAND_WORDS.search(text):
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):
         reasons.append("raw_json_reply")
