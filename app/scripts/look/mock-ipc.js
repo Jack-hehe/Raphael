@@ -66,6 +66,11 @@ export function installMock(fixture, config = {}, target = window) {
     turn.handoffs = [{ ...data.roomHandoff, state: "done" }, { ...data.roomHandoff, task_id: 43, member_id: 2, member_name: "小森", mode: "consult", state: "running", result: "", evidence: [] }];
     turn.messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
   }
+  if (variant.colleagues) {
+    // 小森 asked 小晴 from its own chat; 小晴's main chat shows each question where it came.
+    data.conversations.push(data.colleagueConversation);
+    data.turns.push(data.colleagueTurn, ...data.colleagueExchanges.slice(0, variant.colleagues));
+  }
   if (variant.p02Roles) data.rooms[0].roles = data.p02Roles;
   if (variant.p02Blocked || variant.p02Fallback || variant.p02LongExchange) {
     const exchange = { ...data.roomActiveExchange, state: "stopped", active_turn: null };
@@ -183,14 +188,18 @@ export function installMock(fixture, config = {}, target = window) {
       case "conversations.create": { const conversation = { id: nextId(data.conversations), member_id: p.member_id ?? 0, title: p.title ?? "", is_default: false, created_at_ms: data.now, updated_at_ms: data.now }; data.conversations.push(conversation); return { conversation }; }
       case "conversations.rename": update(data.conversations, p.id, { title: p.title }); return {};
       case "conversations.delete": data.conversations = data.conversations.filter(item => item.id !== p.id); return { deleted: true };
-      case "agent.history.list": return { turns: byMember(data.turns, p).filter(turn => p.conversation_id === undefined || turn.conversation_id === p.conversation_id).slice().reverse() };
+      case "agent.history.list": {
+        // As the core lists them: a member's main conversation also holds what colleagues asked it.
+        const main = data.conversations.find(c => c.member_id === (p.member_id ?? 0) && c.is_default)?.id;
+        return { turns: byMember(data.turns, p).filter(turn => p.conversation_id === undefined || turn.conversation_id === p.conversation_id || (turn.scope === "exchange" && p.conversation_id === main)).slice().reverse() };
+      }
       case "agent.history.search": case "messages.search": return { turns: byMember(data.turns, p).filter(turn => `${turn.question} ${turn.text} ${turn.messages.map(message => message.text).join(" ")}`.includes(p.query)).map(turn => ({ ...turn, conversation_title: data.conversations.find(c => c.id === turn.conversation_id)?.title })) };
       case "agent.history.delete": data.turns = data.turns.filter(item => item.id !== p.id); notify("AgentTurn", { turn_id: p.id, member_id: p.member_id ?? 0 }); return { deleted: true };
       case "agent.speech.status": return data.speech;
       case "agent.question.open": return null;
       case "background.questions.list": return { questions: [] };
       case "quota.list": return { quotas: data.allowances.quotas };
-      case "memory.list": return { memories: byMember(data.memories, p), summary: null };
+      case "memory.list": return { memories: p.space === "shared" ? data.sharedMemories : byMember(data.memories, p), summary: null };
       case "safety.rules.list": return { rules: data.safetyRules };
       case "routines.list": return { routines: p.member_id === undefined ? data.routines : byMember(data.routines, p) };
       case "routines.runs": return { runs: data.routineRuns.filter(run => run.routine_id === p.routine_id), total: data.routineRuns.filter(run => run.routine_id === p.routine_id).length };

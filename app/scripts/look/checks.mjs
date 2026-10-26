@@ -759,5 +759,42 @@ export function checkRendered(name) {
     }
     return { check: name, chips: chips.length };
   }
+  if (name === "bot-ask-centred" || name === "bot-ask-expanded") {
+    const event = document.querySelector('[data-handoff="x71"]');
+    const [line] = eventLines(1);
+    require(line.textContent === "已詢問 小晴已完成", `the asker's line names the colleague and the state: ${line.textContent}`);
+    require(visible(line.querySelector('.av')) && !event.closest('.chat-message'), "one faced line outside the messages");
+    if (name === "bot-ask-expanded") {
+      const detail = event.querySelector('.handoff-detail');
+      require(event.open && detail.querySelector('.message-quote')?.textContent.includes("下週上市的新品代號是多少？"), "it opens on the question that was sent");
+      require(detail.querySelector('.message-text')?.textContent.includes("NX-2026"), "and on the answer that came back");
+      require(!/#\d|x71/.test(detail.textContent), "no internal ids");
+    } else require(!event.open, "the line starts closed");
+    return { check: name, open: event.open };
+  }
+  if (name === "bot-message-from" || name === "bot-exchange-count" || name === "bot-exchange-expanded") {
+    // The asked member's chat: one centred line where the question came, never a pasted transcript.
+    const event = document.querySelector('.exchange-event[data-exchange="71"]');
+    const [line] = eventLines(1);
+    const words = name === "bot-message-from" ? "訊息來自 小森" : "4 則訊息往來：小森";
+    require(line.textContent === words, `the line reads ${words}: ${line.textContent}`);
+    require(visible(line.querySelector('.av')), "the line carries the asker's face");
+    require(document.querySelector('.tn[data-id="2"]').getBoundingClientRect().bottom <= event.getBoundingClientRect().top, "the question sits where it came, after the member's own earlier turn");
+    require(!document.querySelector('.exchange-row .bubble'), "a colleague's question is never an owner bubble");
+    if (name === "bot-exchange-expanded") {
+      const messages = [...event.querySelectorAll('.exchange-message')].filter(visible);
+      require(event.open && messages.length === 4, `every question and answer is shown: ${messages.length}`);
+      require(messages.map(message => message.querySelector('b').textContent).join("|") === "小森|小晴|小森|小晴", "each speaker is named once, in order");
+      require(!/^(?:小森|小晴)[:：]/m.test(messages.map(message => message.querySelector('.message-text').textContent).join("\n")), "no line carries a speaker label");
+    } else require(!event.open, "the line starts closed");
+    return { check: name, words: line.textContent };
+  }
+  if (name === "global-private-memory") {
+    const shared = document.querySelector('.mb-det [data-mem-space="shared"]'), own = document.querySelector('.mb-det [data-mem-space="own"]');
+    require(visible(shared) && visible(own), "the shared and the member's own memory are both on screen");
+    require(shared.textContent.includes("品牌主色是金色") && shared.querySelector('.mem-from')?.textContent === "拉斐爾 · 10/27", "the shared note says whom the owner told it to and when");
+    require(own.textContent.includes("專案每週三檢查原型") && !shared.textContent.includes("專案每週三檢查原型"), "the member's own note stays in its own memory");
+    return { check: name };
+  }
   throw new Error(`Unknown rendered check: ${name}`);
 }

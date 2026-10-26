@@ -4,8 +4,9 @@
 
 Named conversations per member; new/rename/delete; public work/event chips; answers,
 attachments, reply quoting, message actions, search and composer menus.
-Private history, previews, search and unread state exclude room and inter-member exchange
-audit rows. Room answers stay in their room/thread and have no shortcut into private history.
+A member's main conversation lists what colleagues asked or handed it where each came, as one closed
+centred line; previews, search, unread state, other conversations and every model read exclude those
+exchanges, and room turns. Room answers stay in their room/thread and have no shortcut into private history.
 Raphael's single persistent quick-question conversation is created on the first global
 voice question, pinned above formal conversations as 快速提問 / Quick questions / クイック質問.
 Its fixed title and permanent identity have no rename/delete menu; individual messages
@@ -93,20 +94,42 @@ The live-scenario-owner-view scene replays S17 synthetic history through the sha
 Durable assignments use `handoff`, which returns a task receipt immediately. The requesting
 conversation displays one centred grey line (the assignee's face, 已轉交給/已詢問 and the name, then the
 state) whose detail shows the request, the result and the produced files, never task numbers. Work runs
-in the assignee's isolated work turn; results return only to the requesting source. Quick
-`ask_member` consultation remains tool data. Source-document deadlines never schedule work.
+in the assignee's isolated work turn; results return only to the requesting source. A quick
+`ask_member` question is answered in the same turn and draws the same 已詢問 line, with no task behind it.
+Source-document deadlines never schedule work.
 The room handoff scenes in [Team and rooms](team-and-rooms.md) cover the shared event renderer;
 private and room result destinations are also checked by offline core tests.
 
 Every private/API/CLI/member turn receives the current public TeamContextSnapshot with self,
 count, stable IDs, roles, primary/chief and secret-free app connection states. Meeting requests
-use room_meeting; one centred grey line with the group icon, outside Raphael's message, opens the room, and quick ask_member answers remain tool
-data folded into the requesting assistant reply. Room history remains outside private turns.
+use room_meeting; one centred grey line with the group icon, outside Raphael's message, opens the room, and quick ask_member answers are
+folded into the requesting assistant reply. Room history remains outside private turns.
 
 ```powershell
 npm run look -- meeting-open-room meeting-chief-event member-mentions-bots-apps --theme both --width 1120,720,1920x1080
 ```
 
+
+## Consulting a colleague and the shared memory (P14)
+
+Grok Bot's two sides of a question: the asker's chat shows 「已詢問 X」 (handoff-line.ts), which opens on
+the question that was sent and the answer, and the asked member's own chat shows 「訊息來自 Y」 with Y's
+face where the question came (exchange-line.ts); several in a row from one colleague on one day fold into
+「N 則訊息往來：Y」, as Grok Bot words it, opening on each question and answer with each speaker named once,
+never a pasted transcript or a per-line label. Both ways of asking leave the same record, the asked
+member's exchange turn: `ask_member` answers in the asker's turn, a `handoff` in consult mode runs as the
+asked member's task with its own notes and conversation, and a private chat turn that consulted that way
+comes back once with the answer. Shared notes name whom the owner told them to and when, in every memory
+panel and in every member's prompt; what the owner told one member stays its own until a colleague asks.
+
+```powershell
+npm run look -- bot-ask-centred bot-message-from-centred bot-exchange-count bot-exchange-expanded global-private-memory --theme both --width 1120,720,1920x1080
+```
+
+The scenes seed 小森 asking 小晴 through the IPC fixture (`colleagues`, `sharedMemories`); the mock lists
+a member's exchanges in its main conversation as the core does. Model behaviour is covered by Guardian
+S04 and S12: offline with honest fake brains on both brain paths and both ways of asking, live on the API
+brain. Rendered fixtures do not prove a live consult.
 
 ## P04 task lifecycle
 
