@@ -718,8 +718,9 @@ class TaskRun:
             text, cut = _cut(json.dumps(result.data, ensure_ascii=False), limit)
             reply = {"ok": True, "kind": None, "content": text, "truncated": cut}
         else:
-            reply = {"ok": False, "kind": result.error or "error", "content": "", "truncated": False,
-                     "instruction": result.instruction or ""}
+            reply = {"ok": False, "kind": result.error or "error", "content": "", "truncated": False}
+            if result.instruction:
+                reply["instruction"] = result.instruction
         return reply, outcome, None if tier is None else tier.name, result.detail
 
     async def _lookup(self, name: str, arguments: dict, *, approval: Approval | None = None, action: Action | None = None) -> ToolResult:
