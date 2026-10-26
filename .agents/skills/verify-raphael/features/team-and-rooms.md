@@ -14,7 +14,8 @@ after its retries) blocks only that reply with its named reason; the exchange go
 Raphael's wrap-up names the unfinished reply. A blocked reply is a centred line in the thread after its exchange's last
 message, never a note above the composer, and names why in the window language, CLI rate limits, quota, sign-in, busy
 and errors included. Completed sources recover once without replaying work.
-Room-only moderator/pro/con roles run two rounds: each turn is told its round and who still has to speak, an addressed
+A meeting is a room_meeting agenda or the owner's first message after the room's parts are saved; later owner messages
+are answered as usual. Room-only moderator/pro/con roles run two rounds: each turn is told its round and who still has to speak, an addressed
 member takes their planned place in the open round, the moderator closes after the second, and Raphael called on then
 gives the single conclusion. During a moderated meeting no one hands off work, and no hand-off ever goes back to a
 colleague waiting upstream on it. Empty and (pass) replies stay hidden.
