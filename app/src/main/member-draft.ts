@@ -30,16 +30,22 @@ export function hasDrafts(question: AgentQuestion | null | undefined): question 
   return Boolean(question && Array.isArray(question.drafts));
 }
 
+export const isBotRename = (turn: AgentTurn): boolean => turn.status === "done" && /^(?:已重新命名為 |Renamed to |名前を変更：)/.test(turn.text.trim());
+
 export function isSettledDraftTurn(turn: AgentTurn): boolean {
   if (turn.status !== "done" || !hasDetail(turn)) return false;
   const text = turn.text.trim();
   return (
+    isBotRename(turn) ||
     /^(?:已建立|已更新|已套用：|Created |Updated |Applied: )/.test(text) ||
     /(?:を作成しました|を更新しました)$/.test(text)
   );
 }
 
 export function settledDraftHTML(turn: AgentTurn, open: boolean, query = ""): string {
+  if (isBotRename(turn)) {
+    return `<p class="bot-renamed" role="status">${highlightHTML(turn.text.trim(), query)}</p>`;
+  }
   const id = esc(turn.id);
   const summary = highlightHTML(turn.text.trim(), query);
   const lines = (turn.detail ?? "")
@@ -102,7 +108,7 @@ export function presetUrlOf(avatarPreset: string, presets: readonly AvatarPreset
 export interface DraftPanelHost {
   groups(): readonly MemberGroup[];
   presets(): readonly AvatarPreset[];
-  onConfirm(drafts: MemberDraft[]): void;
+  onConfirm(drafts: MemberDraft[], groups?: GroupDraft[]): void;
   onCancel(): void;
 }
 
@@ -122,6 +128,7 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
   let currentQuestionId: string | null = null;
   let currentDrafts: MemberDraft[] = [];
   let currentGroups: GroupDraft[] = [];
+  let groupsEdited = false;
   let isBusy = false;
   const openMore = new Set<string>();
 
@@ -131,8 +138,8 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
   }
 
   function primaryLabel(): string {
-    const count = currentDrafts.length;
-    const allCreate = count > 0 && currentDrafts.every((d) => d.member_id === undefined || d.member_id === null);
+    const count = currentDrafts.length || currentGroups.length;
+    const allCreate = currentDrafts.length > 0 && currentDrafts.every((d) => d.member_id === undefined || d.member_id === null);
     return allCreate ? t("members.draftCreateCount", { p0: count }) : t("members.draftSaveCount", { p0: count });
   }
 
@@ -149,18 +156,18 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
       btn(
         face,
         "draft-av-btn",
-        ` data-draft-act="avatar" aria-label="${esc(t("members.changeAvatar"))}" title="${esc(t("members.changeAvatar"))}" aria-haspopup="menu" aria-expanded="false"`,
+        ` data-draft-act="avatar" aria-label="${esc(t("members.changeAvatar"))}" title="${esc(t("members.changeAvatar"))}" aria-haspopup="menu" aria-expanded="false"${isBusy || draft.member_id === 0 ? " disabled" : ""}`,
       ) +
       `<div class="draft-card-ident">` +
       `<input type="text" class="mb-fin draft-name" data-draft-field="name" maxlength="${NAME_MAX}" value="${esc(draft.name)}" placeholder="${esc(t("members.name"))}" aria-label="${esc(t("members.name"))}" autocomplete="off" spellcheck="false"${isBusy ? " disabled" : ""}>` +
       `<input type="text" class="mb-fin draft-role" data-draft-field="role" maxlength="${ROLE_MAX}" value="${esc(draft.role)}" placeholder="${esc(t("members.role"))}" aria-label="${esc(t("members.role"))}" autocomplete="off" spellcheck="false"${isBusy ? " disabled" : ""}>` +
-      `<span class="draft-group-wrap">${sel(choices, (draft.group ?? "").trim(), t("members.group"), ` data-draft-act="group"${isBusy ? " disabled" : ""}`)}</span>` +
+      (draft.member_id === 0 ? "" : `<span class="draft-group-wrap">${sel(choices, (draft.group ?? "").trim(), t("members.group"), ` data-draft-act="group"${isBusy ? " disabled" : ""}`)}</span>`) +
       `</div>` +
       iconButton("x", removeLabel, ` data-draft-act="remove"${isBusy ? " disabled" : ""}`, "draft-remove") +
       `</div>` +
-      `<div class="draft-card-blurb">` +
+      (draft.member_id === 0 ? "" : `<div class="draft-card-blurb">` +
       `<input type="text" class="mb-fin draft-blurb" data-draft-field="blurb" maxlength="160" value="${esc(draft.blurb)}" placeholder="${esc(t("members.profile.blurb"))}" aria-label="${esc(t("members.profile.blurb"))}" autocomplete="off"${isBusy ? " disabled" : ""}>` +
-      `</div>` +
+      `</div>`) +
       `<div class="draft-more${expanded ? " is-open" : ""}">` +
       btn(
         `<span class="steps-chev">${ico("right")}</span><span>${esc(t("members.draftMore"))}</span>` +
@@ -188,8 +195,7 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
     const choices = draftGroupChoices(host.groups(), currentGroups, currentDrafts);
     const presets = host.presets();
     const groupPills = currentGroups
-      .filter((g) => g.name.trim() !== "")
-      .map((g) => `<span class="draft-group-pill">${ico("folder")}<span>${esc(g.name.trim())}</span></span>`)
+      .map((g) => `<label class="draft-group-pill">${ico("folder")}<input class="mb-fin draft-group-name" data-draft-group="${esc(g.id)}" aria-label="${esc(t("members.group"))}" maxlength="24" value="${esc(g.name)}"${isBusy ? " disabled" : ""}></label>`)
       .join("");
 
     el.setAttribute("aria-label", t("members.draftTitle"));
@@ -250,6 +256,22 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
 
   el.addEventListener("input", (e) => {
     const target = e.target as HTMLInputElement | HTMLTextAreaElement | null;
+    if (target?.dataset.draftGroup) {
+      const group = currentGroups.find(g => g.id === target.dataset.draftGroup);
+      if (!group || isBusy) return;
+      const before = group.name;
+      group.name = target.value;
+      for (const draft of currentDrafts) {
+        if (draft.group !== before) continue;
+        draft.group = group.name;
+        const button = el.querySelector<HTMLElement>(`[data-draft-id="${CSS.escape(draft.id)}"] [data-draft-act="group"]`);
+        const label = button?.querySelector("span");
+        if (label) label.textContent = group.name || t("members.ungrouped");
+        if (button) button.title = group.name || t("members.ungrouped");
+      }
+      groupsEdited = true;
+      return;
+    }
     if (!target || !target.dataset.draftField) return;
     const card = target.closest<HTMLElement>("[data-draft-id]");
     const draft = currentDrafts.find((d) => d.id === card?.dataset.draftId);
@@ -283,7 +305,7 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
     if (!act || (act as HTMLButtonElement).disabled || isBusy) return;
     const action = act.dataset.draftAct;
     if (action === "confirm") {
-      host.onConfirm(currentDrafts.map((d) => ({ ...d })));
+      host.onConfirm(currentDrafts.map((d) => ({ ...d })), groupsEdited ? currentGroups.map(g => ({ ...g })) : undefined);
       return;
     }
     if (action === "cancel") {
@@ -337,6 +359,7 @@ export function createDraftPanel(host: DraftPanelHost): DraftPanelController {
       if (changedQuestion) {
         currentQuestionId = question.id;
         currentDrafts = question.drafts.map((d) => ({ ...d }));
+        groupsEdited = false;
         currentGroups = (question.groups ?? []).map((g) => ({ ...g }));
         openMore.clear();
         el.dataset.id = question.id;

@@ -2,6 +2,53 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "admin-description-draft") {
+    const input = document.querySelector('.composer textarea');
+    require(visible(input) && input.value.includes("整理未讀信並準備回覆"), "description opens the chief's ordinary composer");
+    require(input.value.includes("確認後才建立"), "description requests an editable proposal");
+    require(!window.__look.calls.some(call => call.method === 'members.create'), "description does not create a member directly");
+    return { check: name };
+  }
+  if (name === "first-bot-choice" || name === "first-bot-free-text") {
+    const card = document.querySelector('.first-bot:not([hidden])');
+    require(visible(card), "first Bot conversation card is visible");
+    require(card.querySelectorAll('[data-first-choice]').length === 2, "two suggested answers");
+    require(visible(card.querySelector('textarea')), "free text answer is available");
+    require(window.__look.data.members.length === 1 && window.__look.data.members[0].id === 0, "one stable first Bot");
+    require(!window.__look.calls.some(call => call.command === 'agent_ask_text'), "choices have no side effects");
+    if (name === "first-bot-free-text") require(card.querySelector('textarea').value === "星河", "Back preserves free text");
+    return { check: name, text: card.querySelector('textarea').value };
+  }
+  if (name === "first-bot-draft") {
+    const draft = document.querySelector('.draft-panel:not([hidden])');
+    require(visible(draft) && draft.querySelectorAll('.draft-card').length === 1, "first Bot uses the shared draft");
+    require(draft.querySelector('[data-draft-field="name"]').value === "晨星", "selected name reaches the draft");
+    require(window.__look.data.members[0].profile_ready === false, "profile is not saved before confirmation");
+    const sent = window.__look.calls.find(call => call.command === 'agent_ask_text');
+    require(sent && !/member_update|member ID|成員 ID|Bot/.test(sent.text), "setup request uses natural window-language words");
+    return { check: name };
+  }
+  if (name === "bot-renamed-centred") {
+    const lines = [...document.querySelectorAll('.bot-renamed')].filter(visible);
+    require(lines.length === 1 && lines[0].textContent === "已重新命名為 晨星", "one saved rename line");
+    require(getComputedStyle(lines[0]).textAlign === "center", "rename line is centered");
+    require(window.__look.data.members.length === 1 && window.__look.data.members[0].profile_ready, "profile saved without a second Bot");
+    const answers = window.__look.calls.filter(call => call.command === 'agent_question_answer');
+    require(answers.length === 1 && answers[0].drafts[0].member_id === 0, "shared apply boundary runs once");
+    return { check: name };
+  }
+  if (name === "admin-draft-cancel" || name === "admin-edited-result") {
+    const calls = window.__look.calls.filter(call => call.command === 'agent_question_answer');
+    require(calls.length === 1 && calls[0].approved === (name === "admin-edited-result"), "one owner decision");
+    const created = window.__look.data.members.filter(member => member.id >= 8);
+    require(created.length === (name === "admin-edited-result" ? 2 : 0), "only selected drafts are applied");
+    if (name === "admin-edited-result") {
+      require(created[0].role === "首席營運長" && !created.some(member => member.name === "RD"), "edits and removal persist");
+      require(calls[0].groups[0].name === "工作室", "edited group crosses the confirmation boundary");
+      require(created.every(member => window.__look.data.groups.some(group => group.id === member.group_id && group.name === "工作室")), "edited group membership persists");
+    }
+    return { check: name, created: created.length };
+  }
   if (name === "conversation-running") {
     const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
     require(calls.some(call => (call.params?.member_id ?? 0) === 0 && (call.params?.conversation_id ?? 1) === 1), "R-UI-32: running turn belongs to the open formal conversation");

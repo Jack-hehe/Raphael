@@ -43,6 +43,7 @@ from ..device.models import LOCAL_STT_MODELS
 from ..languages import DEFAULT_LANGUAGES, checked_languages
 
 DEFAULTS: dict[str, Any] = {
+    "first_bot_profile": {},
     "owner_name": "",
     "owner_about": "",
     "owner_photo": "",
@@ -315,6 +316,16 @@ def _read_disconnected_clis(saved: Any) -> list[str]:
 def checked(key: str, value: Any) -> tuple[str, Any]:
     """The key and the value that setting `key` to `value` saves, or the error `SettingsStore.set`
     raises for them (see there). Nothing is saved."""
+    if key == "first_bot_profile":
+        limits = {"name": 16, "role": 24, "personality": 2000, "instructions": 2000}
+        if not isinstance(value, dict) or set(value) - set(limits):
+            raise ValueError("Invalid first Bot profile")
+        if any(not isinstance(text, str) or len(text.strip()) > limits[field] or "\x00" in text
+               for field, text in value.items()):
+            raise ValueError("Invalid first Bot profile text")
+        if value and not value.get("name", "").strip():
+            raise ValueError("The first Bot needs a name")
+        return key, {field: text.strip() for field, text in value.items()}
     if key == "languages":
         return key, checked_languages(key, value)
     if value is None and key in _NULLABLE:

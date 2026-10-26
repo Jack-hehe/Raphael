@@ -770,7 +770,7 @@ class AgentService:
     def _speaker(self, member_id: int) -> Speaker | None:
         """Who `member_id` is: Raphael for 0, a member of the team, or None for nobody."""
         if member_id == 0:
-            return RAPHAEL
+            return self._team.speaker(0) if self._team is not None else RAPHAEL
         if self._team is None:
             return None
         try:
@@ -1476,6 +1476,11 @@ class AgentService:
             system += roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings)
             if ask.speaker.is_raphael:
                 system += LEADERSHIP
+                if ask.speaker.name:
+                    system += "\nOwner-confirmed first Bot profile (identity 0; administration remains chief-only):\n" + json.dumps({
+                        "name": ask.speaker.name, "role": ask.speaker.role,
+                        "personality": ask.speaker.personality, "instructions": ask.speaker.instructions,
+                    }, ensure_ascii=False)
             user = build_user_message(
                 labelled_lines(ask.exchange_speakers[0], ask.text) if ask.exchange_speakers else ask.text,
                 self._moment(), context.turns, [], ask.language,
@@ -1577,6 +1582,8 @@ class AgentService:
                     return ToolOutcome(True, content="\n".join(lines), tools=definitions)
                 planned = plan(name, args)
                 screened = [screenings[call_id]] if call_id in screenings else None
+                if name in BATCH_TOOLS and ask.nested:
+                    return ToolOutcome(False, "owner_confirmation_required")
                 if planned is not None and name in BATCH_TOOLS and ask.speaker.is_raphael and not ask.nested:
                     screening = screened[0] if screened else await self._screen_call(ask, planned, ledger)
                     screened = [screening]
@@ -1584,13 +1591,13 @@ class AgentService:
                         ask.admin_pending.clear()
                         loop.response = self._finish(ask, "answer", "negative", forbidden(ask.language, screening), ledger)
                         raise Stop("finished")
-                    if ask.admin_pending or needs_yes(False, screening):
-                        creates = sum(call.tool.key in ("member_create", "create_member") for call in ask.admin_pending)
-                        if name in ("member_create", "create_member") and ask.member_creates + creates >= 10:
-                            return ToolOutcome(False, "member_create_limit")
-                        ask.admin_pending.append(planned)
-                        ask.admin_screenings.append(screening)
-                        return ToolOutcome(True, content="pending_approval: true. Queued for one approval at the end of this turn. Nothing has been changed. Continue collecting requested changes; do not retry this operation.")
+                    # Team changes are always owner-editable proposals, on every brain and mode.
+                    creates = sum(call.tool.key in ("member_create", "create_member") for call in ask.admin_pending)
+                    if name in ("member_create", "create_member") and ask.member_creates + creates >= 10:
+                        return ToolOutcome(False, "member_create_limit")
+                    ask.admin_pending.append(planned)
+                    ask.admin_screenings.append(screening)
+                    return ToolOutcome(True, content="pending_approval: true. This is only a proposal awaiting the owner's edits and confirmation at the end of this turn. Nothing has been created or updated; no new ID exists. Continue collecting requested changes; do not retry or claim success.")
                 if planned is not None:
                     outcome = await self._carry_out(ask, [planned], [], ledger, screenings=screened)
                     if isinstance(outcome, dict):
@@ -1686,18 +1693,26 @@ class AgentService:
         if isinstance(loop, CliLoop) and loop.failed:
             return self._finish(ask, "answer", "negative", reply.text, ledger, status="error")
         if ask.admin_pending:
-            operations = [{"name": call.tool.key, "arguments": dict(call.arguments)} for call in ask.admin_pending]
-            text = "\n\n".join(asked_with(ask.language, screening, self._team.admin_confirmation(op["name"], op["arguments"], ask.language, question=False))
-                                  for op, screening in zip(operations, ask.admin_screenings))
-            text += {"en": "\n\nAllow all these changes?", "zh-TW": "\n\n允許以上所有變更嗎？", "ja": "\n\nすべての変更を許可しますか？"}[ask.language]
-            drafts, groups = await self._team.admin_drafts(operations)
-            action = Action("team_admin_batch", {"operations": operations, "drafts": drafts, "groups": groups})
-            result = self._open_question(ask, action, "answer", text, ledger)
-            result["confirm"]["drafts"] = drafts
-            result["confirm"]["groups"] = groups
-            self._followups[result["confirm"]["id"]] = _Followup(ask, ask.admin_pending[0], loop.seen, admin_batch=True)
-            return result
+            return await self._propose_admin(ask, ledger, loop.seen)
         return self._finish_reply(ask, "exchange" if ask.nested else "answer", reply, loop.seen, ledger)
+
+    async def _propose_admin(self, ask: _Ask, ledger: Ledger, seen: list[ToolResult]) -> dict:
+        """One editable proposal and one apply path for every conversational brain."""
+        from .team_admin import proposal_operations
+
+        operations = proposal_operations([{"name": call.tool.key, "arguments": call.arguments} for call in ask.admin_pending])
+        text = "\n\n".join(self._team.admin_confirmation(op["name"], op["arguments"], ask.language, question=False) for op in operations)
+        why = next((screening for screening in ask.admin_screenings if screening.verdict == ASK), None)
+        if why is not None:
+            text = asked_with(ask.language, why, text)
+        text += {"en": "\n\nAllow all these changes?", "zh-TW": "\n\n允許以上所有變更嗎？", "ja": "\n\nすべての変更を許可しますか？"}[ask.language]
+        drafts, groups = await self._team.admin_drafts(operations)
+        action = Action("team_admin_batch", {"operations": operations, "drafts": drafts, "groups": groups})
+        result = self._open_question(ask, action, "answer", text, ledger)
+        result["confirm"]["drafts"] = drafts
+        result["confirm"]["groups"] = groups
+        self._followups[result["confirm"]["id"]] = _Followup(ask, ask.admin_pending[0], seen, admin_batch=True)
+        return result
 
     async def _cli_permission(self, ask: _Ask, args: dict, ledger: Ledger, loop: CliLoop) -> ToolOutcome:
         if len(canonical(args)) > MAX_ARGUMENT_CHARS:
@@ -1754,6 +1769,8 @@ class AgentService:
             if isinstance(outcome, dict):
                 return outcome  # a question for a yes
             results = outcome
+            if ask.admin_pending:
+                return await self._propose_admin(ask, ledger, results)
             created = [r for r in results if r.name == CREATE_MEMBER]
             if picked and created and len(created) == len(picked) and all(r.ok for r in created):
                 # 《了。已建立「小行程」。》: nothing more to word.
@@ -1938,6 +1955,14 @@ class AgentService:
         asking: list[tuple[PlannedCall, Screening]] = []
         for call, screening in zip(calls, screenings):
             tier = self._tier_now(call)
+            if call.tool.key in BATCH_TOOLS and ask.speaker.is_raphael and not ask.nested:
+                creates = sum(queued.tool.key in ("member_create", "create_member") for queued in ask.admin_pending)
+                if call.tool.key in ("member_create", "create_member") and ask.member_creates + creates >= 10:
+                    results.append(ToolResult(call.tool.key, False, None, "member_create_limit"))
+                    continue
+                ask.admin_pending.append(call)
+                ask.admin_screenings.append(screening)
+                continue
             if tier is not None and needs_yes(tier >= Tier.T2, screening):
                 asking.append((call, screening))
             else:
@@ -2445,8 +2470,15 @@ class AgentService:
             operations = pending.action.args["operations"]
             began = time.perf_counter()
             try:
-                self._gate.check_admin_batch(pending.action, approval)
                 planned = self._team.plan_admin_batch(operations, drafts=drafts, groups=groups)
+                # Recheck current rules against owner-edited arguments before consuming approval.
+                for operation in planned:
+                    tool = team_tool(operation["name"]) if operation["name"] in TEAM_TOOLS else harness_tool(operation["name"])
+                    screening = await self._screen_call(followup.ask, PlannedCall(tool, operation["arguments"]), ledger)
+                    if screening.verdict == DENY:
+                        raise NotApproved(operation["name"])
+                self._gate.check_admin_batch(pending.action, approval)
+                chief_before = self._team.speaker(0).name
                 results = await self._team.admin_batch(
                     followup.ask.speaker.id, operations, drafts=drafts, groups=groups
                 )
@@ -2465,6 +2497,11 @@ class AgentService:
             groups_by_id = {g.id: g.name for g in self._team.store.groups()} if hasattr(self._team, "store") else {}
             for operation, result in zip(planned, results):
                 self._gate.record_builtin(operation["name"], outcome="ok", approver="user")
+                if self._tool_observer is not None:
+                    from .harness_tools import definitions_for
+                    definition = dict(definitions_for(0)).get(operation["name"])
+                    self._tool_observer(operation["name"], operation["arguments"], ToolOutcome(True),
+                                        0, followup.ask.conversation_id, definition["parameters"] if definition else {})
                 item = result.get("member") or result.get("group") or {}
                 name = item.get("name", "")
                 role = item.get("role", "")
@@ -2500,6 +2537,9 @@ class AgentService:
             else:
                 text = {"en": "Applied: ", "zh-TW": "已套用：", "ja": "適用済み："}[language] + ", ".join(names)
             detail = "\n".join(detail_lines) if detail_lines else None
+            chief_after = self._team.speaker(0).name
+            if chief_after and chief_after != chief_before:
+                text = {"en": "Renamed to ", "zh-TW": "已重新命名為 ", "ja": "名前を変更："}[language] + chief_after
             return self._outcome(pending, "understood", text, "done", detail=detail, cost_usd=ledger.total)
 
         if followup.memory_reply is not None:

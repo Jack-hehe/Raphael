@@ -46,7 +46,7 @@ BASE = (
     ("Registry coverage", "", "registry_mapping,verified_dual_brain_calls", "P22"),
 )
 
-SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr)
+SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr, "team-setup" if i == 1 else "")
                   for i, (title, prompt, checks, pr) in enumerate(BASE, 1))
 
 

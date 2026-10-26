@@ -841,6 +841,7 @@ pub struct Confirmation {
     /// The third answer of a question that has one (「一律允許」): a YES, kept for next time.
     pub always: bool,
     pub drafts: Option<Vec<serde_json::Value>>,
+    pub groups: Option<Vec<serde_json::Value>>,
 }
 
 /// Where the page's answers go: the dictation controller's task takes them from the other end.
@@ -875,6 +876,7 @@ pub fn overlay_confirm(
             in_app: false,
             always: approved && always == Some(true),
             drafts: None,
+            groups: None,
         })
         .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }

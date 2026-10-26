@@ -170,7 +170,7 @@ def roster_prompt(team: Team | None, speaker: Speaker, language: str) -> str:
     if team is None:
         return ""
     rows = [
-        {"name": RAPHAEL_NAMES[language] if other.is_raphael else other.name,
+        {"name": (other.name or RAPHAEL_NAMES[language]) if other.is_raphael else other.name,
          "role": "Core assistant" if other.is_raphael else other.role,
          "blurb": other.blurb}
         for other in team.roster() if other.id != speaker.id

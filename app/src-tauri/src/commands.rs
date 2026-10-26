@@ -877,6 +877,7 @@ pub fn agent_question_answer(
     approved: bool,
     always: Option<bool>,
     drafts: Option<Vec<Value>>,
+    groups: Option<Vec<Value>>,
 ) -> Result<(), String> {
     require_main(&webview)?;
     if !is_question_id(&id) {
@@ -894,6 +895,7 @@ pub fn agent_question_answer(
             in_app: true,
             always: approved && always == Some(true),
             drafts: if approved { drafts } else { None },
+            groups: if approved { groups } else { None },
         })
         .map_err(|_| AGENT_OFF.to_owned())
 }

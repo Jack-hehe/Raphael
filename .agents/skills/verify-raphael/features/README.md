@@ -3,7 +3,7 @@
 Use [the verification workflow](../SKILL.md) first. Commands run from `app/` and
 request both themes; feature commands use 720/1120 and the full hand-off matrix
 also requires 1920x1080. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 188 scenes, 1128 combinations across both themes and
+are the executable source: 196 scenes, 1176 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.
@@ -19,7 +19,7 @@ behavior the fixture cannot prove.
 | [Settings and appearance](settings-appearance.md) | Profile/preferences, skins, languages, models and app information |
 | [Connections and MCP](connections-mcp.md) | Unified plugins, managed store, MCP setup/discovery and Home's private Google calendar read |
 | [Usage](usage.md) | Spend overview, grouping, CSV and CLI allowances |
-| [Onboarding](onboarding.md) | First launch and entry into the usable app |
+| [Onboarding](onboarding.md) | First launch, first Bot choices and confirmed profile |
 
 Keep entry points, prerequisites and observable end states current. If data is
 missing, add it at the existing fixture boundary or report the failure; do not drop

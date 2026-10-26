@@ -76,7 +76,7 @@ from typing import Any
 
 from ..agent.history import AgentHistory, Turn
 from ..agent.persona import normalize_language, phrase
-from ..agent.speaker import BUILTIN_TOOL_IDS, RAPHAEL, RAPHAEL_NAMES, Speaker, is_raphael_name
+from ..agent.speaker import BUILTIN_TOOL_IDS, RAPHAEL_NAMES, Speaker, is_raphael_name
 from ..background.tasks import Refused
 from ..brain.settings import DEFAULTS, SettingsStore
 from ..clock import wall_clock_ms
@@ -285,13 +285,20 @@ class MembersService:
     # --- the team, as the assistant sees it (agent.team.Team) ----------------------------------------
 
     def speaker(self, member_id: int) -> Speaker | None:
+        if member_id == 0:
+            return Speaker(**self.first_bot_profile())
         return self.store.speaker(member_id)
+
+    def first_bot_profile(self) -> dict:
+        from ..brain.settings import SettingsStore
+
+        return SettingsStore(self._conn).get("first_bot_profile")
 
     def find(self, name: str) -> Speaker | None:
         if not isinstance(name, str) or not name.strip():
             return None
-        if is_raphael_name(name):
-            return RAPHAEL
+        if is_raphael_name(name) or name.casefold() == self.first_bot_profile().get("name", "").casefold():
+            return self.speaker(0)
         member = self.store.by_name(name)
         return None if member is None else member.speaker()
 
@@ -316,7 +323,7 @@ class MembersService:
         return self._conn.execute("SELECT 1 FROM members LIMIT 1").fetchone() is not None
 
     def roster(self) -> list[Speaker]:
-        return [RAPHAEL] + [
+        return [self.speaker(0)] + [
             Speaker(id=member.id, name=member.name, role=member.role, blurb=member.blurb)
             for member in self.store.members()
         ]
@@ -350,7 +357,7 @@ class MembersService:
         """What the member `member_id` is called (for the overlay's notice of a question that waits
         in its thread); None for one that is not there."""
         try:
-            speaker = self.store.speaker(member_id)
+            speaker = self.speaker(member_id)
         except sqlite3.Error as exc:
             logger.warning("Could not read a member: %s", type(exc).__name__)
             return None
@@ -556,6 +563,9 @@ class MembersService:
             "last_at": None if last is None else last.created_at_ms,
         }
         picture = self._raphael_picture()
+        profile = self.first_bot_profile()
+        view.update(profile)
+        view["profile_ready"] = bool(profile)
         if picture is not None:
             view["avatar_url"], view["avatar_crop"] = picture
         return view
@@ -985,6 +995,12 @@ class MembersService:
                 is_update = name == "member_update"
                 target_id = arguments.get("id") if is_update else None
                 current = self.store.member(target_id) if is_update and type(target_id) is int else None
+                if is_update and target_id == 0:
+                    from types import SimpleNamespace
+                    current = SimpleNamespace(name=RAPHAEL_NAMES[self._language()], role="", personality="", instructions="",
+                                              blurb="", avatar="", group_id=None)
+                    for field, value in self.first_bot_profile().items():
+                        setattr(current, field, value)
                 current_group = self.store.group(current.group_id) if current and current.group_id else None
                 group_val = arguments.get("group", current_group.name if current_group else "")
                 group_name = group_val.strip() if isinstance(group_val, str) else ""
@@ -1120,6 +1136,13 @@ class MembersService:
         if member_id != 0 or not operations or any(op["name"] not in BATCH_TOOLS for op in operations):
             raise invalid_params("invalid team administration batch")
         planned = self.plan_admin_batch(operations, drafts=drafts, groups=groups)
+        allowed_targets = {op["arguments"].get("id") for op in operations if op["name"] == "member_update"}
+        allowed_groups = {op["arguments"].get("id") for op in operations if op["name"] == "group_rename"}
+        create_limit = sum(op["name"] in ("member_create", "create_member") for op in operations)
+        if (sum(op["name"] == "member_create" for op in planned) > create_limit
+                or any(op["arguments"].get("id") not in allowed_targets for op in planned if op["name"] == "member_update")
+                or any(op["arguments"].get("id") not in allowed_groups for op in planned if op["name"] == "group_rename")):
+            raise invalid_params("edited drafts exceed the proposed scope")
         if not planned:
             return []
         # Finish filesystem work before opening the transaction; its handlers must not yield.
@@ -1167,6 +1190,25 @@ class MembersService:
                                        for preset in (await self._presets({}))["presets"]]}
         if name in ("member_create", "member_update"):
             params = dict(arguments)
+            if name == "member_update" and params.get("id") == 0:
+                from ..brain.settings import checked
+
+                changes = {key: value for key, value in params.items() if key in ("name", "role", "personality", "instructions")}
+                if any(params.get(key) for key in ("group", "avatar_preset", "blurb")):
+                    raise invalid_params("the first Bot cannot be regrouped")
+                profile = {"name": RAPHAEL_NAMES[self._language()], **self.first_bot_profile(), **changes}
+                try:
+                    key, profile = checked("first_bot_profile", profile)
+                except (ValueError, TypeError):
+                    raise invalid_params("invalid first Bot profile") from None
+                if any(member.name.casefold() == profile["name"].casefold() for member in self.store.members()):
+                    raise invalid_params("duplicate first Bot name")
+                # Join the batch transaction: SettingsStore.set would commit it prematurely.
+                with self.store.transaction():
+                    self._conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                       (key, json.dumps(profile)))
+                self._changed()
+                return {"member": self._raphael_view(self._language(), set(), set(), {})}
             if name == "member_update":
                 self._member_id(params)
             if presets is None:

@@ -46,3 +46,20 @@ required by the shared guardian hand-off gate.
 
 Ability choices form one vertical checklist (R-UI-35), including at full-screen
 widths. The rendered audit rejects side-by-side ability choices.
+
+## First Bot conversation setup (P05a)
+
+Open the first Bot's empty conversation before its profile has been confirmed.
+Three cards collect name, personality and first work. Each supports two suggestions
+and free text; Back preserves answers. Cancel dismisses the cards for the session
+without saving. Review sends an ordinary localized conversation request and opens
+the shared editable team proposal. Confirmation saves the profile on identity 0;
+the resulting centered rename line appears once without a duplicate answer avatar.
+
+```powershell
+npm run look -- first-bot-choice first-bot-free-text admin-draft-onboarding bot-renamed-centred --theme both --width 1120,720,1920x1080
+```
+
+The fixture proves choice/free-text navigation, no pre-confirmation writes and the
+shared confirmation boundary. Core tests recreate MembersService to read back the
+saved name, personality and instructions. Native desktop relaunch is unverified.

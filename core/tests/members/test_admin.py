@@ -21,7 +21,9 @@ async def test_api_turn_creates_the_requested_company_roles(setup, client):
         live_said("Created COO, PM and RD."),
     ]
     result = await typed(rig, "Create COO, PM, RD", 0, language="en")
-    assert result["status"] == "done"
+    assert result["status"] == "confirm"
+    assert (await rig.call("members.list", {}))["members"][1:] == []
+    await rig.confirm(result["confirm"]["id"])
     roster = await rig.call("members.list", {})
     assert [(m["name"], m["role"]) for m in roster["members"][1:]] == [("COO", "COO"), ("PM", "PM"), ("RD", "RD")]
     assert len(roster["groups"]) == 1
@@ -70,7 +72,7 @@ async def test_cli_turn_applies_or_denies_the_whole_batch_through_http_mcp(setup
 
     monkeypatch.setattr(Driver, "run", run)
     result = await typed(rig, "Create COO, PM, RD", 0, language="en")
-    if mode == "ask":
+    if mode in ("ask", "direct"):
         assert result["status"] == "confirm"
         text = result["confirm"]["text"]
         for role in roles:
@@ -159,7 +161,9 @@ async def test_admin_turn_assigns_distinct_presets_and_enforces_ten_creates(setu
     for name in ("alpha", "beta"):
         (folder / f"{name}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     client.chats = [chat("Creating the team.", *(("member_create" if i % 2 else "create_member", {"name": f"Member {i}", "role": "RD"}) for i in range(11))), live_said("Created ten members.")]
-    await typed(rig, "Create eleven members", 0, language="en")
+    asked = await typed(rig, "Create eleven members", 0, language="en")
+    assert len(asked["confirm"]["drafts"]) == 10
+    await rig.confirm(asked["confirm"]["id"])
     roster = (await rig.call("members.list", {}))["members"][1:]
     assert len(roster) == 10
     assert {roster[0]["avatar"], roster[1]["avatar"]} == {"preset:alpha", "preset:beta"}
@@ -172,9 +176,11 @@ async def test_legacy_create_reports_invalid_fields_without_failing_the_turn(set
     member(team, name="COO")
     client.chats = [chat("Creating COO.", ("create_member", {"name": "COO", "role": "Operations"})), live_said("COO already exists.")]
     result = await typed(rig, "Create COO", 0, language="en")
-    assert result["status"] == "done"
+    assert result["status"] == "confirm"
+    done = await rig.confirm(result["confirm"]["id"])
+    assert done["status"] == "done"
     assert len((await rig.call("members.list", {}))["members"]) == 2
-    assert "bad_arguments" in client.chat_calls[-1]["messages"][-1]["content"]
+    assert (await rig.turns())[0]["status"] == "error"
 
 
 async def test_admin_turn_updates_groups_profiles_routines_and_commands_and_emits_changes(setup, client):
@@ -188,7 +194,8 @@ async def test_admin_turn_updates_groups_profiles_routines_and_commands_and_emit
         chat("Scheduling the report.", ("routine_create", {"member_id": one.id, "title": "Report", "prompt": "Prepare report", "schedule": {"kind": "daily", "time": "09:00"}})),
         chat("Reading the team.", ("team_overview", {})), live_said("Updated COO."),
     ]
-    await typed(rig, "Set up COO reports", 0, language="en")
+    asked = await typed(rig, "Set up COO reports", 0, language="en")
+    await rig.confirm(asked["confirm"]["id"])
     roster = await team.members.admin_tool(0, "team_overview", {})
     coo = next(item for item in roster["members"] if item["id"] == one.id)
     assert (coo["group"], coo["blurb"], coo["commands_count"]) == ("Company", "Operations lead", 1)

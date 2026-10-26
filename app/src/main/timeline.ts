@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 
 import { replyLine, userLine } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
-import { isSettledDraftTurn, settledDraftHTML } from "./member-draft";
+import { isBotRename, isSettledDraftTurn, settledDraftHTML } from "./member-draft";
 import { messageHTML } from "./message-content";
 import { quoteHTML } from "./message-quote";
 import { previewCardsHTML } from "./link-previews";
@@ -820,7 +820,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
-    `<div class="ra"><span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span><div class="ra-body">` +
+    `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
+    (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
       ? turnMessagesHTML(turn, state, query, look.plain, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
       : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)

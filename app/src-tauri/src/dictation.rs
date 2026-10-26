@@ -330,6 +330,7 @@ struct State {
     /// The question on screen, while there is one.
     ask: Option<PendingAsk>,
     drafts: Option<Vec<Value>>,
+    group_drafts: Option<Vec<Value>>,
     /// When the current recording started, on the clock of [`DictationController::on_hotkey`].
     started_ms: u64,
     /// When the dictation key last ended a question, on the same clock: the agent key pressed a
@@ -369,6 +370,7 @@ impl State {
         self.speech_done.clear();
         self.on_overlay = false;
         self.drafts = None;
+        self.group_drafts = None;
         self.take_ask();
         self.session.take()
     }
@@ -474,6 +476,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 speech_done: Vec::new(),
                 ask: None,
                 drafts: None,
+                group_drafts: None,
                 started_ms: 0,
                 question_stopped_ms: None,
                 shown: Vec::new(),
@@ -1640,6 +1643,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             {
                 params["drafts"] = Value::Array(drafts);
             }
+            if let Some(groups) = lock(&self.state).group_drafts.take()
+                && answer.approved
+            {
+                params["groups"] = Value::Array(groups);
+            }
             reply = self.core.call("agent.confirm", params).await;
         }
     }
@@ -1867,7 +1875,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// a question that is gone) is dropped. (The app answers through [`Self::on_answer`].)
     #[cfg(test)]
     pub fn on_confirm(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, false, false, None);
+        self.confirm(id, approved, false, false, None, None);
     }
 
     /// The main window's answer to the question on screen: a button of the card that mirrors the
@@ -1875,7 +1883,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// the long press of a `T3` YES included; the focus the window has is left with it.
     #[cfg(test)]
     pub fn on_confirm_in_app(&self, id: &str, approved: bool) {
-        self.confirm(id, approved, true, false, None);
+        self.confirm(id, approved, true, false, None, None);
     }
 
     /// An answer of either page, the third answer of a question that has one (`always`)
@@ -1883,7 +1891,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// answer is a plain YES.
     #[cfg(test)]
     pub fn on_answer(&self, id: &str, approved: bool, always: bool, in_app: bool) {
-        self.confirm(id, approved, in_app, always, None);
+        self.confirm(id, approved, in_app, always, None, None);
     }
 
     pub fn on_answer_with_drafts(
@@ -1893,8 +1901,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         always: bool,
         in_app: bool,
         drafts: Option<Vec<Value>>,
+        groups: Option<Vec<Value>>,
     ) {
-        self.confirm(id, approved, in_app, always, drafts);
+        self.confirm(id, approved, in_app, always, drafts, groups);
     }
 
     fn confirm(
@@ -1904,6 +1913,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         in_app: bool,
         always: bool,
         drafts: Option<Vec<Value>>,
+        groups: Option<Vec<Value>>,
     ) {
         let pending = {
             let mut state = lock(&self.state);
@@ -1922,6 +1932,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 return;
             }
             state.drafts = if approved { drafts } else { None };
+            state.group_drafts = if approved { groups } else { None };
             state.take_ask()
         };
         if let Some(pending) = pending {
@@ -2588,8 +2599,8 @@ mod app {
                     }
                 }
                 answer = next(&mut confirmations) => match answer {
-                    Some(Confirmation { id, approved, in_app, always, drafts }) => match &controller {
-                        Some(controller) => controller.on_answer_with_drafts(&id, approved, always, in_app, drafts),
+                    Some(Confirmation { id, approved, in_app, always, drafts, groups }) => match &controller {
+                        Some(controller) => controller.on_answer_with_drafts(&id, approved, always, in_app, drafts, groups),
 
                         None => log::info!("an answer to a question is dropped: the core is not running"),
                     },
@@ -6935,6 +6946,29 @@ mod tests {
         assert_eq!(
             c.overlay().events().last().unwrap(),
             "say:了|已複製到剪貼簿。"
+        );
+    }
+
+    #[tokio::test]
+    async fn edited_member_and_group_drafts_cross_the_confirmation_boundary_once() {
+        let (c, turn) = question_on_screen(30_000).await;
+        let drafts = vec![json!({"id": "draft-1", "name": "Research", "group": "Studio"})];
+        let groups = vec![json!({"id": "group-1", "name": "Studio", "group_id": null})];
+        c.on_answer_with_drafts(
+            "c-1",
+            true,
+            false,
+            true,
+            Some(drafts.clone()),
+            Some(groups.clone()),
+        );
+        c.on_answer_with_drafts("c-1", true, false, true, Some(vec![]), Some(vec![]));
+        turn.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            vec![json!({
+                "id": "c-1", "approved": true, "drafts": drafts, "groups": groups
+            })]
         );
     }
 
