@@ -850,6 +850,32 @@ ALTER TABLE room_exchanges ADD COLUMN meeting INTEGER NOT NULL DEFAULT 0;
 PRAGMA user_version = 35;
 COMMIT;
 """
+# A chat's connector cards (`connectors.cards`): the app a turn's task waits for, how its sign-in
+# stands, and the one resume of that task. `done` holds digests of what the task already did,
+# never arguments.
+_MIGRATIONS[36] = """
+BEGIN;
+CREATE TABLE connect_cards (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL,
+    member_id INTEGER NOT NULL,
+    conversation_id INTEGER,
+    app TEXT NOT NULL,
+    language TEXT NOT NULL,
+    reconnect INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL CHECK(state IN ('pending','authorizing','connected','failed','cancelled','expired')),
+    error TEXT NOT NULL DEFAULT '',
+    tool_count INTEGER,
+    done TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL,
+    resumed_at_ms INTEGER,
+    UNIQUE(turn_id, app)
+);
+PRAGMA user_version = 36;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

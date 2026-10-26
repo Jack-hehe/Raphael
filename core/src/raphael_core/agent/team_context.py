@@ -39,7 +39,8 @@ def snapshot(team, self_id, language, room_member_ids=None):
         # Copy only public metadata, never provider configuration or credentials.
         status = app.get("status", "unknown")
         apps.append({"id": app["id"], "name": app["name"], "enabled": bool(app["enabled"]),
-                     "state": "needs_sign_in" if app.get("error") == "auth" else status})
+                     "state": "needs_sign_in" if app.get("error") == "auth" else status,
+                     "tools": app["tools"] if type(app.get("tools")) is int else 0})
     content = {"members": members, "apps": apps, "inventory_state": state,
                "primary_id": 0, "chief_id": 0}
     revision = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()

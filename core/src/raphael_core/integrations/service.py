@@ -614,17 +614,19 @@ class IntegrationsService:
         return {**self._view(server), "tools": self._tool_views(server)}
 
     def connections(self) -> list[dict[str, Any]]:
-        """The connections, as the 工具 tab of a member lists them: each one's id, name and whether
-        it is on. Nothing secret."""
+        """The connections, as the 工具 tab of a member lists them: each one's id, name, whether
+        it is on and how many of its tools can be used now. Nothing secret."""
         result = [
             {"id": server.id, "name": server.name, "enabled": server.enabled,
-             "status": self._view(server)["status"], "error": self._failure.get(server.id)}
+             "status": self._view(server)["status"], "error": self._failure.get(server.id),
+             "tools": sum(1 for tool in server.tools if server.tool_on(tool)) if server.enabled else 0}
             for server in self._config.servers() if not server.managed_by
         ]
         if self.managed is not None:
             result += [{"id": entry.id, "name": entry.name or entry.id, "enabled": entry.enabled,
                         "status": "disabled" if not entry.enabled else "ready" if entry.status == "ACTIVE" else "unchecked",
-                        "error": "auth" if entry.status in ("EXPIRED", "REVOKED", "INACTIVE") else None}
+                        "error": "auth" if entry.status in ("EXPIRED", "REVOKED", "INACTIVE") else None,
+                        "tools": len(entry.enabled_tools) if entry.enabled and entry.status == "ACTIVE" else 0}
                        for entry in self.managed.store.connectors.values()]
         return result
 
