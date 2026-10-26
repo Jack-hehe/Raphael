@@ -943,10 +943,10 @@ impl UiaField {
                 } else if let Some(keys) = &mut self.keys {
                     keys.apply(event);
                 }
-                if event == EditEvent::Invalidated {
-                    if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
-                        tracker.invalidate();
-                    }
+                if event == EditEvent::Invalidated
+                    && let ReadMode::Terminal { tracker, .. } = &mut self.mode
+                {
+                    tracker.invalidate();
                 }
             }
             if stopped {

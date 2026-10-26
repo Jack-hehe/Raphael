@@ -65,7 +65,7 @@ use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
-use crate::dictation::{DeskHandle, ModeCell, QuestionNews};
+use crate::dictation::{DeskHandle, ModeCell, QuestionNews, TypedQuestion};
 use crate::hotkey::{Bindings, HotkeyEvent, HotkeyService, WindowHotkey};
 use crate::mic_access::{self, MicAccess};
 use crate::notices::LanguageCell;
@@ -264,7 +264,7 @@ pub enum MainEvent {
 impl From<QuestionNews> for MainEvent {
     fn from(news: QuestionNews) -> Self {
         match news {
-            QuestionNews::Open(prompt) => Self::AgentQuestion(prompt),
+            QuestionNews::Open(prompt) => Self::AgentQuestion(*prompt),
             QuestionNews::Closed(id) => Self::AgentQuestionClosed { id },
         }
     }
@@ -851,6 +851,7 @@ pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
 /// when the turn is over, its answer in the history or its failure shown. Refused while Raphael is
 /// busy with a recording or another question.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri receives each named argument separately from IPC.
 pub async fn agent_ask_text(
     app: AppHandle,
     webview: Webview,
@@ -875,15 +876,15 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_conversation(
+        .ask_conversation(TypedQuestion {
             text,
             attachments,
-            member_id.unwrap_or(0),
+            member: member_id.unwrap_or(0),
             request_id,
             replace_turn_id,
             quote,
             conversation_id,
-        )
+        })
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -2169,7 +2170,7 @@ mod tests {
             timeout_ms: 30_000,
         };
         assert_eq!(
-            serde_json::to_value(MainEvent::from(QuestionNews::Open(prompt))).unwrap(),
+            serde_json::to_value(MainEvent::from(QuestionNews::Open(Box::new(prompt)))).unwrap(),
             json!({
                 "type": "AgentQuestion", "id": "c-1", "tier": "T3", "prefix": "問",
                 "text": "要寄出這封信嗎？", "yes": "寄出", "no": "取消", "timeout_ms": 30_000,
