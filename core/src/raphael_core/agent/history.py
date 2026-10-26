@@ -398,7 +398,7 @@ class AgentHistory:
     ) -> list[Turn]:
         """The thread of `member_id`, newest first. `before_id` keeps the turns made before that
         one: the cursor for the next page. With `exchanges`, what colleagues asked or handed the
-        member (`_exchanges`) is among them, where it came: the line its own chat shows."""
+        member (`_EXCHANGES`) is among them, where it came: the line its own chat shows."""
         where, params = _thread(member_id, conversation_id, exchanges)
         if before_id is not None:
             where += " AND id < ?"
