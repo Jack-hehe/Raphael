@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 34
+LATEST = 35
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -400,6 +400,8 @@ SCHEMA_V32 = {
 SCHEMA_V33 = SCHEMA_V32
 # Schema v34: a room remembers that its saved parts open the owner's next message as a meeting.
 SCHEMA_V34 = {**SCHEMA_V33, "rooms": [*SCHEMA_V33["rooms"], "meeting_pending INTEGER NOT NULL DEFAULT 0"]}
+# Schema v35: an exchange remembers that it is a meeting.
+SCHEMA_V35 = {**SCHEMA_V34, "room_exchanges": [*SCHEMA_V34["room_exchanges"], "meeting INTEGER NOT NULL DEFAULT 0"]}
 
 
 def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
@@ -445,7 +447,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V34) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V35) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -459,7 +461,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V34.items():
+    for table, columns in SCHEMA_V35.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

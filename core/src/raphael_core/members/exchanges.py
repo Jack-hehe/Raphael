@@ -73,6 +73,7 @@ class Exchange:
     wrapup_sent: int
     reason: str
     routing: str = "{}"
+    meeting: int = 0
 
 
 class RoomExchanges:
@@ -245,6 +246,7 @@ class RoomExchanges:
         if meeting:
             with self.conn:
                 self.conn.execute("UPDATE rooms SET meeting_pending=0 WHERE id=?", (room["id"],))
+                self.conn.execute("UPDATE room_exchanges SET meeting=1 WHERE origin_message_id=?", (origin,))
             speakers = [moderator] + [i for i in self.rooms._ids(room) if i not in (0, moderator)]
             plan = [{"member":i, "reply_to_member":None, "reply_to":origin, "handoff":False, "round":round_no}
                     for round_no in (1, 2) for i in speakers]

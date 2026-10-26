@@ -629,11 +629,12 @@ class BackgroundService:
             self._ensure_pump()
 
     def _in_meeting(self, turn_id):
-        """Whether a room turn speaks in a live exchange of a room that a moderator runs."""
+        """Whether a room turn speaks in a live meeting. A room keeps its moderator after one, so it is the exchange
+        that says so: live, the owner's 「現在執行」 after a meeting could hand off nothing."""
         row = self._metrics_conn.execute(
-            "SELECT r.roles, m.kind FROM room_messages m JOIN room_exchanges e ON e.origin_message_id=m.origin_message_id "
-            "JOIN rooms r ON r.id=m.room_id WHERE m.turn_id=? AND e.state IN ('queued','running')", (turn_id,)).fetchone()
-        return bool(row) and row['kind'] == 'message' and 'moderator' in json.loads(row['roles'] or '{}').values()
+            "SELECT m.kind FROM room_messages m JOIN room_exchanges e ON e.origin_message_id=m.origin_message_id "
+            "WHERE m.turn_id=? AND e.state IN ('queued','running') AND e.meeting=1", (turn_id,)).fetchone()
+        return bool(row) and row['kind'] == 'message'
 
     def _handoff_member_allowed(self, room_id, member):
         room = self._metrics_conn.execute('SELECT * FROM rooms WHERE id=?',(room_id,)).fetchone()

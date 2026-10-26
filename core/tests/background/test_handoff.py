@@ -153,14 +153,15 @@ async def test_a_meeting_turn_gives_the_floor_with_a_mention_instead_of_a_handof
         rig.conn.execute('UPDATE rooms SET roles=? WHERE id=?',(json.dumps({str(target.id):'moderator'}),source.room_id))
         origin=rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,text,created) VALUES (?,?,'Debate the launch',1)",
             (source.room_id,source.thread_id)).lastrowid
-        rig.conn.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language) VALUES (?,?,'running','en')",
+        rig.conn.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language,meeting) VALUES (?,?,'running','en',1)",
             (origin,source.room_id))
         rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,origin_message_id,kind) "
             "VALUES (?,?,0,'',2,?,?,'message')",(source.room_id,source.thread_id,source.id,origin))
     refused=rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='en')
     assert (refused.ok,refused.error)==(False,'meeting_in_progress') and '@mention' in refused.instruction
+    # Live, the room kept its moderator after the meeting, so the owner's 「現在執行」 could hand nothing off.
     with rig.conn:
-        rig.conn.execute("UPDATE room_exchanges SET state='done' WHERE origin_message_id=?",(origin,))
+        rig.conn.execute("UPDATE room_exchanges SET meeting=0 WHERE origin_message_id=?",(origin,))
     assert rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='en').ok
 
 
