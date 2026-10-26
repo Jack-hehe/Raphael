@@ -19,7 +19,7 @@ from raphael_core.agent.failure import AgentFailure
 from raphael_core.agent.history import Turn
 from raphael_core.agent.ledger import Ledger
 from raphael_core.agent.tools import ToolResult
-from raphael_core.brain.openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterError
+from raphael_core.brain.openrouter import Completion, OpenRouterError
 from raphael_core.brain.spend import SpendTracker
 
 NOW = {
@@ -100,7 +100,7 @@ async def test_the_model_is_asked_for_json_with_a_little_reasoning(voice, client
     await reply(voice, ledger)
     call = client.json_calls[0]
     assert call["model"] == "openai/gpt-6-luna"
-    assert call["fallbacks"] == CLEANUP_FALLBACKS
+    assert call["fallbacks"] == []  # the owner's brain answers as itself, never a fallback model
     assert call["system"] == persona.system_prompt("zh-TW", "answer")
     assert call["schema_name"] == "raphael_reply"
     assert call["reasoning_effort"] == "none"

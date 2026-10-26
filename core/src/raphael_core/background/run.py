@@ -64,7 +64,7 @@ from ..agent.team import ASK_MEMBER, CREATE_MEMBER, TEAM_TOOLS
 from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
 from ..brain.catalog import LLM, find
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.openrouter import OpenRouterError
 from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import public_line
 from ..brain.pricing import builtin_catalog
@@ -392,7 +392,9 @@ class TaskRun:
                 asyncio.wait_for(
                     self._client.chat_tools(
                         model=self.model,
-                        fallbacks=CLEANUP_FALLBACKS,
+                        # The task's own model answers with all of its time: live, a fallback model
+                        # took over slow replies, each attempt getting a third of the time.
+                        fallbacks=[],
                         messages=messages,
                         # The snapshot's tools, whatever the worker sent.
                         tools=self.snapshot.definitions,

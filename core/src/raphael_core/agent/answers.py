@@ -37,7 +37,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.openrouter import OpenRouterError
 from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import convert_leftover_simplified
 from ..memory.reflection import SPACES as MEMORY_SPACES
@@ -462,7 +462,9 @@ class Voice:
             completion = await asyncio.wait_for(
                 self._client.complete_json(
                     model=model,
-                    fallbacks=CLEANUP_FALLBACKS,
+                    # The owner's brain answers as itself: a fallback model took over slow replies
+                    # live, each attempt getting a third of the time.
+                    fallbacks=[],
                     system=system,
                     user=user,
                     schema=reply_schema(

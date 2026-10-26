@@ -106,7 +106,8 @@ async def test_a_model_call_is_made_with_the_tools_of_the_snapshot_and_paid_into
     # The tools the worker names are not the tools the model is offered: the snapshot's are.
     assert sent["tools"] == rig.run.snapshot.definitions
     assert sent["messages"] == MESSAGES and sent["model"] == "fake/model"
-    assert sent["reasoning_effort"] == "none" and sent["fallbacks"]
+    # The task's own model answers: live, a fallback model replaced a slow reply at a third of its time.
+    assert sent["reasoning_effort"] == "none" and sent["fallbacks"] == []
     rows = rig.conn.execute("SELECT purpose, model, cost_usd FROM spend").fetchall()
     assert [tuple(r) for r in rows] == [("agent", "fake/model", 0.004)]
     assert rig.run.ledger.total == 0.004
