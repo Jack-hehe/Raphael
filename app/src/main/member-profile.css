@@ -35,7 +35,7 @@
 .mp-resource b { font-size: var(--fs-sm); font-weight: 600; line-height: 1.5; color: var(--text); }
 .mp-resource p { margin: var(--sp-1) 0 0; overflow-wrap: anywhere; }
 .mp-resource .tg { flex-shrink: 0; }
-.mp-add { display: flex; align-items: flex-end; gap: var(--sp-2); min-width: 0; }
+.mp-add { display: flex; align-items: stretch; gap: var(--sp-2); min-width: 0; }
 .mp-add > input, .mp-add > label { flex: 1; min-width: 0; }
 .mp-command-fields { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 2fr); gap: var(--sp-2); margin: var(--sp-3) 0 var(--sp-2); }
 .mp-command-fields input { width: 100%; min-width: 0; }

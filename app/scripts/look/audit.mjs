@@ -56,6 +56,68 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
       horizontalOverflow.push({ ...description, width: element.clientWidth, scrollWidth: element.scrollWidth });
     if (!onScreen(element)) continue;
     const violation = (rule, reason) => productRules.push({ ...description, rule, reason });
+    if (element.matches('button.btn.icon')) {
+      if (!['transparent', 'rgba(0, 0, 0, 0)', ''].includes(style.backgroundColor)) violation('R-UI-16', 'Icon action has a background surface');
+      const glyph = element.querySelector(':scope > svg.i');
+      if (glyph) {
+        const rect = glyph.getBoundingClientRect();
+        const sizes = element.matches('.cmp-send') ? [32] : [16, 20];
+        if (!sizes.some(size => Math.abs(rect.width - size) <= .5 && Math.abs(rect.height - size) <= .5)) violation('R-UI-19', 'Action glyph does not use the shared icon sizes');
+        if (Math.abs(rect.left + rect.width / 2 - box.left - box.width / 2) > 1 || Math.abs(rect.top + rect.height / 2 - box.top - box.height / 2) > 1) violation('R-UI-19', 'Action glyph is not centered');
+      }
+    }
+    if (element.matches('.au-month-grid .btn[aria-pressed="true"]')) {
+      const luminance = value => {
+        const rgb = value.match(/[\d.]+/g)?.slice(0, 3).map(Number);
+        if (rgb?.length !== 3) return null;
+        return rgb.map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4).reduce((sum, channel, i) => sum + channel * [.2126, .7152, .0722][i], 0);
+      };
+      const foreground = luminance(style.color), background = luminance(style.backgroundColor);
+      if (foreground !== null && background !== null && (Math.max(foreground, background) + .05) / (Math.min(foreground, background) + .05) < 4.5)
+        violation('R-UI-22', 'Selected date has insufficient text contrast');
+    }
+    if (element.matches('.mp-add')) {
+      const controls = [...element.children].filter(child => visible(child) && child.matches('input, .btn'));
+      if (controls.length > 1 && Math.max(...controls.map(child => child.getBoundingClientRect().height)) - Math.min(...controls.map(child => child.getBoundingClientRect().height)) > 1)
+        violation('R-UI-17', 'Adjacent import controls have different heights');
+    }
+    if (element.matches('.au-field')) {
+      const controls = [...element.children].filter(child => visible(child) && child.matches('.sel, .mb-fin, .btn'));
+      if (controls.length > 1 && controls.some(child => Math.abs(child.getBoundingClientRect().width - controls[0].getBoundingClientRect().width) > 1))
+        violation('R-UI-17', 'Schedule controls in one column have different widths');
+    }
+    if (element.matches('.skin-grid, .wgrid')) {
+      const cards = [...element.children].filter(visible);
+      if (cards.length > 1) {
+        const row = cards.filter(card => Math.abs(card.getBoundingClientRect().top - cards[0].getBoundingClientRect().top) <= 1);
+        if (row.length !== 2) violation('R-UI-30', 'Long choices must form two card columns');
+      }
+    }
+    if (element.matches('.page-overview .kc-row')) {
+      const label = element.querySelector('.kc-name'), keys = element.querySelector('.kc-keys');
+      if (label && keys && Math.abs(label.getBoundingClientRect().top + label.getBoundingClientRect().height / 2 - keys.getBoundingClientRect().top - keys.getBoundingClientRect().height / 2) > 2)
+        violation('R-UI-17', 'Shortcut label and keys wrap onto separate rows');
+    }
+    if (element.matches('.modal-body .purpose')) violation('R-UI-02', 'Settings subtitle repeats the pane purpose');
+    if (element.matches('.ob-col h2') && parseFloat(style.fontSize) < 28) violation('R-UI-37', 'Onboarding needs a large headline');
+    if (element.matches('.ob-actions > .btn.pri') && box.width < element.parentElement.getBoundingClientRect().width * .6)
+      violation('R-UI-37', 'Onboarding primary action must fill the action row');
+    if (element.matches('.ob-abilities')) {
+      const choices = [...element.children].filter(visible);
+      if (choices.length > 1 && choices.some((choice, index) => index > 0 && Math.abs(choice.getBoundingClientRect().top - choices[0].getBoundingClientRect().top) <= 1))
+        violation('R-UI-35', 'Onboarding abilities must form a vertical checklist');
+    }
+    if (element.matches('.mc-source-list')) {
+      const selected = element.querySelector('.mc-source[aria-pressed="true"]');
+      if (selected && visible(selected)) {
+        const row = selected.getBoundingClientRect();
+        if (row.top < box.top - 1 || row.bottom > box.bottom + 1)
+          violation('R-UI-01', 'Selected model source is clipped by its scrollport');
+      }
+      const footer = element.nextElementSibling;
+      if (footer && visible(footer) && footer.getBoundingClientRect().top - box.bottom < 7)
+        violation('R-UI-17', 'Model source action touches the final source row');
+    }
     if (englishUI.length && element.closest('button, label, input, textarea, h1, h2, h3, [role="tab"], [role="menuitem"], .nav') && !element.closest('.message-text, .ans, .txt')) {
       const copy = [...element.childNodes].filter(node => node.nodeType === 3).map(node => node.textContent.trim());
       for (const attribute of ['aria-label', 'placeholder', 'title']) if (element.hasAttribute(attribute)) copy.push(element.getAttribute(attribute).trim());

@@ -18,7 +18,7 @@ export default [
   scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
-  scene("running", "Conversation while a reply is being prepared", [], { running: true }),
+  scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),
   scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
   scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
   scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
@@ -56,6 +56,6 @@ export default [
       type(`${form} textarea`, dictationText.after), check("composer-pair"), click(`${form} .cmp-send`), wait(".toast"), check("composer-learn"), check("composer-pair")], { dictationText }),
       scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
       scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), check("composer-pair")]),
-      scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), check("composer-pair")])];
+      scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), wait('.message-tooltip:not([hidden])'), check("composer-pair")])];
   }),
 ];

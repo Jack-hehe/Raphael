@@ -32,3 +32,8 @@ Time is fixed to 2026-10-24, Asia/Taipei. Synthetic drop proves the handler's re
 not physical pointer dragging. Mock routines never execute jobs or OS wake behavior.
 A calendar PNG cannot prove scheduler reliability. The old separate run-log UI is
 gone; Usage retains aggregate summaries and CSV only.
+
+## UI audit regression coverage
+
+The rendered audit rejects mismatched controls in one schedule column and selected
+mini-calendar dates with insufficient contrast, including while hovered.

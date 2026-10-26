@@ -14,6 +14,7 @@
 .mc-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); height: 100%; min-height: 0; }
 .mc-rail { display: flex; flex-direction: column; min-height: 0; padding: var(--sp-3) var(--sp-2) var(--sp-3); background: var(--side); border-right: 1px solid var(--line); }
 .mc-source-list { flex: 1; overflow-x: hidden; overflow-y: auto; min-height: 0; }
+.mc-rail > .btn[data-dlg="sources"] { flex: none; margin-top: var(--sp-2); }
 .mc-rail section { display: flex; flex-direction: column; gap: var(--sp-1); }
 .mc-inherit { margin: 0 0 var(--sp-3); width: 100%; font-size: var(--fs-xs); }
 .mc-inherit[aria-pressed="true"] { background: var(--selected); }

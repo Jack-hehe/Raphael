@@ -376,7 +376,6 @@ export function mountOnboarding(root: HTMLElement, options: GuideOptions, app: A
         if (canvas && subs) {
           stage = new Stage(canvas, subs, () => {});
           stage.play();
-          stage.show({ text: mode === "first" ? t("report.firstRun") : t("onboarding.rerunLine") });
         }
         break;
       }

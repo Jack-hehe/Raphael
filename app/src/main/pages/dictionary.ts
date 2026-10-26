@@ -56,7 +56,6 @@ export function createDictionary(app: AppContext): DictionaryPage {
       p0:
         actionRow({ cls: "head-actions", secondary: btn(t("dictionary.025"), "", ' data-act="import"'), primary: { label: t("dictionary.007", { p0: ico("plus") }), attrs: ' data-act="new" aria-expanded="false"' } }),
     }) +
-    t("dictionary.009") +
     `<div class="addword card" hidden>${fieldHTML(t("dictionary.010"), "", { id: "nw-word", get label() { return t("dictionary.011"); } })}` +
     actionRow({ cls: "addword-actions", secondary: btn(t("common.cancel"), "", ' data-act="new-cancel"'), primary: { label: t("dictionary.014"), attrs: ' data-act="add"' } }) + `</div>` +
     `<div class="importbox card" role="status" hidden><span class="importmsg"></span>` +

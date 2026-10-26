@@ -669,6 +669,7 @@ class MountedPicker implements ModelPicker {
     const inherit = this.o.lead ? `<button type="button" class="btn mc-inherit" data-model="${esc(this.o.lead.id)}" aria-pressed="${this.draft === this.o.lead.id}">${esc(this.o.lead.name)}</button>` : "";
     this.dialog.el.querySelector(".mb-dlg-body")!.innerHTML = `<div class="mc-layout"><aside class="mc-rail">${inherit}<div class="mc-source-list">${rail}</div>${btn(`${ico("plus")}${esc(t("chooser.sources"))}`, "", ' data-dlg="sources"')}</aside><div class="mc-pane"></div></div>`;
     this.paintPane();
+    this.dialog.el.querySelector<HTMLElement>('.mc-source[aria-pressed="true"]')?.scrollIntoView?.({ block: "nearest" });
   }
   private paintPane(): void {
     const source = this.selectedSource(), pane = this.dialog?.el.querySelector(".mc-pane");

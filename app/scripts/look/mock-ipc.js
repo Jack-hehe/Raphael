@@ -18,9 +18,9 @@ export function installMock(fixture, config = {}, target = window) {
     adminTurn.text = "";
   }
   if (variant.running) {
-    data.turns[0].status = "running";
-    data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
-    data.turns[0].text = "";
+    adminTurn.status = "running";
+    adminTurn.messages = adminTurn.messages.filter(message => message.kind !== "reply");
+    adminTurn.text = "";
   }
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
   if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);

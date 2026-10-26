@@ -3,7 +3,7 @@
 .page-overview .home-main, .page-overview .home-main > .usage { display: contents; }
 .page-overview .home-side { min-width: 0; }
 @container dictation (min-width: 760px) {
-  .page-overview .home { grid-template-columns: minmax(0, 1fr) 232px; }
+  .page-overview .home { grid-template-columns: minmax(0, 1fr) 288px; }
   .page-overview .home-side { grid-column: 2; grid-row: 2; }
 }
 @container dictation (min-width: 1200px) {

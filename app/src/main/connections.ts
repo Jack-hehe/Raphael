@@ -509,9 +509,9 @@ function formHTML(f: ConnectionForm): string {
         `</div>`
       : fld(t("conn.form.url"), fieldHTML(t("conn.form.urlHint"), f.url, { id: "conn-url", label: t("conn.form.url"), disabled: off }), "", "conn-url");
   const error = f.error ? `<div class="note" role="alert">${st("err", f.error())}</div>` : "";
-  const typeSel = `<div class="mcp-tabs" role="tablist">${(["stdio", "http"] as const).map(type => `<button type="button" class="btn" role="tab" aria-selected="${f.type === type}" tabindex="${f.type === type ? 0 : -1}" data-conn="form-type" data-type="${type}" ${off ? "disabled" : ""}>${esc(t(type === "stdio" ? "mcp.commandTab" : "mcp.urlTab"))}</button>`).join("")}</div>`;
+  const typeSel = sel(typeChoices(), f.type, t("conn.form.type"), ` data-k="conn-type"${off ? " disabled" : ""}`);
   return (
-    `<h2 class="big">${esc(t(f.id ? "mcp.edit" : "mcp.add"))}</h2><p class="cd-help">${esc(t("mcp.startsOff"))}</p>` +
+    `<h2 class="big">${esc(t(f.id ? "mcp.edit" : "mcp.add"))}</h2>` +
     `<div class="add-grid">` +
     `<div class="two">${fld(t("conn.form.type"), typeSel)}${fld(t("conn.form.name"), fieldHTML(t("conn.form.nameHint"), f.name, { id: "conn-name", label: t("conn.form.name"), disabled: off }), "", "conn-name")}</div>` +
     fields +
@@ -944,7 +944,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (!group) return true;
         const panel = openPopover(button, [
           ...(!group.source ? [["test-server", t("mcp.test")], ["edit-server", t("mcp.edit")]] : []),
-          ["disconnect", t(confirming === id ? "conn.disconnectConfirm" : group.source ? "conn.disconnect" : "mcp.delete")],
+          ["disconnect", t(confirming === id ? group.source ? "conn.disconnectConfirm" : "conn.deleteConfirm" : group.source ? "conn.disconnect" : "mcp.delete")],
         ].map(([act, label]) => `<button type="button" role="menuitem"${act === "disconnect" ? ' class="danger"' : ""} data-conn="${act}" data-id="${esc(id)}">${esc(label)}</button>`).join(""), { className: "menu", role: "menu", label: t("mcp.actions") });
         panel.addEventListener("click", event => {
           const action = (event.target as Element).closest("[data-conn]");
@@ -960,7 +960,6 @@ export function createConnections(host: ConnectionsHost): Connections {
         panel.querySelector<HTMLButtonElement>("button")?.focus();
         break;
       }
-      case "form-type": menuFor("conn-type")?.pick(button.dataset.type ?? ""); break;
       case "test-server":
         void api.integrationsTest({ id }).then(result => toaster.info(result.ok ? t("mcp.testOk") + ` (${result.tools.length})` : t("mcp.testFailed") + `: ${result.error ?? ""}`), error => toaster.info(describeError(error)));
         break;
@@ -1139,14 +1138,6 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   function key(e: KeyboardEvent): boolean {
     if (e.key === "Enter" && (e.target as HTMLElement)?.id === "conn-key") { e.preventDefault(); void saveKey(); return true; }
-    const tab = (e.target as Element | null)?.closest?.<HTMLElement>('[data-conn="form-type"]');
-    if (tab && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key) && form && !form.busy) {
-      e.preventDefault();
-      const type = e.key === "Home" ? "stdio" : e.key === "End" ? "http" : form.type === "stdio" ? "http" : "stdio";
-      menuFor("conn-type")?.pick(type);
-      focusOn(`[data-conn="form-type"][data-type="${type}"]`);
-      return true;
-    }
     const panel = typeof document !== "undefined" ? (host.root ?? document).querySelector<HTMLElement>("#cs-dialog") : null;
     if (e.key === "Escape" && panel && !isTopLayer(panel)) return false;
     if (e.key === "Escape" && open?.tab === "installed" && !e.defaultPrevented) {

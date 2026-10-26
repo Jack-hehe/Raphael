@@ -56,3 +56,8 @@ The room fixture is synthetic IPC only; core tests use a fake brain and shared w
 loop with real approval gates. Paid provider discussion, installed CLI execution and native
 persistence still require the owner's isolated live acceptance. Restart stops exchanges
 without replaying tasks or approvals. The earlier forced moderator loop is not implemented.
+
+## UI audit regression coverage
+
+Team installs the same custom composer tooltip as member/room conversations and
+hides it on navigation. Every composer-hover scene waits for the visible tooltip.

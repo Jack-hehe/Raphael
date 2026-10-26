@@ -571,13 +571,11 @@ const altgrNote = (v: SettingsView, bindings: readonly string[]): string[] =>
   v.altgr && bindings.some((binding) => binding.split("+").includes("AltRight")) ? [note(st("warn", t("settings.054")))] : [];
 
 /**
- * The first lines of every tab: its name, which has the focus when the panel opens, and what the tab
- * is for. `actions` go beside the name (連接's 「新增」), which then shares a line with them.
+ * The pane title receives focus when settings open. Actions share its row.
  */
 export const headingHTML = (v: SettingsView, actions = ""): string => {
   const title = `<h1 id="set-title" tabindex="-1">${esc(paneTitle(v.pane))}</h1>`;
-  return (actions ? `<div class="set-head">${title}${actions}</div>` : title) +
-    (canonicalPane(v.pane) === "connections" ? "" : `<p class="purpose">${esc(PANES.find((p) => p.id === canonicalPane(v.pane))!.purpose(v.device))}</p>`);
+  return actions ? `<div class="set-head">${title}${actions}</div>` : title;
 };
 
 /** What the tabs that need the core say when it does not answer. */

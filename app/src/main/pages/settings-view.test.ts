@@ -241,7 +241,7 @@ describe("the tabs", () => {
     expect(agent).not.toContain("<svg");
   });
 
-  test("each opens with its name and one short line on what it is for", () => {
+  test("each opens with its name without repeating the pane purpose (R-UI-02)", () => {
     for (const locale of LOCALES) {
       setLocale(locale);
       for (const id of IDS) {
@@ -254,27 +254,16 @@ describe("the tabs", () => {
           expect(html).not.toContain('class="purpose"');
           continue;
         }
-        else expect(html.startsWith(`${head}<p class="purpose">`)).toBe(true);
-        expect(html.match(/class="purpose"/g)).toHaveLength(1);
-        const purpose = /<p class="purpose">(.*?)<\/p>/.exec(html)![1];
-        expect(purpose.length).toBeGreaterThan(3);
-        expect(purpose.length).toBeLessThan(60);
+        else expect(html.startsWith(head)).toBe(true);
+        expect(html).not.toContain('class="purpose"');
       }
     }
   });
 
-  test("say in a line what they are for", () => {
-    const purpose = (id: SettingsPane, over: Partial<SettingsView> = {}): string => /<p class="purpose">(.*?)<\/p>/.exec(tab(id, over))![1];
-    expect(purpose("general")).toBe("個人資料、介面語言與桌面設定");
-    expect(purpose("dictation")).toBe("按快捷鍵說話，拉斐爾把你說的打出來");
-    expect(purpose("agent")).toBe("按 右 Alt + Space 問拉斐爾");
-    expect(purpose("usage")).toBe(t("providers.about"));
-  });
-
-  test("keep the name and the purpose while the settings are being read", () => {
+  test("keeps the pane title while settings are being read", () => {
     const html = loadingHTML(view({ pane: "usage" }));
     expect(html).toContain('<h1 id="set-title" tabindex="-1">模型與用量</h1>');
-    expect(html).toContain('<p class="purpose">');
+    expect(html).not.toContain('<p class="purpose">');
     expect(html).toContain("settings-skeleton");
   });
 });
@@ -438,9 +427,9 @@ describe("拉斐爾", () => {
     expect(tab("agent")).not.toContain("Telegram");
   });
 
-  test("still says how to ask her when no key is set", () => {
+  test("shows the missing shortcut beside its change action", () => {
     const html = tab("agent", { device: { ...device, agent_keys: [] } });
-    expect(html).toContain('<p class="purpose">設定快捷鍵後，按下就能問拉斐爾</p>');
+    expect(html).not.toContain('class="purpose"');
     expect(rowOf(html, "問拉斐爾")).toContain("尚未設定");
   });
 
@@ -594,7 +583,7 @@ describe("Models", () => {
 
 describe("訊息平台", () => {
   test("is Telegram, in rows like the others", () => {
-    expect(tab("messaging")).toMatch(/<p class="purpose">在手機上傳訊息給拉斐爾<\/p><section class="sgroup msg" data-msg-section aria-label="Telegram"><div class="slist"><div class="row msg-head">/);
+    expect(tab("messaging")).toMatch(/<section class="sgroup msg" data-msg-section aria-label="Telegram"><div class="slist"><div class="row msg-head">/);
   });
 });
 

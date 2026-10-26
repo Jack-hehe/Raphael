@@ -9,6 +9,7 @@
 .au-routine-dialog .mb-dlg-body { display: flex; flex-direction: column; gap: var(--sp-5); padding: var(--sp-5) var(--sp-5); }
 .au-title.mb-fin { font-size: var(--fs-h1); font-weight: 600; border: 0; border-bottom: 1px solid var(--edge); border-radius: 0; background: transparent; padding: var(--sp-2) 0 var(--sp-3); }
 .au-field { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; margin: 0; }
+.au-field > .sel { width: 100%; max-width: 100%; justify-content: space-between; }
 .au-field h3, .au-label { font-size: var(--fs-xs); font-weight: 600; margin: 0; }
 .au-start { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); color: var(--text-2); font-size: var(--fs-xs); }
 .au-time.mb-fin { width: 90px; font-variant-numeric: tabular-nums; }
@@ -28,7 +29,8 @@
 .au-month-grid .btn { padding: 0; min-width: 0; height: 28px; border: 0; background: transparent; justify-content: center; font-size: var(--fs-2xs); }
 .au-month-grid .btn.au-other-month { color: var(--text-3); }
 .au-month-grid .btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-radius: var(--r-pill); }
-.au-month-grid .btn:hover { background: var(--hover); }
+.au-month-grid .btn[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
+.au-month-grid .btn:hover:not([aria-pressed="true"]) { background: var(--hover); }
 .au-spacer { flex: 1; }
 .au-calendar { display: flex; min-height: 0; flex: 1; }
 .au-toolbar { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
