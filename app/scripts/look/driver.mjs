@@ -93,6 +93,11 @@ export async function perform(page, step) {
       await element.dispose();
       return { check: "window-control", control: step.control, restore: !!step.restore, hovered, pressed, focus };
     }
+    case "main-event": {
+      // Replay only the existing native event boundary; navigation and cards remain real.
+      await page.evaluate(event => window.__look.emit(event), step.event);
+      break;
+    }
     case "dictation-paste": {
       await page.focus(step.selector);
       await page.keyboard.type(step.text);
