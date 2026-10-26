@@ -3,7 +3,19 @@ import { scene, click, hover, type, wait, member, room, search, check, key, wait
 const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
+const firstBot = { name: "晨星", personality: "沉穩、精準", instructions: "規劃每週工作" };
+const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
+  click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
+const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
 export default [
+  scene("admin-description-draft", "Describe a new member from the conversation creation picker", [{ action: "member-column", collapsed: false }, click('[data-col="add"]'), click('[data-pick="conversation"]'), wait('.mb-chat-picker'), type('[data-chat-search]', "整理未讀信並準備回覆"), click('[data-dlg="describe"]'), check("admin-description-draft")]),
+  scene("admin-cli-draft-edit", "The common draft edits and removes sequential CLI proposals", adminDraftEdits, { adminApproval: "draft" }),
+  scene("admin-draft-cancel", "Cancel discards every proposal without changing the roster", [wait('.draft-panel:not([hidden])'), click('[data-draft-act="cancel"]'), wait('.composer:not([hidden])'), check("admin-draft-cancel")], { adminApproval: "draft" }),
+  scene("admin-draft-apply-result", "Apply settles once and updates the member column", [...adminDraftEdits, click('[data-draft-act="confirm"]'), wait('.draft-done'), click('[data-act="draft-done"]'), check("admin-edited-result")], { adminApproval: "draft" }),
+  scene("first-bot-choice", "First Bot offers conversation choices with a custom answer", [wait('.first-bot:not([hidden])'), check("first-bot-choice")], { firstBot }),
+  scene("first-bot-free-text", "Free text and Back preserve the owner's answers", [wait('.first-bot:not([hidden])'), type('[data-first-answer]', "星河"), click('[data-first-act="next"]'), type('[data-first-answer]', "直接、務實，保留重要細節。"), click('[data-first-act="back"]'), check("first-bot-free-text")], { firstBot }),
+  scene("admin-draft-onboarding", "First Bot answers use the ordinary editable proposal", [...firstBotAnswers, check("first-bot-draft")], { firstBot }),
+  scene("bot-renamed-centred", "Confirmed first Bot profile produces one centered rename line", [...firstBotAnswers, click('[data-draft-act="confirm"]'), wait('.bot-renamed'), check("bot-renamed-centred")], { firstBot }),
   scene("live-scenario-owner-view", "Guardian S17 owner-visible failure and separate public work", [check("conversation-design"), check("live-scenario-owner-view")], { liveScenarioOwnerView: true }),
   scene("quick-conversation-list", "Persistent quick questions at the top of Raphael conversations", [{ action: "open-details" }, check("quick-conversation-list")]),
   scene("quick-conversation", "Open and continue the persistent quick conversation", [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.ra .chat-message[data-expandable]'), check("quick-conversation")]),

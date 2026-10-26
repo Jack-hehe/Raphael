@@ -40,7 +40,7 @@ async def test_raphael_is_first_in_the_list_in_the_language_asked(rig):
         "notify": False, "ask_before_members": False, "pinned": False, "hidden": False,
         "id": 0, "name": "Raphael", "role": "", "personality": "", "instructions": "", "avatar": "", "group_id": None,
         "model": "", "tools": None, "position": -1, "created": 0, "unread": False,
-        "waiting": False, "preview": "", "last_at": None,
+        "waiting": False, "preview": "", "last_at": None, "profile_ready": False,
     }  # fmt: skip
     rig.language = "ja"
     assert (await rig.call("members.list"))["members"][0]["name"] == "ラファエル"

@@ -1328,6 +1328,22 @@ export const zhTW = {
   "rooms.blockedRestart": "重新啟動後需確認",
   "rooms.blockedWorker": "執行失敗",
   "rooms.blockedSource": "來源不可用",
+  "firstBot.describe": "以描述建立成員",
+  "firstBot.newProposal": "請依這段描述提議一位新成員：{description}。先顯示可編輯草稿，確認後才建立。",
+  "firstBot.name": "你想怎麼稱呼我？",
+  "firstBot.personality": "你希望我有什麼個性？",
+  "firstBot.work": "第一件想交給我的工作？",
+  "firstBot.nameOne": "拉斐爾",
+  "firstBot.nameTwo": "晨星",
+  "firstBot.calm": "沉穩、精準",
+  "firstBot.warm": "親切、善於鼓勵",
+  "firstBot.plan": "規劃每週工作",
+  "firstBot.research": "研究資料並整理重點",
+  "firstBot.custom": "也可以直接寫下你的想法",
+  "firstBot.back": "返回",
+  "firstBot.next": "下一步",
+  "firstBot.review": "檢視草稿",
+  "firstBot.proposal": "請將你的名字改為「{name}」，個性設定為「{personality}」，第一件工作是「{work}」。先讓我確認設定草稿。",
 } as const;
 export type MessageKey = keyof typeof zhTW;
 export type Messages = Record<MessageKey, string>;

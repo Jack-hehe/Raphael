@@ -201,6 +201,47 @@ class RpcDriver:
             reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
         elif cell.driver in ('roster', 'meeting'):
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
+        elif cell.driver == "team-setup":
+            reasons = []
+            async def team_state():
+                roster = await self.app.call("members.list", {})
+                for member in roster["members"]:
+                    for field in ("waiting", "unread", "preview", "last_at"):
+                        member.pop(field, None)
+                return roster
+
+            before = await team_state()
+            result = await self.ask(cell.prompt)
+            if result.get("status") != "confirm" or len(result.get("confirm", {}).get("drafts", [])) != 5:
+                return ["missing_editable_team_draft"], (await self.owner_view())[0]
+            if await team_state() != before:
+                reasons.append("early_team_mutation")
+            cancelled_id = result["confirm"]["id"]
+            await self.confirm(result, False)
+            await self.app.call("agent.confirm", {"id": cancelled_id, "approved": True})
+            if await team_state() != before:
+                reasons.append("cancel_replay_mutated_team")
+            result = await self.ask(cell.prompt)
+            drafts = copy.deepcopy(result.get("confirm", {}).get("drafts", []))
+            if len(drafts) != 5 or any(not draft.get("instructions", "").strip() for draft in drafts):
+                return reasons + ["missing_member_prompts"], (await self.owner_view())[0]
+            if {draft["name"] for draft in drafts} != {"行銷", "信件助理", "HiKari", "PM", "RD"}:
+                reasons.append("incomplete_team")
+            if await team_state() != before:
+                reasons.append("early_team_mutation")
+            drafts[0]["instructions"] = "Owner-edited instructions " + self.nonce
+            approved_id = result["confirm"]["id"]
+            self.approvals.append({"id_digest": digest(approved_id), "approved": True, "edited": True})
+            result = await self.app.call("agent.confirm", {"id": approved_id, "approved": True, "drafts": drafts})
+            after = await team_state()
+            created = after["members"][1:]
+            if len(created) != 5 or not any(item["instructions"] == drafts[0]["instructions"] for item in created):
+                reasons.append("edited_prompt_not_persisted")
+            await self.app.call("agent.confirm", {"id": approved_id, "approved": True, "drafts": drafts})
+            if await team_state() != after:
+                reasons.append("apply_replay_mutated_team")
+            if self.recorder.receipts:
+                reasons.append("unexpected_external_action")
         elif cell.driver in ("missing-connection", "missing-permission"):
             await self.install_fixture()
             self.recorder.failure = "auth" if cell.driver == "missing-connection" else "denied"

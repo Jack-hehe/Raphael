@@ -77,6 +77,32 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
         await driver.aclose()
 
 
+@pytest.mark.parametrize("brain", ["A", "C"])
+async def test_s01_edits_cancels_and_applies_once_on_both_production_brains(tmp_path, monkeypatch, brain):
+    calls = [("group_create", {"name": "驗證團隊"}), *[("member_create", {
+        "name": name, "role": name, "instructions": "Review evidence for " + name, "group": "驗證團隊"
+    }) for name in ("行銷", "信件助理", "HiKari", "PM", "RD")]]
+    client = FakeClient([("", calls), ("等待確認。", []), ("", calls), ("等待確認。", [])])
+    if brain == "C":
+        from raphael_core.agent.cli.drivers import Driver
+
+        async def run(driver, **kwargs):
+            async with httpx.AsyncClient(headers={"Authorization": "Bearer " + kwargs["token"]}, trust_env=False) as http:
+                for index, (name, arguments) in enumerate(calls):
+                    response = await http.post(kwargs["endpoint"], json={"jsonrpc": "2.0", "id": index,
+                        "method": "tools/call", "params": {"name": name, "arguments": arguments}})
+                    assert not response.json()["result"]["isError"]
+            yield Event("model", "test-model")
+            yield Event("final", "等待確認。")
+        monkeypatch.setattr(Driver, "run", run)
+    registry = await inventory()
+    result = await run_cell(selected("S01"), brain, "cli:codex:test-model" if brain == "C" else "fake/model", tmp_path,
+                            client=client, brains=FakeBrains(tmp_path), budget=Budget(30), seconds=20,
+                            run_id="offline-s01", head="test-head", registry=registry)
+    assert result["status"] == "PASS", result
+    assert result["assertions"] == list(selected("S01").assertions)
+
+
 def test_registry_contains_all_22_owner_contracts_and_operation_cells():
     assert [cell.id for cell in SCENARIOS] == [f"S{i:02}" for i in range(1, 23)]
     expanded = cells(catalog=[{"provider": "fixture", "id": "page-one", "auth_modes": ["oauth", "api-key"]},
@@ -336,7 +362,8 @@ async def test_missing_budget_and_brain_skip_but_unbuilt_contract_fails(tmp_path
                                 client=FakeClient([]), brains=FakeBrains(tmp_path), budget=budget,
                                 seconds=1, run_id="run", head="head", registry=registry)
         assert result["status"] == "SKIP" and result["reason"] == reason
-    result = await run_cell(SCENARIOS[0], "A", None, tmp_path, client=None,
+    unbuilt = next(cell for cell in SCENARIOS if not cell.driver)
+    result = await run_cell(unbuilt, "A", None, tmp_path, client=None,
                             brains=None, budget=Budget(0), seconds=1, run_id="run", head="head", registry=registry)
     assert result["status"] == "FAIL" and result["reason"].startswith("not implemented")
 

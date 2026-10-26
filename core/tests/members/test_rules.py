@@ -65,8 +65,9 @@ async def test_a_rule_that_asks_has_the_member_added_only_after_the_yes(guarded,
     assert asked["status"] == "confirm"
     assert asked["confirm"]["text"].startswith("此操作符合安全規則「新增成員」。")
     assert team.members.store.by_name("小行程") is None
+    client.decisions.append(judged(1))
     done = await rig.confirm(asked["confirm"]["id"])
-    assert (done["prefix"], done["text"]) == ("了", "已建立「小行程」。")
+    assert done["text"] == "已建立 小行程"
     assert team.members.store.by_name("小行程") is not None
 
 
@@ -80,13 +81,17 @@ async def test_a_no_to_adding_a_member_adds_nobody(guarded, rules, client):
     assert team.members.store.by_name("小行程") is None
 
 
-async def test_a_rule_that_allows_it_or_no_rule_that_matches_adds_it_at_once(guarded, rules, client):
+async def test_an_allow_rule_still_requires_the_editable_team_proposal(guarded, rules, client):
     rig, team = guarded
     rules.create("新增成員", ALLOW)
     client.decisions += [decision("command"), judged(1)]
     client.plans.append(tool_plan(CREATE))
-    reply = await rig.ask("幫我加一個管行程的成員")
-    assert reply["text"] == "已建立「小行程」。"
+    asked = await rig.ask("幫我加一個管行程的成員")
+    assert asked["status"] == "confirm"
+    assert team.members.store.by_name("小行程") is None
+    client.decisions.append(judged(1))
+    reply = await rig.confirm(asked["confirm"]["id"])
+    assert reply["text"] == "已建立 小行程"
 
 
 @pytest.fixture

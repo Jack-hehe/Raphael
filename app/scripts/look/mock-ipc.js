@@ -10,7 +10,13 @@ export function installMock(fixture, config = {}, target = window) {
   if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
-  const adminTurn = adminQuestion ? data.turns.find(turn => turn.id === adminQuestion.turn_id) : null;
+  let adminTurn = adminQuestion ? data.turns.find(turn => turn.id === adminQuestion.turn_id) : null;
+  if (variant.firstBot) {
+    data.members = [{ ...data.members[0], profile_ready: false }];
+    data.groups = [];
+    data.turns = [];
+    adminQuestion = adminTurn = null;
+  }
   if (adminQuestion && !adminTurn) throw new Error("Approval fixture requires its explicit source turn");
   if (adminQuestion) {
     adminTurn.status = "confirm";
@@ -246,7 +252,21 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "main_events") { state.channel = args.channel; return; }
       // Escape reaches the native worker even when no capture is active.
       if (command === "window_hotkey" && args.kind === "cancel") return;
-      if (command === "agent_ask_text") return null;
+      if (command === "agent_ask_text") {
+        if (variant.firstBot) {
+          const profile = variant.firstBot;
+          if (![profile.name, profile.personality, profile.instructions].every(text => args.text.includes(text))) throw new Error("First Bot answers were lost at the native boundary");
+          adminTurn = { ...copy(fixture.turns[0]), id: 90, member_id: 0, conversation_id: 1, question: args.text,
+            status: "confirm", text: "", detail: null, messages: [] };
+          data.turns.push(adminTurn);
+          adminQuestion = { ...copy(data.adminQuestions.draft), id: "first-bot-profile", turn_id: 90, groups: [],
+            drafts: [{ id: "draft-1", member_id: 0, name: profile.name, personality: profile.personality,
+              instructions: profile.instructions, role: "", blurb: "", group: "", avatar_preset: "" }] };
+          notify("AgentTurn", { turn_id: 90, member_id: 0 });
+          notify("AgentQuestion", copy(adminQuestion));
+        }
+        return null;
+      }
       if (command === "core_call") return copy(await core(args.method, args.params));
       if (command === "device_settings_get") return copy(data.device);
       if (command === "device_settings_set") { Object.assign(data.device, args.patch); notify("DeviceSettings", { settings: copy(data.device) }); return copy(data.device); }
@@ -254,10 +274,29 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "agent_question_open") return copy(adminQuestion);
       if (command === "agent_question_answer" && adminQuestion) {
         if (args.id !== adminQuestion.id) throw new Error("Unknown approval question");
+        if (variant.firstBot) {
+          if (args.approved) {
+            Object.assign(data.members[0], args.drafts[0], { id: 0, profile_ready: true });
+            adminTurn.status = "done";
+            adminTurn.text = `已重新命名為 ${data.members[0].name}`;
+            adminTurn.detail = data.members[0].name;
+          } else { adminTurn.status = "denied"; adminTurn.text = "已取消。"; }
+          adminTurn.messages = [{ seq: 1, kind: "reply", text: adminTurn.text, at_ms: data.now }];
+          notify("MembersChanged", { member_id: 0 });
+          notify("AgentQuestionClosed", { id: adminQuestion.id });
+          notify("AgentTurn", { turn_id: adminTurn.id, member_id: 0 });
+          adminQuestion = null;
+          return;
+        }
         if (Array.isArray(args.drafts)) {
           if (args.approved) {
-            if (data.adminGroup && !data.groups.some(g => g.name === data.adminGroup.name)) {
-              data.groups.push(copy(data.adminGroup));
+            const groups = args.groups ?? (data.adminGroup ? [data.adminGroup] : []);
+            for (const proposed of groups) {
+              const existing = data.groups.find(g => g.id === proposed.group_id);
+              if (existing) existing.name = proposed.name;
+              else if (!data.groups.some(g => g.name === proposed.name)) {
+                data.groups.push({ ...copy(data.adminGroup), name: proposed.name });
+              }
             }
             let nextMemberId = 8;
             for (const draft of args.drafts) {

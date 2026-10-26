@@ -86,6 +86,20 @@ describe("member draft helpers", () => {
 });
 
 describe("DraftPanelController", () => {
+  test("group edits preserve draft membership and reach the shared confirmation", () => {
+    const onConfirm = vi.fn();
+    const panel = createDraftPanel({ groups: () => [], presets: () => [], onConfirm, onCancel: vi.fn() });
+    panel.sync(sampleQuestion());
+    const input = panel.el.querySelector<HTMLInputElement>('[data-draft-group="group-1"]')!;
+    input.value = "Studio";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(panel.drafts().every(draft => draft.group === "Studio")).toBe(true);
+    expect(panel.el.querySelector('[data-draft-act="group"]')?.textContent).toContain("Studio");
+    panel.el.querySelector<HTMLButtonElement>('[data-draft-act="confirm"]')!.click();
+    expect(onConfirm.mock.calls[0]![1]).toEqual([{ id: "group-1", name: "Studio", group_id: null }]);
+  });
+
   test("renders cards, edits fields in place, removes a draft, and submits edited drafts", () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();
@@ -153,5 +167,16 @@ describe("settled draft summary in timeline", () => {
     expect(opened).toContain('class="draft-done is-open"');
     expect(opened).toContain('aria-expanded="true"');
     expect(opened).toContain("COO · 首席營運長 · 個人公司");
+  });
+
+  test("a saved first Bot rename is one centered system line without a reply avatar", () => {
+    const turn = { ...baseTurn, text: "已重新命名為 晨星", detail: "晨星", messages: [
+      { seq: 1, kind: "reply" as const, text: "已重新命名為 晨星", at_ms: baseTurn.created_at_ms },
+    ] };
+    const html = turnHTML(turn, emptyTimelineState(), false, { face: () => "FACE" });
+    expect(html).toContain('class="bot-renamed" role="status"');
+    expect(html.match(/已重新命名為 晨星/g)).toHaveLength(1);
+    expect(html).not.toContain("FACE");
+    expect(html).not.toContain('data-message="1"');
   });
 });

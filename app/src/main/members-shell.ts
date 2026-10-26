@@ -426,7 +426,15 @@ export function createMembers(host: MembersHost): MembersShell {
       body: `<input class="mb-fin" type="search" data-chat-search placeholder="${esc(t("members.sidePickerHint"))}" aria-label="${esc(t("members.sidePickerHint"))}"><div class="mb-chat-choices"></div>`,
       actions: {secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"')},
       onAct(action, target, d) {
-        if (action === "member") { d.close(); newMember(null); }
+        if (action === "describe") {
+          const description = input.value.trim();
+          if (!description) return;
+          d.close();
+          select(RAPHAEL_ID);
+          setDetails(false);
+          host.app.go("agent", `draft:${t("firstBot.newProposal", { description })}`);
+        }
+        else if (action === "member") { d.close(); newMember(null); }
         else if (action === "conversation") { d.close(); select(Number(target.dataset.id)); }
         else d.close();
       },
@@ -435,7 +443,8 @@ export function createMembers(host: MembersHost): MembersShell {
     const choices = dialog.el.querySelector<HTMLElement>(".mb-chat-choices")!;
     const draw = () => {
       const q = input.value.trim().toLocaleLowerCase();
-      choices.innerHTML = btn(`${ico("plus")}<span>${esc(t("members.newMember"))}</span>`, "mb-chat-choice", ' data-dlg="member"') +
+      choices.innerHTML = (q ? btn(`${ico("plus")}<span>${esc(t("firstBot.describe"))}</span>`, "mb-chat-choice", ' data-dlg="describe"') : "") +
+        btn(`${ico("plus")}<span>${esc(t("members.newMember"))}</span>`, "mb-chat-choice", ' data-dlg="member"') +
         [raphaelOf(list), ...memberSections(list ?? {members: [], groups: []}).flatMap(section => section.members)]
           .filter(m => `${m.name} ${m.role} ${m.blurb ?? ""}`.toLocaleLowerCase().includes(q))
           .map(m => btn(`${faceHTML(m, 34)}<span><b>${esc(m.name)}</b><small>${esc(m.blurb || m.role)}</small></span>`, "mb-chat-choice", ` data-dlg="conversation" data-id="${m.id}"`)).join("");

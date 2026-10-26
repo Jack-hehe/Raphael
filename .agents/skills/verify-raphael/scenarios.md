@@ -80,3 +80,13 @@ Offline tests use transport fakes with production RPC/loops/MCP. The shared
 `live-scenario-owner-view` look scene uses the same public history/message shape
 to check S17's actionable failure and separate progress through the real renderer.
 That fixture is not live model, connector, native or design acceptance.
+
+## S01 team setup acceptance (P05)
+
+S01 uses the production AgentService loops for both brains. It checks that a
+five-member team is proposed without roster mutation, cancels and replays the old
+confirmation, then requests the team again, edits the first prompt, applies once
+and reads back the saved prompt. Replaying approval must not change the roster.
+Only committed admin operations count toward tool coverage. The offline fake API
+and sequential authenticated CLI/MCP tests are deterministic evidence; they do not
+establish live provider acceptance.

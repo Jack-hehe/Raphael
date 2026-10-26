@@ -76,7 +76,8 @@ import {
   turnHTML,
   wantsRefresh,
 } from "../timeline";
-import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, MemberDraft, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
+import type { AgentDraft, AgentQuestion, AgentTurn, AppContext, GroupDraft, MemberDraft, MessageQuote, Page, SettingsPane, TurnAttachment, WireAttachment } from "../types";
+import { createFirstBot } from "../first-bot";
 import { copyText, esc, ico, iconButton, toaster } from "../ui";
 import { createRoomPane } from "../group-chats";
 import { composerHTML, openComposerMenu } from "../chat-composer";
@@ -266,6 +267,12 @@ export function createAgent(app: AppContext): Page {
   const hi = el.querySelector<HTMLElement>(".ra-hi")!;
   const slot = el.querySelector<HTMLElement>(".ra-slot")!;
   const dock = el.querySelector<HTMLElement>(".ra-dock")!;
+  const firstBot = createFirstBot(description => {
+    putDraft(description);
+    void send();
+  });
+  empty.insertBefore(firstBot.el, slot);
+  firstBot.el.addEventListener("change", () => drawDock());
   /** The open thread's questions from the background, above the composer wherever it is. */
   let waiting: BackgroundQuestions | null = null;
   const backgroundSlot = document.createElement("div");
@@ -283,6 +290,7 @@ export function createAgent(app: AppContext): Page {
     onSelect: () => switchThread(),
     onUpdate: () => {
       drawComposer();
+      drawDock();
       drawFaces();
       drawConversation();
       hi.textContent = emptyLine();
@@ -426,7 +434,7 @@ export function createAgent(app: AppContext): Page {
   const draftPanel = createDraftPanel({
     groups: () => members.groups(),
     presets: () => members.presets(),
-    onConfirm: (edited) => void answer(true, false, edited),
+    onConfirm: (edited, groups) => void answer(true, false, edited, groups),
     onCancel: () => void answer(false),
   });
 
@@ -675,6 +683,8 @@ export function createAgent(app: AppContext): Page {
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
     selectQuestion();
+    firstBot.sync(inRaphael() && members.member().profile_ready === false && isEmpty() && !question && !pending);
+    hero.hidden = hi.hidden = !firstBot.el.hidden;
     const home = empty.hidden ? dock : slot;
     if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
@@ -698,7 +708,7 @@ export function createAgent(app: AppContext): Page {
     askCard.classList.toggle("is-member", !inRaphael());
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
     askCard.hidden = !asking;
-    composer.hidden = asking;
+    composer.hidden = asking || !firstBot.el.hidden;
     if (!asking) {
       delete askCard.dataset.id;
       return;
@@ -1189,7 +1199,7 @@ export function createAgent(app: AppContext): Page {
   // ---------- the approval card ----------
 
   /** `always` is the third answer: YES, and keep allowing (only a question that has the button). */
-  async function answer(approved: boolean, always = false, editedDrafts?: MemberDraft[]): Promise<void> {
+  async function answer(approved: boolean, always = false, editedDrafts?: MemberDraft[], groups?: GroupDraft[]): Promise<void> {
     if (!question || answering) return;
     if (always && !question.always) return;
     const id = question.id;
@@ -1199,7 +1209,7 @@ export function createAgent(app: AppContext): Page {
     try {
       if (hasDrafts(question)) draftPanel.sync(question, true);
       await (editedDrafts !== undefined
-        ? api.agentQuestionAnswer(question.id, approved, always, editedDrafts)
+        ? api.agentQuestionAnswer(question.id, approved, always, editedDrafts, groups)
         : always
           ? api.agentQuestionAnswer(question.id, true, true)
           : api.agentQuestionAnswer(question.id, approved));
@@ -1960,6 +1970,7 @@ export function createAgent(app: AppContext): Page {
   });
 
   onLocaleChange(() => {
+    firstBot.redraw();
     void slashMenu.refresh();
     drawWords();
     draftPanel.redraw();

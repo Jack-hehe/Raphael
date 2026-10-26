@@ -46,9 +46,8 @@ BASE = (
     ("Registry coverage", "", "registry_mapping,verified_dual_brain_calls", "P22"),
 )
 
-SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr)
-                  if i not in (2, 7) else ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr,
-                      "roster" if i == 2 else "meeting")
+SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr,
+                               {1: "team-setup", 2: "roster", 7: "meeting"}.get(i, ""))
                   for i, (title, prompt, checks, pr) in enumerate(BASE, 1))
 
 

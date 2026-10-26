@@ -25,6 +25,7 @@ import type {
   CliBrainId,
   Member,
   MemberDraft,
+  GroupDraft,
   MemberGroup,
   MemberPatch,
   MembersList,
@@ -163,12 +164,13 @@ export const agentQuestionOpen = (): Promise<AgentQuestion | null> => invoke("ag
  * Answers the question `id` from the page, as the overlay's buttons do; the window must have the
  * focus. `always` (with `approved`) is the third answer, 「一律允許」, and is sent only when true.
  */
-export const agentQuestionAnswer = (id: string, approved: boolean, always = false, drafts?: MemberDraft[]): Promise<void> =>
+export const agentQuestionAnswer = (id: string, approved: boolean, always = false, drafts?: MemberDraft[], groups?: GroupDraft[]): Promise<void> =>
   invoke("agent_question_answer", {
     id,
     approved,
     ...(always ? { always: true } : {}),
     ...(drafts !== undefined ? { drafts } : {}),
+    ...(groups !== undefined ? { groups } : {}),
   });
 
 /**

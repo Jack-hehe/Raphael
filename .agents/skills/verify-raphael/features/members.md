@@ -61,7 +61,7 @@ selection or persistence: core tests drive API turns and authenticated HTTP MCP
 turns through the real member service. Live provider/CLI and native relaunch
 checks remain separate.
 
-Ask mode collects the entire turn's reversible member/group changes in one card,
+Every action mode and brain collects the entire turn's reversible member/group changes in one card,
 including eight-member requests across multiple model rounds or sequential CLI MCP
 calls. Every member lists name, role, blurb and group. Approval applies the entire
 transaction; rejection or expiry applies none. An invalid operation rolls everything
@@ -88,3 +88,29 @@ snapshot has no refresh token; an expired access token requires the owner's Code
 to refresh its login before the next Raphael turn. Browser fixtures cannot prove
 this boundary. For live acceptance on a Codex brain, ask Raphael to create members
 and check the turn's MCP steps show team_overview and member_create, not other tools.
+
+## Editable proposals and first Bot setup (P05/P05a)
+
+API and sequential authenticated CLI/MCP calls queue the same turn-end proposal.
+Pending tool responses have no created IDs and explicitly prohibit claiming success.
+Owner confirmation rechecks edited arguments against current safety rules and applies
+the transaction once. Cancel, expiry and a superseding turn discard it. Repeated
+updates to one target merge their fields into one card. Nested member work cannot
+administer the roster; deletion retains its separate held T3 confirmation.
+
+The conversation creation picker offers Create from description for a nonempty
+search. It opens the chief's ordinary composer with a proposal request. First Bot
+setup collects name, personality and first work through choices or free text, then
+uses the same draft. Confirmation saves the profile on identity 0 and renders one
+centered rename line. A personalized name never grants another member admin tools.
+Group proposal names are editable and follow the existing native confirmation route.
+
+```powershell
+npm run look -- admin-description-draft admin-cli-draft-edit admin-draft-cancel admin-draft-apply-result first-bot-choice first-bot-free-text admin-draft-onboarding bot-renamed-centred --theme both --width 1120,720,1920x1080
+```
+
+Core evidence: tests/members/test_admin_proposals.py covers both fake API and
+sequential HTTP MCP paths, edits, direct/ask modes, cancellation, expiry, resend,
+atomic rollback, target scope, current safety, saved first Bot identity and replay.
+Guardian S01 runs the production loops for both fake brains. Browser IPC fixtures
+prove rendered interactions only; live brains and native persistence remain separate.

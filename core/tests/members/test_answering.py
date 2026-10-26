@@ -291,11 +291,28 @@ async def test_raphael_adds_a_member_when_the_owner_asks(setup, client):
     client.plans.append(
         tool_plan(("Raphael__create_member", {"name": "小行程", "role": "管行程", "instructions": "每天早上提醒我", "group": "生活"}))
     )
-    result = await rig.ask("幫我加一個管行程的成員")
-    assert (result["prefix"], result["text"]) == ("了", "已建立「小行程」。")
+    asked = await rig.ask("幫我加一個管行程的成員")
+    assert team.members.store.by_name("小行程") is None
+    result = await rig.confirm(asked["confirm"]["id"])
+    assert result["text"] == "已建立 小行程"
     made = team.members.store.by_name("小行程")
     assert made.role == "管行程" and team.members.store.group(made.group_id).name == "生活"
     assert client.json_calls == []  # nothing more to word
+
+
+async def test_voice_picked_members_share_one_proposal(setup, client):
+    rig, team = setup
+    client.decisions.append(decision("command"))
+    client.plans.append(tool_plan(*[
+        ("Raphael__create_member", {"name": f"Member {index}", "role": "Research"})
+        for index in range(3)
+    ]))
+    asked = await rig.ask("幫我新增三位研究成員")
+    assert len(asked["confirm"]["drafts"]) == 3
+    assert not team.members.store.members()
+    # The overlay confirms the complete proposal without sending edited drafts.
+    await rig.confirm(asked["confirm"]["id"])
+    assert len(team.members.store.members()) == 3
 
 
 class _Voice:

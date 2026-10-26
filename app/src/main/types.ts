@@ -655,6 +655,8 @@ export interface GroupDraft {
  * its thread (the core cuts it to one line), `last_at` when it was said.
  */
 export interface Member {
+  /** Whether the owner has confirmed the first Bot's profile (identity 0). */
+  profile_ready?: boolean;
   id: number;
   name: string;
   role: string;
