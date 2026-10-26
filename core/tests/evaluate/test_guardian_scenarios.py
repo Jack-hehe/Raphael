@@ -55,6 +55,7 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
         def __init__(self,*args,**kwargs):
             pass
         async def run(self,*,endpoint,token,system,user,**kwargs):
+            yield Event('model','owner-model')
             child='Acceptance criteria' in system
             if child or ('Delegated work results' not in user and 'Close this exchange' not in user):
                 async with httpx.AsyncClient() as http:
@@ -73,6 +74,9 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
         assert not reasons,reasons
         assert len(driver.recorder.receipts)==1
         assert driver.app._conn.execute("SELECT COUNT(*) FROM worker_tasks WHERE mode='work'").fetchone()[0]==1
+        if brain=='cli':
+            # Live, a room-only cell verified no CLI model: its turns all ran as background tasks.
+            assert set(driver.actual_cli_models)=={'owner-model'},driver.actual_cli_models
     finally:
         await driver.aclose()
 

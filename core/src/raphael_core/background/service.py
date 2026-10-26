@@ -364,8 +364,10 @@ class BackgroundService:
         now_ms: Callable[[], int] = wall_clock_ms,
         tz: tzinfo | None = None,
         clock: Callable[[], float] = time.monotonic,
+        model_observer: Callable[..., None] | None = None,
     ) -> None:
         self._client = client
+        self._model_observer = model_observer  # told each CLI turn's actual model (Guardian verifies it)
         self._picker = ToolPicker(client)
         self._gate = gate
         self._tools = tools
@@ -1111,6 +1113,8 @@ class BackgroundService:
         self._changed(task.id, RUNNING)
         try:
             outcome = await run._guarded(asyncio.wait_for(loop.run(), run.remaining_s()))
+            if self._model_observer is not None and loop.actual_model:  # a turn stopped before the CLI ran has none
+                self._model_observer(loop.actual_model)
             if outcome.kind == 'handoff':
                 self._wait_for_handoffs(task,run,spec or {'user':task.text,'system':''},[])
             elif outcome.kind == PAUSED_KIND and run.waiting:

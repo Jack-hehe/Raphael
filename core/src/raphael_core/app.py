@@ -823,6 +823,7 @@ class App(Router):
             self.gate,
             Tools(self.client, services=self.services),
             notify=self._worker_notice,
+            model_observer=agent_model_observer,
         )
         self.background.register(self)
         # The run on the owner's desktop: the core asks the shell, which reaches UI Automation
