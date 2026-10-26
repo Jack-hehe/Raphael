@@ -1601,7 +1601,8 @@ class BackgroundService:
                 names+=['everyone','所有人','全員']
                 message=self._metrics_conn.execute('SELECT kind FROM room_messages WHERE turn_id=?',(task.turn_id,)).fetchone()
                 wrapup=task.mode is not None or bool(message and message['kind']=='wrapup')
-            report = report_from(str(reply.get('final') or ''),language,plain=task.member_id!=0)
+            # A room reads every reply in the app, Raphael's too: its lines stay (live, a wrap-up's headings ran together).
+            report = report_from(str(reply.get('final') or ''),language,plain=task.member_id!=0 or task.room_id is not None)
             if report:
                 clean = lambda value: validate_terminal(value,names=names,wrapup=wrapup).text if value else value
                 report = dataclasses.replace(report,text=clean(report.text),detail=clean(report.detail),

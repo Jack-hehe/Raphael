@@ -35,7 +35,8 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
     bob = members.store.create_member(name="Bob", role="CTO", personality="CAUTIOUS-ENGINEER")
     rig.client.replies.extend(report(text) for text in (
         "@Alice lead the release plan", "@Bob I propose shipping today", "@Alice I disagree: test first",
-        "Agreed, I own testing", "Conclusion: test first. Owner decides release. Alice owns testing; Bob owns rollout.",
+        "Agreed, I own testing",
+        "### Conclusion\nTest first.\n### Owner decision\nThe release date.\n### Next steps\nAlice owns testing; Bob owns rollout.",
     ))
     try:
         room = (await rig.rpc.call("rooms.create", {"name":"Release", "member_ids":[0,alice.id,bob.id]}))["room"]
@@ -44,7 +45,10 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
         messages = (await rig.rpc.call("rooms.messages", {"room_id":room["id"]}))["messages"]
         assert [m["member_id"] for m in messages] == [None,0,alice.id,bob.id,alice.id,0]
         assert [m["reply_to_member"] for m in messages[2:]] == [0,alice.id,bob.id,None]
-        assert messages[-1]["kind"] == "wrapup" and "Alice owns testing" in messages[-1]["text"]
+        # Live, Raphael's wrap-up came out as one line and its three headings ran together.
+        assert messages[-1]["kind"] == "wrapup" and messages[-1]["text"].splitlines() == [
+            "### Conclusion", "Test first.", "### Owner decision", "The release date.", "### Next steps",
+            "Alice owns testing; Bob owns rollout."]
         assert len(rig.client.chat_calls) == 5 and not rig.client.replies and rig.reports() == []
         assert "PRECISE-PLANNER" in rig.client.chat_calls[1]["messages"][0]["content"]
         assert "CAUTIOUS-ENGINEER" in rig.client.chat_calls[2]["messages"][0]["content"]
