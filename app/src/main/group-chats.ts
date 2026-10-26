@@ -14,6 +14,8 @@ import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 import type { HandoffView } from "./types";
 import type { AppContext, MembersList, Room, RoomMessage, RoomExchange } from "./types";
+import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, sel, toaster } from "./ui";
+import "./automations.css";
 
 /** Why a member's room reply never came, by the core's reason for its blocked intent. */
 const BLOCKED = {
@@ -22,8 +24,6 @@ const BLOCKED = {
   cli_quota: "rooms.blockedQuota", cli_login: "rooms.blockedLogin", cli_missing: "rooms.blockedLogin", cli_busy: "rooms.blockedBusy",
   cli_error: "rooms.blockedWorker",
 } as const;
-import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, sel, toaster } from "./ui";
-import "./automations.css";
 
 let context: AppContext | undefined;
 const listeners = new Set<() => void>();
