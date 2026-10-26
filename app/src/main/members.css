@@ -229,7 +229,14 @@
 .mb-offer-t { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
 .mb-offer-t b { font-size: var(--pa-dfs); font-weight: 600; overflow-wrap: anywhere; }
 .mb-offer-t i { font-style: normal; font-size: var(--pa-rt-s); color: var(--text-3); overflow-wrap: anywhere; }
-.mb-dialog.mb-confirm { width: min(calc(340px + 80 * var(--pa-u)), 100%); }
+.mb-dialog.mb-confirm { width: min(480px, 100%); gap: var(--sp-2); padding: var(--sp-4); border: 1px solid var(--edge); border-radius: var(--r-lg); }
+.mb-confirm .mb-dlg-head { align-items: flex-start; }
+.mb-confirm .mb-dlg-head h2 { padding-top: 4px; font-size: var(--fs-lg); }
+.mb-confirm .mb-dlg-head .btn.icon { flex: none; width: 32px; min-height: 32px; }
+.mb-confirm .mb-dlg-body { font-size: var(--fs-sm); line-height: 1.55; color: var(--text-2); overflow-wrap: anywhere; }
+.mb-confirm .mb-dlg-body p { margin: 0; }
+.mb-confirm .mb-dlg-act { padding-top: var(--sp-1); border-top: 0; }
+.mb-confirm .mb-dlg-act .btn { min-height: 36px; padding-inline: var(--sp-4); border-radius: var(--r-pill); font-size: var(--fs-sm); }
 .mb-addrow { display: flex; gap: var(--sp-2); }
 .mb-addrow .mb-fin { flex: 1; }
 

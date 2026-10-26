@@ -44,15 +44,26 @@ can select an already installed Edge/Chrome executable.
 
 ## User-facing behavior
 
+Choose the smallest verification scope that covers the changed behavior and its
+affected consumers before running commands. Use the feature map to name those scenes
+and state the selection briefly. A shared dialog, for example, needs its conversation,
+routine, group and room confirmation scenes, not unrelated settings, onboarding and
+dictation journeys. Keep all three sizes and both themes for the selected UI scenes.
+
 ```powershell
 npm run verify
-npm run look -- --all --theme both --width 1120,720,1920x1080
+npm run look -- <affected scenes> --theme both --width 1120,720,1920x1080
 ```
 
-Run mapped feature commands while iterating; use the full matrix for UI handoff.
-All commands are from `app/`. `verify -- --quick` omits contrast and is only an
-iteration check. `verify -- --core --rust` additionally runs offline core/Rust tests
-when that scope needs them; report unavailable dependencies and exact exits.
+Use the selected feature matrix for a local UI handoff. Reserve the full matrix for
+integration/release acceptance, CI, explicit requests or genuinely app-wide changes
+such as global tokens, navigation and shared layout. Sharing a component alone does
+not require full-project verification. Add core or Rust checks only when their code,
+contracts or behavior change; frontend-only styling does not require either suite.
+Documentation-only changes need diff/link review. All commands are from `app/`.
+`verify -- --quick` omits contrast and is only an iteration check. Report unavailable
+dependencies and exact exits; do not rerun unchanged, unrelated suites to replace a
+blocked check.
 
 Scenes use real clicks, input, hover, menus and navigation. Extend
 `app/scripts/look/scenes/*.mjs` and the one `fixture.json` when a journey is missing.
@@ -101,13 +112,18 @@ installed app and other worktrees untouched.
 
 Read [RULES.md](../../product/RULES.md) and [ARCHITECTURE.md](../../product/ARCHITECTURE.md).
 Their named tests run in the ordinary Vitest/pytest suites on every PR, not local hooks.
-From app/, the complete offline check is `npm run verify -- --core --rust`.
+From app/, the complete integration offline check is `npm run verify -- --core --rust`.
+Local changes use the affected frontend/core/Rust boundaries described above.
 
-For UI hand-off, capture `npm run look -- --all --theme both --width 1120,720,1920x1080`.
-The 1920 viewport is 1080px high. Inspect every contact sheet and relevant full-size
-image at all three sizes, then run `npm run judge -- <look run dir> --references <external png/jpg paths...>`
+For local UI hand-off, capture the selected affected scenes at both themes and all
+three sizes. Full UI integration acceptance uses
+`npm run look -- --all --theme both --width 1120,720,1920x1080`.
+The 1920 viewport is 1080px high. Inspect every generated contact sheet and relevant
+full-size image, then run `npm run judge -- <look run dir> --references <external png/jpg paths...>`
 (or `npm run verify -- --judge <look run dir>` with RAPHAEL_JUDGE_REFERENCES as a JSON
-array of external paths). Judge is required after look and before UI hand-off.
+array of external paths). Judge reviews the same selected look run; it must not widen
+a local change into a full-project review. Judge is required after look and before UI hand-off,
+or must be recorded as blocked/SKIP with the reason when unavailable.
 It refuses failed/incomplete look evidence, uses judge rules plus each scene's
 feature entry, and fails scores below 4, hard violations, malformed reviews and
 budget exhaustion. Reports and summaries live in app/.look/judge-*/; cache identity

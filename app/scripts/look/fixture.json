@@ -2011,7 +2011,14 @@
       }
     ]
   },
-  "localModels": [],
+  "localModels": [
+    { "name": "qwen3-asr", "title": "Qwen3-ASR", "languages": ["zh", "en", "ja", "ko", "yue"], "note": "dictionary", "size": 878702423, "ready": false },
+    { "name": "sensevoice", "title": "SenseVoice", "languages": ["zh", "en", "ja", "ko", "yue"], "note": "fast", "size": 163002883, "ready": false },
+    { "name": "breeze-asr-25", "title": "Breeze-ASR-25", "languages": ["zh", "en"], "note": "taiwan", "size": 1775001000, "ready": false },
+    { "name": "fire-red-asr", "title": "FireRedASR", "languages": ["zh", "en"], "note": "mandarin", "size": 1700000000, "ready": false },
+    { "name": "paraformer-zh", "title": "Paraformer", "languages": ["zh"], "note": "chinese", "size": 227405559, "ready": false },
+    { "name": "whisper-turbo", "title": "Whisper Turbo", "languages": ["zh", "en", "ja", "multi"], "note": "multilingual", "size": 800000000, "ready": false }
+  ],
   "languages": [],
   "audioDevices": {
     "devices": [

@@ -167,6 +167,65 @@ export function checkRendered(name) {
     require(document.getElementById('progress')?.textContent === "《告。正在查看今天下午的行程。》", "the latest shared turn narration is the subtitle");
     return { check: name, text: document.getElementById('progress').textContent };
   }
+  if (name.startsWith("model-choice-")) {
+    const dialog = document.querySelector('.model-chooser');
+    const scroller = dialog?.querySelector('.mc-scroll');
+    require(visible(scroller), "the model list is visible");
+    const rows = [...dialog.querySelectorAll('.mc-row, .lm-row')];
+    require(rows.length > 0, "the catalogue contains model choices");
+    const viewport = scroller.getBoundingClientRect();
+    if (name === "model-choice-scroll") {
+      const last = rows.at(-1).getBoundingClientRect();
+      require(last.bottom <= viewport.bottom + 1 && last.top >= viewport.top - 1, "the final model can be reached inside the list");
+      return { check: name, rows: rows.length };
+    }
+    if (name === "model-choice-selection") {
+      const selected = dialog.querySelector('.lm-main[aria-checked="true"]');
+      require(selected?.dataset.name === 'qwen3-asr', "the preview selects exactly the requested local model");
+      require(dialog.querySelectorAll('.lm-main[aria-checked="true"]').length === 1, "only one local radio is selected");
+      require(document.activeElement === selected && parseFloat(getComputedStyle(selected).outlineWidth) >= 2, "keyboard focus stays visible on the choice");
+      const mark = selected.querySelector('.ck svg');
+      require(visible(mark) && mark.getBoundingClientRect().width <= 16 && getComputedStyle(mark).fill === 'none' && getComputedStyle(mark).stroke !== 'none', "the selected model has a bounded, visible check mark");
+      require(!window.__look.calls.some(call => ['models.download', 'models.use', 'settings.set'].includes(call.method)), "previewing does not download or save settings");
+      require(getComputedStyle(selected.closest('.lm-row')).backgroundColor !== getComputedStyle(rows[1]).backgroundColor, "selection has a distinct themed surface");
+      return { check: name, selected: selected.dataset.name };
+    }
+    let minimumGap = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const box = rows[i].getBoundingClientRect(), style = getComputedStyle(rows[i]);
+      require(box.left >= viewport.left && box.right <= viewport.right + 1, "model choices fit the scroll pane");
+      require(style.borderTopStyle === 'solid' && parseFloat(style.borderTopWidth) <= 1, "choices use subtle designed borders instead of native button frames");
+      const button = rows[i].matches('.lm-row') ? rows[i].querySelector('.lm-main') : rows[i];
+      const buttonStyle = getComputedStyle(button);
+      require(!['outset', 'inset'].includes(buttonStyle.borderTopStyle), "model buttons reset the browser's default border");
+      require(parseFloat(buttonStyle.paddingTop) >= 12 && box.height >= 80, "each choice retains breathing room and a comfortable target");
+      for (const text of button.querySelectorAll('.mp-line, .mp-sub, .mc-description')) {
+        require(text.scrollWidth <= text.clientWidth + 1, "model metadata wraps within its column");
+      }
+      if (i > 0) minimumGap = Math.min(minimumGap, box.top - rows[i - 1].getBoundingClientRect().bottom);
+    }
+    require(rows.length < 2 || minimumGap >= 8, "adjacent model choices have at least eight pixels of separation");
+    const footer = dialog.querySelector('.mb-dlg-act').getBoundingClientRect();
+    require(viewport.bottom <= footer.top + 1, "scrolling choices cannot cover the fixed actions");
+    return { check: name, rows: rows.length, minimumGap: Number.isFinite(minimumGap) ? minimumGap : null };
+  }
+  if (name === "delete-confirmation") {
+    const dialogs = [...document.querySelectorAll('.mb-dialog.mb-confirm')];
+    const dialog = dialogs.at(-1);
+    require(visible(dialog), "the confirmation is visible");
+    const buttons = [...dialog.querySelectorAll('.mb-dlg-act .btn')];
+    require(buttons.map(button => button.dataset.dlg).join('|') === 'cancel|delete', "Cancel precedes Delete visually and in keyboard order");
+    require(document.activeElement === buttons[0], "Cancel receives initial focus");
+    require(visible(document.getElementById(dialog.getAttribute('aria-describedby'))), "the irreversible-action description is announced");
+    require(buttons[1].classList.contains('pri'), "Delete uses the skin's primary accent");
+    require(getComputedStyle(dialog.querySelector('.mb-dlg-act')).borderTopWidth === '0px', "no divider separates the compact footer");
+    require(parseFloat(getComputedStyle(buttons[0]).borderRadius) >= 18, "actions have pill corners");
+    const box = dialog.getBoundingClientRect();
+    const close = dialog.querySelector('[data-dlg="close"]').getBoundingClientRect();
+    require(box.width <= 482 && box.left >= 0 && box.right <= innerWidth, "the compact panel fits the window");
+    require(close.width >= 32 && close.height >= 32, "the close control retains its hit target");
+    return { check: name, width: box.width, height: box.height };
+  }
   if (name.startsWith("cli-account-")) {
     const row = document.querySelector('[data-cli-menu="codex"], [data-cli="codex"]')?.closest('.cli-card');
     require(visible(row), "the Codex card is visible");

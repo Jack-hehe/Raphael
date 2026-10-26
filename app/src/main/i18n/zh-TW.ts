@@ -1071,6 +1071,7 @@ export const zhTW = {
   "members.moveTo": "移到分組",
   "members.delete": "刪除",
   "members.deleteConfirm": "刪除「{p0}」？",
+  "members.deleteHint": "此操作無法復原。",
   "members.deleted": "已刪除「{p0}」",
   "members.rename": "重新命名",
   "members.groupName": "分組名稱",

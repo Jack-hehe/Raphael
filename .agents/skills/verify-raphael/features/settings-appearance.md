@@ -20,6 +20,11 @@ inside Raphael, removes its models, and leaves a framed Connect action. Reconnec
 an existing CLI login. Caption icon controls keep transparent hover/pressed surfaces (R-UI-16). Close uses
 the error foreground; glyph contrast and keyboard focus are checked.
 
+Model choosers for answers, cleanup, speech and vision share separated selection rows.
+Local speech models show languages, size, notes and download state; choosing a row only
+previews it until the fixed footer's action is used. Rows keep an 8 px gap, subtle
+theme borders and visible keyboard focus, with metadata wrapping inside narrow panes.
+
 ## How to get to it (user POV)
 
 Open the navigation gear, then a settings pane. Appearance has skin previews/theme
@@ -33,6 +38,7 @@ npm run look -- profile appearance models dictation agent messaging data about s
 npm run look -- skin-default skin-paper skin-graphite skin-lagoon skin-dusk skin-midnight skin-meadow skin-ink skin-catppuccin --theme both --width 1120,720
 npm run look -- appearance --theme both --width 1120,720 --skin lagoon --locale ja
 npm run look -- cli-account-menu cli-account-disconnected cli-account-reconnected window-hover-minimize window-hover-maximize window-hover-restore window-hover-close window-hover-modal --theme both --width 1120,720,1920x1080
+npm run look -- model-choices-answer model-choices-cleanup model-choices-stt model-choices-local model-choices-local-selected --theme both --width 1120,720,1920x1080
 ```
 
 Keep pane/skin PNGs; inspect wrapping, focus, scroll access, active selections and
@@ -45,6 +51,12 @@ tests; look drives the real account menu through the existing IPC boundary. Chec
 caption hover images at full size and keep the driver's centering, margins, transparent pressed,
 tooltip, focus and close-contrast assertions. Native OS minimize/maximize/close and a real
 CLI login remain separate checks; never log out the user's shared CLI account.
+
+The model-choice scenes open Models and usage, then its answer, cleanup or speech
+picker. Speech's local source uses the shared synthetic catalogue, including models
+that are not downloaded. Rendered checks reject native outset borders, touching rows,
+clipped metadata and overlapping footer actions, reach the last model by scrolling,
+and ensure selecting a local model neither downloads it nor saves settings.
 
 Safety-rule editing/deletion and always-allowed app removal use each row's overflow
 menu (R-UI-11). Memory rows use the same policy and retain Undo.

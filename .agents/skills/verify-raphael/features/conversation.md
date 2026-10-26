@@ -65,6 +65,12 @@ the remembered member-panel preference. Rename/delete scenes open
 dialogs, not committed changes. Empty/running are fixture variants, not proof of
 streaming, cancellation, persistence or file transfer.
 
+Delete confirmations use a compact 480px panel with a fine theme border, a top-right
+close control, an announced irreversible-action description and pill actions aligned
+right: Cancel then theme-accent Delete. Cancel retains initial focus. The shared
+`delete-confirmation` rendered check covers conversation, group, room and routine
+deletion, including a confirmation stacked over the routine editor.
+
 ## Team administration and progress
 
 Team administration approvals are covered by the member feature's `admin-*`

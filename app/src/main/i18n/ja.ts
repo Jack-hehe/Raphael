@@ -1072,6 +1072,7 @@ export const ja = {
   "members.moveTo": "グループへ移動",
   "members.delete": "削除",
   "members.deleteConfirm": "「{p0}」を削除しますか？",
+  "members.deleteHint": "この操作は取り消せません。",
   "members.deleted": "「{p0}」を削除しました",
   "members.rename": "名前を変更",
   "members.groupName": "グループ名",
