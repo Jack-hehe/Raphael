@@ -64,6 +64,14 @@ describe("rendered look checks", () => {
     glyph.getBoundingClientRect = () => ({ left: 52, top: 17, right: 68, bottom: 33, width: 16, height: 16 });
     expect(audit().productRules).toEqual([]);
   });
+  it("measures glyphs in a zoomed board at their unzoomed size (R-UI-19)", () => {
+    const { window, audit } = productAudit('<div class="team-board" style="zoom:1.1"><button class="btn icon" style="border:0;background:transparent"><svg class="i"></svg></button></div>');
+    const glyph = window.document.querySelector('svg');
+    glyph.getBoundingClientRect = () => ({ left: 51.2, top: 16.2, right: 68.8, bottom: 33.8, width: 17.6, height: 17.6 });
+    expect(audit().productRules).toEqual([]);
+    glyph.getBoundingClientRect = () => ({ left: 52.3, top: 17.3, right: 67.7, bottom: 32.7, width: 15.4, height: 15.4 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-19']);
+  });
   it("rejects low-contrast selected dates, including hover overrides (R-UI-22)", () => {
     const { window, audit } = productAudit('<div class="au-month-grid"><button class="btn" aria-pressed="true" style="border:0;color:rgb(30,30,30);background:rgb(40,40,40)">28</button></div>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-22']);

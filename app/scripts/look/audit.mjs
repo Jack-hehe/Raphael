@@ -62,7 +62,10 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
       if (glyph) {
         const rect = glyph.getBoundingClientRect();
         const sizes = element.matches('.cmp-send') ? [32] : [16, 20];
-        if (!sizes.some(size => Math.abs(rect.width - size) <= .5 && Math.abs(rect.height - size) <= .5)) violation('R-UI-19', 'Action glyph does not use the shared icon sizes');
+        // A board the owner zooms scales its glyphs too; the shared size is the unzoomed one.
+        let zoom = 1;
+        for (let parent = element; parent; parent = parent.parentElement) zoom *= parseFloat(win.getComputedStyle(parent).zoom) || 1;
+        if (!sizes.some(size => Math.abs(rect.width / zoom - size) <= .5 && Math.abs(rect.height / zoom - size) <= .5)) violation('R-UI-19', 'Action glyph does not use the shared icon sizes');
         if (Math.abs(rect.left + rect.width / 2 - box.left - box.width / 2) > 1 || Math.abs(rect.top + rect.height / 2 - box.top - box.height / 2) > 1) violation('R-UI-19', 'Action glyph is not centered');
       }
     }
