@@ -172,6 +172,17 @@ def test_a_member_never_reads_another_members_own_memory(memory, members):
     assert "A 的工作筆記" not in str(memory.reader_for(B).index())
 
 
+def test_a_room_or_a_hand_off_reads_the_shared_notes_alone(memory, members):
+    write(memory.store_for(A), "preference-secret", kind="preference", text="A 的工作筆記")
+    write(memory.shared, "user-city")
+    shared = memory.shared_reader()
+    assert "主人住在台北" in str(shared.index()) and "A 的工作筆記" not in str(shared.index())
+    assert "<own_memory>" not in str(shared.index())
+    result = shared.read(["preference-secret", "user-city"])
+    assert [m["name"] for m in result.data["memories"]] == ["user-city"] and result.data["missing"] == ["preference-secret"]
+    assert not shared.search("台北").ok
+
+
 # --- the RPC methods ---------------------------------------------------------------------------
 
 

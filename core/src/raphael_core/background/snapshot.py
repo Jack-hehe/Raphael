@@ -226,6 +226,7 @@ def take_snapshot(
     question: str = "",
     *,
     memory: bool = False,
+    history: bool = True,
     attachments: bool = False,
     speaker: Speaker = RAPHAEL,
     team: Sequence[str] = (),
@@ -233,7 +234,8 @@ def take_snapshot(
     interactive: bool = False,
     turned_off: Collection[str] = (),
 ) -> Snapshot:
-    """The tools a task starting now may use: with `memory`, the memory's tools that read too, and
+    """The tools a task starting now may use: with `memory`, the memory's tools that read too (the
+    conversation search only with `history`: a room's turn has no conversation of its own), and
     with `attachments` (the task came with files) the tool that reads them. A
     plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
     task is shown the ones that share the most words with `question` (`refine` chooses with the
@@ -247,7 +249,7 @@ def take_snapshot(
     pool: Offer | None = None
     builtin = (
         *(name for name in WEB_TOOLS if speaker.uses(name) and name not in turned_off),
-        *(MEMORY_READ_TOOLS if memory else ()),
+        *(name for name in MEMORY_READ_TOOLS if memory and (history or name != "history_search")),
         *(name for name in ATTACHMENT_TOOLS if attachments and name not in turned_off),
     )
     for name in builtin:

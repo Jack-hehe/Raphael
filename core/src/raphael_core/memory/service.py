@@ -356,17 +356,22 @@ class MemoryService:
 
     # --- for the assistant -------------------------------------------------------------------------
 
-    def index(self, member_id: int = 0) -> MemoryIndex:
+    def index(self, member_id: int | None = 0) -> MemoryIndex:
         """What `member_id` reads of the memory for the prompt: the index of the shared memory and
-        of its own. An index that cannot be read is empty."""
+        of its own; the shared one alone without a member (`SharedMemory`). An index that cannot be
+        read is empty."""
         indexes = []
-        for store in (self.shared, self.store_for(member_id)):
+        for store in (self.shared, *(() if member_id is None else (self.store_for(member_id),))):
             try:
                 indexes.append(store.index())
             except OSError as exc:
                 logger.warning("Could not read the memory: %s", type(exc).__name__)
                 indexes.append("")
-        return MemoryIndex(shared=indexes[0], own=indexes[1])
+        return MemoryIndex(shared=indexes[0], own=None if member_id is None else indexes[1])
+
+    def shared_reader(self) -> "SharedMemory":
+        """What a room's turn or work a colleague handed over may do with the memory."""
+        return SharedMemory(self)
 
     def apply_said(self, actions: Sequence[Action], turn_id: int, member_id: int = 0) -> Applied:
         """Write what the owner asked to be remembered (or forgotten) in the turn `turn_id`: the
@@ -412,14 +417,15 @@ class MemoryService:
                 (_REFLECTED, f"{_REFLECTED}:%"),
             )
 
-    def read(self, names: Sequence[str], member_id: int = 0) -> ToolResult:
+    def read(self, names: Sequence[str], member_id: int | None = 0) -> ToolResult:
         """`memory_read`: the memories of `names` (at most MAX_READ), each with its body, when it
         was last updated and its space, looked for in the own memory of `member_id`, then in the
-        shared one; the names that are not memories are listed as missing."""
+        shared one (in the shared one alone without a member); the names that are not memories are
+        listed as missing."""
         found, missing = [], []
-        own = self.store_for(member_id)
+        own = None if member_id is None else self.store_for(member_id)
         for name in list(dict.fromkeys(names))[:MAX_READ]:
-            space, memory = "own", own.get(name) if valid_name(name) else None
+            space, memory = "own", own.get(name) if own is not None and valid_name(name) else None
             if memory is None and valid_name(name):
                 space, memory = "shared", self.shared.get(name)
             if memory is None:
@@ -873,3 +879,22 @@ class MemberMemory:
 
     def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult:
         return self.memory.search(query, limit=limit, exclude=exclude, member_id=self.member_id)
+
+
+@dataclass(frozen=True)
+class SharedMemory:
+    """The memory as a room's turn or work a colleague handed over sees it
+    (`background.run.MemoryReader`): the shared notes alone. What the owner told one assistant
+    stays out of a group and out of a colleague's work, so no own note is read and no conversation
+    searched; never a write."""
+
+    memory: MemoryService
+
+    def index(self) -> MemoryIndex:
+        return self.memory.index(None)
+
+    def read(self, names: Sequence[str]) -> ToolResult:
+        return self.memory.read(names, None)
+
+    def search(self, query: str, *, limit: int = 5, exclude: Sequence[int] = ()) -> ToolResult:
+        return ToolResult("history_search", False, None, "blocked")

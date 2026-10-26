@@ -587,20 +587,19 @@ class MemoryIndex:
     """What an assistant reads of the memory: the index of the shared memory, which every assistant
     of the owner's reads and writes (who the owner is), and the index of its own (its own work).
     The shared one comes first: it changes less often than an assistant's own work, which keeps
-    the start of the prompt the same for the provider's cache."""
+    the start of the prompt the same for the provider's cache. `own` is None where no own note may
+    be read: a room's turn, or work one assistant handed another."""
 
     shared: str = ""
-    own: str = ""
+    own: str | None = ""
 
     def __bool__(self) -> bool:
         return bool(self.shared or self.own)
 
     def __str__(self) -> str:
-        """Both indexes, each in its tags, for a prompt that shows them as data."""
-        return (
-            f"<shared_memory>\n{self.shared or '(no notes yet)'}\n</shared_memory>\n"
-            f"<own_memory>\n{self.own or '(no notes yet)'}\n</own_memory>"
-        )
+        """The indexes, each in its tags, for a prompt that shows them as data."""
+        shared = f"<shared_memory>\n{self.shared or '(no notes yet)'}\n</shared_memory>"
+        return shared if self.own is None else f"{shared}\n<own_memory>\n{self.own or '(no notes yet)'}\n</own_memory>"
 
 
 def _is_turn_id(turn: object) -> bool:

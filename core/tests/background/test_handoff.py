@@ -347,16 +347,21 @@ async def test_a_stopped_conversation_turn_stops_the_questions_it_sent(make_rig,
     assert not rig.reports() and rig.client.chat_calls==[]
 
 
-async def test_assigned_work_never_reads_the_assignees_private_conversation_or_notes(make_rig,tmp_path):
+@pytest.mark.parametrize('room',[True,False])
+async def test_assigned_work_reads_the_shared_notes_but_never_the_assignees_private_ones(make_rig,tmp_path,room):
+    # Hand-offs read no memory at all, so a fact the owner gave the whole team never reached the work.
     rig=make_rig()
-    target,source=setup(rig,room=False)
+    target,source=setup(rig,room=room)
     knowing(rig,tmp_path,target)
     rig.client.replies.append(report('明早我會完成。'))
     task_id=rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='zh-TW').data['task_id']
     await until(lambda:rig.task(task_id).state in ('done','failed'))
     [assigned]=rig.client.chat_calls
     shown=json.dumps(assigned['messages'],ensure_ascii=False)
+    assert '品牌主色是金色' in shown
     assert 'PRIVATE-CHAT' not in shown and 'PRIVATE-NOTE' not in shown
+    tools=[tool['function']['name'] for tool in assigned['tools']]
+    assert 'memory_read' in tools and 'history_search' not in tools
 
 
 @pytest.mark.parametrize('room',[True,False])

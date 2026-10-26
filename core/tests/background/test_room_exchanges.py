@@ -33,6 +33,8 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
     rig.service._notify = arrived
     alice = members.store.create_member(name="Alice", role="PM", personality="PRECISE-PLANNER")
     bob = members.store.create_member(name="Bob", role="CTO", personality="CAUTIOUS-ENGINEER")
+    memory.shared.write("user-brand", type="user", description="BRAND-GOLD", body="BRAND-GOLD", member=0)
+    memory.store_for(alice.id).write("reference-alice", type="reference", description="ALICE-PRIVATE", body="ALICE-PRIVATE")
     rig.client.replies.extend(report(text) for text in (
         "@Alice lead the release plan", "@Bob I propose shipping today", "@Alice I disagree: test first",
         "Agreed, I own testing",
@@ -55,6 +57,10 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
         assert "PRECISE-PLANNER" in rig.client.chat_calls[1]["messages"][0]["content"]
         assert "CAUTIOUS-ENGINEER" in rig.client.chat_calls[2]["messages"][0]["content"]
         assert "I disagree: test first" in str(rig.client.chat_calls[3]["messages"])
+        # A room reads the team's shared notes; what the owner told Alice alone stays out of it.
+        alice_turn = str(rig.client.chat_calls[1]["messages"])
+        assert "BRAND-GOLD" in alice_turn and "ALICE-PRIVATE" not in alice_turn
+        assert "history_search" not in [tool["function"]["name"] for tool in rig.client.chat_calls[1]["tools"]]
     finally:
         await rooms.aclose()
         await members.aclose()
