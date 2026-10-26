@@ -22,6 +22,7 @@ VERSION = 1
 # One request per look image: the full matrix must fit the default; dollars stay the real limit.
 DEFAULT_MAX_REQUESTS = 1200
 MAX_REQUESTS = 2000
+_FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.S)
 
 
 def rules_path(root):
@@ -62,7 +63,9 @@ def build_prompt(rules, feature, scene):
 
 
 def parse_review(text, rules):
-    value = json.loads(text)
+    # Live, the reviewer wrapped every review in a ```json fence despite "Return ONLY JSON".
+    fenced = _FENCE.fullmatch(text.strip())
+    value = json.loads(fenced[1] if fenced else text)
     if not isinstance(value, dict) or set(value) != {"score", "findings"}:
         raise ValueError("invalid_review")
     if type(value["score"]) is not int or value["score"] not in range(1, 6) or not isinstance(value["findings"], list):
