@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 from raphael_core.agent.history import AgentHistory
+from raphael_core.members.exchanges import seat
 from raphael_core.members.rooms import RoomsService
 from .test_exchanges import exchange, team, send, finish, history, Decision  # noqa: F401
 
@@ -315,8 +316,42 @@ async def test_room_roles_run_two_rounds_without_changing_personas(rig, exchange
     while (await history(rig, room))['exchange']['state'] != 'done':
         await finish(rig, exchange, 'Evidence reviewed')
     assert [s['member_id'] for s in rig.background.submitted] == [*ids,*ids,0]
-    assert 'This is round 2' in rig.background.submitted[2]['text']
+    assert 'Open round 2' in rig.background.submitted[2]['text']
     assert rig.service.speaker(ids[0]).role == 'PM'
+
+
+async def test_a_meeting_runs_two_rounds_then_the_moderator_closes_and_raphael_concludes_once(rig, exchange):
+    # Live, every reply handed the floor on with an @, the moderator kept asking, and two rounds ran past forty turns.
+    room, (alice, bob, carol) = await three(rig)
+    await rig.call('rooms.update', {'room_id':room['id'], 'roles':{str(alice):'moderator', str(bob):'pro', str(carol):'con'}})
+    await send(rig, room, '@Alice @Bob @Carol debate the launch')
+    prompts = []
+    for reply in ('Should we launch now? @Bob', 'Launch now. @Carol', 'Test first. @Alice', 'Speed against cost: @Carol',
+                  'Speed costs more. @Bob', 'The cost is small. @Alice', 'Both sides are heard. @Raphael please conclude'):
+        prompts.append(rig.background.submitted[-1]['text'])
+        await finish(rig, exchange, reply)
+    await finish(rig, exchange, '### Conclusion\nTest first.\n### Owner decision\nNone.\n### Next steps\nBob: run the test.')
+    result = await history(rig, room)
+    assert [(m['member_id'], m['kind']) for m in result['messages'] if m['member_id'] is not None] == [
+        (alice, 'message'), (bob, 'message'), (carol, 'message'), (alice, 'message'),
+        (carol, 'message'), (bob, 'message'), (alice, 'message'), (0, 'wrapup')]
+    assert result['exchange']['state'] == 'done'
+    assert all(i['state'] == 'done' for i in result['exchange']['reply_intents'])
+    assert 'Open round 1' in prompts[0] and 'Still to speak in round 1: @Carol' in prompts[1]
+    assert 'hand back to the moderator @Alice' in prompts[2] and 'Open round 2' in prompts[3]
+    assert 'Still to speak in round 2: @Bob' in prompts[4] and 'hand back to the moderator @Alice' in prompts[5]
+    assert 'Both rounds are complete' in prompts[6] and '@拉斐爾' in prompts[6]
+
+
+@pytest.mark.parametrize('plan,member,phase', [
+    ([{'member':1, 'round':2}, {'member':2, 'round':2}], 2, 'aside'),
+    ([{'member':2, 'round':1}, {'member':1, 'round':2}, {'member':2, 'round':2}], 1, 'floor'),
+    ([{'member':3, 'round':1}, {'member':1, 'round':2}, {'member':2, 'round':2}, {'member':3, 'round':2}], 2, 'aside'),
+    ([], 2, 'after')])
+def test_a_turn_outside_its_planned_place_keeps_the_plan(plan, member, phase):
+    # Between rounds, mid-round or after them, an addressed member answers without using up a planned turn.
+    rest, meeting = seat(plan, member, 1)
+    assert (meeting['phase'], rest) == (phase, plan)
 
 
 async def test_meeting_reuses_exact_members_and_has_one_agenda(rig, exchange):

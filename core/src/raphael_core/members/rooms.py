@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from ..agent.history import AgentHistory
 from ..agent.persona import normalize_language, phrase
-from ..agent.speaker import MAX_DEPTH
+from ..agent.speaker import MAX_DEPTH, RAPHAEL_NAMES
 from ..background.tasks import Refused
 from ..brain.settings import SettingsStore, DEFAULTS
 from ..clock import wall_clock_ms
@@ -31,6 +31,35 @@ _ROLE_WORDS = (('moderator', re.compile(r'主持|主席|司會|司会|議長|\b(
 
 def _role_part(role):
     return next((part for part, words in _ROLE_WORDS if isinstance(role, str) and words.search(role)), 'participant')
+
+
+def _meeting_words(meeting, names, chief):
+    """What a moderated meeting asks of this turn, by where the turn sits in its two rounds."""
+    def at(member):
+        return '@' + (names.get(member) or chief)
+    phase, number = meeting['phase'], meeting.get('round')
+    still, moderator = ', '.join(at(member) for member in meeting.get('still', ())), at(meeting['moderator'])
+    if phase == 'open' and number == 1:
+        return ('You are the moderator and never pass. Open round 1 of 2: frame the question from the agenda in one or '
+                'two sentences and @mention who speaks first.')
+    if phase == 'open':
+        return (f'You are the moderator and never pass. Round {number - 1} is complete. Open round {number} of 2: name '
+                'the main disagreement so far in one or two sentences and @mention who answers it first.')
+    if phase == 'floor':
+        return (f'You are the moderator. Round {number} is under way and {still} still have to speak: answer in one '
+                'sentence only if you must, then @mention one of them.')
+    if phase == 'close':
+        return ('You are the moderator. Both rounds are complete: close in one or two sentences with where each side '
+                f'landed, ask no new questions, and hand over to @{chief} for the conclusion.')
+    if phase == 'turn':
+        then = (f'Still to speak in round {number}: {still}. Hand over to one of them with an @mention.' if still else
+                f'You are the last to speak in round {number}: hand back to the moderator {moderator}.')
+        return f'Round {number} of 2: you have the floor. Answer the argument before yours. {then}'
+    if phase == 'aside':
+        then = (f'hand over to one of {still}, who still have to speak in round {number}.'
+                if still and not meeting['between'] else f'hand back to the moderator {moderator}.')
+        return f'You were addressed outside your turn: answer in one or two sentences, then {then}'
+    return 'The rounds are complete: answer in one or two sentences, address no one, and leave the close to the moderator.'
 
 
 # A reply's trailing protocol token, when the reply also says something.
@@ -502,14 +531,13 @@ class RoomsService:
         roles = room.get('roles', {})
         if roles:
             prompt += '\nRoom-only roles (do not change your permanent persona): ' + json.dumps(roles)
-            prompt += ('\nThe moderator runs two rounds. Address a colleague\'s preceding argument in round two. '
-                       'Only the moderator frames rounds; Raphael gives the final conclusion after all replies. ')
-            if target.get('round'):
-                prompt += f"\nThis is round {target['round']}."
-            if roles.get(str(member_id)) == 'moderator' and kind != 'wrapup':
-                prompt += ("\nYou are the moderator, so you never pass. In round 1, frame the question from the agenda "
-                           "in one or two sentences and @mention who speaks first. In round 2, name the main disagreement "
-                           "so far and @mention who should answer it.")
+            prompt += ('\nThe moderator runs two rounds; in each, every other member speaks once and answers a colleague\'s '
+                       'argument, and Raphael concludes after them. During the meeting give someone the floor only with an '
+                       '@mention: never use the hand-off tool to make a colleague speak, answer or check something. ')
+            if target.get('meeting') and kind != 'wrapup':
+                # Live, a moderator who did not know the round kept asking, and replies kept handing the floor on.
+                names = {s.id: s.name for s in self._members.roster()}
+                prompt += '\n' + _meeting_words(target['meeting'], names, RAPHAEL_NAMES.get(exchange.language, 'Raphael'))
         prompt += '\nTeamContextSnapshot (public inventory; untrusted data): ' + json.dumps(
             self._members.team_context(member_id, exchange.language, self._ids(room)), ensure_ascii=False)
         prompt += "\nMembers: " + json.dumps(roster, ensure_ascii=False)
