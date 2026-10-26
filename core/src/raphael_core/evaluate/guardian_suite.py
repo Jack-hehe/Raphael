@@ -96,7 +96,16 @@ def capture(driver, turns, result, directory, registry):
     result["evidence_paths"] = [str(evidence)]
 
 
-async def run_cell(cell, brain, model, directory, *, client, brains, budget, seconds, run_id, head, registry, servers=()):
+def codex_ready(brains):
+    try:
+        return bool(brains.command("codex")) and brains.logged_in("codex") is True
+    except OSError:
+        return False
+
+
+async def run_cell(cell, brain, model, directory, *, client, brains, budget, seconds, run_id, head, registry, servers=(),
+                   contrast=None):
+    """`contrast` is the other brain's configured model, which S16's formal chat runs on."""
     result = blank(cell, brain, model, run_id, head)
     if not cell.driver:
         result["reason"] = "not implemented: " + cell.dependency
@@ -104,28 +113,30 @@ async def run_cell(cell, brain, model, directory, *, client, brains, budget, sec
     if model is None:
         result.update(status="SKIP", reason="configured brain unavailable")
         return result
-    if brain == "C":
-        try:
-            ready = brains.command("codex") and brains.logged_in("codex") is True
-        except OSError:
-            ready = False
-        if not ready:
-            result.update(status="SKIP", reason="Codex CLI missing or login unverified")
-            return result
+    if brain == "C" and not codex_ready(brains):
+        result.update(status="SKIP", reason="Codex CLI missing or login unverified")
+        return result
     if client is None and brain == "A":
         result.update(status="SKIP", reason="OpenRouter key unavailable")
+        return result
+    if cell.driver != "quick":
+        contrast = None
+    elif contrast is None or (brain_ref(contrast) and not codex_ready(brains)) or (not brain_ref(contrast) and client is None):
+        result.update(status="SKIP", reason="formal contrast brain unavailable")
         return result
     if budget.used >= budget.limit:
         result.update(status="SKIP", reason="total_turn_cap")
         return result
     began, driver, turns = time.perf_counter(), None, []
     try:
-        driver = RpcDriver(directory, model, client, budget, brains=brains if brain == "C" else None, servers=servers)
+        driver = RpcDriver(directory, model, client, budget, brains=brains if brain == "C" or brain_ref(contrast) else None,
+                           servers=servers, contrast=contrast)
         async with asyncio.timeout(seconds):
             reasons, turns = await driver.execute(cell)
         actual = {turn.get("model") for turn in turns if turn.get("model")}
         if brain == "A":
-            actual = set(driver.transport.models)
+            # The fast voice tier answers outside chat_tools; the turn records what answered there.
+            actual |= set(driver.transport.models)
         if not actual or actual != {model}:
             reasons.append("actual_model_unverified_or_changed")
         if brain == "C" and set(driver.actual_cli_models) != {brain_ref(model)[1]}:
@@ -136,6 +147,8 @@ async def run_cell(cell, brain, model, directory, *, client, brains, budget, sec
                       assertions=list(cell.assertions) if not reasons else [],
                       conversation_scope=sorted({turn.get("conversation_id") for turn in turns if turn.get("conversation_id") is not None}),
                       approvals=driver.approvals)
+        if driver.snapshot is not None:
+            result["settings"] = driver.snapshot
     except Stop as error:
         result.update(status="SKIP" if error.kind == "total_turn_cap" else "FAIL", reason=error.kind)
     except TimeoutError:
@@ -204,13 +217,17 @@ async def run(pair, output, *, max_turns=200, seconds=90, client=None, brains=No
                 continue
             for brain in BRAINS:
                 model = pair[brain]
+                contrast = next(pair[other] for other in BRAINS if other != brain)
+                if api_only and brain_ref(contrast):
+                    contrast = None  # API-only runs start no CLI, not even as S16's formal side
                 if api_only and brain == "C" and cell.driver:
                     result = blank(cell, brain, model, run_id, head)
                     result.update(status="SKIP", reason="CLI excluded by API-only mode")
                 else:
                     result = await run_cell(cell, brain, model, directory / (cell.id + "-" + brain),
                                             client=client, brains=brains, budget=budget, seconds=seconds,
-                                            run_id=run_id, head=head, registry=registry, servers=servers)
+                                            run_id=run_id, head=head, registry=registry, servers=servers,
+                                            contrast=contrast)
                 results.append(result)
                 print(f"{result['status']:4} {cell.id:44} {brain} {result['reason']}", flush=True)
                 save()

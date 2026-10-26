@@ -48,7 +48,7 @@ BASE = (
 
 SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr,
                                {1: "team-setup", 2: "roster", 4: "consult", 11: "task-stop", 12: "memory",
-                                13: "privacy"}.get(i, ""))
+                                13: "privacy", 16: "quick"}.get(i, ""))
                   for i, (title, prompt, checks, pr) in enumerate(BASE, 1))
 
 

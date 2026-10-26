@@ -127,9 +127,11 @@ class ModelTransport(BudgetClient):
 
 
 class RpcDriver:
-    def __init__(self, directory, model, client, budget, *, brains=None, servers=()):
+    def __init__(self, directory, model, client, budget, *, brains=None, servers=(), contrast=None):
         from ..app import App
         self.model, self.budget = model, budget
+        # S16's formal chat runs on the other configured brain, so that a crossed model shows.
+        self.contrast, self.snapshot = contrast, None
         self.nonce, self.traces, self.events, self.approvals = uuid4().hex[:12], [], [], []
         self.actual_cli_models = []
         self.transport = ModelTransport(client, budget)
@@ -149,7 +151,7 @@ class RpcDriver:
             isolated = SimpleNamespace(home=Path(directory), environ=dict(brains.environ),
                                        settings=settings, command=brains.command,
                                        logged_in=brains.logged_in, available=brains.available,
-                                       aclose=self.transport._noop)
+                                       with_effort=brains.with_effort, aclose=self.transport._noop)
             # The production driver retains only subscription auth discovery; workspaces
             # and session DBs remain private to this cell.
             isolated.environ.setdefault("CODEX_HOME", str(brains.home / ".codex"))
@@ -164,12 +166,21 @@ class RpcDriver:
                             "conversation_scope": conversation, "outcome": "ok" if outcome.ok else outcome.kind,
                             "gate_passed": outcome.ok, "source": "production_loop"})
 
-    async def ask(self, prompt, *, member=0):
-        if brain_ref(self.model):
+    async def ask(self, prompt, *, member=0, conversation=None, quick=False, model=None, session=""):
+        """The owner's request: typed in a thread (`conversation`, else its main one), or with `quick`
+        as the Alt+Space hotkey sends it, spoken with the quick destination. A CLI turn counts here;
+        the transport counts API calls."""
+        if brain_ref(model or self.model):
             self.budget.take()
-        return await self.app.call("agent.ask", {"session_id": "guardian-" + self.nonce,
-                                               "source": "app", "text": prompt,
-                                               "ui_language": "zh-TW", "member_id": member})
+        params = {"session_id": "-".join(filter(None, ("guardian", self.nonce, session))),
+                  "text": prompt, "ui_language": "zh-TW", "member_id": member}
+        if quick:
+            params["destination"] = "quick"
+        else:
+            params["source"] = "app"
+            if conversation is not None:
+                params["conversation_id"] = conversation
+        return await self.app.call("agent.ask", params)
 
     async def confirm(self, result, approved):
         self.approvals.append({"id_digest": digest(result["confirm"]["id"]), "approved": approved,
@@ -184,13 +195,14 @@ class RpcDriver:
         self.app.integrations._config.add(ServerConfig("guardian-mail", "Guardian", "http",
                                                        url="https://example.invalid/mcp", tools=[tool]))
 
-    async def owner_view(self, member=0):
-        turns = (await self.app.call("agent.history.list", {"member_id": member}))["turns"]
+    async def owner_view(self, member=0, conversation=None, source="app"):
+        scope = {"member_id": member} if conversation is None else {"member_id": member, "conversation_id": conversation}
+        turns = (await self.app.call("agent.history.list", scope))["turns"]
         reasons = []
         for turn in turns:
             if turn.get("scope", "private") == "exchange":
                 continue  # a colleague's question in this chat is that colleague's, drawn as one line
-            if turn.get("member_id", 0) != member or turn.get("source") != "app":
+            if turn.get("member_id", 0) != member or turn.get("source") != source:
                 reasons.append("wrong_conversation_scope")
             for message in turn.get("messages", []):
                 kind, text = message.get("kind"), message.get("text", "")
@@ -218,6 +230,8 @@ class RpcDriver:
             reasons, result = await (self.consult_scenario() if cell.driver == 'consult' else self.memory_scenario())
         elif cell.driver == 'privacy':
             reasons, result = await self.privacy_scenario()
+        elif cell.driver == 'quick':
+            reasons, result = await self.quick_scenario()
         elif cell.driver == "team-setup":
             reasons = []
             async def team_state():
@@ -323,7 +337,8 @@ class RpcDriver:
             owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
         else:
             # A member's own conversation is the owner's view when the owner spoke to that member.
-            turns, owner_reasons = await self.owner_view(result.get('viewer', 0))
+            turns, owner_reasons = await self.owner_view(result.get('viewer', 0), result.get('conversation'),
+                                                         result.get('source', 'app'))
         reasons += owner_reasons
         if not turns or result.get("status") not in {"done", "denied", "error"}:
             reasons.append("no_terminal_owner_result")
@@ -610,6 +625,81 @@ class RpcDriver:
         if any(private in message['text'] for message in messages):
             reasons.append('private_text_in_group')
         return reasons, {**result, 'viewer': marketing}
+
+    async def quick_scenario(self):
+        """S16: an Alt+Space question, sent as the hotkey sends it, is answered in the quick conversation by the
+        quick model, while formal work at the same moment stays in its thread on its own model and CLI session;
+        neither reads the other's words."""
+        if self.contrast is None:
+            return ['formal_contrast_model_missing'], {'status': 'error', 'text': ''}
+        quick_model, _, effort = self.model.partition('?effort=')
+        settings = SettingsStore(self.app._conn)
+        settings.set('quick_model', quick_model)
+        if effort:
+            settings.set('quick_effort', effort)
+        settings.set('agent_model', self.contrast)
+        self.snapshot = {key: settings.get(key) for key in ('quick_model', 'quick_effort', 'agent_model')}
+        listed = (await self.app.call('conversations.list', {'member_id': 0}))['conversations']
+        formal = next(item['id'] for item in listed if item['is_default'])
+        quick_code, formal_code = 'QK-' + self.nonce, 'FM-' + self.nonce[::-1]
+
+        def quick(prompt, session):
+            return self.ask(prompt, quick=True, model=self.model, session=session)
+
+        def formally(prompt, session):
+            return self.ask(prompt, conversation=formal, model=self.contrast, session=session)
+
+        def elsewhere():
+            # What a quick question must never add to: members' threads and rooms.
+            return tuple(self.app._conn.execute(
+                'SELECT (SELECT COUNT(*) FROM agent_turns WHERE member_id != 0),'
+                ' (SELECT COUNT(*) FROM rooms), (SELECT COUNT(*) FROM room_messages)').fetchone())
+
+        seeded = await formally(f'這是正式聊天，代號是 {formal_code}。請只回覆「收到」。', 'formal-seed')
+        before = elsewhere()
+        asked, recalled = await asyncio.gather(
+            quick(f'本次快問代號是 {quick_code}。請在快問回答本次代號，不要寫入正式聊天。', 'quick'),
+            formally('只根據這個對話回答：正式聊天的代號是什麼？', 'formal-recall'))
+        probed, guessed = await asyncio.gather(
+            quick('只根據這個快問對話回答：正式聊天的代號是什麼？不知道就說不知道。', 'quick-probe'),
+            formally('只根據這個對話回答：快問的代號是什麼？不知道就說不知道。', 'formal-probe'))
+        conversations = (await self.app.call('conversations.list', {'member_id': 0}))['conversations']
+        quick_id = next((item['id'] for item in conversations if item.get('kind') == 'quick'), None)
+
+        async def thread(conversation):
+            if conversation is None:
+                return []
+            return (await self.app.call('agent.history.list', {'member_id': 0, 'conversation_id': conversation}))['turns']
+
+        quick_turns, formal_turns = await thread(quick_id), await thread(formal)
+        turns = {turn['id']: turn for turn in [*quick_turns, *formal_turns]}
+
+        def replied(turn):
+            # A spoken turn answers in its text alone; a typed one also in its reply messages.
+            return '\n'.join([turn['text'] or '', turn.get('detail') or '',
+                              *(message['text'] for message in turn.get('messages', []) if message['kind'] == 'reply')])
+
+        def answer(reply):
+            turn = turns.get(reply.get('turn_id'))
+            return replied(turn) if turn else reply.get('text', '')
+
+        reasons = []
+        if ({turn['id'] for turn in quick_turns} != {asked.get('turn_id'), probed.get('turn_id')}
+                or any(turn['status'] != 'done' for turn in quick_turns) or quick_code not in answer(asked)):
+            reasons.append('quick_destination')
+        if {turn['model'] for turn in quick_turns} != {self.model}:
+            reasons.append('quick_actual_model')
+        if ({turn['id'] for turn in formal_turns} != {seeded.get('turn_id'), recalled.get('turn_id'), guessed.get('turn_id')}
+                or any(quick_code in turn['question'] + replied(turn) for turn in formal_turns) or elsewhere() != before):
+            reasons.append('formal_unchanged')
+        if ({turn['model'] for turn in formal_turns} != {self.contrast} or formal_code not in answer(recalled)
+                or quick_code in answer(recalled) + answer(guessed) or formal_code in answer(probed)
+                or quick_id is None or self.app._conn.execute(
+                    'SELECT COUNT(*) FROM agent_conversation_cli_sessions WHERE conversation_id=?', (quick_id,)).fetchone()[0]):
+            reasons.append('concurrent_scope')
+        for reply in (asked, probed):
+            reasons += check_reply(answer(reply), Scenario('quick-question', ''))
+        return reasons, {**asked, 'viewer': 0, 'conversation': quick_id, 'source': 'voice'}
 
     async def meeting_scenario(self):
         ids = await self.seed_team()

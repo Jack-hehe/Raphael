@@ -35,6 +35,9 @@ class FakeBrains:
     def available(self, name, *, command=None):
         return self.installed
 
+    def with_effort(self, model, effort):
+        return f"{model.partition('?effort=')[0]}?effort={effort}"
+
     async def aclose(self):
         pass
 

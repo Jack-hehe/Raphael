@@ -90,3 +90,17 @@ and reads back the saved prompt. Replaying approval must not change the roster.
 Only committed admin operations count toward tool coverage. The offline fake API
 and sequential authenticated CLI/MCP tests are deterministic evidence; they do not
 establish live provider acceptance.
+
+## S16 quick question (P19)
+
+S16 asks as the Alt+Space hotkey does (`agent.ask` with `destination: "quick"`, no
+source) on the run's own model as the quick model and effort, while Raphael's formal
+chat runs on the other configured brain's model, so a crossed model is visible. It
+seeds a formal code, then asks a quick and a formal question at the same moment twice:
+quick turns must stay in the quick conversation on the quick model with no stored CLI
+session, formal turns in their thread on their own model, neither side may name the
+other's code, and members and rooms gain nothing. The cell records the settings it ran
+with. Without the other brain (or in API-only mode, where no CLI starts) it is SKIP
+"formal contrast brain unavailable". Offline honest fake brains on both brains and one
+negative test per check live in `core/tests/evaluate/test_p19_scenarios.py`; the native
+Alt+Space entry still needs its own live check.
