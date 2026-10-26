@@ -22,6 +22,17 @@ MAX_MESSAGE = 10000
 # A wrap-up's headings in the owner's language; the app reads them back into its three parts.
 _WRAPUP_HEADINGS = {'zh-TW':('結論','待你決定','下一步'), 'en':('Conclusion','Owner decision','Next steps'),
                     'ja':('結論','所有者の判断','次の手順')}
+# A meeting part in the owner's words, as one of the room's four. English words match whole, and
+# "for" only leads, so "content for the launch" stays a participant.
+_ROLE_WORDS = (('moderator', re.compile(r'主持|主席|司會|司会|議長|\b(?:moderat\w*|chair\w*|host|facilitat\w*)\b', re.I)),
+               ('con', re.compile(r'反方|反對|反対|\b(?:con|against|oppos\w*)\b', re.I)),
+               ('pro', re.compile(r'正方|贊成|賛成|\b(?:pro|affirmative|proponent)\b|^\s*for\b', re.I)))
+
+
+def _role_part(role):
+    return next((part for part, words in _ROLE_WORDS if isinstance(role, str) and words.search(role)), 'participant')
+
+
 # A reply's trailing protocol token, when the reply also says something.
 _TRAILING_PASS = re.compile(r'(\S[\s\S]*?)\s*[(（]\s*pass\s*[)）][.。]?\s*$', re.IGNORECASE)
 # The owner's Stop, and a new owner message that preempts the exchange.
@@ -180,15 +191,14 @@ class RoomsService:
         return {"room":self._view(self._conn.execute("SELECT * FROM rooms WHERE id = ?", (room["id"],)).fetchone())}
 
     def _meeting_roles(self, roles, ids):
-        """A model's roles as a room keeps them: a member's name may stand for its id, and a part
-        outside the room's four is taking part (「HiKari 從社群內容補充」)."""
+        """A model's roles as a room keeps them: a member's name may stand for its id, a part in the
+        owner's words is read (主持人, 正方, 反方, chair, for, against), and any other part is taking
+        part (「HiKari 從社群內容補充」)."""
         if not isinstance(roles, dict):
             return roles
         names = {(s.name or '').casefold(): s.id for s in self._members.roster() if s.id in ids and s.name}
         names.update({'raphael': 0, '拉斐爾': 0, 'ラファエル': 0})
-        return {str(names.get(str(key).strip().casefold(), key)):
-                role if role in ('moderator', 'pro', 'con', 'participant') else 'participant'
-                for key, role in roles.items()}
+        return {str(names.get(str(key).strip().casefold(), key)): _role_part(role) for key, role in roles.items()}
 
     @staticmethod
     def _roles(roles, ids):

@@ -339,6 +339,18 @@ async def test_meeting_roles_accept_names_and_a_supporting_part(rig, exchange):
     assert roles == {str(ids[0]):'moderator', str(ids[1]):'participant'}
 
 
+@pytest.mark.parametrize('parts,expected', [
+    ({'Alice':'主持人', 'Bob':'正方', 'Carol':'反方'}, ['moderator', 'pro', 'con']),
+    ({'Alice':'Chair', 'Bob':'for', 'Carol':'against'}, ['moderator', 'pro', 'con']),
+    ({'Alice':'社群內容補充', 'Bob':'content for the launch', 'Carol':'pro side'}, ['participant', 'participant', 'pro'])])
+async def test_meeting_roles_understand_the_owners_words(rig, exchange, parts, expected):
+    # Live, every part the model named fell outside the four words, so the meeting lost its moderator.
+    room, ids = await three(rig)
+    await exchange.meeting({'member_ids':[0,*ids], 'agenda':'Plan the launch', 'roles':parts}, 'zh-TW', 44)
+    roles = next(r for r in (await rig.call('rooms.list'))['rooms'] if r['id'] == room['id'])['roles']
+    assert [roles[str(i)] for i in ids] == expected
+
+
 async def test_snapshot_schema_is_current_and_secret_free(rig):
     first = rig.service.team_context(0, 'en')
     assert first['count'] == len(first['members']) == 1 and first['self_id'] == 0
