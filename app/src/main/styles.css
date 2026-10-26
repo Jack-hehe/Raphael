@@ -360,8 +360,8 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .chip { display: inline-flex; align-items: center; height: 26px; border-radius: var(--r-lg); border: 1px dashed var(--btn-edge); background: transparent; font-size: var(--fs-xs); color: var(--text); }
 .chip:hover, :where(:root[data-keys]) .chip:focus-within { border-style: solid; border-color: var(--hover-edge); }
 .chip button { display: inline-flex; align-items: center; height: 100%; border: 0; background: transparent; color: inherit; font: inherit; }
-.wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-2); margin-top: var(--sp-4); }
-.wchip { position: relative; display: flex; align-items: center; gap: var(--sp-2); min-height: 46px; padding: var(--sp-2) var(--sp-1) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); border: 0; border-bottom: 1px solid var(--line); background: transparent; min-width: 0; }
+.wgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2); margin-top: var(--sp-4); }
+.wchip { position: relative; display: flex; align-items: center; gap: var(--sp-2); min-height: 46px; padding: var(--sp-2) var(--sp-1) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); border: 1px solid var(--edge); background: var(--panel); min-width: 0; }
 .wchip:hover { border-color: var(--hover-edge); }
 .wchip .spark { display: inline-flex; color: var(--accent-text); }
 .wchip .spark .i { fill: currentColor; }
@@ -521,7 +521,7 @@ body:has(.page-agent:not([hidden])) .toasts { bottom: 112px; }
 .ob-bar-steps i.now { background: var(--accent-text); opacity: 0.5; }
 .ob-body { overflow-x: hidden; overflow-y: auto; display: flex; justify-content: center; padding: var(--sp-4) var(--sp-5); }
 .ob-col { width: 560px; max-width: 100%; min-width: 0; margin: clamp(var(--sp-1), 7vh, 64px) 0 auto; }
-.ob-col h2 { margin: 0; font: 600 var(--fs-h1)/1.25 var(--display); text-align: center; text-wrap: balance; }
+.ob-col h2 { margin: 0; font: 600 28px/1.25 var(--display); text-align: center; text-wrap: balance; }
 .ob-col h2:focus { outline: none; }
 .ob-sub { margin: var(--sp-2) 0 0; color: var(--text-2); text-align: center; text-wrap: balance; }
 .ob-main { margin-top: var(--sp-5); }
@@ -530,9 +530,10 @@ body:has(.page-agent:not([hidden])) .toasts { bottom: 112px; }
 .ob-foot { padding: var(--sp-3) var(--sp-5) var(--sp-5); }
 .ob-actions { width: min(560px, 100%); margin-inline: auto; }
 .ob-foot .btn { min-height: 40px; }
+.ob-foot .btn.pri { flex: 1; }
 .ob-lang { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: var(--sp-3); }
 .ob-lang-label { color: var(--text-2); font-size: var(--fs-sm); }
-.ob-abilities { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--sp-2); }
+.ob-abilities { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
 .ob-ability { display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-width: 0; padding: 10px var(--sp-3); text-align: left; border: 1px solid var(--btn-edge); border-radius: var(--r-md); background: var(--panel); }
 .ob-ability:hover { background: var(--hover); }
 .ob-ability[aria-checked="true"] { border-color: var(--accent-text); background: var(--accent-soft); }

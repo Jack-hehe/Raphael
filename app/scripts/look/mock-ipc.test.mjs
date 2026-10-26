@@ -10,6 +10,15 @@ describe("shared look IPC boundary", () => {
     data.adminQuestions.draft.turn_id = turn_id;
     expect(() => installMock(data, { fixture: { adminApproval: "draft" } }, {})).toThrow("Approval fixture requires its explicit source turn");
   });
+  it("puts running state in the visible formal conversation and preserves quick questions", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { running: true } }, target);
+    const history = conversation_id => target.__TAURI_INTERNALS__.invoke('core_call', { method: 'agent.history.list', params: { member_id: 0, conversation_id } });
+    const turn = (await history(1)).turns[0];
+    expect(turn.status).toBe('running');
+    expect(turn.messages.some(message => message.kind === 'reply')).toBe(false);
+    expect((await history(4)).turns[0].status).toBe('done');
+  });
   it.each([true, false])("settles draft approval in the formal conversation while preserving quick history (%s)", async approved => {
     const target = {};
     installMock(fixture, { fixture: { adminApproval: "draft" } }, target);

@@ -17,8 +17,8 @@ Owner profile/preferences, themes/skins, models/providers, dictation, assistant,
 messaging, data management and About. Usage and MCP have separate maps.
 Subscription accounts share the room row-action menu: disconnect disables a CLI only
 inside Raphael, removes its models, and leaves a framed Connect action. Reconnect reuses
-an existing CLI login. Caption controls have rounded hover/pressed surfaces; Close uses
-the contrasting close/error palette in every skin.
+an existing CLI login. Caption icon controls keep transparent hover/pressed surfaces (R-UI-16). Close uses
+the error foreground; glyph contrast and keyboard focus are checked.
 
 ## How to get to it (user POV)
 
@@ -42,7 +42,7 @@ for persistence. Native provider/model, messaging, import/export, autostart and 
 deletion need isolated real journeys and observable side effects.
 CLI credential cleanup and persisted disconnection are covered by temporary-home core
 tests; look drives the real account menu through the existing IPC boundary. Check all
-caption hover images at full size and keep the driver's centering, margins, pressed,
+caption hover images at full size and keep the driver's centering, margins, transparent pressed,
 tooltip, focus and close-contrast assertions. Native OS minimize/maximize/close and a real
 CLI login remain separate checks; never log out the user's shared CLI account.
 
@@ -55,3 +55,10 @@ Both theme and skin matter; a preview is not the whole app in that skin. Contras
 tests cannot prove every rendered combination. Native settings/provider responses
 are fixtures. Profile is reached through Settings, not a retired owner menu. Keep
 destructive native steps within task authorization and disposable test data.
+
+## UI audit regression coverage
+
+Appearance choices form exactly two card columns at every matrix width (R-UI-30).
+Settings headings omit repeated purpose subtitles (R-UI-02). Model chooser source
+actions retain an 8px gap below the list, including a scrolled full list. The selected
+source scrolls fully into view when opening or switching sources (R-UI-01).

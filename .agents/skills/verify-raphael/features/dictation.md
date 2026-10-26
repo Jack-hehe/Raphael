@@ -67,3 +67,9 @@ The fixture's populated history day is 2026-10-24; the first heatmap cell may ha
 history. Mock devices/status do not prove permissions, STT or global hotkeys. Silence
 must not close recording; only explicit stop/cancel or genuine microphone/STT failure
 may stop it. Preserve password/elevated-window/field-scope/60-second learning safeguards.
+
+## UI audit regression coverage
+
+The rendered audit requires two framed Dictionary card columns and aligned
+shortcut labels/keys at every matrix width. Keyboard navigation retains its selected
+button; focus rings remain reserved for Tab navigation.

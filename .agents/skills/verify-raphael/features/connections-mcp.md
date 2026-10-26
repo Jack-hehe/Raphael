@@ -67,3 +67,9 @@ existing core RPC, sign in, exercise partial consent and refresh, and verify Gma
 and Calendar tool switches and revocation. Home calendar reads only through the
 enabled private calendar_list_events tool. Test a custom local MCP server with
 add/test/edit/paste/discover, a harmless call and removal; stop only that test server.
+
+## UI audit regression coverage
+
+Custom MCP transport uses the shared dropdown (`data-k="conn-type"`); HTTP
+journeys choose the `http` menu item. Custom server deletion asks to delete; managed
+connector disconnection asks to disconnect. Security and secret-storage notices remain.

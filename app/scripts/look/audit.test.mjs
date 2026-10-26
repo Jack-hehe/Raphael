@@ -39,6 +39,70 @@ describe("rendered look checks", () => {
       expect(checkRendered('team-board-space')).toEqual({ check: 'team-board-space', wide: false });
     } finally { vi.unstubAllGlobals(); }
   });
+  it("rejects mismatched adjacent import heights and schedule widths (R-UI-17)", () => {
+    const { window, audit } = productAudit('<div class="mp-add"><input><button class="btn" style="border:1px solid gray">Import</button></div><label class="au-field"><button class="sel">End</button><input class="mb-fin"></label>');
+    const input = window.document.querySelector('.mp-add input');
+    input.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 54, width: 100, height: 44 });
+    const count = window.document.querySelector('.mb-fin');
+    count.getBoundingClientRect = () => ({ left: 10, top: 10, right: 128, bottom: 40, width: 118, height: 30 });
+    expect(audit().productRules.filter(item => item.rule === 'R-UI-17')).toHaveLength(2);
+    input.getBoundingClientRect = count.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects three-column choice grids and accepts two columns (R-UI-30)", () => {
+    const { window, audit } = productAudit('<div class="skin-grid"><div></div><div></div><div></div></div>');
+    expect(audit().productRules.map(item => item.rule)).toContain('R-UI-30');
+    window.document.querySelector('.skin-grid').lastElementChild.getBoundingClientRect = () => ({ left: 10, top: 50, right: 110, bottom: 80, width: 100, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects icon surfaces, incorrect glyph sizing and off-center icons (R-UI-16/19)", () => {
+    const { window, audit } = productAudit('<button class="btn icon" style="border:0;background:gray"><svg class="i"></svg></button>');
+    const button = window.document.querySelector('button'), glyph = button.firstElementChild;
+    glyph.getBoundingClientRect = () => ({ left: 10, top: 10, right: 24, bottom: 24, width: 14, height: 14 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-16', 'R-UI-19', 'R-UI-19']);
+    button.style.background = 'transparent';
+    glyph.getBoundingClientRect = () => ({ left: 52, top: 17, right: 68, bottom: 33, width: 16, height: 16 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects low-contrast selected dates, including hover overrides (R-UI-22)", () => {
+    const { window, audit } = productAudit('<div class="au-month-grid"><button class="btn" aria-pressed="true" style="border:0;color:rgb(30,30,30);background:rgb(40,40,40)">28</button></div>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-22']);
+    window.document.querySelector('button').style.color = 'white';
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects repeated settings subtitles and wrapped shortcut rows (R-UI-02/17)", () => {
+    const { window, audit } = productAudit('<div class="modal-body"><p class="purpose">Settings description</p></div><div class="page-overview"><div class="kc-row"><span class="kc-name">Ask</span><span class="kc-keys">Right Alt + Space</span></div></div>');
+    window.document.querySelector('.kc-keys').getBoundingClientRect = () => ({ left: 10, top: 45, right: 110, bottom: 75, width: 100, height: 30 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-02', 'R-UI-17']);
+  });
+  it("keeps a gap between the model source scrollport and its footer action (R-UI-17)", () => {
+    const { window, audit } = productAudit('<aside><div class="mc-source-list"></div><button class="btn" style="border:1px solid gray">Connect</button></aside>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-17']);
+    window.document.querySelector('button').getBoundingClientRect = () => ({ left: 10, top: 48, right: 110, bottom: 78, width: 100, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects a clipped selected model source (R-UI-01)", () => {
+    const { window, audit } = productAudit('<div class="mc-source-list"><button class="btn mc-source" aria-pressed="true">OpenRouter</button></div>');
+    const selected = window.document.querySelector('button');
+    selected.getBoundingClientRect = () => ({ left: 10, top: 30, right: 110, bottom: 60, width: 100, height: 30 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-01']);
+    selected.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("rejects small onboarding headlines and narrow primary actions (R-UI-37)", () => {
+    const { window, audit } = productAudit('<div class="ob-col"><h2 style="font-size:20px">Welcome</h2></div><div class="ob-actions"><button class="btn pri" style="border:1px solid gray">Start</button></div>');
+    window.document.querySelector('.ob-actions').getBoundingClientRect = () => ({ left: 10, top: 10, right: 410, bottom: 40, width: 400, height: 30 });
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-37', 'R-UI-37']);
+    window.document.querySelector('h2').style.fontSize = '28px';
+    window.document.querySelector('button').getBoundingClientRect = () => ({ left: 10, top: 10, right: 410, bottom: 40, width: 400, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
+  it("requires a vertical onboarding ability checklist (R-UI-35)", () => {
+    const { window, audit } = productAudit('<div class="ob-abilities"><button class="btn" style="border:1px solid gray">Dictate</button><button class="btn" style="border:1px solid gray">Ask</button></div>');
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-35']);
+    window.document.querySelector('.ob-abilities').lastElementChild.getBoundingClientRect = () => ({ left: 10, top: 50, right: 110, bottom: 80, width: 100, height: 30 });
+    expect(audit().productRules).toEqual([]);
+  });
   it("rejects duplicate custom and native tooltips", () => {
     const { audit } = productAudit('<button data-tooltip="Save" title="Save">Save</button><button data-tooltip="Open"><svg><title>Open</title></svg></button><button title="Native">Native</button>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-26', 'R-UI-26']);

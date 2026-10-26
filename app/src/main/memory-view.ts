@@ -83,6 +83,7 @@ const TYPE_KEYS: Record<string, MessageKey> = {
   person: "mem.type.person",
   ongoing: "mem.type.ongoing",
   reference: "mem.type.reference",
+  project: "mem.type.project",
 };
 const tr = t as unknown as (key: MessageKey) => string;
 export const typeLabel = (type: string): string => (TYPE_KEYS[type] ? tr(TYPE_KEYS[type]) : type);

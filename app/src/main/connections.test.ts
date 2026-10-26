@@ -159,8 +159,8 @@ describe("已安裝", () => {
     expect(connectionsHTML(view({ groups: [{ ...notes, status: "unchecked" }] }))).toContain("還沒有讀取工具");
   });
 
-  test("an empty list points at the store, and a search that finds nothing says so", () => {
-    expect(connectionsHTML(view({ groups: [] }))).toContain("到「商店」加入一個");
+  test("empty connections and unmatched searches have concise empty states", () => {
+    expect(connectionsHTML(view({ groups: [] }))).toContain("尚無連線");
     expect(connectionsHTML(view({ search: "zzz" }))).toContain("沒有符合的項目");
     const found = bodyHTML(view({ search: "files" }));
     expect(found).toContain("Files");
@@ -449,19 +449,20 @@ describe("the page of a store service", () => {
 });
 
 describe("the form that connects a server of the user's own", () => {
-  test("takes the place of the tab with transport tabs, multiline fields and test and save actions", () => {
+  test("takes the place of the tab with a transport dropdown, multiline fields and test and save actions", () => {
     const html = connectionsHTML(view({ form: form() }));
     expect(html).toContain("新增 MCP 伺服器");
-    expect(html).toContain('data-conn="form-type"');
+    expect(html).toContain('data-k="conn-type"');
+    expect(html).not.toContain('role="tablist"');
     expect(html).toContain('id="conn-args" rows="4"');
     expect(html).toContain('id="conn-command"');
     expect(html).toContain("只接你信任的程式。");
-    expect(html).toContain("新伺服器預設關閉");
+    expect(html).not.toContain('class="cd-help"');
     expect(html).toContain('data-conn="connect"');
     expect(html).toContain('data-conn="form-cancel"');
     expect(html.indexOf('data-conn="form-cancel"')).toBeLessThan(html.indexOf('data-conn="connect"'));
     expect(html).toContain('class="action-row add-acts is-sticky"');
-    expect(html).toContain('role="tablist"');
+    expect(html).toContain('aria-haspopup="menu"');
     expect(html).not.toContain('role="dialog"');
   });
 

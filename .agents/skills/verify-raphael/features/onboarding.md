@@ -13,7 +13,7 @@ choices to the Home overview. Never reset an installed user's onboarding state.
 ## Driving it with look
 
 ```powershell
-npm run look -- onboarding after-onboarding --theme both --width 1120,720
+npm run look -- onboarding onboarding-abilities onboarding-done after-onboarding --theme both --width 1120,720
 ```
 
 Keep welcome/completed-main-screen PNGs and report. Completion uses actual Next
@@ -29,3 +29,20 @@ Each scene begins fresh. The onboarding variant overrides the ordinary onboarded
 device setting. All-disabled completion proves only that branch. Credentials,
 downloads, permission prompts, ability activation and native persistence remain
 separate checks.
+
+## UI audit regression coverage
+
+The primary footer action fills the available centered action row (R-UI-37),
+including welcome and completion, while secondary actions stay to its left.
+Headings use the 28px onboarding scale. The welcome and completion screens omit redundant
+subtitles; essential tutorial guidance remains visible (R-UI-02/37).
+
+`onboarding-abilities` and `onboarding-done` capture the intermediate choice and
+completion screens. Shared rendered checks reject small headlines and narrow
+primary actions, with failing bad-state coverage in audit.test.mjs.
+
+UI hand-off also runs these named scenes at 1920x1080 in both themes, as
+required by the shared guardian hand-off gate.
+
+Ability choices form one vertical checklist (R-UI-35), including at full-screen
+widths. The rendered audit rejects side-by-side ability choices.

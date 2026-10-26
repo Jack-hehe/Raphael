@@ -18,9 +18,11 @@ export function installMock(fixture, config = {}, target = window) {
     adminTurn.text = "";
   }
   if (variant.running) {
-    data.turns[0].status = "running";
-    data.turns[0].messages = data.turns[0].messages.filter(message => message.kind !== "reply");
-    data.turns[0].text = "";
+    const formalConversation = data.conversations.find(conversation => conversation.member_id === 0 && conversation.is_default);
+    const runningTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === formalConversation?.id);
+    runningTurn.status = "running";
+    runningTurn.messages = runningTurn.messages.filter(message => message.kind !== "reply");
+    runningTurn.text = "";
   }
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
   if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);

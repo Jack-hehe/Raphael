@@ -7,6 +7,7 @@ import { askGroupName, confirmDelete } from "../member-dialogs";
 import { openActions } from "../member-column";
 import { openGroupChat } from "../group-chats";
 import { faceHTML } from "../members";
+import { messageTooltip } from "../message-tooltip";
 import { modelMark } from "../provider-marks";
 import { openMemberThread } from "../team-navigation";
 import { textPositionRect } from "../text-position";
@@ -20,6 +21,7 @@ export function createTeamPage(app: AppContext): Page {
   el.innerHTML = `<header class="page-head"></header><div class="team-board-scroll"><div class="team-board"></div></div><div class="team-bottom"><div class="team-composer"></div><div class="team-zoom"></div></div>`;
   const composer = createChatComposer({ placeholder: () => t("team.composer"), send });
   el.querySelector(".team-composer")!.append(composer.el);
+  const hideTooltip = messageTooltip(el);
   const board = el.querySelector<HTMLElement>(".team-board")!, input = composer.input;
   let list: MembersList = { members: [], groups: [] }, model = "", zoom = 1, visible = false, loads = 0, sending = false;
   let requestId: string | undefined, retryText = "";
@@ -87,5 +89,5 @@ export function createTeamPage(app: AppContext): Page {
   board.addEventListener("drop", e => { const g = (e.target as Element).closest<HTMLElement>("[data-team-group]"); if (!g) return; e.preventDefault(); const id = Number(e.dataTransfer?.getData("application/x-raphael-member")); if (!id || !list.members.some(m => m.id === id)) return; void api.membersUpdate(id, { group_id: g.dataset.teamGroup === "none" ? null : Number(g.dataset.teamGroup) }).then(() => load()).catch(error => toaster.info(describeError(error))); });
   app.onEvent(event => { if (visible && ["MembersChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
   onLocaleChange(() => { if (visible) { draw(); void load(); } });
-  return { id: "team", el, show() { visible = true; draw(); void load(); }, hide() { visible = false; loads++; } };
+  return { id: "team", el, show() { visible = true; draw(); void load(); }, hide() { visible = false; loads++; hideTooltip(); } };
 }

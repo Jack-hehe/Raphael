@@ -2,6 +2,13 @@
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
+  if (name === "conversation-running") {
+    const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
+    require(calls.some(call => (call.params?.member_id ?? 0) === 0 && (call.params?.conversation_id ?? 1) === 1), "R-UI-32: running turn belongs to the open formal conversation");
+    require([...document.querySelectorAll('.ra .work-toggle')].some(visible), "R-UI-32: running progress is visible");
+    require(![...document.querySelectorAll('.ra .chat-message[data-expandable]')].some(visible), "R-UI-32: completed answer is absent while running");
+    return { check: name, running: true };
+  }
   if (name === "live-scenario-owner-view") {
     const answers = [...document.querySelectorAll('.ra [data-expandable] > .ans')].filter(visible);
     require(answers.length === 1, "one owner-visible terminal answer");

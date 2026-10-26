@@ -173,8 +173,6 @@
 .cs-dash { padding: 0 var(--sp-1); color: var(--text-3); font: 600 var(--fs-h1)/1 ui-monospace, "Cascadia Mono", Consolas, monospace; }
 .cs-device-acts { gap: var(--sp-2); }
 .mcp-lines { width: 100%; min-height: 96px; padding: var(--sp-2) var(--sp-3); resize: vertical; font-family: ui-monospace, monospace; white-space: pre; }
-.mcp-tabs { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
-.mcp-tabs [aria-selected="true"] { background: var(--selected); border-color: var(--focus); }
 .mcp-row-actions { display: flex; align-items: center; gap: var(--sp-1); }
 .modal-body:has(.cs-form) { display:flex; flex-direction:column; overflow:hidden; }
 .cs-form { display:flex; flex-direction:column; flex:1; min-height:0; }

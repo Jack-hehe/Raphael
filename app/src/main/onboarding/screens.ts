@@ -297,7 +297,7 @@ export function doneHTML(v: DoneView): string {
   const rows = v.rows.map((r) => `<div class="row"><div class="lbl"><div class="t">${esc(r.label)}</div></div><div class="ctl">${st(r.state, r.text)}</div></div>`).join("");
   const shortcut = (binding: string, label: string): string => `<div class="ob-shortcut">${capsHTML(binding)}<span>${esc(label)}</span></div>`;
   return (
-    head(t("onboarding.doneTitle"), v.noKey ? t("onboarding.doneNoKey") : t("onboarding.doneLine")) +
+    head(t("onboarding.doneTitle"), v.noKey ? t("onboarding.doneNoKey") : "") +
     `<div class="ob-main">${rows ? `<div class="list">${rows}</div>` : ""}` +
     `<div class="ob-shortcuts">${shortcut(v.dictationKeys, t("home.020"))}${shortcut(v.agentKeys, t("settings.agentKeys"))}${v.pasteKeys ? shortcut(v.pasteKeys, t("home.021")) : ""}<div class="ob-shortcut">${keys(["Esc"])}<span>${esc(t("common.cancel"))}</span></div></div></div>`
   );
