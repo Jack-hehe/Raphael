@@ -217,8 +217,9 @@ async def run(pair, output, *, max_turns=200, seconds=90, client=None, brains=No
                 continue
             for brain in BRAINS:
                 model = pair[brain]
-                contrast = next(pair[other] for other in BRAINS if other != brain)
-                if api_only and brain_ref(contrast):
+                # A run on one brain has no formal side for S16, which then SKIPs.
+                contrast = next((pair[other] for other in BRAINS if other != brain), None)
+                if api_only and contrast is not None and brain_ref(contrast):
                     contrast = None  # API-only runs start no CLI, not even as S16's formal side
                 if api_only and brain == "C" and cell.driver:
                     result = blank(cell, brain, model, run_id, head)
