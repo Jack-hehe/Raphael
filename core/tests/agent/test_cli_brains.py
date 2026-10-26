@@ -436,6 +436,29 @@ for line in sys.stdin:
     assert all("PRIVATE-DIAGNOSTIC" not in event.text and "429" not in event.text for event in events)
 
 
+@pytest.mark.parametrize("shape,expected", [("limited", "rate_limited"), ("exhausted", "quota"), ("other", "cli_failed")])
+async def test_claude_api_429_is_a_rate_limit_unless_the_plan_window_is_rejected(tmp_path, monkeypatch, shape, expected):
+    from raphael_core.agent.cli.drivers import Driver
+    from .test_quota import NOW
+
+    monkeypatch.setattr("raphael_core.agent.cli.drivers.wall_clock_ms", lambda: NOW)
+    script = tmp_path / "claude_429.py"
+    script.write_text('''import json, sys
+shape, reset = sys.argv[1:3]
+def send(packet): print(json.dumps(packet), flush=True)
+json.loads(sys.stdin.readline())
+if shape == "exhausted":
+    send({"type":"rate_limit_event", "rate_limit_info":{"status":"rejected", "rateLimitType":"five_hour", "resetsAt":int(reset)}})
+send({"type":"result", "subtype":"success", "is_error":True, "terminal_reason":"api_error",
+      "api_error_status":500 if shape == "other" else 429, "result":"PRIVATE-DIAGNOSTIC"})
+''', encoding="utf-8")
+    driver = Driver("claude", [sys.executable, str(script), shape, str(NOW // 1000 + 3600)])
+    events = [event async for event in driver.run(user="hello", system="persona", endpoint="http://127.0.0.1:1/mcp",
+                                                 token="ephemeral", permission=None, cwd=str(tmp_path))]
+    assert (events[-1].kind, events[-1].text) == ("error", expected)
+    assert all("PRIVATE-DIAGNOSTIC" not in event.text for event in events)
+
+
 async def test_discovery_reports_changes_without_reading_credentials(tmp_path, monkeypatch):
     from pathlib import Path
     script = tmp_path / "version.py"

@@ -244,7 +244,8 @@ class Driver:
                     yield Event("session", self.session)
                 yield Event("usage", data=packet.get("usage", {}))
                 if packet.get("is_error") or packet.get("subtype") != "success":
-                    yield self._event("error", "cli_failed")
+                    # api_error_status is the HTTP status of the API error that ended the turn.
+                    yield self._event("error", "rate_limited" if packet.get("api_error_status") == 429 else "cli_failed")
                 else:
                     yield self._event("final", packet.get("result") or "")
                 return
