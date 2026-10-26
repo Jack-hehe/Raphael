@@ -161,8 +161,8 @@ def check_reply(text, scenario):
         reasons.append("english_sentence_in_zh_TW_reply")
     from opencc import OpenCC
     # Preserve product terms: OpenCC otherwise rewrites permission and primary-contact
-    # wording as a regional synonym or an operating-system window.
-    traditional = text.replace("權限", "").replace("主要窗口", "")
+    # wording as a regional synonym or an operating-system window, and a code (代碼) as program code.
+    traditional = text.replace("權限", "").replace("主要窗口", "").replace("代碼", "")
     if OpenCC("s2twp").convert(traditional) != traditional:
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):

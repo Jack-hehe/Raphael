@@ -348,7 +348,7 @@ class RpcDriver:
                 reasons.append('immediate_start')
             if task['scope']!=('room' if room else 'exchange') or task['model_ref']!=self.model:
                 reasons.append('work_scope_or_model')
-            if task['room_id']!=room_id or self.nonce not in (task['report_detail'] or task['report_text'] or ''):
+            if task['room_id']!=room_id or self.nonce not in (task['report_text'] or '')+(task['report_detail'] or ''):
                 reasons.append('result_destination_or_nonce')
             if not self.app._conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result' AND disposition='delivered'",(task['id'],)).fetchone():
                 reasons.append('result_not_delivered')

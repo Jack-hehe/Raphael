@@ -19,6 +19,7 @@ from test_guardian_scenarios import FakeClient
 
 def test_owner_view_preserves_the_product_primary_contact_term():
     assert not check_reply('主要窗口與幕僚長是拉斐爾。', Scenario('roster', ''))
+    assert not check_reply('已讀取測試信件，本次測試代碼是 f44fdc358cb1。', Scenario('room-work', ''))
 
 
 class P02Brain(FakeClient):
