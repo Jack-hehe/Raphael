@@ -323,8 +323,9 @@ class RpcDriver:
         await self.install_fixture()
         target = ids[1]
         prompt = (f'請用 handoff 立即交給信件助理（member_id={target}），stage_id=mail-triage，'
-            f'工作是用 Guardian 讀取測試信件並回報本次代碼。來源文件寫「明早截止、明天中午提交」，仍現在做；'
-            f'done_when=讀取工具成功並回報測試代碼。不要建立例行任務。')
+            # 「本次代碼」 alone let members report the mail's receipt hash instead of its nonce live.
+            f'工作是用 Guardian 讀取測試信件並回報信中的 nonce。來源文件寫「明早截止、明天中午提交」，仍現在做；'
+            f'done_when=讀取工具成功並回報信中的 nonce。不要建立例行任務。')
         room_id = None
         if room:
             room_id = (await self.app.call('rooms.create',{'name':'立即工作驗收','member_ids':[0,target]}))['room']['id']
