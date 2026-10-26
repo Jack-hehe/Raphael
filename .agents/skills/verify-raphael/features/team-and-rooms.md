@@ -15,7 +15,8 @@ Raphael's wrap-up names the unfinished reply. A blocked reply is a centred line 
 message, never a note above the composer, and names why in the window language, CLI rate limits, quota, sign-in, busy
 and errors included. Completed sources recover once without replaying work.
 A meeting is a room_meeting agenda or the owner's first message after the room's parts are saved; later owner messages
-are answered as usual. Room-only moderator/pro/con roles run two rounds: each turn is told its round and who still has to speak, an addressed
+are answered as usual. The moderator always opens round one: the @ addresses in a meeting's own message (an agenda's
+「@拉斐爾 作最後結論」) are not calls to speak first. Room-only moderator/pro/con roles run two rounds: each turn is told its round and who still has to speak, an addressed
 member takes their planned place in the open round, the moderator closes after the second, and Raphael called on then
 gives the single conclusion. During a moderated meeting no one hands off work, and no hand-off ever goes back to a
 colleague waiting upstream on it. Empty and (pass) replies stay hidden.
@@ -31,7 +32,8 @@ through a hover/focus more button. New rooms choose 2-6 members including requir
 and a default responder. Their generated name follows selection until the owner edits it.
 Raphael cannot be deselected. Legacy six-member rooms without Raphael retain every member
 and require owner adjustment before sending. Room turns and exchanges remain outside private
-history, preview, search, badges and worker context. Reply chips use server-derived source
+history, preview, search, badges and worker context. A room's turn and work one colleague hands another read the
+team's shared notes, never a member's own notes or private chat; Guardian S13 checks both directions live. Reply chips use server-derived source
 authors, including the owner; missing sources display an unavailable label.
 Reply on a member message directs the next owner message to that member; the composer
 shows the recipient and lets the owner cancel the reply. Stop immediately cancels the task tree and blocks queued recipients. Completed actions remain; a deterministic chief summary closes the stopped generation. A new owner message immediately invalidates the previous task generation and blocks its queued reply intents; completed actions are retained.
