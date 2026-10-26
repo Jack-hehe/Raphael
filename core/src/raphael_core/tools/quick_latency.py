@@ -31,6 +31,17 @@ QUESTIONS = ("Open YouTube.", "What is two plus two?", "What is on my calendar t
 
 
 class RecordingBackground:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, **kwargs):
+        # A delegated question is recorded as a task and never run.
+        self.submitted.append(kwargs)
+        return len(self.submitted)
+
+    def attach_turn(self, *args):
+        pass
+
     def brief_for_assistant(self, *args, **kwargs):
         return []
 
