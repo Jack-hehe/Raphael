@@ -1189,7 +1189,6 @@ export const zhTW = {
   "rooms.owner": "你",
   "rooms.sourceMissing": "來源訊息已無法取得",
   "rooms.adjustMembers": "調整群組成員",
-  "rooms.wrapup": "討論收束",
   "rooms.wrapupConclusion": "結論",
   "rooms.wrapupDecision": "待你決定",
   "rooms.wrapupNext": "下一步",

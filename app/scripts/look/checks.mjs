@@ -302,13 +302,17 @@ export function checkRendered(name) {
     const crown = document.querySelector('.au-room-crown').getBoundingClientRect();
     const face = document.querySelector('.au-room-crown').parentElement.getBoundingClientRect();
     require(crown.right <= face.right && crown.left >= face.left, "the chief badge stays inside its participant slot");
-    require(document.querySelectorAll('.au-room-role').length >= 3, "member roles remain visible");
+    // Messages carry face, name and reply chip only; roles stay with the faces of the header and the member column.
+    require(document.querySelectorAll('.au-room-participant[data-tooltip*=" · "]').length === 3, "header faces name each member and role");
+    for (const meta of document.querySelectorAll('.au-room-meta')) require([...meta.children].every(child => child.matches('.au-room-author, .au-room-reply')), "no role tag above a message");
     return { check: name, replyChips: document.querySelectorAll('.au-room-reply').length };
   }
   if (name === "room-wrapup") {
     const card = document.querySelector('.au-room-wrapup');
-    require(visible(card), "wrap-up is a distinct card");
-    require(getComputedStyle(card.querySelector('.ans')).borderLeftWidth === '3px', "the wrap-up retains its card accent");
+    require(visible(card), "the wrap-up is visible");
+    const answer = getComputedStyle(card.querySelector('.ans')), ordinary = getComputedStyle(document.querySelector('.au-room-message:not(.au-room-wrapup) .ra .ans'));
+    require(answer.borderLeftWidth === '0px' && answer.borderTopWidth === '0px' && answer.backgroundColor === ordinary.backgroundColor && answer.paddingLeft === ordinary.paddingLeft, "the wrap-up is Raphael's ordinary message, not a bordered card");
+    require(card.querySelector('.au-room-author')?.textContent === '拉斐爾' && visible(card.querySelector('.ra-face .av')) && !/討論收束/.test(card.textContent), "face and name lead the wrap-up like every room message");
     require([...card.querySelectorAll('.au-room-wrapup-section h3')].map(heading => heading.textContent).join('|') === '結論|待你決定|下一步', "wrap-up has three labelled sections");
     require(card.querySelectorAll('.au-room-wrapup-owner').length === 3, "next steps style each named owner");
     for (const text of ['小晴：', '小森：', '拉斐爾：']) require(card.textContent.includes(text), `wrap-up preserves ${text}`);

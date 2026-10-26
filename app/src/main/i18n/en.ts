@@ -1190,7 +1190,6 @@ export const en = {
   "rooms.owner": "You",
   "rooms.sourceMissing": "Source unavailable",
   "rooms.adjustMembers": "Adjust room members",
-  "rooms.wrapup": "Wrap-up",
   "rooms.wrapupConclusion": "Conclusion",
   "rooms.wrapupDecision": "Your decision",
   "rooms.wrapupNext": "Next steps",

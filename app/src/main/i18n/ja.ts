@@ -1190,7 +1190,6 @@ export const ja = {
   "rooms.owner": "あなた",
   "rooms.sourceMissing": "返信元を表示できません",
   "rooms.adjustMembers": "グループメンバーを調整",
-  "rooms.wrapup": "議論のまとめ",
   "rooms.wrapupConclusion": "結論",
   "rooms.wrapupDecision": "決めてほしいこと",
   "rooms.wrapupNext": "次のステップ",
