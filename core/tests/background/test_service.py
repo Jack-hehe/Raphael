@@ -144,6 +144,7 @@ async def test_the_turn_of_the_history_that_handed_the_task_over_is_completed_wi
     )  # fmt: skip
     assert done.cost_usd == pytest.approx(0.0001 + 0.005)
     assert done.question == TASK_TEXT
+    assert done.model == "fake/model"
 
 
 async def test_retracting_a_running_turn_cannot_write_its_late_report_into_a_reused_id(make_rig, conn):

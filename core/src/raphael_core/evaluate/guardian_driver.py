@@ -314,8 +314,10 @@ class RpcDriver:
         else:
             return ["not implemented: " + cell.dependency], []
         if cell.driver in ('immediate-room-work','short-wrapup','task-stop'):
-            # This owner entered through rooms.send; do not invent a private conversation.
-            turns = [{'source':'room','scope':'room','status':result.get('status'),'text':result.get('text','')}]
+            # This owner entered through rooms.send; do not invent a private conversation. The room's
+            # turns are what the owner saw, each with the model that answered it.
+            turns = [{'source':'room','scope':'room',**dict(row)} for row in self.app._conn.execute(
+                "SELECT id,member_id,status,text,model FROM agent_turns WHERE scope='room' ORDER BY id")]
             owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
         else:
             # A member's own conversation is the owner's view when the owner spoke to that member.

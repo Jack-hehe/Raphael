@@ -319,7 +319,7 @@ class RoomsService:
             with self._conn:
                 turn=self._conn.execute("INSERT INTO agent_turns(created_at_ms,session_id,question,route,prefix,text,status,source,member_id,scope,room_id,thread_id) VALUES (?,?,'','room','','','running','room',0,'room',?,?)",
                     (self._now(),f'room-stop:{origin}',room_id,owner['thread_id'])).lastrowid
-                self._history.publish_terminal(turn,prefix='',text=text,detail=None,status='done',cost_usd=0,replies=[text])
+                self._history.publish_terminal(turn,prefix='',text=text,detail=None,status='done',cost_usd=0,replies=[text],model=None)
                 self._conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,origin_message_id,kind) VALUES (?,?,0,?,?,?,?,'wrapup')",
                     (room_id,owner['thread_id'],text,self._now(),turn,origin))
                 self._conn.execute('UPDATE room_exchanges SET wrapup_sent=1,active_turn=NULL WHERE origin_message_id=?',(origin,))

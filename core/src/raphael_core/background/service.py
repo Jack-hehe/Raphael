@@ -1745,8 +1745,10 @@ class BackgroundService:
                 )
             def publish():
                 if self._has_linked_turn(task):
+                    # A room makes its turns before any model answers; the one that did is named here.
                     self._history.publish_terminal(task.turn_id,prefix=prefix,text=text,detail=detail,
                         status=_TURN_STATUS.get(state,'error'),cost_usd=cost,
+                        model=run.ledger.model if run is not None else None,
                         replies=[compose(prefix,line,None) for line in replies or [text] if line])
             self._store.finish(task.id, state, prefix=prefix, text=text, detail=detail, reason=reason,publish=publish)
             if run is not None:

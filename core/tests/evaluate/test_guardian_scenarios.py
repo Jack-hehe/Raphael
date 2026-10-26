@@ -70,8 +70,10 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
     driver=RpcDriver(tmp_path,model,Client([]),Budget(40),brains=FakeBrains(tmp_path) if brain=='cli' else None)
     driver.app.background._host=WorkerHost(connect=Links(),grace_s=.3)
     try:
-        reasons,_=await asyncio.wait_for(driver.execute(selected(identifier)),10)
+        reasons,turns=await asyncio.wait_for(driver.execute(selected(identifier)),10)
         assert not reasons,reasons
+        # Live, a room cell's owner view held no model, so the Codex brain could never pass it.
+        assert {turn.get('model') for turn in turns}=={model},turns
         assert len(driver.recorder.receipts)==1
         assert driver.app._conn.execute("SELECT COUNT(*) FROM worker_tasks WHERE mode='work'").fetchone()[0]==1
         if brain=='cli':
