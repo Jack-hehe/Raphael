@@ -8,7 +8,7 @@ export const ja = {
   "handoff.queued": "待機中", "handoff.running": "実行中", "handoff.waiting": "結果待ち",
   "card.connect": "接続", "card.reconnect": "再接続", "card.retry": "再試行", "card.cancel": "キャンセル",
   "card.openConnections": "接続設定を開く",
-  "card.pending": "接続するとこの作業を続けます", "card.expiredAuth": "認証の期限が切れました。再接続すると続けます",
+  "card.pending": "接続するとこの作業を続けます", "card.expiredAuth": "認証の期限が切れました",
   "card.authorizing": "ブラウザでのサインインを待っています…", "card.connected": "接続済み · ツール {p0} 個",
   "card.reconnected": "再接続済み · ツール {p0} 個", "card.cancelled": "サインインをキャンセルしました",
   "card.expired": "期限切れのため、この作業は続行されませんでした", "card.denied": "アクセスを拒否しました",

@@ -66,7 +66,7 @@ describe("a turn with a card", () => {
     const html = turnHTML(resumed, emptyTimelineState(), false, LOOK);
     expect(html).not.toContain("owner-message");
     expect(html).toContain('data-resumed="8"');
-    expect(visible(resumedLineHTML(resumed))).toBe("已連結 Gmail ，繼續原本的工作");
+    expect(visible(resumedLineHTML(resumed))).toBe("Gmail 已連結，繼續原本的工作");
     expect(html).toContain(SERVICE_ICONS.gmail.path);
   });
 });

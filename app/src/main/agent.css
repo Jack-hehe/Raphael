@@ -231,7 +231,7 @@
 .media-pdf-frame { display: block; width: 100%; height: 100%; border: 0; }
 
 /* A connector card (connector-card.ts): the app's bare mark, its name and sign-in state, its one action. */
-.connector-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: calc(10px + 4 * var(--pa-u)); row-gap: var(--sp-2); justify-self: start; width: min(calc(400px + 100 * var(--pa-u)), 100%); padding: calc(8px + 3 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border-radius: var(--r-lg); background: var(--panel); }
+.connector-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: calc(10px + 4 * var(--pa-u)); justify-self: start; width: min(calc(300px + 80 * var(--pa-u)), 100%); padding: calc(8px + 3 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border-radius: var(--r-lg); background: var(--panel); }
 .connector-card > .mono { width: 28px; height: 28px; }
 .cc-meta { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; }
 .cc-name { font-size: var(--pa-fs-d); font-weight: 600; line-height: 1.35; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -241,6 +241,7 @@
 .cc-done .i { width: 16px; height: 16px; }
 .connector-card[data-card-state="failed"] .cc-state, .connector-card[data-card-state="expired"] .cc-state { color: var(--text-3); }
 .cc-actions { display: flex; justify-content: flex-end; }
+.event-line > .mono { width: 16px; height: 16px; }
 
 /* image lightbox */
 .media-lightbox .lb-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: min(860px, 100%); max-height: 100%; padding: var(--sp-3); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--pop); }
@@ -450,8 +451,6 @@
   .ra { max-width: 100%; }
   .ask-card { grid-template-columns: var(--pa-ask-face) minmax(0, 1fr); }
   .ask-row { grid-column: 1 / -1; justify-content: flex-end; }
-  .connector-card { grid-template-columns: auto minmax(0, 1fr); }
-  .cc-actions { grid-column: 1 / -1; }
 }
 
 @media (max-height: 860px) {

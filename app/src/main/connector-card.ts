@@ -72,7 +72,7 @@ export function connectorCardHTML(card: ConnectorCard): string {
 
 /** The cards a turn showed, below what it said. */
 export function connectorCardsHTML(turn: AgentTurn): string {
-  return (turn.connectors ?? []).map(card => `<div class="chat-message" data-message="connector">${connectorCardHTML(card)}</div>`).join("");
+  return (turn.connectors ?? []).map(connectorCardHTML).join("");
 }
 
 /** The brand names of the apps (`connectors/apps.py`), never translated. */
