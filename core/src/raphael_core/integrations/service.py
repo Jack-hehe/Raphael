@@ -84,6 +84,10 @@ def _not_saved(exc: OSError) -> RpcError:
     return RpcError(INTERNAL_ERROR, "Could not save the plugins")
 
 
+class NoSuchSecret(LookupError):
+    """A secret that no connection of the owner's declares (any more): it is not kept."""
+
+
 def _str(params: dict, name: str) -> str:
     value = params.get(name)
     if not isinstance(value, str) or not value:
@@ -629,6 +633,41 @@ class IntegrationsService:
                         "tools": len(entry.enabled_tools) if entry.enabled and entry.status == "ACTIVE" else 0}
                        for entry in self.managed.store.connectors.values()]
         return result
+
+    def missing_secrets(self, ref: str) -> tuple[ServerConfig, list[tuple[str, str]]] | None:
+        """The connection of the owner's own that `ref` names (its id, else its name), and which of
+        the secrets it declares the vault holds no value for, as (kind, name) in the order they are
+        declared; None when there is no such connection. Only names are read here, never a value;
+        a vault that cannot be read raises, since unknown is not missing."""
+        servers = [server for server in self._config.servers() if not server.managed_by]
+        server = next((s for s in servers if s.id == ref), None) or next(
+            (s for s in servers if s.name.casefold() == ref.strip().casefold()), None
+        )
+        if server is None:
+            return None
+        declared = [("env", key) for key in server.env] + [("header", key) for key in server.headers]
+        return server, [(kind, key) for kind, key in declared if self._vault.get(secret_name(server.id, kind, key)) is None]
+
+    def fill_secret(self, server_id: str, kind: str, key: str, value: str) -> None:
+        """Keep the value of a secret a connection of the owner's declares, in the vault and nowhere
+        else, and forget what the connection's last failure said: its next call is made with it.
+        NoSuchSecret when the connection or the secret is not declared; SecretTooLong for a value the
+        vault cannot hold; any other failure is the vault's, whose message could hold anything.
+
+        An Authorization header given as a bare token is kept as a bearer, which is what a token
+        is for there; a value with a scheme in it (a space) is kept as it was typed."""
+        server = self._config.get(server_id)
+        if server is None or server.managed_by:
+            raise NoSuchSecret(kind)
+        declared = server.env if kind == "env" else server.headers if kind == "header" else []
+        if key not in declared:
+            raise NoSuchSecret(kind)
+        if kind == "header" and key.casefold() == "authorization" and not any(c.isspace() for c in value):
+            value = "Bearer " + value
+        self._vault.set(secret_name(server.id, kind, key), value)
+        self._connector.invalidate(server.id)  # a connection kept open was made without it
+        self._failure.pop(server.id, None)
+        self._changed()
 
     async def _toolsets(self, params: dict) -> dict:
         return {"groups": [self._group(server) for server in self._config.servers()]}
