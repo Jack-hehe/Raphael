@@ -304,7 +304,7 @@ class RpcDriver:
             return ["not implemented: " + cell.dependency], []
         if cell.driver in ('immediate-room-work','short-wrapup','task-stop'):
             # This owner entered through rooms.send; do not invent a private conversation.
-            turns = [{'source':'room','scope':'room','text':result.get('text','')}]
+            turns = [{'source':'room','scope':'room','status':result.get('status'),'text':result.get('text','')}]
             owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
         else:
             turns, owner_reasons = await self.owner_view()

@@ -355,6 +355,30 @@ async def test_unknown_api_cost_is_null_instead_of_fake_zero(tmp_path):
     assert result["cost"]["amount"] is None and result["cost"]["source"] == "unavailable"
 
 
+async def test_a_room_cell_reports_its_result_through_the_suite(tmp_path, monkeypatch):
+    # Room cells return a room view, not owner turns; capturing it once ended the whole live suite.
+    from raphael_core.background.host import WorkerHost
+    from raphael_core.evaluate import guardian_suite
+    from background.conftest import Links
+
+    class LinkedDriver(RpcDriver):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.app.background._host = WorkerHost(connect=Links(), grace_s=.1)
+
+    class Client(FakeClient):
+        async def chat_tools(self, **kwargs):
+            self.turns = iter([("已核對目前沒有交付成果。", [])])
+            return await super().chat_tools(**kwargs)
+
+    monkeypatch.setattr(guardian_suite, "RpcDriver", LinkedDriver)
+    result = await run_cell(selected("S07.short-wrapup"), "A", "fake/model", tmp_path, client=Client([]),
+                            brains=None, budget=Budget(40), seconds=15, run_id="run", head="head",
+                            registry=await inventory())
+    assert result["status"] == "PASS", result["reason"]
+    assert json.loads((tmp_path / "owner-view.json").read_text(encoding="utf-8"))["turns"][0]["status"] == "done"
+
+
 async def test_missing_budget_and_brain_skip_but_unbuilt_contract_fails(tmp_path):
     registry = await inventory()
     for model, budget, reason in [(None, Budget(2), "configured brain unavailable"), ("fake/model", Budget(0), "total_turn_cap")]:

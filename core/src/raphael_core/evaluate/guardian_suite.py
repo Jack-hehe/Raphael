@@ -88,7 +88,7 @@ def capture(driver, turns, result, directory, registry):
     evidence = Path(directory) / "owner-view.json"
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text(json.dumps({"turns": [{"id": turn.get("id"), "conversation_id": turn.get("conversation_id"),
-                         "member_id": turn.get("member_id"), "status": turn["status"],
+                         "member_id": turn.get("member_id"), "status": turn.get("status"),
                          "text_digest": digest(turn.get("text", "")),
                          "message_kinds": [message.get("kind") for message in turn.get("messages", [])]}
                         for turn in turns], "receipts": driver.recorder.receipts,
@@ -146,7 +146,10 @@ async def run_cell(cell, brain, model, directory, *, client, brains, budget, sec
         if driver is not None:
             if budget.capped:
                 result.update(status="SKIP", reason="total_turn_cap", assertions=[])
-            capture(driver, turns, result, directory, registry)
+            try:
+                capture(driver, turns, result, directory, registry)
+            except Exception as error:  # evidence for one cell must not end the whole suite
+                result.update(status="FAIL", reason="capture:" + type(error).__name__, assertions=[])
             result["approvals"] = driver.approvals
             result["timings"]["first_response_ms"] = driver.transport.first_response_ms
             if brain == "A" and driver.transport.models:
