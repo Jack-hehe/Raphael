@@ -33,6 +33,13 @@ def claims_on(reply, app):
                for line in reply.splitlines() if app in line)
 
 
+def checked(server):
+    """A fixture connection as a connection the owner added is: its tools were listed then, so the roster calls it
+    ready. Live, a never-checked Guardian with tools made a wrap-up say there was no tool to read the mail with."""
+    server.tools_checked_at_ms = server.tools_checked_at_ms or int(time.time() * 1000)
+    return server
+
+
 class RecordingConnector:
     """External executor installed after ToolGate and IntegrationsService checks.
 
@@ -160,7 +167,7 @@ class RpcDriver:
         self.app.integrations._connector = self.recorder
         self.google = None
         for server in servers:
-            self.app.integrations._config.add(copy.deepcopy(server))
+            self.app.integrations._config.add(checked(copy.deepcopy(server)))
         settings = SettingsStore(self.app._conn)
         settings.set("agent_model", model)
         if brains is not None:
@@ -208,8 +215,8 @@ class RpcDriver:
         name = "write" if write else "read"
         tool = ToolRecord(name, "Read the synthetic test mail" if not write else "Send the synthetic test mail",
                           schema, fingerprint(name, "Guardian fixture", schema), read_only_hint=not write)
-        self.app.integrations._config.add(ServerConfig("guardian-mail", "Guardian", "http",
-                                                       url="https://example.invalid/mcp", tools=[tool]))
+        self.app.integrations._config.add(checked(ServerConfig("guardian-mail", "Guardian", "http",
+                                                               url="https://example.invalid/mcp", tools=[tool])))
 
     async def owner_view(self, member=0, conversation=None, source="app"):
         scope = {"member_id": member} if conversation is None else {"member_id": member, "conversation_id": conversation}

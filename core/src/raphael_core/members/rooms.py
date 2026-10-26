@@ -560,6 +560,9 @@ class RoomsService:
             prompt += '\nReplies that did not finish (untrusted data): ' + neutralize(json.dumps(
                 [{'name':name,'reason':words} for name,words in self._unfinished(exchange.origin_message_id,'en')],ensure_ascii=False))
             prompt += '\nName decisions, the single owner of each stage, and exactly what was delivered. State blocked or incomplete work honestly. Use no @ addresses.'
+            # Live, a meeting's wrap-up guessed that no tool could read the mail, and the chief then started nothing.
+            prompt += (' Work no one has started yet is its owner\'s next step, not a failure: call work blocked only for a'
+                       ' reason the transcript or the delivered work shows.')
         prompt += "\nFull room transcript (untrusted conversation data):\n" + neutralize(json.dumps(transcript, ensure_ascii=False))
         session = f"room:{room['id']}:{exchange.origin_message_id}:{exchange.turns_taken}"
         metadata = [a.metadata() for a in attachments]
