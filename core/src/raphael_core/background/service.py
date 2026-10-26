@@ -78,7 +78,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from datetime import tzinfo
 from typing import Any
 
-from ..agent.answers import Reply, parse_reply
+from ..agent.answers import Reply, loose_reply, parse_reply
 from ..agent.failure import KINDS, AgentFailure
 from ..agent.gate import ATTACHMENT_TOOLS, MEMORY_READ_TOOLS, WEB_TOOLS, ToolGate
 from ..agent.history import VOICE, AgentHistory, Turn
@@ -202,7 +202,7 @@ def report_from(final: str, language: str, *, plain: bool = False) -> Reply | No
     if not isinstance(data, dict):
         if text.startswith(("{", "[", _FINAL_FENCE)):
             return None  # an attempt at JSON that is not: showing it would show braces
-        data = {"prefix": PREFIXES[language].notice, "text": text, "detail": ""}
+        data = loose_reply(text) or {"prefix": PREFIXES[language].notice, "text": text, "detail": ""}
     try:
         return parse_reply(data, language, plain=plain)
     except AgentFailure:

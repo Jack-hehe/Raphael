@@ -15,7 +15,7 @@ from ..brain.providers.base import ModelProvider
 from ..brain.textnorm import public_line
 from ..background.run import estimate_cost
 from ..worker.loop import Call, Limits, Outcome, Stop, ToolOutcome, Turn, run_task
-from .answers import Reply, parse_reply
+from .answers import Reply, loose_reply, parse_reply
 from .failure import AgentFailure, failure_kind
 from .ledger import Ledger
 from .tools import ToolResult
@@ -206,7 +206,7 @@ class NarratedLoop:
             raise AgentFailure(outcome.detail or "error")
         objects, prose = _content(outcome.final)
         data = next((obj for obj in reversed(objects) if "text" in obj or "messages" in obj),
-                    {"text": prose, "detail": ""})
+                    loose_reply(prose) or {"text": prose, "detail": ""})
         data = dict(data)
         for field in ("text", "detail", "say_ja"):
             data[field] = _reply_text(data.get(field))

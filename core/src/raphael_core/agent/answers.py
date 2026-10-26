@@ -307,6 +307,24 @@ _REPLY_OPEN = re.compile(
     + r")[。.：:]\s*", re.I,
 )
 _REPLY_FRAME = re.compile(_REPLY_OPEN.pattern + r"(.*?)》$", re.S | re.I)
+_LOOSE_FIELD = re.compile(r'\s*"(?:prefix|text|messages|detail|say_ja|memory|need|thinking|progress)"\s*[:：]')
+_LOOSE_TEXT = re.compile(
+    r'"text"\s*[:：]\s*(?:"((?:[^"\\]|\\.)*)"|「(.*?)」(?=\s*[,，]?\s*(?:"\w+"\s*[:：]|\}|$)))', re.S)
+
+
+def loose_reply(text: str) -> dict | None:
+    """A reply whose object lost its braces, often with 「」 and a full-width colon in place of JSON's
+    (live: `"text"：「…」` then `"messages":[…],"need":}`): its text, or an empty one when that cannot
+    be read, so the fields are never shown as words. None when the text does not begin as fields."""
+    if not _LOOSE_FIELD.match(text):
+        return None
+    match = _LOOSE_TEXT.search(text)
+    if match is None or match[1] is None:
+        return {"text": match[2] if match else ""}
+    try:
+        return {"text": json.loads(f'"{match[1]}"', strict=False)}
+    except ValueError:
+        return {"text": match[1]}
 
 
 def parse_reply(data: Any, language: str, *, plain: bool = False, long: bool = False) -> Reply:

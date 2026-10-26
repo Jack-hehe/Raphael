@@ -230,6 +230,7 @@ async def test_the_context_is_the_last_turns_of_the_conversation_without_the_tas
         ('Here it is: {"prefix": "否", "text": "Cannot.", "detail": ""} Bye.', ("Negative", "Cannot.", None)),
         ("A plain sentence.", ("Notice", "A plain sentence.", None)),
         ('{"text": "No prefix."}', ("Answer", "No prefix.", None)),
+        ('"text"：「收到。」\n"messages":["收到。"],"need":}', ("Answer", "收到。", None)),
     ],
 )
 def test_the_report_of_the_model_is_read_in_the_shapes_it_comes_in(final, expected):
@@ -237,7 +238,8 @@ def test_the_report_of_the_model_is_read_in_the_shapes_it_comes_in(final, expect
     assert (reply.prefix, reply.text, reply.detail) == expected
 
 
-@pytest.mark.parametrize("final", ["", "   ", "{", '{"prefix": "告", "text": ""}', '```json\n{broken', "[]"])
+@pytest.mark.parametrize("final", ["", "   ", "{", '{"prefix": "告", "text": ""}', '```json\n{broken', "[]",
+                                   '"thinking":"","memory":[],"need":}'])
 def test_a_report_that_says_nothing_usable_is_none(final):
     assert report_from(final, "en") is None
 

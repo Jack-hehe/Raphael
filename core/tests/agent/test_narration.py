@@ -143,6 +143,25 @@ async def test_a_confirmed_result_can_supply_the_address_for_the_next_round(make
     assert opened == [address]
 
 
+@pytest.mark.parametrize("final,text", [
+    ('"text"：「收到，我會記住。」\n"messages":["收到，我會記住。"],"thinking":"","detail":"","memory":[],"need":}', "收到，我會記住。"),
+    ('"text": "Done.", "detail": ""', "Done.")])
+async def test_a_reply_object_without_its_braces_is_read_not_shown(make_rig, client, final, text):
+    # Live, a member's final dropped its object's braces (with 「」 and ：) and the owner read the protocol itself.
+    rig = make_rig()
+    client.decisions.append(decision("answer"))
+    client.chats = [chat(final)]
+    assert (await typed(rig))["text"] == text
+
+
+async def test_reply_fields_without_a_readable_text_are_not_shown(make_rig, client):
+    rig = make_rig()
+    client.decisions.append(decision("answer"))
+    client.chats = [chat('"thinking":"","memory":[],"need":}')]
+    assert "need" not in (await typed(rig))["text"]
+    assert (await rig.turns())[0]["status"] == "error"
+
+
 @pytest.mark.parametrize("wrap", ["```json\n{}\n```", "Here is the result: {}"])
 async def test_final_json_wrapping_does_not_leak_into_the_reply(make_rig, client, wrap):
     rig = make_rig()
