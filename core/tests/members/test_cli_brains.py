@@ -109,6 +109,34 @@ def fake_brain(rig, tmp_path, script, *, name="claude"):
     rig.service._cli_brains = CliBrains(home=home, environ={**os.environ, "PYTHONUTF8": "1", "CODEX_HOME": str(home / ".codex")}, commands={name: [sys.executable, str(path)]}, settings=rig.service._settings)
 
 
+async def test_a_resumed_cli_turn_carries_the_team_as_it_is_now(setup, tmp_path, client):
+    # Live, a resumed Codex thread kept the instructions it began with: a renamed member and a removed
+    # app stayed in its roster answers.
+    rig, team = setup
+    teacher = member(team, model="cli:codex")
+    writer = member(team, name="Writer", role="Writes")
+    inputs = tmp_path / "inputs.jsonl"
+    fake_brain(rig, tmp_path, '''import json, sys
+def send(value): print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize": send({"id":msg["id"], "result":{}})
+    elif msg.get("method") in ("thread/start", "thread/resume"):
+        send({"id":msg["id"], "result":{"thread":{"id":"roster-session"}}})
+    elif msg.get("method") == "turn/start":
+        with open(INPUTS, "a", encoding="utf-8") as out:
+            out.write(json.dumps(msg["params"]["input"][0]["text"]) + "\\n")
+        send({"method":"item/completed", "params":{"item":{"type":"agentMessage", "id":"final", "phase":"final_answer", "text":"Noted."}}})
+        send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
+        break
+'''.replace("INPUTS", repr(str(inputs))), name="codex")
+    await typed(rig, "Who is on the team?", teacher.id, language="en")
+    team.members.store.update_member(writer.id, name="Editor")
+    await typed(rig, "And now?", teacher.id, language="en")
+    first, second = [json.loads(line) for line in inputs.read_text(encoding="utf-8").splitlines()]
+    assert "Editor" in second and "Editor" not in first
+
+
 async def test_cli_member_uses_persona_records_zero_cost_and_resumes(setup, tmp_path, client):
     rig, team = setup
     teacher = member(team, model="cli:claude:sonnet")

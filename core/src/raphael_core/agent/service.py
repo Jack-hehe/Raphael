@@ -1497,6 +1497,11 @@ class AgentService:
                 background_block(self._briefs(ask.speaker.id)), summary=context.summary, say_ja=say_ja, narrated=True,
                 quote=ask.quote,
             )
+            if brain_ref(settings.model):
+                # A resumed CLI thread keeps the instructions it began with (live, a renamed member and a
+                # removed app stayed in its answers), so each turn carries the team as it is now.
+                user += "\n\nThe team as it is now, which replaces any earlier snapshot:" + roster_prompt(
+                    self._team, ask.speaker, ask.language)
             if ask.attachments:
                 user += "\nFiles: " + json.dumps([
                     {"index": n, "name": neutralize(a.name), "mime": a.mime}
