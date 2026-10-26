@@ -5,7 +5,6 @@ mod agent;
 mod avatar;
 mod background;
 mod commands;
-mod schedule_awake;
 mod computer;
 mod core_process;
 mod data_layout;
@@ -23,6 +22,7 @@ mod notices;
 mod overlay;
 mod paste;
 mod rpc;
+mod schedule_awake;
 mod tray;
 
 use std::path::PathBuf;
@@ -165,7 +165,9 @@ pub fn run() {
             avatar::avatar_clear,
         ])
         .setup(move |app| {
-            if let Err(error) = schedule_awake::get() { log::warn!("could not restore scheduler awake setting: {error}"); }
+            if let Err(error) = schedule_awake::get() {
+                log::warn!("could not restore scheduler awake setting: {error}");
+            }
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
@@ -525,10 +527,23 @@ mod window_state_tests {
     fn ctrl_plus_and_minus_zoom_the_main_window_within_three_steps() {
         // The owner zooms with Ctrl + plus / minus (2026-10-25) but only three steps either way: the app's
         // window-zoom.ts handles the keys, so WebView2's own 25%-500% zoom keys stay off.
-        let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let main = config["app"]["windows"].as_array().unwrap().iter().find(|w| w["label"] == MAIN_WINDOW).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["label"] == MAIN_WINDOW)
+            .unwrap();
         assert_eq!(main["zoomHotkeysEnabled"], false);
-        let chrome: serde_json::Value = serde_json::from_str(include_str!("../capabilities/main-window-chrome.json")).unwrap();
-        assert!(chrome["permissions"].as_array().unwrap().iter().any(|p| p == "core:webview:allow-set-webview-zoom"));
+        let chrome: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main-window-chrome.json")).unwrap();
+        assert!(
+            chrome["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "core:webview:allow-set-webview-zoom")
+        );
     }
 }

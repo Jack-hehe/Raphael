@@ -21,8 +21,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::observation::{
     ascii_capture_allowed, composition_state, deadline_after, edit_key, keyboard_origin,
-    monotonic_ms, mouse_origin, permitted, submission_key, terminal_key, EditBuffer, EditEvent, HookHeartbeat,
-    ImeAnswer, InputOrigin, InputStamp,
+    monotonic_ms, mouse_origin, permitted, submission_key, terminal_key, EditBuffer, EditEvent,
+    HookHeartbeat, ImeAnswer, InputOrigin, InputStamp,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]

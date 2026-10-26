@@ -295,12 +295,30 @@ pub trait Desk: Send + Sync {
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy>;
     fn ask_conversation(
-        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
-        replace_turn_id: Option<u64>, quote: Option<Value>, _conversation_id: Option<u64>,
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+        _conversation_id: Option<u64>,
     ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_typed(text, attachments, member, request_id, replace_turn_id, quote)
+        self.ask_typed(
+            text,
+            attachments,
+            member,
+            request_id,
+            replace_turn_id,
+            quote,
+        )
     }
-    fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>>;
+    fn retract(
+        &self,
+        session: String,
+        member: u64,
+        turn_id: Option<u64>,
+    ) -> JoinHandle<Result<Value, RpcError>>;
     /// The YES/NO question that waits for its answer now, with the time it has left as its
     /// `timeout_ms`.
     fn open_question(&self) -> Option<AskPrompt>;
@@ -656,7 +674,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// Tells the report, if there is one, that a dictation or question reached `phase`.
     fn tell(&self, phase: DictationPhase, agent: bool) {
         if let Some(report) = &self.phase_report {
-            let member = lock(&self.state).session.as_ref().map(|session| session.member);
+            let member = lock(&self.state)
+                .session
+                .as_ref()
+                .map(|session| session.member);
             report(phase, agent, member.filter(|member| agent && *member != 0));
         }
     }
@@ -794,9 +815,20 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     }
 
     fn on_agent_progress(&self, params: &Value) {
-        let Some(session) = params.get("session_id").and_then(Value::as_str) else { return; };
-        let Some(text) = params.get("text").and_then(Value::as_str).filter(|text| !text.trim().is_empty()) else { return; };
-        let language = params.get("language").and_then(Value::as_str).unwrap_or("zh-TW");
+        let Some(session) = params.get("session_id").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(text) = params
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+        else {
+            return;
+        };
+        let language = params
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or("zh-TW");
         let _transition = lock(&self.transitions);
         if self.is_current(session) && lock(&self.state).agent == Some(AgentStage::Thinking) {
             self.question_on_overlay(|overlay| overlay.step(text, language));
@@ -827,8 +859,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             if state.agent == Some(AgentStage::Speaking) && state.speaking_turn == Some(turn) {
                 state.session.as_ref().map(|session| session.id.clone())
             } else {
-                if matches!(state.agent, Some(AgentStage::Thinking | AgentStage::Confirming))
-                    && !state.speech_done.contains(&turn)
+                if matches!(
+                    state.agent,
+                    Some(AgentStage::Thinking | AgentStage::Confirming)
+                ) && !state.speech_done.contains(&turn)
                 {
                     if state.speech_done.len() == 32 {
                         state.speech_done.remove(0);
@@ -1033,7 +1067,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             let params = match kind {
                 Kind::Dictation => json!({ "session_id": id, "ui_language": ui_language }),
-                Kind::Agent => json!({ "session_id": id, "purpose": "agent", "ui_language": ui_language }),
+                Kind::Agent => {
+                    json!({ "session_id": id, "purpose": "agent", "ui_language": ui_language })
+                }
             };
             let reply = this.core.call("dictation.start", params).await;
             let Err(err) = reply else {
@@ -1183,8 +1219,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 } else {
                     this.first_time(notices::notice_for_fallback(reason.as_deref()))
                 };
-                let language = reply.get("ui_language").and_then(Value::as_str)
-                    .map(str::to_owned).unwrap_or_else(|| this.language.get());
+                let language = reply
+                    .get("ui_language")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| this.language.get());
                 this.report_in_language(delivery.as_ref(), fallback, true, &language);
                 this.learn_after_paste(text, target.as_ref(), delivery);
             });
@@ -1592,7 +1631,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// The rest of a question after the key was released (or the core heard nothing more): the
     /// core transcribes it, within `wait`, the agent answers it, the overlay shows the answer.
     /// Never logs the words of the question or the answer.
-    async fn agent_turn(&self, session: Session, target: Option<Target>, wait: Duration, released: std::time::Instant) {
+    async fn agent_turn(
+        &self,
+        session: Session,
+        target: Option<Target>,
+        wait: Duration,
+        released: std::time::Instant,
+    ) {
         // Released before the core answered the start? Then wait, like a dictation does.
         if !session.start_succeeded().await {
             log::info!("dictation.start failed; no dictation.stop to send");
@@ -1654,8 +1699,19 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             return;
         }
         let transcript_ms = released.elapsed().as_secs_f64() * 1000.0;
-        self.converse_with_timing(&id, question, target_app, None, Vec::new(), session.member, None, None, None, Some(transcript_ms))
-            .await;
+        self.converse_with_timing(
+            &id,
+            question,
+            target_app,
+            None,
+            Vec::new(),
+            session.member,
+            None,
+            None,
+            None,
+            Some(transcript_ms),
+        )
+        .await;
     }
 
     /// A typed question to Raphael with no files ([`Self::ask_typed_with`] with none): the tests' way in.
@@ -1699,12 +1755,26 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed_in(text, attachments, member, request_id, replace_turn_id, quote, None)
+        self.ask_composed_in(
+            text,
+            attachments,
+            member,
+            request_id,
+            replace_turn_id,
+            quote,
+            None,
+        )
     }
 
     pub fn ask_composed_in(
-        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
-        replace_turn_id: Option<u64>, quote: Option<Value>, conversation_id: Option<u64>,
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+        conversation_id: Option<u64>,
     ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
         let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -1745,8 +1815,18 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         log::info!("agent: a typed question");
         let (this, text) = (turn, text.to_owned());
         Ok(tokio::spawn(async move {
-            this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member, replace_turn_id, quote, conversation_id)
-                .await;
+            this.converse(
+                &id,
+                &text,
+                None,
+                Some(TYPED_SOURCE),
+                attachments,
+                member,
+                replace_turn_id,
+                quote,
+                conversation_id,
+            )
+            .await;
         }))
     }
 
@@ -1769,13 +1849,33 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         quote: Option<Value>,
         conversation_id: Option<u64>,
     ) {
-        self.converse_with_timing(id, question, target_app, source, attachments, member, replace_turn_id, quote, conversation_id, None).await;
+        self.converse_with_timing(
+            id,
+            question,
+            target_app,
+            source,
+            attachments,
+            member,
+            replace_turn_id,
+            quote,
+            conversation_id,
+            None,
+        )
+        .await;
     }
 
     async fn converse_with_timing(
-        &self, id: &str, question: &str, target_app: Option<String>, source: Option<&str>,
-        attachments: Vec<Value>, member: u64, replace_turn_id: Option<u64>, quote: Option<Value>,
-        conversation_id: Option<u64>, transcript_ms: Option<f64>,
+        &self,
+        id: &str,
+        question: &str,
+        target_app: Option<String>,
+        source: Option<&str>,
+        attachments: Vec<Value>,
+        member: u64,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+        conversation_id: Option<u64>,
+        transcript_ms: Option<f64>,
     ) {
         let mut params = json!({
             "session_id": id,
@@ -1808,7 +1908,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let mut asked = 0;
         loop {
             let may_ask = asked < MAX_QUESTIONS_IN_A_TURN;
-            let Some((prompt, answer)) = self.show_reply(id, reply, may_ask, member, conversation_id) else {
+            let Some((prompt, answer)) =
+                self.show_reply(id, reply, may_ask, member, conversation_id)
+            else {
                 return;
             };
             asked += 1;
@@ -1916,7 +2018,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             Ok(Reply::Ask(mut prompt)) => {
                 // Typed Raphael turns must name member 0 too: another composer may now be active.
                 prompt.member_id = (self.voice.is_some() || member != 0).then_some(member);
-                prompt.conversation_id = reply.get("conversation_id").and_then(Value::as_u64).or(conversation_id);
+                prompt.conversation_id = reply
+                    .get("conversation_id")
+                    .and_then(Value::as_u64)
+                    .or(conversation_id);
                 let (answer, wait) = oneshot::channel();
                 {
                     let mut state = lock(&self.state);
@@ -2209,7 +2314,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let release = {
             let mut state = lock(&self.state);
             if state.agent != Some(AgentStage::Speaking)
-                || state.session.as_ref().is_none_or(|current| current.id != id)
+                || state
+                    .session
+                    .as_ref()
+                    .is_none_or(|current| current.id != id)
             {
                 return;
             }
@@ -2326,17 +2434,43 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         replace_turn_id: Option<u64>,
         quote: Option<Value>,
     ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed(text, attachments, member, request_id, replace_turn_id, quote)
+        self.ask_composed(
+            text,
+            attachments,
+            member,
+            request_id,
+            replace_turn_id,
+            quote,
+        )
     }
 
     fn ask_conversation(
-        &self, text: &str, attachments: Vec<Value>, member: u64, request_id: Option<String>,
-        replace_turn_id: Option<u64>, quote: Option<Value>, conversation_id: Option<u64>,
+        &self,
+        text: &str,
+        attachments: Vec<Value>,
+        member: u64,
+        request_id: Option<String>,
+        replace_turn_id: Option<u64>,
+        quote: Option<Value>,
+        conversation_id: Option<u64>,
     ) -> Result<JoinHandle<()>, Busy> {
-        self.ask_composed_in(text, attachments, member, request_id, replace_turn_id, quote, conversation_id)
+        self.ask_composed_in(
+            text,
+            attachments,
+            member,
+            request_id,
+            replace_turn_id,
+            quote,
+            conversation_id,
+        )
     }
 
-    fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>> {
+    fn retract(
+        &self,
+        session: String,
+        member: u64,
+        turn_id: Option<u64>,
+    ) -> JoinHandle<Result<Value, RpcError>> {
         if self.voice.is_none() {
             let turn = self.typed_contexts().into_iter().find(|turn| {
                 lock(&turn.state)
@@ -2352,11 +2486,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         let shown = lock(&self.state).on_overlay;
         let current = {
             let mut state = lock(&self.state);
-            if state.session.as_ref().is_some_and(|active| active.id == session && active.member == member) {
+            if state
+                .session
+                .as_ref()
+                .is_some_and(|active| active.id == session && active.member == member)
+            {
                 state.go_idle();
                 self.set_cancel(false);
                 true
-            } else { false }
+            } else {
+                false
+            }
         };
         if current {
             self.forget_typed();
@@ -2368,7 +2508,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
         let core = self.core.clone();
         tokio::spawn(async move {
             let mut params = json!({"session_id": session, "member_id": member});
-            if let Some(turn_id) = turn_id { params["turn_id"] = json!(turn_id); }
+            if let Some(turn_id) = turn_id {
+                params["turn_id"] = json!(turn_id);
+            }
             core.call("agent.history.retract", params).await
         })
     }
@@ -4226,18 +4368,37 @@ mod tests {
     #[tokio::test]
     async fn a_gap_and_its_post_paste_notice_use_the_dictation_language() {
         for (language, text, expected) in [
-            ("zh-TW", "前文（這段沒有聽清楚）後文", "《否。部分語音無法辨識，文字已標示缺漏。》"),
-            ("ja", "前文（この部分は聞き取れませんでした）後文", "《否。一部の音声を認識できませんでした。欠落箇所を表示しました。》"),
-            ("en", "Before (this part was not heard) after", "《Negative. Some speech could not be transcribed. Gaps are marked in the text.》"),
+            (
+                "zh-TW",
+                "前文（這段沒有聽清楚）後文",
+                "《否。部分語音無法辨識，文字已標示缺漏。》",
+            ),
+            (
+                "ja",
+                "前文（この部分は聞き取れませんでした）後文",
+                "《否。一部の音声を認識できませんでした。欠落箇所を表示しました。》",
+            ),
+            (
+                "en",
+                "Before (this part was not heard) after",
+                "《Negative. Some speech could not be transcribed. Gaps are marked in the text.》",
+            ),
         ] {
-            let (core, gate) = FakeCore::with("dictation.stop", json!({
-                "text": text, "incomplete": true, "ui_language": language,
-            })).gated("dictation.stop");
+            let (core, gate) = FakeCore::with(
+                "dictation.stop",
+                json!({
+                    "text": text, "incomplete": true, "ui_language": language,
+                }),
+            )
+            .gated("dictation.stop");
             let (paster, paste_entered, paste_release) = FakePaster::pasting("notepad.exe").gated();
             let c = controller(core, paster);
             c.language().set(language);
             run(&c, HotkeyEvent::DictationDown, 0).await;
-            assert_eq!(c.core().call_params("dictation.start")["ui_language"], language);
+            assert_eq!(
+                c.core().call_params("dictation.start")["ui_language"],
+                language
+            );
             let task = c.on_hotkey(HotkeyEvent::DictationUp, 900).unwrap();
             settle().await;
             assert_eq!(c.core().count("dictation.stop"), 1);
@@ -5642,7 +5803,10 @@ mod tests {
         settle().await;
         assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
         assert_eq!(c.cancel().last(), Some(true));
-        assert_eq!(c.overlay().events().last().unwrap(), "say-held:Answer|Hello.");
+        assert_eq!(
+            c.overlay().events().last().unwrap(),
+            "say-held:Answer|Hello."
+        );
         for (method, params) in [
             ("speech.other", json!({"state": "done", "turn_id": 42})),
             ("speech.state", json!({"state": "playing", "turn_id": 42})),
@@ -5927,8 +6091,13 @@ mod tests {
         let id = c.core().call_params("agent.ask")["session_id"].clone();
         c.on_agent_progress(&json!({"session_id": "stale", "text": "Stale", "language": "en"}));
         assert_eq!(c.overlay().quiet_lines.lock().unwrap().len(), 1);
-        c.on_agent_progress(&json!({"session_id": id, "text": "Checking the schedule.", "language": "en"}));
-        assert_eq!(c.overlay().quiet_lines.lock().unwrap().last().unwrap(), &vec!["Checking the schedule.".to_owned()]);
+        c.on_agent_progress(
+            &json!({"session_id": id, "text": "Checking the schedule.", "language": "en"}),
+        );
+        assert_eq!(
+            c.overlay().quiet_lines.lock().unwrap().last().unwrap(),
+            &vec!["Checking the schedule.".to_owned()]
+        );
         gate.notify_one();
         turn.await.unwrap();
         let count = c.overlay().quiet_lines.lock().unwrap().len();
@@ -6054,45 +6223,93 @@ mod tests {
     async fn composed_requests_keep_their_id_and_replacement_and_retraction_drops_late_replies() {
         let (core, gate) = agent_core(answer("答", "late")).gated("agent.ask");
         let c = controller(core, FakePaster::pasting("chrome.exe"));
-        let turn = c.ask_composed("corrected", Vec::new(), 3, Some("request-1".into()), Some(17), None).unwrap();
+        let turn = c
+            .ask_composed(
+                "corrected",
+                Vec::new(),
+                3,
+                Some("request-1".into()),
+                Some(17),
+                None,
+            )
+            .unwrap();
         settle().await;
         assert_eq!(c.core().call_params("agent.ask")["session_id"], "request-1");
         assert_eq!(c.core().call_params("agent.ask")["replace_turn_id"], 17);
-        c.retract("request-1".into(), 3, Some(18)).await.unwrap().unwrap();
+        c.retract("request-1".into(), 3, Some(18))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(c.phase(), Phase::Idle);
-        assert_eq!(c.core().call_params("agent.history.retract"), json!({"session_id":"request-1", "member_id":3, "turn_id":18}));
-        gate.notify_one(); turn.await.unwrap();
-        assert!(!c.overlay().events().iter().any(|event| event.starts_with("say:")));
+        assert_eq!(
+            c.core().call_params("agent.history.retract"),
+            json!({"session_id":"request-1", "member_id":3, "turn_id":18})
+        );
+        gate.notify_one();
+        turn.await.unwrap();
+        assert!(
+            !c.overlay()
+                .events()
+                .iter()
+                .any(|event| event.starts_with("say:"))
+        );
     }
 
     #[tokio::test]
     async fn retracting_an_old_message_leaves_a_new_request_alone() {
         let (core, gate) = agent_core(answer("答", "new answer")).gated("agent.ask");
         let c = controller(core, FakePaster::pasting("chrome.exe"));
-        let turn = c.ask_composed("new", Vec::new(), 3, Some("new".into()), None, None).unwrap();
+        let turn = c
+            .ask_composed("new", Vec::new(), 3, Some("new".into()), None, None)
+            .unwrap();
         settle().await;
         c.retract("old".into(), 3, Some(1)).await.unwrap().unwrap();
         assert_eq!(c.agent_stage(), Some(AgentStage::Thinking));
-        gate.notify_one(); turn.await.unwrap();
+        gate.notify_one();
+        turn.await.unwrap();
     }
 
     #[tokio::test]
     async fn a_composed_request_names_its_conversation_and_voice_keeps_the_default() {
         let c = agent(answer("Answer", "Hello"));
-        c.ask_composed_in("Explain", Vec::new(), 3, Some("conversation-1".into()), None, None, Some(42))
-            .unwrap().await.unwrap();
+        c.ask_composed_in(
+            "Explain",
+            Vec::new(),
+            3,
+            Some("conversation-1".into()),
+            None,
+            None,
+            Some(42),
+        )
+        .unwrap()
+        .await
+        .unwrap();
         assert_eq!(c.core().call_params("agent.ask")["conversation_id"], 42);
         let c = agent(answer("Answer", "Hello"));
         c.ask_typed("Hi").unwrap().await.unwrap();
-        assert!(c.core().call_params("agent.ask").get("conversation_id").is_none());
+        assert!(
+            c.core()
+                .call_params("agent.ask")
+                .get("conversation_id")
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn a_quote_is_sent_separately_and_voice_requests_have_no_quote() {
         let c = agent(answer("答", "Explanation"));
         let quote = json!({"text":"しかねません", "author":"Teacher"});
-        c.ask_composed("Explain", Vec::new(), 3, Some("quote-1".into()), None, Some(quote.clone()))
-            .unwrap().await.unwrap();
+        c.ask_composed(
+            "Explain",
+            Vec::new(),
+            3,
+            Some("quote-1".into()),
+            None,
+            Some(quote.clone()),
+        )
+        .unwrap()
+        .await
+        .unwrap();
         let params = c.core().call_params("agent.ask");
         assert_eq!(params["text"], "Explain");
         assert_eq!(params["quote"], quote);
@@ -6126,7 +6343,10 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            c.overlay().events().iter().all(|e| !e.starts_with("notice")),
+            c.overlay()
+                .events()
+                .iter()
+                .all(|e| !e.starts_with("notice")),
             "{:?}",
             c.overlay().events()
         );
@@ -6145,22 +6365,34 @@ mod tests {
     async fn a_members_voice_press_keeps_its_thread_until_the_turn_ends() {
         let phases = Arc::new(Mutex::new(Vec::new()));
         let sink = phases.clone();
-        let c = agent(answer("", "A member's answer"))
-            .with_phase_report(Arc::new(move |phase, agent, member| {
+        let c = agent(answer("", "A member's answer")).with_phase_report(Arc::new(
+            move |phase, agent, member| {
                 sink.lock().unwrap().push((phase, agent, member));
-            }));
+            },
+        ));
         run(&c, HotkeyEvent::MemberDown(3), 0).await;
         run(&c, AgentUp, 900).await;
         let params = c.core().call_params("agent.ask");
         assert_eq!(params["member_id"], json!(3));
         assert_eq!(params.get("source"), None);
         assert_eq!(c.agent_stage(), None);
-        assert_eq!(*phases.lock().unwrap(), [
-            (DictationPhase::Listening, true, Some(3)),
-            (DictationPhase::Processing, true, Some(3)),
-        ]);
-        assert_eq!(c.overlay().events().last().map(String::as_str), Some("hide"));
-        assert!(c.overlay().events().iter().all(|event| !event.starts_with("notice")));
+        assert_eq!(
+            *phases.lock().unwrap(),
+            [
+                (DictationPhase::Listening, true, Some(3)),
+                (DictationPhase::Processing, true, Some(3)),
+            ]
+        );
+        assert_eq!(
+            c.overlay().events().last().map(String::as_str),
+            Some("hide")
+        );
+        assert!(
+            c.overlay()
+                .events()
+                .iter()
+                .all(|event| !event.starts_with("notice"))
+        );
         // The next global hotkey has no member target left over from the composer.
         run(&c, AgentDown, 2000).await;
         run(&c, AgentUp, 2900).await;
@@ -6175,7 +6407,9 @@ mod tests {
         until_stage(&c, AgentStage::Asking).await;
         let prompt = c.open_question().unwrap();
         assert_eq!(prompt.member_id, Some(3));
-        assert!(matches!(&heard.lock().unwrap()[0], QuestionNews::Open(prompt) if prompt.member_id == Some(3)));
+        assert!(
+            matches!(&heard.lock().unwrap()[0], QuestionNews::Open(prompt) if prompt.member_id == Some(3))
+        );
         c.on_confirm("c-1", false);
         turn.await.unwrap();
         assert_eq!(c.core().call_params("agent.ask")["member_id"], json!(3));
@@ -8775,9 +9009,10 @@ mod tests {
     fn reporting(core: FakeCore, paster: FakePaster) -> (Ctl, Seen) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = seen.clone();
-        let c = controller(core, paster).with_phase_report(Arc::new(move |phase, agent, _member| {
-            sink.lock().unwrap().push((phase, agent));
-        }));
+        let c =
+            controller(core, paster).with_phase_report(Arc::new(move |phase, agent, _member| {
+                sink.lock().unwrap().push((phase, agent));
+            }));
         (c, seen)
     }
 

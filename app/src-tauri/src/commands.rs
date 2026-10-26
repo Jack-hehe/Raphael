@@ -158,11 +158,19 @@ pub enum DictationPhase {
 pub enum MainEvent {
     /// A successful dictation delivered to our own process, for in-memory composer learning.
     /// Never logged or replayed to a later subscriber.
-    DictationPasted { text: String },
+    DictationPasted {
+        text: String,
+    },
     /// Loudness of the microphone, 0 to 1, while the microphone is being monitored.
-    Level { value: f32 },
+    Level {
+        value: f32,
+    },
     /// A speech model is being downloaded.
-    ModelProgress { name: String, done: u64, total: u64 },
+    ModelProgress {
+        name: String,
+        done: u64,
+        total: u64,
+    },
     /// Learning from corrections cannot read what the user types in `app`, so it learns less
     /// there. Sent at most once per `app` and `reason` while the app runs, whenever the main
     /// window is listening (a window that subscribes later is told then). The identifiers are
@@ -170,7 +178,10 @@ pub enum MainEvent {
     /// `reason` is `accessibility_off` (the editor's `editor.accessibilitySupport` is off, so
     /// its text box is empty to other programs, and only ASCII typed on the US layout can be
     /// followed; setting it to `"on"` fixes that).
-    LearnLimited { app: String, reason: String },
+    LearnLimited {
+        app: String,
+        reason: String,
+    },
     /// A tray menu item asks for a page, and perhaps one thing to do there. It is sent before the
     /// window is shown, so that the window opens on that page. The first-run guide ignores it.
     TrayOpen {
@@ -181,13 +192,22 @@ pub enum MainEvent {
     /// A turn of the conversations was written or completed (`agent.turn`): the page of the
     /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
     /// Raphael's, and a core from before the members names none): what was said stays in the core.
-    AgentTurn { turn_id: u64, member_id: u64 },
-    ConversationsChanged { member_id: u64 },
+    AgentTurn {
+        turn_id: u64,
+        member_id: u64,
+    },
+    ConversationsChanged {
+        member_id: u64,
+    },
     QuotaChanged,
     ActionModeChanged,
     /// Data changed: the window re-reads it without receiving private content.
-    RoutinesChanged { member_id: u64 },
-    RoomsChanged { room_id: u64 },
+    RoutinesChanged {
+        member_id: u64,
+    },
+    RoomsChanged {
+        room_id: u64,
+    },
     MembersChanged,
     ProvidersChanged,
     SettingsChanged,
@@ -215,7 +235,9 @@ pub enum MainEvent {
     },
     /// A key of Raphael went down or up, from the global hook or from the window itself. Sent for
     /// every key event, whether or not the guide is practising; the keys are never named.
-    Hotkey { kind: HotkeyKind },
+    Hotkey {
+        kind: HotkeyKind,
+    },
     /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
     /// phase: what was said stays in the core.
     Dictation {
@@ -229,10 +251,14 @@ pub enum MainEvent {
     AgentQuestion(AskPrompt),
     /// The question `id` was answered (on the overlay or the page), ran out, or was dropped with
     /// its session: the card goes.
-    AgentQuestionClosed { id: String },
+    AgentQuestionClosed {
+        id: String,
+    },
     /// The microphone's loudness, 0 to 1, while a question to Raphael is recorded: the ring around
     /// the person's picture in the 拉斐爾 page's voice mode follows it. Never a dictation's.
-    VoiceLevel { value: f32 },
+    VoiceLevel {
+        value: f32,
+    },
 }
 
 impl From<QuestionNews> for MainEvent {
@@ -722,13 +748,24 @@ pub async fn save_usage_csv(app: AppHandle, webview: Webview, csv: String) -> Re
     let window = webview.window();
     tauri::async_runtime::spawn_blocking(move || {
         use tauri_plugin_dialog::DialogExt;
-        let chosen = app.dialog().file().set_parent(&window)
-            .add_filter("CSV", &["csv"]).set_file_name("raphael-usage.csv").blocking_save_file();
-        let Some(chosen) = chosen else { return Ok(false); };
-        let path = chosen.into_path().map_err(|_| "invalid save location".to_owned())?;
+        let chosen = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .add_filter("CSV", &["csv"])
+            .set_file_name("raphael-usage.csv")
+            .blocking_save_file();
+        let Some(chosen) = chosen else {
+            return Ok(false);
+        };
+        let path = chosen
+            .into_path()
+            .map_err(|_| "invalid save location".to_owned())?;
         std::fs::write(path, format!("\u{feff}{csv}")).map_err(|err| err.to_string())?;
         Ok(true)
-    }).await.map_err(|err| format!("a background task failed: {err}"))?
+    })
+    .await
+    .map_err(|err| format!("a background task failed: {err}"))?
 }
 
 // ---------- questions to Raphael from the window ----------
@@ -789,13 +826,21 @@ pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, 
 
 /// The quote is data, never appended to the owner's question by the shell.
 pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
-    let Some(quote) = quote else { return Ok(None); };
-    let bounded = |key: &str, max: usize| quote.get(key).and_then(Value::as_str)
-        .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max);
+    let Some(quote) = quote else {
+        return Ok(None);
+    };
+    let bounded = |key: &str, max: usize| {
+        quote
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max)
+    };
     if !bounded("text", 20_000) || !bounded("author", 256) {
         return Err("invalid quote".to_owned());
     }
-    Ok(Some(json!({"text": quote["text"], "author": quote["author"]})))
+    Ok(Some(
+        json!({"text": quote["text"], "author": quote["author"]}),
+    ))
 }
 
 /// Asks Raphael a question typed in the composer, with optional images/PDFs and a selected
@@ -830,7 +875,15 @@ pub async fn agent_ask_text(
         .ok_or(AGENT_OFF)?;
     let turn = desk
         .0
-        .ask_conversation(text, attachments, member_id.unwrap_or(0), request_id, replace_turn_id, quote, conversation_id)
+        .ask_conversation(
+            text,
+            attachments,
+            member_id.unwrap_or(0),
+            request_id,
+            replace_turn_id,
+            quote,
+            conversation_id,
+        )
         .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
     // The page waits for the turn, so that it knows when to stop waiting for its answer.
     if let Err(err) = turn.await {
@@ -859,9 +912,16 @@ pub async fn agent_retract(
     turn_id: Option<u64>,
 ) -> Result<Value, String> {
     require_main(&webview)?;
-    if !is_question_id(&session_id) { return Err("invalid request id".to_owned()); }
-    let desk = app.try_state::<DeskHandle>().map(|desk| desk.inner().clone()).ok_or(AGENT_OFF)?;
-    desk.0.retract(session_id, member_id, turn_id).await
+    if !is_question_id(&session_id) {
+        return Err("invalid request id".to_owned());
+    }
+    let desk = app
+        .try_state::<DeskHandle>()
+        .map(|desk| desk.inner().clone())
+        .ok_or(AGENT_OFF)?;
+    desk.0
+        .retract(session_id, member_id, turn_id)
+        .await
         .map_err(|err| err.to_string())?
         .map_err(|err| err.to_string())
 }
@@ -954,7 +1014,9 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
         "routines.changed" => Some(MainEvent::RoutinesChanged {
             member_id: params.get("member_id")?.as_u64()?,
         }),
-        "rooms.changed" => Some(MainEvent::RoomsChanged { room_id: params.get("room_id")?.as_u64()? }),
+        "rooms.changed" => Some(MainEvent::RoomsChanged {
+            room_id: params.get("room_id")?.as_u64()?,
+        }),
         "members.changed" => Some(MainEvent::MembersChanged),
         "conversations.changed" => Some(MainEvent::ConversationsChanged {
             member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
@@ -1468,14 +1530,21 @@ fn is_provider_docs_link(url: &str, registry: &Value) -> bool {
     if url.bytes().any(|c| c <= b' ' || c == 127) {
         return false;
     }
-    let Ok(parsed) = tauri::Url::parse(url) else { return false; };
+    let Ok(parsed) = tauri::Url::parse(url) else {
+        return false;
+    };
     parsed.scheme() == "https"
         && parsed.host_str().is_some()
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && registry.get("kinds").and_then(Value::as_array).is_some_and(|kinds| {
-            kinds.iter().any(|kind| kind.get("docs_url").and_then(Value::as_str) == Some(url))
-        })
+        && registry
+            .get("kinds")
+            .and_then(Value::as_array)
+            .is_some_and(|kinds| {
+                kinds
+                    .iter()
+                    .any(|kind| kind.get("docs_url").and_then(Value::as_str) == Some(url))
+            })
 }
 
 /// Opens a fixed app link or an exact provider documentation URL in the default browser.
@@ -1483,8 +1552,13 @@ fn is_provider_docs_link(url: &str, registry: &Value) -> bool {
 pub async fn open_link(app: AppHandle, webview: Webview, url: String) -> Result<(), String> {
     require_main(&webview)?;
     if !is_openable_link(&url) {
-        let core = app.try_state::<Arc<CoreProcess>>().ok_or(CORE_NOT_RUNNING)?;
-        let registry = core.call("providers.kinds", json!({})).await.map_err(|err| err.to_string())?;
+        let core = app
+            .try_state::<Arc<CoreProcess>>()
+            .ok_or(CORE_NOT_RUNNING)?;
+        let registry = core
+            .call("providers.kinds", json!({}))
+            .await
+            .map_err(|err| err.to_string())?;
         if !is_provider_docs_link(&url, &registry) {
             return Err("that link may not be opened".to_owned());
         }
@@ -1496,7 +1570,9 @@ fn is_external_url(url: &str) -> bool {
     if url.len() > 8192 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return false;
     }
-    let Ok(parsed) = tauri::Url::parse(url) else { return false; };
+    let Ok(parsed) = tauri::Url::parse(url) else {
+        return false;
+    };
     matches!(parsed.scheme(), "http" | "https")
         && parsed.host_str().is_some()
         && parsed.username().is_empty()
@@ -1507,9 +1583,17 @@ fn is_external_url(url: &str) -> bool {
 #[tauri::command]
 pub async fn open_attachment(app: AppHandle, webview: Webview, id: String) -> Result<(), String> {
     require_main(&webview)?;
-    let core = app.try_state::<Arc<CoreProcess>>().ok_or(CORE_NOT_RUNNING)?;
-    let result = core.call("attachments.path", json!({"id": id})).await.map_err(|_| "attachment unavailable".to_owned())?;
-    let path = result.get("path").and_then(Value::as_str).ok_or("attachment unavailable")?;
+    let core = app
+        .try_state::<Arc<CoreProcess>>()
+        .ok_or(CORE_NOT_RUNNING)?;
+    let result = core
+        .call("attachments.path", json!({"id": id}))
+        .await
+        .map_err(|_| "attachment unavailable".to_owned())?;
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("attachment unavailable")?;
     launch_link(path)
 }
 
@@ -1841,7 +1925,12 @@ mod tests {
         assert_eq!(typed_quote(None).unwrap(), None);
         let quote = json!({"text":"しかねません", "author":"Teacher"});
         assert_eq!(typed_quote(Some(quote.clone())).unwrap(), Some(quote));
-        for bad in [json!({}), json!({"text":"", "author":"Teacher"}), json!({"text":"x", "author":1}), json!({"text":"x".repeat(20_001), "author":"Teacher"})] {
+        for bad in [
+            json!({}),
+            json!({"text":"", "author":"Teacher"}),
+            json!({"text":"x", "author":1}),
+            json!({"text":"x".repeat(20_001), "author":"Teacher"}),
+        ] {
             assert!(typed_quote(Some(bad)).is_err());
         }
     }
@@ -1912,18 +2001,30 @@ mod tests {
         }
         assert!(!is_allowed_method("brains.execute"));
         let event = main_event_from(
-            &notification("brains.changed", json!({"token": "private"})), true,
-        ).unwrap();
-        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "BrainsChanged"}));
+            &notification("brains.changed", json!({"token": "private"})),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "BrainsChanged"})
+        );
     }
 
     #[test]
     fn connector_change_events_never_forward_private_payloads() {
         let event = main_event_from(
-            &notification("connectors.changed", json!({"key": "private", "mail": "private"})),
+            &notification(
+                "connectors.changed",
+                json!({"key": "private", "mail": "private"}),
+            ),
             true,
-        ).unwrap();
-        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "ConnectionsChanged"}));
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "ConnectionsChanged"})
+        );
     }
 
     #[test]
@@ -1950,8 +2051,12 @@ mod tests {
         let event = main_event_from(
             &notification("providers.changed", json!({"key": "private"})),
             true,
-        ).unwrap();
-        assert_eq!(serde_json::to_value(event).unwrap(), json!({"type": "ProvidersChanged"}));
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "ProvidersChanged"})
+        );
     }
 
     #[test]
@@ -2209,7 +2314,10 @@ mod tests {
             ("memory.create", json!({"body": "  "})),
             ("memory.create", json!({"body": 5})),
             ("memory.create", json!({"body": "x".repeat(1201)})),
-            ("memory.create", json!({"body": "x", "description": "x".repeat(81)})),
+            (
+                "memory.create",
+                json!({"body": "x", "description": "x".repeat(81)}),
+            ),
             ("memory.get", json!({})),
             ("memory.get", json!({"name": "../raphael"})),
             ("memory.delete", json!({"name": 3})),
@@ -2309,13 +2417,28 @@ mod tests {
 
     #[test]
     fn chat_links_are_only_bounded_web_addresses_without_credentials() {
-        for url in ["https://www.cwa.gov.tw/V8/C/P/Typhoon/TY_WARN.html?lang=zh-TW&full=1", "http://example.com/a#part"] {
+        for url in [
+            "https://www.cwa.gov.tw/V8/C/P/Typhoon/TY_WARN.html?lang=zh-TW&full=1",
+            "http://example.com/a#part",
+        ] {
             assert!(is_external_url(url), "{url}");
         }
-        for url in ["javascript:alert(1)", "file:///C:/Windows/System32/calc.exe", "ms-settings:privacy-microphone", "data:text/html,hello", "https://user:password@example.com/", "https://example.com/\n", "https://example.com/a b", ""] {
+        for url in [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-settings:privacy-microphone",
+            "data:text/html,hello",
+            "https://user:password@example.com/",
+            "https://example.com/\n",
+            "https://example.com/a b",
+            "",
+        ] {
             assert!(!is_external_url(url), "{url:?}");
         }
-        assert!(!is_external_url(&format!("https://example.com/{}", "a".repeat(8192))));
+        assert!(!is_external_url(&format!(
+            "https://example.com/{}",
+            "a".repeat(8192)
+        )));
         assert!(is_allowed_method("links.preview"));
         for method in ["links", "links.", "links.fetch", "Links.preview"] {
             assert!(!is_allowed_method(method));
@@ -2328,14 +2451,28 @@ mod tests {
             {"kind": "vertex", "docs_url": "https://console.cloud.google.com/iam-admin/serviceaccounts"},
             {"kind": "custom", "docs_url": "file:///C:/Windows/System32/calc.exe"}
         ]});
-        assert!(is_provider_docs_link("https://console.cloud.google.com/iam-admin/serviceaccounts", &kinds));
+        assert!(is_provider_docs_link(
+            "https://console.cloud.google.com/iam-admin/serviceaccounts",
+            &kinds
+        ));
         for url in [
-            "https://evil.example/", "https://console.cloud.google.com/iam-admin/serviceaccounts?extra=1",
-            "http://console.cloud.google.com/iam-admin/serviceaccounts", "file:///C:/Windows/System32/calc.exe",
-            "javascript:alert(1)", "",
-        ] { assert!(!is_provider_docs_link(url, &kinds), "{url}"); }
-        for url in ["https://user:password@example.com/", "https://example.com/\n"] {
-            assert!(!is_provider_docs_link(url, &json!({"kinds": [{"docs_url": url}]})));
+            "https://evil.example/",
+            "https://console.cloud.google.com/iam-admin/serviceaccounts?extra=1",
+            "http://console.cloud.google.com/iam-admin/serviceaccounts",
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(!is_provider_docs_link(url, &kinds), "{url}");
+        }
+        for url in [
+            "https://user:password@example.com/",
+            "https://example.com/\n",
+        ] {
+            assert!(!is_provider_docs_link(
+                url,
+                &json!({"kinds": [{"docs_url": url}]})
+            ));
         }
         assert!(!is_provider_docs_link("https://example.com/", &json!({})));
     }
@@ -2800,11 +2937,31 @@ mod tests {
     #[test]
     fn data_changes_are_forwarded_without_private_fields() {
         for (method, params, expected) in [
-            ("routines.changed", json!({"member_id": 4, "prompt": "private"}), json!({"type": "RoutinesChanged", "member_id": 4})),
-            ("members.changed", json!({"name": "private"}), json!({"type": "MembersChanged"})),
-            ("memory.changed", json!({"member_id": 4, "space": "own", "body": "private"}), json!({"type": "MemoryChanged", "member_id": 4, "space": "own"})),
-            ("memory.changed", json!({"member_id": 0, "space": "shared"}), json!({"type": "MemoryChanged", "member_id": 0, "space": "shared"})),
-            ("memory.changed", json!({"member_id": 4}), json!({"type": "MemoryChanged", "member_id": 4})),
+            (
+                "routines.changed",
+                json!({"member_id": 4, "prompt": "private"}),
+                json!({"type": "RoutinesChanged", "member_id": 4}),
+            ),
+            (
+                "members.changed",
+                json!({"name": "private"}),
+                json!({"type": "MembersChanged"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 4, "space": "own", "body": "private"}),
+                json!({"type": "MemoryChanged", "member_id": 4, "space": "own"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 0, "space": "shared"}),
+                json!({"type": "MemoryChanged", "member_id": 0, "space": "shared"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 4}),
+                json!({"type": "MemoryChanged", "member_id": 4}),
+            ),
         ] {
             for monitoring in [false, true] {
                 let event = main_event_from(&notification(method, params.clone()), monitoring);
@@ -2815,7 +2972,10 @@ mod tests {
             ("routines.changed", json!({})),
             ("routines.changed", json!({"member_id": -1})),
             ("memory.changed", json!({"member_id": "4"})),
-            ("memory.changed", json!({"member_id": 4, "space": "invalid"})),
+            (
+                "memory.changed",
+                json!({"member_id": 4, "space": "invalid"}),
+            ),
         ] {
             assert_eq!(main_event_from(&notification(method, params), false), None);
         }
@@ -2929,7 +3089,8 @@ mod tests {
                 phase: DictationPhase::Listening,
                 agent: true,
                 member_id: Some(3),
-            }).unwrap(),
+            })
+            .unwrap(),
             json!({"type": "Dictation", "phase": "listening", "agent": true, "member_id": 3})
         );
     }

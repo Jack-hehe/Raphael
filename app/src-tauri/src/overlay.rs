@@ -678,7 +678,8 @@ impl Overlay {
     /// appear in (see [`sight`]). It is queued behind the placing that came before it, so it sees
     /// the window where it was just put; the caller does not wait for it.
     fn keep_in_sight(&self, placement: Option<Placement>) {
-        self.last_sight_ms.store(self.elapsed_ms(), Ordering::Relaxed);
+        self.last_sight_ms
+            .store(self.elapsed_ms(), Ordering::Relaxed);
         if let Some(hwnd) = self.hwnd {
             sight::check(&self.window, hwnd, placement);
         }
@@ -741,9 +742,19 @@ impl OverlayApi for Overlay {
     }
 
     fn step(&self, text: &str, language: &str) {
-        self.publish(OverlayEvent::Show { mode: Mode::Thinking, line: None });
-        self.publish(OverlayEvent::Mode { mode: Mode::Thinking, quiet: true, lines: Vec::new() });
-        self.publish(OverlayEvent::Step { text: text.to_owned(), language: language.to_owned() });
+        self.publish(OverlayEvent::Show {
+            mode: Mode::Thinking,
+            line: None,
+        });
+        self.publish(OverlayEvent::Mode {
+            mode: Mode::Thinking,
+            quiet: true,
+            lines: Vec::new(),
+        });
+        self.publish(OverlayEvent::Step {
+            text: text.to_owned(),
+            language: language.to_owned(),
+        });
     }
 
     fn level(&self, value: f32) {
@@ -1481,12 +1492,7 @@ mod tests {
             .split("impl OverlayApi for Overlay {")
             .nth(1)
             .unwrap();
-        for method in [
-            "fn show(",
-            "fn greet(",
-            "fn set_mode(",
-            "fn progress(",
-        ] {
+        for method in ["fn show(", "fn greet(", "fn set_mode(", "fn progress("] {
             let body = api
                 .split(method)
                 .nth(1)
