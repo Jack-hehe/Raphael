@@ -94,6 +94,17 @@ async def status(router):
     return (await router.call("status.get", {}))["openrouter"]
 
 
+async def test_usage_bill_rpc_matches_status_sidebar_and_reports_enabled_voice(usage_brain):
+    brain, router, _, _ = usage_brain(KeyEndpoint())
+    for purpose in ("agent", "stt", "cleanup", "memory", "other"):
+        brain._spend.record(purpose=purpose, model="m", cost_usd=.1, prompt_tokens=1, completion_tokens=1)
+    bill = (await router.call("usage.runs", {"range": "month", "tz": "Pacific/Honolulu"}))["bill"]
+    assert bill["cost_usd"] == (await router.call("status.get", {}))["spend"]["month_usd"]
+    assert len(bill["purposes"]) == 5
+    brain._settings.set("tts_enabled", True)
+    assert (await router.call("usage.runs", {}))["fish_voice"] is True
+
+
 async def wait_status(router, predicate):
     async def poll():
         while True:

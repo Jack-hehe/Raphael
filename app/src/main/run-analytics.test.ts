@@ -5,9 +5,41 @@ import type { RunAnalyticsApi, RunReport } from "./run-analytics-types";
 import { setLocale } from "./i18n";
 
 afterEach(() => document.body.replaceChildren());
+it("separates the ledger bill from retained work and only shows applicable exclusions", async () => {
+  setLocale("zh-TW");
+  const summary = { duration_ms: 0, cost_usd: .01, tokens: 0, ai_steps: 0, tools: 0, errors: 0 };
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary,
+    total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]}, fish_voice:false,
+    bill:{cost_usd:1.24,purposes:[
+      {purpose:"agent",cost_usd:.6,share:.6/1.24}, {purpose:"stt",cost_usd:.496,share:.4},
+      {purpose:"cleanup",cost_usd:.08,share:.08/1.24}, {purpose:"memory",cost_usd:.04,share:.04/1.24},
+      {purpose:"future-purpose",cost_usd:.024,share:.024/1.24},
+    ]} };
+  const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageExport:vi.fn(),
+    saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[]}) };
+  const host = document.createElement("div"); document.body.append(host);
+  const view = mountRunAnalytics(host, api); await view.ready;
+  expect(host.querySelector(".run-bill-total")?.textContent).toBe("US$1.24");
+  expect(host.querySelector(".run-bill h3")?.textContent).toBe("本月花費");
+  expect(host.querySelector(".run-work h3")?.textContent).toBe("對話與工作的明細");
+  expect(host.querySelector(".run-retained")?.textContent).toContain("刪除紀錄");
+  expect(host.querySelector(".run-exclusions")).toBeNull();
+  expect(host.querySelector('[data-bill-purpose="stt"]')?.textContent).toContain("40%");
+  expect(host.querySelector('[data-bill-purpose="future-purpose"]')?.textContent).toContain("其他");
+  vi.mocked(api.usageRuns).mockResolvedValue({...report,fish_voice:true});
+  vi.mocked(api.usageAllowances).mockResolvedValue({brains:[{id:"codex",name:"Codex",windows:[]}]});
+  await view.refresh();
+  expect(host.querySelector(".run-exclusions")?.textContent).toContain("Fish Audio");
+  const heading = host.querySelector<HTMLElement>(".run-allowance h3")!;
+  heading.scrollIntoView = vi.fn();
+  host.querySelector<HTMLButtonElement>('[data-run-act="show-allowance"]')!.click();
+  expect(heading.scrollIntoView).toHaveBeenCalled();
+  expect(document.activeElement).toBe(heading);
+  view.destroy();
+});
 it("shows catalog model names, localized members and durations, and expands the member top five", async () => {
   const summary = { duration_ms: 185200, cost_usd: .01, tokens: 120, ai_steps: 1, tools: 0, errors: 0 };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 1, groups: { member: Array.from({length:7}, (_, i) => ({label: i ? `Member ${i}` : "Raphael", member_id: i, tokens: 7-i, cost_usd: 0, runs: 1})), model: [{label:"cli:codex:gpt-6.1",tokens:120,cost_usd:.01,runs:1}], day: [], provider: [], routine: [] } };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, bill: {cost_usd:1.24,purposes:[{purpose:"agent",cost_usd:1.24,share:1}]}, fish_voice:false, total: 1, groups: { member: Array.from({length:7}, (_, i) => ({label: i ? `Member ${i}` : "Raphael", member_id: i, tokens: 7-i, cost_usd: 0, runs: 1})), model: [{label:"cli:codex:gpt-6.1",tokens:120,cost_usd:.01,runs:1}], day: [], provider: [], routine: [] } };
   const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageExport: vi.fn(), usageAllowances: vi.fn().mockResolvedValue({brains:[]}), saveUsageCsv:vi.fn(), brainsCli:vi.fn().mockResolvedValue({clis:[{id:"codex",models:[{id:"gpt-6.1",name:"GPT-6.1",provider:"OpenAI"}]}]}) };
   setLocale("zh-TW");
   const host = document.createElement("div"); document.body.append(host);
@@ -26,11 +58,11 @@ it("shows catalog model names, localized members and durations, and expands the 
 });
 it("keeps totals, grouping and CSV export without any per-run navigation", async () => {
   const summary = { duration_ms: 2000, cost_usd: .01, tokens: 120, ai_steps: 1, tools: 2, errors: 0 };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, bill: {cost_usd:1.24,purposes:[{purpose:"agent",cost_usd:1.24,share:1}]}, fish_voice:false, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
   const api: RunAnalyticsApi = { usageRuns: vi.fn().mockResolvedValue(report), usageExport: vi.fn().mockResolvedValue({ csv: "all runs" }), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn().mockResolvedValue(true) };
   const host = document.createElement("div"); document.body.append(host);
   const view = mountRunAnalytics(host, api); await view.ready;
-  expect(host.querySelectorAll(".run-tile")).toHaveLength(6);
+  expect(host.querySelectorAll(".run-tile")).toHaveLength(5);
   expect(host.querySelector(".run-list, .run-timeline, [data-run-id]")).toBeNull();
   host.querySelector<HTMLButtonElement>('[data-run-group="day"]')!.click();
   expect(host.querySelector('[data-run-group="day"]')?.getAttribute("aria-selected")).toBe("true");
@@ -45,7 +77,7 @@ it("keeps totals, grouping and CSV export without any per-run navigation", async
 
 it("retries a failed load and does not open a save dialog after the view is destroyed", async () => {
   const summary = { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 };
-  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
+  const report: RunReport = { range: "month", start_day: null, end_day: "2026-10-24", summary, bill: {cost_usd:1.24,purposes:[{purpose:"agent",cost_usd:1.24,share:1}]}, fish_voice:false, total: 0, groups: { member: [], model: [], day: [], provider: [], routine: [] } };
   let finish!: (result: { csv: string }) => void;
   const api: RunAnalyticsApi = { usageRuns: vi.fn().mockRejectedValueOnce("offline").mockResolvedValue(report), usageExport: vi.fn().mockImplementation(() => new Promise(resolve => { finish = resolve; })), usageAllowances: vi.fn().mockResolvedValue({ brains: [] }), saveUsageCsv: vi.fn() };
   const host = document.createElement("div"); document.body.append(host);
@@ -62,7 +94,7 @@ it("retries a failed load and does not open a save dialog after the view is dest
 
 it("shows recorded subscription exhaustion and reset beside live Codex allowances", async () => {
   const summary = { duration_ms:0, cost_usd:0, tokens:0, ai_steps:0, tools:0, errors:0 };
-  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, bill: {cost_usd:1.24,purposes:[{purpose:"agent",cost_usd:1.24,share:1}]}, fish_voice:false, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
   const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[{id:"codex",name:"Codex CLI",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792800000}]},{id:"claude",name:"Claude",windows:[]},{id:"gemini",name:"Antigravity",windows:[]}],quotas:[{provider:"claude",reset_at_ms:1792800000000},{provider:"gemini",reset_at_ms:null}]}) };
   const host = document.createElement("div"); document.body.append(host);
   const view = mountRunAnalytics(host,api); await view.ready;
@@ -74,7 +106,7 @@ it("shows recorded subscription exhaustion and reset beside live Codex allowance
 
 it("renders and refreshes all allowance sources with maker marks and honest unknown percentages", async () => {
   const summary = { duration_ms:0, cost_usd:0, tokens:0, ai_steps:0, tools:0, errors:0 };
-  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
+  const report: RunReport = { range:"month", start_day:null, end_day:"2026-10-24", summary, bill: {cost_usd:1.24,purposes:[{purpose:"agent",cost_usd:1.24,share:1}]}, fish_voice:false, total:0, groups:{member:[],model:[],day:[],provider:[],routine:[]} };
   const api: RunAnalyticsApi = { usageRuns:vi.fn().mockResolvedValue(report), usageExport:vi.fn(), saveUsageCsv:vi.fn(), usageAllowances:vi.fn().mockResolvedValue({brains:[
     {id:"codex",name:"Codex",source:"live",windows:[{period:"fiveHour",remaining_percent:76,resets_at:1792900000}]},
     {id:"claude",name:"Claude",source:"reported",windows:[

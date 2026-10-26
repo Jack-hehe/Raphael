@@ -236,7 +236,6 @@ class Brain:
         self._notify_providers = lambda: None
         self._notify_settings = lambda: None
         from .runs import RunAnalytics
-        self._runs = RunAnalytics(conn, now_ms, providers)
         self._keys = keys
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
@@ -254,6 +253,7 @@ class Brain:
         self._dictionary = DictionaryStore(conn, now_ms)
         self._settings = SettingsStore(conn)
         self._spend = SpendTracker(conn, now_ms, tz)
+        self._runs = RunAnalytics(conn, now_ms, providers, spend=self._spend, settings=self._settings)
         self._stats = StatsStore(conn, now_ms, tz)
         self._usage = UsageAnalytics(conn, now_ms, tz, providers)
         self._pricing = PricingService(conn, client, now_ms)

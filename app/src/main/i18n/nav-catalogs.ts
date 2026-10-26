@@ -1,5 +1,12 @@
 /** Navigation, owner settings, MCP management and run analytics. */
 export const navZh = {
+  "runs.billOf": "{p0}花費",
+  "runs.work": "對話與工作",
+  "runs.workDetail": "對話與工作的明細",
+  "runs.retained": "僅計保留的執行紀錄；刪除紀錄會減少這裡的統計，不影響上方的花費。",
+  "runs.excluded": "未含：",
+  "runs.cliExcluded": "CLI 訂閱（查看額度）",
+  "runs.fishExcluded": "Fish Audio 語音（另行計費）",
   "runs.allowancePercentUnknown": "未提供剩餘百分比",
   "runs.allowanceUnavailable": "這個 CLI 不提供剩餘額度", "runs.allowanceUpdated": "更新於 {time}",
   "runs.lastReported": "上次執行回報", "runs.liveAllowance": "即時查詢", "runs.allowanceAllowed": "可使用", "runs.allowanceWarning": "接近額度上限",
@@ -17,6 +24,13 @@ export const navZh = {
 } as const;
 
 export const navEn: Record<keyof typeof navZh, string> = {
+  "runs.billOf": "Spend · {p0}",
+  "runs.work": "Conversations and work",
+  "runs.workDetail": "Conversation and work details",
+  "runs.retained": "Retained runs only; deleting records reduces these totals, not the spend above.",
+  "runs.excluded": "Excludes:",
+  "runs.cliExcluded": "CLI subscriptions (view allowances)",
+  "runs.fishExcluded": "Fish Audio voice (billed separately)",
   "runs.allowancePercentUnknown": "Remaining percentage not provided",
   "runs.allowanceUnavailable": "This CLI does not provide remaining allowance", "runs.allowanceUpdated": "Updated {time}",
   "runs.lastReported": "Last run report", "runs.liveAllowance": "Live query", "runs.allowanceAllowed": "Available", "runs.allowanceWarning": "Approaching limit",
@@ -34,6 +48,13 @@ export const navEn: Record<keyof typeof navZh, string> = {
 };
 
 export const navJa: Record<keyof typeof navZh, string> = {
+  "runs.billOf": "{p0}の費用",
+  "runs.work": "会話と作業",
+  "runs.workDetail": "会話と作業の内訳",
+  "runs.retained": "保存中の実行記録のみ。記録を削除するとここの統計は減りますが、上の費用は変わりません。",
+  "runs.excluded": "対象外：",
+  "runs.cliExcluded": "CLI サブスクリプション（残量へ）",
+  "runs.fishExcluded": "Fish Audio 音声（別途請求）",
   "runs.allowancePercentUnknown": "残りの割合は未提供です",
   "runs.allowanceUnavailable": "この CLI は残量を提供していません", "runs.allowanceUpdated": "更新日時 {time}",
   "runs.lastReported": "前回の実行から", "runs.liveAllowance": "現在の照会", "runs.allowanceAllowed": "利用可能", "runs.allowanceWarning": "上限に近づいています",

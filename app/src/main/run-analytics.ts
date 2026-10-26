@@ -13,7 +13,7 @@ import type { MessageKey } from "./i18n/zh-TW";
 import type { CliAllowances, RunAnalyticsApi, RunGrouping, RunPeriod, RunReport, RunSummary } from "./run-analytics-types";
 
 const btn = (label: string, attrs = "") => uiBtn(label, "", attrs);
-type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds" | "runs.allowanceUpdated">;
+type RunKey = Exclude<Extract<MessageKey, `runs.${string}`>, "runs.minutesSeconds" | "runs.seconds" | "runs.allowanceUpdated" | "runs.billOf">;
 const periodKey: Record<RunPeriod, RunKey> = { week: "runs.week", month: "runs.month", last_month: "runs.lastMonth", all: "runs.all" };
 const groupKey: Record<RunGrouping, RunKey> = { member: "runs.member", model: "runs.model", day: "runs.day", provider: "runs.provider", routine: "runs.routine" };
 const number = (n: number) => new Intl.NumberFormat(getLocale(), { maximumFractionDigits: 0 }).format(n);
@@ -26,7 +26,7 @@ const memberName = (id: number | undefined, name: string) => id === 0 || name ==
 const time = (ms: number) => new Date(ms).toLocaleString(getLocale(), { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 function tiles(s: RunSummary): string {
   return `<div class="run-tiles">${([
-    ["runs.time", duration(s.duration_ms)], ["runs.cost", formatUsd(s.cost_usd)], ["runs.tokens", number(s.tokens)],
+    ["runs.time", duration(s.duration_ms)], ["runs.tokens", number(s.tokens)],
     ["runs.ai", number(s.ai_steps)], ["runs.tools", number(s.tools)], ["runs.errors", number(s.errors)],
   ] as [RunKey, string][]).map(([key, value]) => `<div class="run-tile"><span>${t(key)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>`;
 }
@@ -68,16 +68,32 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onMod
     return values.length ? `<ul class="run-bars">${values.map(g => `<li><div><span class="run-group-label">${group === "model" ? modelHTML(g.label) : group === "member" ? faceHTML({id:g.member_id ?? (g.label === "Raphael" ? 0 : -1),name:g.label,avatar_url:g.avatar_url},24) + esc(memberName(g.member_id,g.label)) : esc(g.label === "unknown" ? t("runs.unknown") : g.label)}</span><strong>${number(g.tokens || g.runs)}</strong></div>` +
       `<div class="run-bar-track"><i style="width:${Math.max(1, (g.tokens || g.runs) / peak * 100)}%"></i></div><small>${formatUsd(g.cost_usd)}</small></li>`).join("")}</ul>${group === "member" && all.length > 5 ? btn(t(allMembers ? "runs.showLess" : "runs.showAll"), ' data-run-act="members"') : ""}` : `<p class="ua-empty">${t("runs.empty")}</p>`;
   }
+  function billHTML(): string {
+    const bill = report!.bill;
+    const purposeKey = { agent: "runs.work", stt: "usage.stt", cleanup: "usage.cleanup", memory: "usage.memory" } as const;
+    const exclusions = [
+      allowance.brains.length ? btn(t("runs.cliExcluded"), ' data-run-act="show-allowance"') : "",
+      report!.fish_voice ? esc(t("runs.fishExcluded")) : "",
+    ].filter(Boolean);
+    return `<section class="run-bill"><h3>${t("runs.billOf", { p0: t(periodKey[range]) })}</h3><strong class="run-bill-total" data-bill-total="${bill.cost_usd}">${formatUsd(bill.cost_usd)}</strong>` +
+      `<ul class="run-bill-purposes">${bill.purposes.map(row => {
+        const label = t(purposeKey[row.purpose as keyof typeof purposeKey] ?? "usage.other");
+        const percent = new Intl.NumberFormat(getLocale(), { style: "percent", maximumFractionDigits: 1 }).format(row.share);
+        return `<li data-bill-purpose="${esc(row.purpose)}"><div><span>${label}</span><strong>${formatUsd(row.cost_usd)}</strong><span>${percent}</span></div>` +
+          `<div class="run-bar-track" role="img" aria-label="${esc(`${label} · ${formatUsd(row.cost_usd)} · ${percent}`)}"><i style="width:${Math.min(100, Math.max(0, row.share * 100))}%"></i></div></li>`;
+      }).join("")}</ul>` +
+      (exclusions.length ? `<div class="run-exclusions">${t("runs.excluded")} ${exclusions.join(" · ")}</div>` : "") + `</section>`;
+  }
   function render(): void {
     if (disposed) return;
     const focus = root.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.runAct : undefined;
     root.setAttribute("aria-busy", String(busy));
     let html = `<header class="run-header"><h2>${t("runs.overview")}</h2><div>${sel(Object.entries(periodKey).map(([value, key]) => ({ value, label: t(key) })), range, t("usage.period"), ' data-run-act="period"')}${btn(t("runs.export"), ` data-run-act="export"${busy || exportBusy ? " disabled" : ""}`)}</div></header>`;
-    if (report) html += tiles(report.summary) + `<h3>${t("runs.where")}</h3><div class="run-groups"><section class="run-members"><h4>${t("runs.member")}</h4>${bars("member")}</section><section><div class="run-segments">` +
-      tabs((["model", "day", "provider", "routine"] as RunGrouping[]).map(g => ({id:g,label:t(groupKey[g]),attrs:` data-run-group="${g}" tabindex="${grouping === g ? 0 : -1}"`})),grouping,{label:t("runs.where"),kind:"nav"}) + `</div>${bars(grouping)}</section></div>`;
+    if (report) html += billHTML() + `<section class="run-work"><h3>${t("runs.workDetail")}</h3><p class="run-retained">${t("runs.retained")}</p>` + tiles(report.summary) + `<h4>${t("runs.where")}</h4><div class="run-groups"><section class="run-members"><h4>${t("runs.member")}</h4>${bars("member")}</section><section><div class="run-segments">` +
+      tabs((["model", "day", "provider", "routine"] as RunGrouping[]).map(g => ({id:g,label:t(groupKey[g]),attrs:` data-run-group="${g}" tabindex="${grouping === g ? 0 : -1}"`})),grouping,{label:t("runs.where"),kind:"nav"}) + `</div>${bars(grouping)}</section></div></section>`;
     if (busy) html += `<p role="status" class="ua-status">${t("usage.loading")}</p>`;
     if (error) html += `<p role="alert">${esc(error)}</p>${btn(t("usage.retry"), ' data-run-act="retry"')}`;
-    html += `<section class="run-allowance"><header><h3>${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
+    html += `<section class="run-allowance"><header><h3 tabindex="-1">${t("runs.allowance")}</h3>${btn(t("runs.refresh"), ` data-run-act="allowance"${allowanceBusy ? " disabled" : ""}`)}</header>` +
       allowanceHTML() + `</section>`;
     root.innerHTML = html;
     if (focus) root.querySelector<HTMLElement>(`[data-run-act="${focus}"]`)?.focus({ preventScroll: true });
@@ -105,6 +121,11 @@ export function mountRunAnalytics(host: HTMLElement, api: RunAnalyticsApi, onMod
     else if (act === "retry") void refresh();
     else if (act === "members") { allMembers = !allMembers; render(); }
     else if (act === "allowance") void allowances();
+    else if (act === "show-allowance") {
+      const heading = root.querySelector<HTMLElement>(".run-allowance h3");
+      heading?.scrollIntoView({ block: "start", behavior: "smooth" });
+      heading?.focus({ preventScroll: true });
+    }
     else if (act === "export") {
       exportBusy = true; render();
       try { const result = await api.usageExport(params()); if (!disposed && await api.saveUsageCsv(result.csv)) toaster.info(t("runs.exported")); }

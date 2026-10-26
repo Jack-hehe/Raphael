@@ -85,6 +85,45 @@ class SpendTracker:
         first, following = _month_range(today)
         return self._spent_between(_day_start_ms(first, zone), _day_start_ms(following, zone))
 
+    def bill(self, period: str) -> dict:
+        """The ledger bill by purpose, using the sidebar's clock and calendar zone.
+
+        Costs survive history deletion. Full calendar periods deliberately use the same
+        half-open month boundaries as month_total(), including any future-dated rows.
+        """
+        zone, today = self._zone_and_today()
+        if period == "month":
+            first, following = _month_range(today)
+        elif period == "last_month":
+            following = today.replace(day=1)
+            first = (following - _ONE_DAY).replace(day=1)
+        elif period == "week":
+            first = today - timedelta(days=today.weekday())
+            following = first + timedelta(days=7)
+        elif period == "all":
+            first = following = None
+        else:
+            raise ValueError("Unknown bill period")
+        where, args = "", ()
+        if first is not None:
+            where = " WHERE created_at_ms >= ? AND created_at_ms < ?"
+            args = (_day_start_ms(first, zone), _day_start_ms(following, zone))
+        # Keep SQL's row-order total identical to month_total(), rather than summing
+        # rounded or regrouped amounts in the UI.
+        total = float(self._conn.execute(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) FROM spend" + where, args
+        ).fetchone()[0])
+        amounts = dict.fromkeys(("agent", "stt", "cleanup", "memory"), 0.0)
+        for purpose, cost in self._conn.execute(
+            "SELECT purpose, SUM(cost_usd) FROM spend" + where + " GROUP BY purpose", args
+        ):
+            key = purpose if purpose in amounts else "other"
+            amounts[key] = amounts.get(key, 0.0) + float(cost)
+        return {"cost_usd": total, "purposes": [
+            {"purpose": purpose, "cost_usd": cost, "share": cost / total if total else 0.0}
+            for purpose, cost in amounts.items()
+        ]}
+
     def today_total(self) -> float:
         """What has been spent today, in US dollars."""
         zone, today = self._zone_and_today()

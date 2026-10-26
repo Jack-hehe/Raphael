@@ -76,7 +76,7 @@ beforeEach(() => {
   api.providersKinds.mockResolvedValue({ kinds: [] });
   api.providersList.mockResolvedValue({ providers: [] });
   api.brainsCli.mockResolvedValue({ clis: [] });
-  api.usageRuns.mockResolvedValue({ range: "month", start_day: "2026-10-01", end_day: "2026-10-24", summary: { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 }, groups: { member: [], model: [], day: [], provider: [], routine: [] }, runs: [], total: 0 });
+  api.usageRuns.mockResolvedValue({ range: "month", start_day: "2026-10-01", end_day: "2026-10-24", summary: { duration_ms: 0, cost_usd: 0, tokens: 0, ai_steps: 0, tools: 0, errors: 0 }, groups: { member: [], model: [], day: [], provider: [], routine: [] }, bill: { cost_usd: 0, purposes: [] }, fish_voice: false, total: 0 });
   api.usageAllowances.mockResolvedValue({ brains: [] });
   api.usageAnalytics.mockImplementation(async ({ range }: UsageRequest) => {
     const group = { total: 0, series: [] };
