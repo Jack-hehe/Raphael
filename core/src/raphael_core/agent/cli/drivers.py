@@ -372,14 +372,30 @@ class Driver:
             elif method == "turn/started":
                 self.turn = (params.get("turn") or {}).get("id")
             elif method == "turn/completed":
-                if (params.get("turn") or {}).get("status") == "completed":
+                turn = params.get("turn") or {}
+                if turn.get("status") == "completed":
                     yield self._event("final", final_text)
                 else:
-                    yield self._event("error", "cli_turn_failed")
+                    yield self._event("error", "rate_limited" if too_many_requests(turn.get("error")) else "cli_turn_failed")
                 return
             elif method == "error":
-                yield self._event("error", "cli_error")
+                if params.get("willRetry") is True:
+                    continue  # Codex retries the turn itself; its outcome still comes as turn/completed
+                yield self._event("error", "rate_limited" if too_many_requests(params.get("error")) else "cli_error")
                 return
+
+
+_STATUS_KEYS = frozenset({"httpStatusCode", "http_status_code", "statusCode", "status_code", "status"})
+
+
+def too_many_requests(error):
+    """Whether a CLI's error object carries HTTP 429 or "Too Many Requests" at any depth."""
+    if isinstance(error, dict):
+        return any(key in _STATUS_KEYS and value in (429, "429") or too_many_requests(value) for key, value in error.items())
+    if isinstance(error, list):
+        return any(too_many_requests(value) for value in error)
+    return isinstance(error, str) and "too many requests" in error.lower()
+
 
 async def codex_home(workspace, environ, *, owner=None):
     """Private persistent state outside the workspace; borrow login without refresh authority.

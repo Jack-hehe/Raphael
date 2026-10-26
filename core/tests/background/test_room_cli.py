@@ -2,6 +2,7 @@
 import asyncio
 import pytest
 
+from raphael_core.agent.cli.drivers import Event
 from raphael_core.agent.cli.loop import CliLoop
 from raphael_core.agent.history import AgentHistory
 from raphael_core.background.run import RunLimits
@@ -74,6 +75,73 @@ async def test_cli_room_timeout_and_cancel_are_worker_terminal_states(make_rig, 
     await rig.service._cancel({"task_id":task})
     await until(lambda: rig.task(task).state == "cancelled")
     assert not rig.service._cli_loops
+
+
+class Brains:
+    def __init__(self, home):
+        self.home, self.environ = home, {}
+
+    def command(self, name):
+        return ["never-spawn-real-CLI"]
+
+    def available(self, name, *, command=None):
+        return True
+
+
+def scripted_cli(monkeypatch, *runs, waits=(0.0, 0.0)):
+    """Each CLI run plays the next list of events (the last one repeats); returns the runs made."""
+    played = []
+    class Driver:
+        def __init__(self, *args, **kwargs):
+            pass
+        async def run(self, **kwargs):
+            played.append(kwargs)
+            for event in runs[min(len(played), len(runs)) - 1]:
+                yield event
+        async def interrupt(self):
+            pass
+    monkeypatch.setattr("raphael_core.agent.cli.loop.Driver", Driver)
+    monkeypatch.setattr("raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S", waits)
+    return played
+
+
+def progress(rig, task):
+    return [params["text"] for method, params in rig.notifications if method == "worker.progress" and params["task_id"] == task]
+
+
+async def test_cli_room_turn_waits_out_one_rate_limit_and_answers(make_rig, monkeypatch, tmp_path):
+    rig = make_rig()
+    played = scripted_cli(monkeypatch, [Event("error", "rate_limited")], [Event("final", "The plan is ready.")])
+    task, turn = submit_room(rig)
+    rig.service.use_cli(Brains(tmp_path))
+    await until(lambda: rig.task(task).state in ("done", "failed"))
+    assert rig.task(task).state == "done" and AgentHistory(rig.conn).get(turn).text == "The plan is ready."
+    assert len(played) == 2 and progress(rig, task) == ["Codex CLI is rate-limited; retrying in 0 s."]
+
+
+@pytest.mark.parametrize("first", [[], [Event("tool_start", data={"name": "local_time"})]])
+async def test_cli_room_turn_reports_a_rate_limit_it_cannot_wait_out(make_rig, monkeypatch, tmp_path, first):
+    rig = make_rig()
+    played = scripted_cli(monkeypatch, [*first, Event("error", "rate_limited")])
+    task, turn = submit_room(rig)
+    rig.service.use_cli(Brains(tmp_path))
+    await until(lambda: rig.task(task).state in ("done", "failed"))
+    failed = rig.task(task)
+    assert (failed.state, failed.reason) == ("failed", "cli_rate_limited")
+    assert failed.report_text == "Codex CLI is rate-limited right now (too many requests). Try again in a little while."
+    assert AgentHistory(rig.conn).get(turn).status == "error"
+    assert len(played) == (1 if first else 3)
+
+
+async def test_stopping_a_room_turn_while_it_waits_out_a_rate_limit_cancels_it(make_rig, monkeypatch, tmp_path):
+    rig = make_rig()
+    played = scripted_cli(monkeypatch, [Event("error", "rate_limited")], waits=(30.0, 60.0))
+    task, _ = submit_room(rig)
+    rig.service.use_cli(Brains(tmp_path))
+    await until(lambda: progress(rig, task))
+    await rig.service._cancel({"task_id": task})
+    await until(lambda: rig.task(task).state == "cancelled")
+    assert len(played) == 1 and not rig.service._cli_loops
 
 
 async def test_cli_room_expired_approval_cancels_the_waiting_loop(make_rig, monkeypatch):

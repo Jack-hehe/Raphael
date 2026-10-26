@@ -271,7 +271,7 @@ async def cell(model, member, scenario, *, brains, client, sessions, conn, budge
                 outcome = await loop.run()
             if outcome.status != "done":
                 raise Stop(outcome.kind or "loop_did_not_finish")
-            if getattr(loop, "failed", False):
+            if getattr(loop, "failure", None):
                 raise Stop("cli_transport_or_login_failed")
             reply = loop.reply(outcome)
             text = "\n".join(reply.messages or [reply.text, reply.detail or ""])

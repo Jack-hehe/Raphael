@@ -276,6 +276,50 @@ print(json.dumps({"type":"result","subtype":"success","result":"Answer from subs
     assert not client.json_calls
 
 
+RATE_LIMITED_CODEX = '''import json, sys
+from pathlib import Path
+launches = Path(LAUNCHES)
+launches.write_text((launches.read_text() if launches.exists() else "") + "x")
+def send(value): print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "initialize": send({"id":msg["id"], "result":{}})
+    elif msg.get("method") in ("thread/start", "thread/resume"): send({"id":msg["id"], "result":{"thread":{"id":"limited"}}})
+    elif msg.get("method") == "turn/start":
+        if len(launches.read_text()) >= ANSWER_ON:
+            send({"method":"item/completed", "params":{"item":{"type":"agentMessage", "id":"final", "text":"Planned."}}})
+            send({"method":"turn/completed", "params":{"turn":{"status":"completed"}}})
+        else:
+            send({"method":"error", "params":{"willRetry":False, "threadId":"limited", "turnId":"t", "error":{
+                "message":"exceeded retry limit, last status: 429 Too Many Requests",
+                "codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}}}}})
+        break
+'''
+
+
+async def test_a_rate_limited_cli_turn_is_run_again_with_one_public_line(setup, tmp_path, monkeypatch):
+    rig, team = setup
+    teacher = member(team, model="cli:codex")
+    monkeypatch.setattr("raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S", (0.0, 0.0))
+    launches = tmp_path / "launches.txt"
+    fake_brain(rig, tmp_path, RATE_LIMITED_CODEX.replace("LAUNCHES", repr(str(launches))).replace("ANSWER_ON", "2"), name="codex")
+    assert (await typed(rig, "Plan it", teacher.id))["text"] == "Planned."
+    [turn] = (await rig.call("agent.history.list", {"member_id": teacher.id}))["turns"]
+    assert [m["text"] for m in turn["messages"] if m["kind"] == "progress"] == ["Codex CLI 暫時限流，0 秒後重試。"]
+    assert launches.read_text() == "xx"
+
+
+async def test_a_quick_cli_question_fails_at_once_when_rate_limited(setup, tmp_path, monkeypatch):
+    rig, _ = setup
+    rig.settings.set("agent_model", "cli:codex")
+    monkeypatch.setattr("raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S", (0.0, 0.0))
+    launches = tmp_path / "launches.txt"
+    fake_brain(rig, tmp_path, RATE_LIMITED_CODEX.replace("LAUNCHES", repr(str(launches))).replace("ANSWER_ON", "99"), name="codex")
+    result = await rig.ask("Explain it")
+    assert result["text"] == "Codex CLI 目前請求太頻繁而被限流，請稍後再試。"
+    assert launches.read_text() == "x"
+
+
 async def test_not_logged_in_never_starts_the_fake_cli(setup, tmp_path):
     rig, team = setup
     teacher = member(team, model="cli:gemini")

@@ -1093,8 +1093,8 @@ class BackgroundService:
                 self._pause(task, run, {"messages":[{"role":"user","content":task.text}]})
             else:
                 reply = dataclasses.asdict(outcome)
-                if loop.failed:
-                    reply = {"status":"stopped", "kind":"failed"}
+                if loop.failure:
+                    reply = {"status":"stopped", "kind":"failed", "detail":"cli_" + loop.failure, "final":outcome.final}
                 self._conclude_run(task, run, reply)
         except TimeoutError:
             self._conclude_run(task, run, {"status":"stopped", "kind":"limit_time"})
@@ -1610,6 +1610,9 @@ class BackgroundService:
             self._conclude(task, run, "limit", notice, text, None, kind)
         elif status == "stopped" and kind == "failed":
             detail = reply.get("detail")
+            if str(detail).startswith("cli_"):  # the CLI loop's own words already say what happened
+                self._conclude(task, run, "failed", negative, reply.get("final") or phrase(language, "error"), None, detail)
+                return
             if detail == "tools":
                 text = phrase(language, "worker_model")
             else:
