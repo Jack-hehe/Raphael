@@ -215,7 +215,7 @@ def smoke_without_a_key(executable: Path) -> dict:
             # why; nothing is asked of a model and nothing is done to this computer (a request that
             # is a command would be: so this one is not).
             refused = rpc.call("agent.ask", {"session_id": "smoke", "text": "What is the weather?",
-                                             "ui_language": "en", "target_app": None})
+                                             "ui_language": "en", "target_app": None, "destination": "quick"})
             require(refused["status"] == "done" and refused["prefix"] == "Negative",
                     "The voice assistant did not refuse a request it cannot answer without a key")
             quick = next(c["id"] for c in rpc.call("conversations.list")["conversations"] if c["kind"] == "quick")
@@ -278,7 +278,7 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
                         f"{languages[0]}: the cleaned dictation was not saved as cleaned at no cost")
             # The voice assistant answers small talk with the fake LLM, in the language asked for.
             spoken = rpc.call("agent.ask", {"session_id": "smoke", "text": "hello",
-                                            "ui_language": "en", "target_app": None})
+                                            "ui_language": "en", "target_app": None, "destination": "quick"})
             require(spoken == {"status": "done", "turn_id": 1, "prefix": "Answer", "text": "hello"},
                     "The voice assistant did not answer with the fake LLM")
             quick = next(c["id"] for c in rpc.call("conversations.list")["conversations"] if c["kind"] == "quick")
@@ -288,7 +288,7 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
             # with --worker), which carries out the fake model's script and reports. If the bundle
             # could not start itself that way the task would end interrupted or failed.
             handed = rpc.call("agent.ask", {"session_id": "smoke", "text": "[delegate] what time is it",
-                                            "ui_language": "en", "target_app": None})
+                                            "ui_language": "en", "target_app": None, "destination": "quick"})
             require(handed["status"] == "done" and handed["text"] == "Handed to the background.",
                     "The task was not handed to the background worker")
             task = rpc.wait_for_notification("worker.report", timeout=90)

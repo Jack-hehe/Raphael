@@ -71,7 +71,9 @@ between the question and the answer. `agent.history.search {query, limit}` finds
 that hold the words in the whole history (the search of the memory, `AgentHistory.search`), and
 gives them in the same shape. `agent.turn {turn_id}` tells the app a turn was written or
 completed. `agent.ask` takes an optional `source`, where the request came from ("voice", the
-default; "app", typed in the conversation page of the app; or a chat app such as "telegram").
+default; "app", typed in the conversation page of the app; or a chat app such as "telegram"), and
+`destination: "quick"` (Alt+Space) for Raphael's quick conversation and the quick model. A spoken
+question to Raphael names that or a thread's `conversation_id`; an ID of the other kind is refused.
 
 The services of the tools (`raphael_core.services`, chosen by the owner) come in three ways. A web
 search uses the search service chosen: "openrouter" as before, or a search engine whose results the
@@ -107,8 +109,8 @@ asked about first. `agent.history.list` and `agent.history.search` take `member_
 that thread alone; `agent.turn` names the thread of the turn (`member_id`).
 
 `agent.cancel {session_id}` ends a request that is still being thought about and denies the
-question that session is waiting on, and stops its run on the desktop. A new request replaces any
-question that waits, and any run.
+question that session is waiting on, and stops its run on the desktop. A new request replaces the
+questions that wait in its conversation, and any run.
 
 Threads: this runs on the event loop, which owns the database. The device actions (a key, a page, the
 clipboard, PowerShell) run on worker threads. Nothing here logs what the user said, what Raphael
@@ -168,7 +170,7 @@ from .device import DeviceActions
 from .failure import AgentFailure, failure_kind
 from .gate import BUILTIN_SERVER, ToolGate
 from .history import VOICE, AgentHistory, Turn
-from .conversations import Conversations
+from .conversations import QUICK, Conversations
 from .quota import Quotas
 from .quotes import quote_from_wire
 from .ledger import Ledger
@@ -746,8 +748,11 @@ class AgentService:
         text = _str(params, "text", blank=True)
         language = _str(params, "ui_language")
         quote = quote_from_wire(params.get("quote"))
-        conversation_id = (self.conversations.quick() if member_id == 0 and (params.get("source") is None or params.get("source") in _QUICK_SOURCES)
-                           else self.conversations.resolve(member_id, _opt_int(params, "conversation_id")))
+        destination = params.get("destination")
+        if destination not in (None, QUICK):
+            raise invalid_params("destination must be quick or absent")
+        quick = destination == QUICK
+        conversation_id = self._destination(member_id, _opt_int(params, "conversation_id"), params.get("source"), quick=quick)
         if quote is not None and params.get("source") != "app":
             raise invalid_params("quotes are supported for composer requests")
         replacement = _opt_int(params, "replace_turn_id")
@@ -770,8 +775,17 @@ class AgentService:
             member_id=member_id,
             quote=quote,
             conversation_id=conversation_id,
+            quick=quick,
             transcript_ms=params.get("transcript_ms"),
         )
+
+    def _destination(self, member_id: int, conversation_id: int | None, source: object, *, quick: bool) -> int:
+        """The conversation a request is written to (`Conversations.destination`). A spoken question
+        to Raphael names its own (the quick one, or a thread's ID): a default either way could put a
+        quick question in a formal thread or the reverse, so a missing one is refused."""
+        if member_id == 0 and not quick and conversation_id is None and (source is None or source in _QUICK_SOURCES):
+            raise invalid_params("a spoken question to Raphael must name its destination")
+        return self.conversations.destination(member_id, conversation_id, quick=quick)
 
     def _speaker(self, member_id: int) -> Speaker | None:
         """Who `member_id` is: Raphael for 0, a member of the team, or None for nobody."""
@@ -796,20 +810,19 @@ class AgentService:
         member_id: int = 0,
         quote: dict[str, str] | None = None,
         conversation_id: int | None = None,
+        quick: bool = False,
         transcript_ms: float | None = None,
     ) -> dict:
         """One request, as `agent.ask` answers it. `attachments` are the files handed with it
         (`services.attachments.Attachment`, at most MAX_ATTACHMENTS), kept in memory only; with
         files and no words, the request asks 「看這個」 in its language. `member_id` is who it is
         for: Raphael (0), or a member of the team addressed by its thread's composer, in writing
-        or by voice. The global voice hotkey and chat apps default to Raphael."""
+        or by voice. The global voice hotkey and chat apps default to Raphael. `quick` sends it to
+        Raphael's quick conversation, answered by the quick model (`_destination`)."""
         speaker = self._speaker(member_id)
         if speaker is None:
             raise invalid_params("there is no such member")
-        if member_id == 0 and (source is None or source in _QUICK_SOURCES):
-            conversation_id = self.conversations.quick()
-        else:
-            conversation_id = self.conversations.resolve(member_id, conversation_id)
+        conversation_id = self._destination(member_id, conversation_id, source, quick=quick)
         original_text = None
         expand = getattr(self._team, "expand_command", None)
         if expand is not None:
@@ -825,9 +838,9 @@ class AgentService:
             attachments=list(attachments),
             quote=quote,
             speaker=speaker,
-            conversation_id=self.conversations.resolve(member_id, conversation_id),
+            conversation_id=conversation_id,
+            quick=quick,
         )
-        ask.quick = self.conversations.get(ask.conversation_id)["kind"] == "quick"
         if ask.quick:
             elapsed = float(transcript_ms) if type(transcript_ms) in (int, float) and 0 <= transcript_ms < 3_600_000 else 0.0
             ask.latency = dict(hotkey_end=0.0, transcript=elapsed, routing=None, first_step=None, final_answer=None, speech_start=None)
@@ -850,11 +863,13 @@ class AgentService:
         if self._attachment_store and ask.attachments:
             ask.attachments = [await asyncio.to_thread(self._attachment_store.save, a) for a in ask.attachments]
         ask.voiced = self._voiced(ask.source, ask.speaker.id)
-        # The questions that ran out are expired, and a new request replaces those that still wait.
+        # The questions that ran out are expired, and a new request replaces those that still wait
+        # in its conversation: a quick question leaves a formal one waiting, and the other way round.
         self._expire(self._confirmations.sweep())
         if ask.source in _AT_THIS_COMPUTER:
             self._stop_speaking()  # a new request ends what Raphael was saying
-            self._deny(self._confirmations.cancel_all())
+            self._deny(self._confirmations.cancel_where(
+                lambda pending: getattr(self.turn(pending.turn_id), "conversation_id", None) == ask.conversation_id))
             if self._computer is not None:
                 self._computer.stop_all("replaced")
         else:  # a message from a messaging app leaves a question asked at this computer alone

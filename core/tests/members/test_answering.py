@@ -61,9 +61,11 @@ def member(team, name="小行程", **fields):
 
 
 async def typed(rig, text, member_id, *, source="app", language="zh-TW"):
+    # Raphael's voice key asks a quick question; a member's goes to its own thread.
+    quick = {"destination": "quick"} if source == "voice" and not member_id else {}
     return await rig.call(
         "agent.ask",
-        {"session_id": "s1", "text": text, "ui_language": language, "source": source, "member_id": member_id},
+        {"session_id": "s1", "text": text, "ui_language": language, "source": source, "member_id": member_id, **quick},
     )
 
 

@@ -229,15 +229,16 @@ class Confirmations:
     def cancel_session(self, session_id: str) -> list[Pending]:
         """Deny the questions of a session that was cancelled; return them. Their yes, if it still
         comes, finds nothing to approve."""
-        self.sweep()
-        cancelled = [p for p in self._pending.values() if p.session_id == session_id]
-        for pending in cancelled:
-            del self._pending[pending.id]
-        return cancelled
+        return self.cancel_where(lambda pending: pending.session_id == session_id)
 
     def cancel_all(self) -> list[Pending]:
         """Deny every question that waits; return them."""
+        return self.cancel_where(lambda pending: True)
+
+    def cancel_where(self, replaced: Callable[[Pending], bool]) -> list[Pending]:
+        """Deny the waiting questions that `replaced` picks; return them."""
         self.sweep()
-        cancelled = list(self._pending.values())
-        self._pending.clear()
+        cancelled = [p for p in self._pending.values() if replaced(p)]
+        for pending in cancelled:
+            del self._pending[pending.id]
         return cancelled

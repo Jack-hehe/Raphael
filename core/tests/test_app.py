@@ -2008,7 +2008,7 @@ class RecordingActions:
 
 
 def ask_params(text, language="zh-TW", session="a1"):
-    return {"session_id": session, "text": text, "ui_language": language, "target_app": None}
+    return {"session_id": session, "text": text, "ui_language": language, "target_app": None, "destination": "quick"}
 
 
 async def test_the_assistants_methods_are_on_the_app_from_the_start(tmp_path):

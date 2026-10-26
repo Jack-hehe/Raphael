@@ -1,7 +1,8 @@
 """Named conversations, with a stable default entry for voice, routines and messaging.
 
-Conversation IDs are never reused. A caller that omits an ID writes to the member's default;
-creating another conversation does not silently redirect unattended work into that context.
+Conversation IDs are never reused. A formal request that omits an ID writes to the member's
+default; creating another conversation does not silently redirect unattended work into that
+context. Raphael's quick conversation is reached only by naming it (`QUICK`), never by default.
 """
 
 import sqlite3
@@ -11,6 +12,8 @@ from ..clock import wall_clock_ms
 from ..protocol import invalid_params
 
 TITLE_MAX = 80
+# The destination (and model purpose) of an Alt+Space question: Raphael's quick conversation.
+QUICK = "quick"
 
 
 def short_title(question: str) -> str:
@@ -41,6 +44,21 @@ class Conversations:
 
     def resolve(self, member_id: int, conversation_id: int | None = None) -> int:
         return self.main(member_id) if conversation_id is None else self.get(conversation_id, member_id)["id"]
+
+    def destination(self, member_id: int, conversation_id: int | None, *, quick: bool) -> int:
+        """Where a request is written. A quick request goes to Raphael's quick conversation and a
+        formal one to the member's named or main conversation; an ID that names the other kind is
+        refused, never routed elsewhere."""
+        if quick:
+            if member_id != 0:
+                raise invalid_params("quick questions belong to Raphael")
+            quick_id = self.quick()
+            if conversation_id is not None and conversation_id != quick_id:
+                raise invalid_params("conversation_id is not the quick conversation")
+            return quick_id
+        if conversation_id is not None and self.get(conversation_id, member_id)["kind"] == QUICK:
+            raise invalid_params("the quick conversation takes quick questions only")
+        return self.resolve(member_id, conversation_id)
 
     def quick(self) -> int:
         """The single, lazy, persistent hotkey conversation; never the formal default."""

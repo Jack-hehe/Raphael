@@ -249,6 +249,14 @@ def test_cancelling_all_denies_every_confirmation(confirmations):
     assert confirmations.cancel_all() == []
 
 
+def test_cancelling_where_denies_only_the_picked_confirmations(confirmations):
+    a, b = open_one(confirmations, session="s1", turn=1), open_one(confirmations, session="s2", turn=2)
+    assert confirmations.cancel_where(lambda pending: pending.turn_id == 1) == [a]
+    assert confirmations.resolve(a.id, True).outcome is Outcome.UNKNOWN
+    assert confirmations.resolve(b.id, True).outcome is Outcome.APPROVED
+    assert confirmations.cancel_where(lambda pending: True) == []
+
+
 def test_a_confirmation_that_ran_out_is_not_returned_by_a_cancel(confirmations, clock):
     pending = open_one(confirmations)
     clock.now += 40

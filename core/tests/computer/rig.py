@@ -92,7 +92,7 @@ class AssistantRig:
         return await self.rpc.call(method, params)
 
     async def ask(self, text, *, session="s1", language="zh-TW"):
-        params = {"session_id": session, "text": text, "ui_language": language}
+        params = {"session_id": session, "text": text, "ui_language": language, "destination": "quick"}
         return await self.call("agent.ask", params)
 
     async def confirm(self, confirm_id, approved=True):

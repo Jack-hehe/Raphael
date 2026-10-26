@@ -63,7 +63,7 @@ def ask(core, text, language="en"):
     return result(
         core,
         "agent.ask",
-        {"session_id": "e2e", "text": text, "ui_language": language, "target_app": None},
+        {"session_id": "e2e", "text": text, "ui_language": language, "target_app": None, "destination": "quick"},
     )
 
 

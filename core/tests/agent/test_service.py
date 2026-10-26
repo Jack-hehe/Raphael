@@ -149,9 +149,11 @@ class Rig:
         return await self.rpc.call(method, params)
 
     async def ask(self, text, *, session="s1", language="zh-TW", target_app=None):
+        # As the Alt+Space hotkey asks: spoken, to the quick conversation.
         return await self.call(
             "agent.ask",
-            {"session_id": session, "text": text, "ui_language": language, "target_app": target_app},
+            {"session_id": session, "text": text, "ui_language": language, "target_app": target_app,
+             "destination": "quick"},
         )
 
     async def confirm(self, confirm_id, approved=True):
@@ -1651,7 +1653,7 @@ async def test_a_message_from_a_messaging_app_leaves_the_question_at_the_compute
     assert not any(t["status"] == "denied" for t in await rig.turns())
 
 
-async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces_the_one_that_waits(
+async def test_a_question_typed_in_a_formal_thread_leaves_the_quick_one_waiting(
     rig, client, actions
 ):
     rig.seed("q", "a")
@@ -1663,10 +1665,10 @@ async def test_a_question_typed_in_the_app_is_asked_at_the_computer_and_replaces
         {"session_id": "app-1", "text": "你好", "ui_language": "zh-TW", "source": "app"},
     )
     assert reply["text"] == "好。"
-    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "否"
+    assert (await rig.confirm(asked["confirm"]["id"], True))["prefix"] == "了"
     formal = await rig.turns(conversation_id=rig.service.conversations.main())
     assert formal[0]["source"] == "app" and formal[0]["question"] == "你好"
-    assert any(t["status"] == "denied" for t in await rig.turns())
+    assert not any(t["status"] == "denied" for t in await rig.turns())
 
 
 async def test_stopping_a_session_ends_its_request_and_denies_its_question_only(rig, client, actions):

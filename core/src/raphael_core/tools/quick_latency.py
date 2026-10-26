@@ -162,7 +162,7 @@ async def replay(args):
                             if fake:
                                 fake.question, fake.round = index, 0
                             result = await service._ask({"session_id": f"replay-{index}", "text": QUESTIONS[index % 3],
-                                "source": "voice", "ui_language": "en", "transcript_ms": 0})
+                                "source": "voice", "destination": "quick", "ui_language": "en", "transcript_ms": 0})
                             turn = service._history.get(result.get("turn_id"))
                             if turn is None or turn.status != "done":
                                 raise RuntimeError("replay turn did not complete")

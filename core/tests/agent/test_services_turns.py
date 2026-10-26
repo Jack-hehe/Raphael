@@ -78,7 +78,7 @@ def wire(name, mime, data):
 
 
 async def ask(rig, text, attachments=None, language="zh-TW"):
-    params = {"session_id": "s1", "text": text, "ui_language": language}
+    params = {"session_id": "s1", "text": text, "ui_language": language, "destination": "quick"}
     if attachments is not None:
         params["attachments"] = attachments
     return await rig.call("agent.ask", params)
