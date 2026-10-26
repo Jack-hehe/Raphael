@@ -465,6 +465,28 @@ async def test_rpc_cli_brain_reaches_the_production_authenticated_mcp(tmp_path, 
         await driver.aclose()
 
 
+@pytest.mark.parametrize('calls,reason',[(0,'no_completed_action'),(1,'action_not_in_flight')])
+async def test_a_stop_cell_without_its_held_call_fails_at_once(tmp_path,calls,reason):
+    # Live, a member read the mail once where the cell waited for a second read, until its timeout.
+    from raphael_core.background.host import WorkerHost
+    from background.conftest import Links
+    made=[]
+    class Client(FakeClient):
+        async def chat_tools(self,**kwargs):
+            asked=not any(m['role']=='tool' for m in kwargs['messages']) and 'Close this exchange' not in str(kwargs['messages'])
+            call=asked and len(made)<calls
+            made.extend([1] if call else [])
+            self.turns=iter([('' if call else '好了。',[('Guardian__read',{})] if call else [])])
+            return await super().chat_tools(**kwargs)
+    driver=RpcDriver(tmp_path,'fake/model',Client([]),Budget(40))
+    driver.app.background._host=WorkerHost(connect=Links(),grace_s=.1)
+    try:
+        reasons,_=await asyncio.wait_for(driver.execute(selected('S11')),15)
+        assert reason in reasons
+    finally:
+        await driver.aclose()
+
+
 @pytest.mark.parametrize('brain',['api','cli'])
 @pytest.mark.parametrize('identifier',['S07.short-wrapup','S11'])
 async def test_p04_short_wrapup_and_stop_through_production_paths(tmp_path,monkeypatch,brain,identifier):

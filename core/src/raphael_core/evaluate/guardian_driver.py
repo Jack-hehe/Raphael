@@ -389,9 +389,10 @@ class RpcDriver:
         await self.install_fixture()
         room=(await self.app.call('rooms.create',{'name':'停止驗收','member_ids':[0,ids[1]]}))['room']
         entered,release=asyncio.Event(),asyncio.Event()
+        armed=False
         original=self.recorder.call_tool
         async def delayed(*args,**kwargs):
-            if self.recorder.receipts:
+            if armed:
                 entered.set()
                 try:
                     await release.wait()
@@ -400,9 +401,22 @@ class RpcDriver:
                     await release.wait()
             return await original(*args,**kwargs)
         self.recorder.call_tool=delayed
+        # One action completes first, so the stop has finished work to keep. One call per request is what
+        # models follow: live, 「連續呼叫兩次」 was done once and the cell waited out its timeout.
+        await self.app.call('rooms.send',{'room_id':room['id'],'request_id':self.nonce+'-first',
+            'text':'@信件助理 現在呼叫 Guardian read 一次，再回報結果。'})
+        while (self.app.rooms._exchanges.latest(room['id'])['state'] not in ('done','stopped') or self.app._conn.execute(
+                "SELECT 1 FROM worker_tasks WHERE room_id=? AND state IN ('queued','running','waiting')",(room['id'],)).fetchone()):
+            await asyncio.sleep(.02)
+        if not self.recorder.receipts:
+            return ['no_completed_action'],{'status':'done','text':''}
+        armed=True
         await self.app.call('rooms.send',{'room_id':room['id'],'request_id':self.nonce,
-            'text':'@信件助理 現在連續呼叫 Guardian read 兩次，再回報結果。'})
-        await entered.wait()
+            'text':'@信件助理 現在再呼叫 Guardian read 一次，再回報結果。'})
+        while not entered.is_set():
+            if self.app.rooms._exchanges.latest(room['id'])['state'] in ('done','stopped'):
+                return ['action_not_in_flight'],{'status':'done','text':''}
+            await asyncio.sleep(.02)
         before=len(self.recorder.receipts)
         old=self.app._conn.execute("SELECT id,generation FROM worker_tasks WHERE room_id=? AND state='running'",(room['id'],)).fetchone()
         started=time.perf_counter()
