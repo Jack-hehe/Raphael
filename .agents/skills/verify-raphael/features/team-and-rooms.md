@@ -9,7 +9,9 @@ responders, sequential handoffs, up to two material chime-ins and Raphael's wrap
 Explicit addresses are durable source/recipient reply intents. Six-turn admission slices and
 three-hop limits bound optional chime-ins only; pending replies continue in scheduled slices
 before Raphael concludes. Stop, revoked membership, cost limits and uncertain restart work
-retain named blocked intents. Completed sources recover once without replaying work.
+retain named blocked intents. A member reply that fails (for example a CLI still rate-limited
+after its retries) blocks only that reply with its named reason; the exchange goes on and
+Raphael's wrap-up names the unfinished reply. Completed sources recover once without replaying work.
 Room-only moderator/pro/con roles run two sequential rounds before the chief concludes. Empty and (pass) replies stay hidden.
 Explicit mentions use whole names, prefer the longest matching name, ignore email addresses,
 and run in the order they occur in the message. The same rule applies to peer handoffs.
@@ -101,7 +103,9 @@ Stages have one durable owner; completion requires executor evidence and require
 Failed acceptance has a named blocked/incomplete stage verdict. Progress is a typed status event,
 never persisted as a message. Terminal publication and its task/outbox event share one transaction.
 The chief waits for accepted replies and child work, then concludes once. Stopped/blocked exchanges receive an atomic deterministic summary after all work is terminal, without another paid call. This includes short
-discussions with zero deliverables. New instructions invalidate prior task generations.
+discussions with zero deliverables. Its first line says the work was stopped only after the owner's Stop
+or a new owner message; otherwise it says the discussion did not fully finish and names each unfinished
+reply with its reason (rate limit, quota, login, budget, error). New instructions invalidate prior task generations.
 Room, private and Team composers show Stop in the existing gold slot through acknowledgement,
 running and waiting; task Stop and microphone Stop keep distinct lifecycles.
 

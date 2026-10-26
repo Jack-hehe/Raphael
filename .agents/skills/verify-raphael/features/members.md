@@ -89,6 +89,14 @@ to refresh its login before the next Raphael turn. Browser fixtures cannot prove
 this boundary. For live acceptance on a Codex brain, ask Raphael to create members
 and check the turn's MCP steps show team_overview and member_create, not other tools.
 
+A subscription turn that ends with HTTP 429 (Codex "Too Many Requests", Claude Code
+`api_error_status` 429) is rate-limited unless the quota windows say the plan is used up.
+A turn that has not started a tool, asked a permission or called Raphael's tools runs again
+after 20 s and 60 s with one progress line per wait; quick questions and turns that already
+acted end at once with a specific rate-limit message, and a background task keeps that message
+with the reason `cli_rate_limited`. Offline proof: core/tests/agent/test_cli_brains.py,
+core/tests/background/test_room_cli.py and core/tests/members/test_cli_brains.py.
+
 ## Editable proposals and first Bot setup (P05/P05a)
 
 API and sequential authenticated CLI/MCP calls queue the same turn-end proposal.
