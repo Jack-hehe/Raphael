@@ -98,6 +98,15 @@ class RoomExchanges:
             self.conn.execute("UPDATE room_reply_intents SET state='blocked', reason=? "
                               "WHERE origin_message_id=? AND state IN ('queued','running')", (reason, origin))
 
+    def failure(self, turn_id):
+        """Why a member's reply did not finish: the CLI loop's named kind, else "worker"."""
+        row = self.conn.execute("SELECT reason FROM worker_tasks WHERE turn_id=? ORDER BY id DESC LIMIT 1", (turn_id,)).fetchone()
+        return row[0] if row and str(row[0]).startswith('cli_') else 'worker'
+
+    def name(self, member):
+        speaker = self.rooms._members.speaker(member)
+        return speaker.name if speaker and speaker.name else 'Raphael' if member == 0 else f'#{member}'
+
     def schedule(self, room_id):
         if self.closed:
             return
@@ -278,16 +287,21 @@ class RoomExchanges:
                     if turn.status == 'done' and message['kind'] != 'wrapup' and not exchange.stop_requested and not is_pass(turn.detail or turn.text):
                         self.intents(exchange.origin_message_id, message['id'],
                             [i for i in self.rooms._targets(room, projected['text']) if i != message['member_id']])
+                    failure = None if turn.status == 'done' else 'owner' if exchange.stop_requested else self.failure(turn.id)
                     with self.conn:
                         self.conn.execute("UPDATE room_messages SET exchange_settled = 1 WHERE id = ?", (message["id"],))
                         self.conn.execute("UPDATE room_exchanges SET active_turn=NULL, cost=?, spoken=? WHERE origin_message_id=?",
                             (exchange.cost + turn.cost_usd, json.dumps(sorted(spoken)), exchange.origin_message_id))
-                        self.conn.execute("UPDATE room_reply_intents SET state=?, reason=? WHERE turn_id=? AND state='running'",
-                            ('done' if turn.status == 'done' else 'blocked', '' if turn.status == 'done' else 'worker', turn.id))
+                        named = self.conn.execute("UPDATE room_reply_intents SET state=?, reason=? WHERE turn_id=? AND state='running'",
+                            ('blocked' if failure else 'done', failure or '', turn.id)).rowcount
+                        if failure and not named and message['kind'] == 'message':
+                            # A planned or chosen reply answered no address; its failure is named by its own message.
+                            self.conn.execute("INSERT INTO room_reply_intents (origin_message_id,source_message_id,"
+                                "recipient_id,recipient_name,state,reason,turn_id) VALUES (?,?,?,?,'blocked',?,?)",
+                                (exchange.origin_message_id, message['id'], message['member_id'], self.name(message['member_id']), failure, turn.id))
                     exchange = self.get(exchange.origin_message_id)
-                    if turn.status != "done":
-                        self.block(exchange.origin_message_id, "worker")
-                        self.update(exchange.origin_message_id, state="stopped", reason="worker")
+                    if failure and message["kind"] == "wrapup":
+                        self.update(exchange.origin_message_id, state="stopped", reason=failure)
                         self.attachments.pop(exchange.origin_message_id, None)
                         self.rooms._changed(room_id)
                         continue
@@ -360,8 +374,10 @@ class RoomExchanges:
                     (room_id,exchange.origin_message_id)).fetchall()
                 if not pending and any(row['state'] in ('queued','running','waiting') for row in work):
                     return
+                # A member's failed reply is named in the wrap-up; any other block ends the exchange without one.
                 wrapup = (exchange.turns_taken >= 1 and 0 in ids and not exchange.wrapup_sent and
-                          not pending and not self.conn.execute("SELECT 1 FROM room_reply_intents WHERE origin_message_id=? AND state='blocked'", (exchange.origin_message_id,)).fetchone())
+                          not pending and not self.conn.execute("SELECT 1 FROM room_reply_intents WHERE origin_message_id=? AND state='blocked' "
+                              "AND reason!='worker' AND reason NOT LIKE 'cli!_%' ESCAPE '!'", (exchange.origin_message_id,)).fetchone())
                 if wrapup:
                     last = self.last_reply(exchange.origin_message_id)
                     pending = [{"member":0,"reply_to_member":last[1] if last else None,
