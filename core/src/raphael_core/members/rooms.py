@@ -338,6 +338,8 @@ class RoomsService:
                 terminal = validate_terminal(message['text'], names=names, wrapup=message['kind']=='wrapup')
                 if terminal.reason and not is_pass(message['text']):
                     message.update(status='incomplete',text='',reason=terminal.reason)
+                elif not terminal.reason:
+                    message['text'] = terminal.text
             message["cost"] = turn.cost_usd
         elif turn:
             message["status"] = "error"

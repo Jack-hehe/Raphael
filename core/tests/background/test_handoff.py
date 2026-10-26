@@ -432,7 +432,7 @@ async def test_terminal_publication_rolls_back_task_history_and_outbox_together(
     assert not rig.conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result'",(task_id,)).fetchone()
 
 
-async def test_room_progress_is_status_only_and_dangling_final_is_never_published(make_rig):
+async def test_room_progress_is_status_only_and_a_dangling_address_is_never_published(make_rig):
     rig=make_rig()
     target,source=setup(rig)
     async def response(**kwargs):
@@ -442,12 +442,13 @@ async def test_room_progress_is_status_only_and_dangling_final_is_never_publishe
         return report('Delivered @')
     rig.client.replies.append(response)
     accepted=rig.service.handoff(RAPHAEL,args(target,mode='consult'),source_turn_id=source.id,language='en')
-    await until(lambda:rig.task(accepted.data['task_id']).state=='failed')
+    await until(lambda:rig.task(accepted.data['task_id']).state=='done')
     task=rig.task(accepted.data['task_id'])
-    assert task.reason=='dangling_mention'
+    # The reply is kept; only the address that would never be served is dropped.
+    assert task.reason is None and AgentHistory(rig.conn).get(task.turn_id).text=='Delivered'
     assert len([event for event in rig.notifications if event[0]=='worker.progress'])==3
     saved=AgentHistory(rig.conn).messages([task.turn_id])[task.turn_id]
-    assert all(message['kind']!='progress' and 'Delivered @' not in message['text'] for message in saved)
+    assert all(message['kind']!='progress' and '@' not in message['text'] for message in saved)
     assert all('Delivered @' not in row[0] for row in rig.conn.execute('SELECT text FROM room_messages'))
 
 

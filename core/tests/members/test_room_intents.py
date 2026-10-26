@@ -30,6 +30,16 @@ async def test_decision_parity_and_explicit_addresses_skip_routing(rig, exchange
     assert not decision.calls
 
 
+async def test_a_spaced_address_still_hands_the_turn_to_that_colleague(rig, exchange):
+    # Models often write 「@ 名字」; dropping the whole reply for it lost a moderator's opening live.
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice open the review')
+    await finish(rig, exchange, 'Opening. @ Bob please start')
+    assert rig.background.submitted[-1]['member_id'] == ids[1]
+    alice = next(m for m in (await history(rig, room))['messages'] if m['member_id'] == ids[0])
+    assert (alice['status'], alice['text']) == ('done', 'Opening. @Bob please start')
+
+
 async def test_timeout_and_invalid_choice_are_observable(rig, exchange, monkeypatch):
     room, ids = await team(rig)
     class Slow:

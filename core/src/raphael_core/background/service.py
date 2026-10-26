@@ -1587,6 +1587,10 @@ class BackgroundService:
                 message=self._metrics_conn.execute('SELECT kind FROM room_messages WHERE turn_id=?',(task.turn_id,)).fetchone()
                 wrapup=task.mode is not None or bool(message and message['kind']=='wrapup')
             report = report_from(str(reply.get('final') or ''),language,plain=task.member_id!=0)
+            if report:
+                clean = lambda value: validate_terminal(value,names=names,wrapup=wrapup).text if value else value
+                report = dataclasses.replace(report,text=clean(report.text),detail=clean(report.detail),
+                                             messages=[line for line in map(clean,report.messages) if line])
             terminal = validate_terminal((report.detail or report.text) if report else None,names=names,wrapup=wrapup)
             if report:
                 for line in [report.text,*report.messages]:
