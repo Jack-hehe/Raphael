@@ -6,7 +6,7 @@
       "expected_assertions": ["immediate_start"]
     },
     "raphael/core/room_meeting": {
-      "scenario_ids": ["S07", "S21.meetings.create-reuse"],
+      "scenario_ids": ["S07.meeting", "S21.meetings.create-reuse"],
       "expected_assertions": ["production_state"]
     },
     "raphael/core/approve": {

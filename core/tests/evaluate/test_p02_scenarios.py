@@ -10,7 +10,7 @@ from raphael_core.brain.openrouter import ChatTurn, ChatToolCall, Completion
 from raphael_core.evaluate.guardian import Budget
 from raphael_core.evaluate.guardian import check_reply, Scenario
 from raphael_core.evaluate.guardian_driver import RpcDriver
-from raphael_core.evaluate.guardian_scenarios import SCENARIOS
+from raphael_core.evaluate.guardian_scenarios import cells
 
 from background.conftest import Links
 from test_guardian import FakeBrains
@@ -57,7 +57,7 @@ class P02Brain(FakeClient):
         system = str(messages[0]['content'])
         user = '\n'.join(str(m.get('content','')) for m in messages[1:])
         calls = []
-        if self.scenario == 'S07' and 'You are in a group chat' not in user and not any(m.get('role')=='tool' for m in messages):
+        if self.scenario == 'S07.meeting' and 'You are in a group chat' not in user and not any(m.get('role')=='tool' for m in messages):
             calls = [('room_meeting', {'member_ids':[0,1,3,4,5], 'agenda':'Review source evidence',
                                       'roles':{'4':'moderator','1':'pro','5':'con'}})]
             text = ''
@@ -66,7 +66,7 @@ class P02Brain(FakeClient):
         return ChatTurn(text, [ChatToolCall(str(n), name, args, json.dumps(args)) for n,(name,args) in enumerate(calls)], kwargs['model'], .001, 10, 10, 1)
 
 
-@pytest.mark.parametrize('scenario', ['S02', 'S07'])
+@pytest.mark.parametrize('scenario', ['S02', 'S07.meeting'])
 @pytest.mark.parametrize('brain', ['api', 'cli'])
 async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monkeypatch, scenario, brain):
     client = P02Brain(scenario)
@@ -77,7 +77,7 @@ async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monke
 
             async def run(self, *, system, user, endpoint, token, **kwargs):
                 yield Event('model','owner-model')
-                if scenario=='S07' and 'You are in a group chat' not in user:
+                if scenario=='S07.meeting' and 'You are in a group chat' not in user:
                     async with httpx.AsyncClient() as http:
                         response = await http.post(endpoint, headers={'Authorization':'Bearer ' + token}, json={
                             'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'room_meeting','arguments':{
@@ -97,7 +97,7 @@ async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monke
     links = Links()
     driver.app.background._host = WorkerHost(connect=links)
     try:
-        reasons, turns = await driver.execute(next(cell for cell in SCENARIOS if cell.id==scenario))
+        reasons, turns = await driver.execute(next(cell for cell in cells() if cell.id==scenario))
         assert not reasons, (reasons, [turn.get('text') for turn in turns])
         assert turns
     finally:

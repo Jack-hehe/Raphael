@@ -86,7 +86,7 @@ headings, task markers, bold markers and fenced-code delimiters on every page.
 The room fixture is synthetic IPC only; core tests use a fake brain and shared worker/CLI
 loop with real approval gates. Paid provider discussion, installed CLI execution and native
 persistence still require the owner's isolated live acceptance. Restart settles completed sources and resumes queued replies; uncertain active work remains
-blocked for reconciliation, without replaying tasks or approvals. Fake-brain S02/S07 tests cover
+blocked for reconciliation, without replaying tasks or approvals. Fake-brain S02/S07.meeting tests cover
 production API/CLI paths, worker protocol and authenticated MCP; rendered fixtures do not prove
 live role reasoning or provider acceptance.
 

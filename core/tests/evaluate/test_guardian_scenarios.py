@@ -380,6 +380,15 @@ async def test_suite_always_emits_44_basic_cells_and_tool_brain_matrix(tmp_path)
     assert len({row["tool_key"] for row in report["coverage"]["results"]}) == len(report["registry"])
 
 
+async def test_the_suite_runs_every_cell_that_has_a_driver(tmp_path):
+    # A base scenario with child cells is only aggregated, so a driver on it never ran (S07's meeting did not).
+    await run({"C": None, "A": None}, tmp_path, client=FakeClient([]), brains=FakeBrains(tmp_path, installed=False),
+              max_turns=1, head="test-head", include_legacy=False)
+    report = json.loads(next(tmp_path.glob("run-*/report.json")).read_text(encoding="utf-8"))
+    attempted = {row["scenario_id"] for row in report["results"] if row["reason"] == "configured brain unavailable"}
+    assert {cell.id for cell in cells() if cell.driver} <= attempted
+
+
 async def test_rpc_cli_brain_reaches_the_production_authenticated_mcp(tmp_path, monkeypatch):
     from raphael_core.agent.cli import loop
 
