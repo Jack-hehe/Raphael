@@ -162,8 +162,9 @@ def check_reply(text, scenario):
     from opencc import OpenCC
     # Preserve product terms: OpenCC otherwise rewrites permission and primary-contact
     # wording as a regional synonym or an operating-system window, and a code (代碼) as program code.
-    traditional = text.replace("權限", "").replace("主要窗口", "").replace("代碼", "")
-    if OpenCC("s2twp").convert(traditional) != traditional:
+    # Taiwan writes 台 and 臺 alike (台灣, 新台幣, 平台), where OpenCC always prefers 臺.
+    traditional = text.replace("權限", "").replace("主要窗口", "").replace("代碼", "").replace("臺", "台")
+    if OpenCC("s2twp").convert(traditional).replace("臺", "台") != traditional:
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):
         reasons.append("raw_json_reply")

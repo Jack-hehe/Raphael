@@ -22,6 +22,13 @@ def test_owner_view_preserves_the_product_primary_contact_term():
     assert not check_reply('已讀取測試信件，本次測試代碼是 f44fdc358cb1。', Scenario('room-work', ''))
 
 
+def test_taiwan_writing_accepts_tai_in_either_form():
+    # Live, a reply quoting the owner's 新台幣 failed as not Taiwan writing.
+    assert not check_reply('預算新台幣 5 萬元，在台灣的平台上架。', Scenario('owner-view', ''))
+    assert not check_reply('預算新臺幣 5 萬元，在臺灣上架。', Scenario('owner-view', ''))
+    assert 'reply_not_traditional_Taiwan' in check_reply('在台湾的平台上架。', Scenario('owner-view', ''))
+
+
 class P02Brain(FakeClient):
     def __init__(self, scenario):
         super().__init__([])
