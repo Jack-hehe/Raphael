@@ -10,7 +10,7 @@ from contextlib import aclosing
 
 from ...worker.loop import Call, Outcome, Stop, ToolOutcome, WAITING
 from ...worker.guards import RepeatGuard, wrap_untrusted
-from ..answers import parse_reply
+from ..answers import MEMORY_ITEM, parse_reply
 from ..conversations import Conversations
 from ..mcp_server import RaphaelMcp
 from ...brain.textnorm import public_line
@@ -32,9 +32,11 @@ ROOM_RATE_LIMIT_WAITS_S = (30.0, 60.0, 120.0, 240.0)
 
 APPROVE = {"type": "function", "function": {"name": "approve", "description": "Ask the owner for permission. Never grants permission by itself.",
            "parameters": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"}}, "additionalProperties": True}}}
+# The fields an API brain's notes have: live, a CLI brain offered free strings wrote type "fact", which no space takes.
 MEMORY_TOOLS = [{"type": "function", "function": {"name": name, "description": "Change only a memory the owner explicitly asked to remember or forget.",
-    "parameters": {"type": "object", "properties": {key: {"type": "string"} for key in ("name", "type", "description", "body", "expires", "space")}, "required": ["name"]}}}
-    for name in ("memory_write", "memory_delete")]
+    "parameters": {"type": "object", "properties": {key: value for key, value in MEMORY_ITEM["properties"].items() if key != "op"},
+                   "required": required}}}
+    for name, required in (("memory_write", ["name", "type", "description", "body", "space"]), ("memory_delete", ["name", "space"]))]
 
 
 class Sessions:

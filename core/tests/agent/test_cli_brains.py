@@ -10,6 +10,19 @@ import pytest
 from raphael_core.agent.cli.discovery import CliBrains, cli_available, resolve_command
 
 
+def test_a_cli_brain_is_offered_the_note_fields_an_api_brain_is_given():
+    # Live, Codex wrote a team-wide note as type "fact", which no space takes, and both writes were refused.
+    from raphael_core.agent.answers import reply_schema
+    from raphael_core.agent.cli.loop import MEMORY_TOOLS
+    item = reply_schema("en", memory=True, plain=True)["properties"]["memory"]["items"]
+    for tool in MEMORY_TOOLS:
+        offered = tool["function"]["parameters"]
+        assert {key: item["properties"][key] for key in offered["properties"]} == offered["properties"]
+        assert set(offered["required"]) <= set(item["required"])
+    write = next(tool["function"]["parameters"] for tool in MEMORY_TOOLS if tool["function"]["name"] == "memory_write")
+    assert {"type", "space"} <= set(write["required"])
+
+
 async def test_discovery_uses_fake_process_and_auth_existence_only(tmp_path):
     script = tmp_path / "fake.py"
     script.write_text("print('fake 1.2.3')", encoding="utf-8")

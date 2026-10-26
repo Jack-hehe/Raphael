@@ -96,7 +96,7 @@ class Reply:
         return bool(self.read or self.search)
 
 
-_MEMORY_ITEM = {
+MEMORY_ITEM = {
     "type": "object",
     "properties": {
         "op": {"type": "string", "enum": ["write", "delete"]},
@@ -139,7 +139,7 @@ def reply_schema(
         properties["say_ja"] = {"type": "string"}
         required.append("say_ja")
     if memory:
-        properties["memory"] = {"type": "array", "items": _MEMORY_ITEM}
+        properties["memory"] = {"type": "array", "items": MEMORY_ITEM}
         properties["need"] = _NEED
         required += ["memory", "need"]
     return {
