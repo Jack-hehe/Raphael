@@ -664,9 +664,16 @@ export function parseMediaPayload(raw: string): MediaPayload | null {
   }
 }
 
+function meetingEvent(text: string): { room_id: number; name: string } | null {
+  try {
+    const event = JSON.parse(text);
+    return event?.type === "meeting" && Number.isSafeInteger(event.room_id) && event.room_id > 0 && typeof event.name === "string" ? event : null;
+  } catch { return null; }
+}
+
 /** Keep all work behind one closed chip; running turns show their latest public update. */
 function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, exchanges = ""): string {
-  const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && m.text.trim());
+  const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && !meetingEvent(m.text) && m.text.trim());
   if (!messages.length && !exchanges && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
   const live = turn.status === "running" || isLive(turn.task);
   const firstReply = (turn.messages ?? []).find(m => m.kind === "reply" && m.at_ms >= turn.created_at_ms)?.at_ms;
@@ -760,7 +767,9 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
   const lastReply = [...ordered].reverse().find(m => m.kind === "reply" && m.text.trim())?.seq;
   const work = workSectionHTML(turn, state, query, inner);
   const settledDraft = isSettledDraftTurn(turn);
-  return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && message.text.trim() === turn.text.trim())) || message.kind === "media").map(message => {
+  const meetings = ordered.filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(m => m !== null);
+  const events = meetings.map(event => `<div class="conversation-event-line">${btn(esc(t("rooms.meetingOpened", { p0: event.name })), "sm", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
+  return events + work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && message.text.trim() === turn.text.trim())) || message.kind === "media").map(message => {
     const text = message.text.trim();
     if (!text) return "";
     if (message.kind === "media") {

@@ -7,6 +7,7 @@ does not implement member, room, routine, memory or approval business logic.
 
 import asyncio
 import copy
+import json
 import re
 import time
 from pathlib import Path
@@ -196,7 +197,9 @@ class RpcDriver:
         return turns, reasons
 
     async def execute(self, cell):
-        if cell.driver in ("missing-connection", "missing-permission"):
+        if cell.driver in ('roster', 'meeting'):
+            reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
+        elif cell.driver in ("missing-connection", "missing-permission"):
             await self.install_fixture()
             self.recorder.failure = "auth" if cell.driver == "missing-connection" else "denied"
             result = await self.ask(cell.prompt)
@@ -257,6 +260,85 @@ class RpcDriver:
         if not turns or result.get("status") not in {"done", "denied", "error"}:
             reasons.append("no_terminal_owner_result")
         return reasons, turns
+
+    async def seed_team(self):
+        return [(await self.app.call('members.create', {'name':name, 'role':role}))['member']['id']
+                for name, role in [('行銷','行銷企劃'), ('信件助理','信件管理'), ('HiKari','社群內容'), ('PM','專案規劃'), ('RD','來源研究')]]
+
+    async def roster_scenario(self):
+        ids = await self.seed_team()
+        await self.install_fixture()
+        reasons, result = [], {}
+        for refresh in (False, True):
+            if refresh:
+                await self.app.call('members.update', {'id':ids[-1], 'name':'研究員' + self.nonce})
+                self.app.integrations._config.remove('guardian-mail')
+            for member in [0,*ids]:
+                authority = self.app.members.team_context(member, 'zh-TW')
+                result = await self.ask('請根據 TeamContextSnapshot 列出全員名字與原文角色、團隊總人數、主要窗口、幕僚長及應用程式連線狀態；不要輸出 JSON。', member=member)
+                turns = (await self.app.call('agent.history.list', {'member_id':member}))['turns']
+                latest = max(turns, key=lambda turn: turn['id']) if turns else {}
+                reply = '\n'.join(m['text'] for m in latest.get('messages', []) if m['kind']=='reply') or result.get('text','')
+                if not all(person['name'] in reply and person['role'] in reply for person in authority['members']):
+                    reasons.append('roster_member_or_role_missing')
+                if str(authority['count']) not in reply or not all(app['name'] in reply for app in authority['apps']):
+                    reasons.append('roster_count_or_apps_missing')
+                if not all(word in reply for word in ('主要窗口', '幕僚長')):
+                    reasons.append('roster_primary_or_chief_missing')
+                if refresh and 'Guardian' in reply:
+                    reasons.append('roster_disconnected_app_stale')
+        return reasons, result
+
+    async def meeting_scenario(self):
+        ids = await self.seed_team()
+        selected = [0, ids[0], *ids[2:]]
+        prompt = ('請為行銷、HiKari、PM、RD 開真正的行銷會議，包含拉斐爾，不需要信件助理。'
+                  '用 room_meeting，讓 PM 主持兩輪、行銷正方、RD 反方。議題代碼：' + self.nonce +
+                  '。每位必須回應前一人的論點；同事使用有效 @ 交棒至少四次並跨過第六輪，最後停止點名，'
+                  '由拉斐爾在所有回覆完成後整理決策與具名負責人。')
+        result = await self.ask(prompt)
+        reasons = []
+        rooms = (await self.app.call('rooms.list'))['rooms']
+        room = next((r for r in rooms if set(r['member_ids']) == set(selected)), None)
+        if room is None:
+            return ['meeting_room_not_created'], result
+        # Completion is read back from production orchestration, never inferred from chief prose.
+        while True:
+            history = await self.app.call('rooms.messages', {'room_id':room['id']})
+            exchange = history['exchange']
+            if exchange and exchange['state'] in ('done','stopped'):
+                break
+            await asyncio.sleep(.02)
+        messages = history['messages']
+        if exchange['state'] != 'done' or any(i['state'] != 'done' for i in exchange['reply_intents']):
+            reasons.append('meeting_pending_or_blocked_intents')
+        if exchange['hops'] < 4 or exchange['turns_taken'] < 7:
+            reasons.append('meeting_did_not_cross_admission_limits')
+        authors = {m['member_id'] for m in messages if m['member_id'] is not None}
+        if authors != set(selected) or len([m for m in messages if m['kind']=='wrapup' and m['member_id']==0]) != 1:
+            reasons.append('meeting_authors_or_chief_wrapup')
+        if any(m['member_id'] is not None and m['reply_to'] is not None and m['member_id']==m['reply_to_member'] for m in messages):
+            reasons.append('meeting_self_reply')
+        if not any(role=='moderator' for role in room.get('roles',{}).values()):
+            reasons.append('meeting_moderator_missing')
+        for member in selected[1:]:
+            if len([m for m in messages if m['member_id']==member and m['kind']=='message']) < 2:
+                reasons.append('meeting_member_missing_second_round')
+        events = [json.loads(row[0]) for row in self.app._conn.execute(
+            "SELECT m.text FROM agent_messages m JOIN agent_turns t ON t.id=m.turn_id "
+            "WHERE m.kind='event' AND t.member_id=0 AND t.scope='private'") if row[0].startswith('{')]
+        if len([event for event in events if event.get('type')=='meeting' and event.get('room_id')==room['id']]) != 1:
+            reasons.append('meeting_private_link_not_once')
+        count = self.app._conn.execute('SELECT COUNT(*) FROM rooms').fetchone()[0]
+        again = await self.app.rooms.meeting({'member_ids':selected, 'agenda':'Reuse ' + self.nonce}, 'zh-TW', 2**50)
+        if again['room_id'] != room['id'] or self.app._conn.execute('SELECT COUNT(*) FROM rooms').fetchone()[0] != count:
+            reasons.append('meeting_did_not_reuse_exact_room')
+        # Inspect accepted reuse without executing a second model discussion in this cell.
+        await self.app.rooms._stop({'room_id':room['id']})
+        private = self.app._conn.execute("SELECT COUNT(*) FROM agent_turns WHERE route='room' AND scope='private'").fetchone()[0]
+        if private:
+            reasons.append('meeting_private_history_pollution')
+        return reasons, result
 
     async def aclose(self):
         await self.app.aclose()

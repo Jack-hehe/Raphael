@@ -2301,12 +2301,25 @@ class AgentService:
         team = self._team
         if team is None or name not in TEAM_TOOLS or (name != SKILL_READ and not speaker.may_ask):
             return ToolResult(name, False, None, "blocked")
-        if name == CREATE_MEMBER and (not speaker.is_raphael or speaker.depth):
+        if name in (CREATE_MEMBER, "room_meeting") and (not speaker.is_raphael or speaker.depth):
             return ToolResult(name, False, None, "blocked")
         try:
             self._gate.check(action or Action(name, dict(arguments)), approval)
         except (UnknownTool, NotApproved):
             return ToolResult(name, False, None, "blocked")
+        if name == "room_meeting":
+            rooms = getattr(team, 'rooms', None)
+            if rooms is None or not source_turn_id:
+                return ToolResult(name, False, None, 'blocked')
+            try:
+                result = await rooms.meeting(dict(arguments), language, source_turn_id)
+            except RpcError:
+                return ToolResult(name, False, None, 'bad_arguments')
+            if not result['duplicate']:
+                self._history.add_message(source_turn_id, 'event', json.dumps({
+                    'type': 'meeting', 'room_id': result['room_id'], 'name': result['name']}, ensure_ascii=False))
+                self._turn_changed(source_turn_id, 0)
+            return ToolResult(name, True, result)
         if name == SKILL_READ:
             read = getattr(team, "skill_read", None)
             text = None if read is None else read(speaker.id, arguments.get("name"))

@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 29
+LATEST = 30
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -363,6 +363,38 @@ SCHEMA_V29 = {
     "room_membership_migrations": ["room_id INTEGER PK", "original_members TEXT NOT NULL", "disposition TEXT NOT NULL"],
     "scope_context_archive": ["kind TEXT NOT NULL", "original TEXT NOT NULL"],
 }
+SCHEMA_V30 = {
+    **SCHEMA_V29,
+    "rooms": [*SCHEMA_V29["rooms"], "roles TEXT NOT NULL DEFAULT '{}'"],
+    "room_exchanges": [*SCHEMA_V29["room_exchanges"], "routing TEXT NOT NULL DEFAULT '{}'"],
+    "room_reply_intents": [
+        "id INTEGER PK", "origin_message_id INTEGER NOT NULL", "source_message_id INTEGER NOT NULL",
+        "recipient_id INTEGER NOT NULL", "recipient_name TEXT NOT NULL", "state TEXT NOT NULL DEFAULT 'queued'",
+        "reason TEXT NOT NULL DEFAULT ''", "turn_id INTEGER",
+    ],
+}
+
+
+def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
+    path = tmp_path / 'v29.db'
+    raw = sqlite3.connect(path)
+    raw.row_factory = sqlite3.Row
+    for version in range(1, 30):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO members(id,name,position,created_at_ms) VALUES(1,'Alice',0,1)")
+    raw.execute("INSERT INTO rooms(id,name,created) VALUES(1,'Plans',1)")
+    raw.executemany('INSERT INTO room_members VALUES(1,?)', [(0,), (1,)])
+    raw.execute("INSERT INTO room_messages(id,room_id,text,created) VALUES(1,1,'@Alice check',1)")
+    raw.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language,pending) VALUES(1,1,'queued','en',?)",
+                (json.dumps([{'member':1,'reply_to':1}]),))
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    intent = dict(migrated.execute('SELECT * FROM room_reply_intents').fetchone())
+    assert (intent['origin_message_id'], intent['source_message_id'], intent['recipient_id'], intent['recipient_name'], intent['state']) == (1,1,1,'Alice','queued')
+    assert migrated.execute('PRAGMA foreign_key_check').fetchall() == []
+    migrated.close()
 
 
 def schema_names(conn, kind):
@@ -386,7 +418,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V29) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V30) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -400,7 +432,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V29.items():
+    for table, columns in SCHEMA_V30.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

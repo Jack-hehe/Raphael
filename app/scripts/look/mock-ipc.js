@@ -25,6 +25,15 @@ export function installMock(fixture, config = {}, target = window) {
     runningTurn.text = "";
   }
   if (variant.roomThinking) { data.messages.push(...data.roomThinkingMessages); data.roomExchanges.push(data.roomActiveExchange); }
+  if (variant.p02Meeting) data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === 1).messages.push({ seq: 99, kind: "event", text: JSON.stringify(data.p02MeetingEvent), at_ms: data.now });
+  if (variant.p02Roles) data.rooms[0].roles = data.p02Roles;
+  if (variant.p02Blocked || variant.p02Fallback || variant.p02LongExchange) {
+    const exchange = { ...data.roomActiveExchange, state: "stopped", active_turn: null };
+    if (variant.p02Blocked) exchange.reply_intents = data.p02BlockedIntents;
+    if (variant.p02Fallback) exchange.routing = { fallback: "timeout", model: "fixture/router" };
+    if (variant.p02LongExchange) { exchange.turns_taken = 8; exchange.hops = 5; exchange.state = "done"; exchange.reply_intents = [{ id: 100, recipient_id: 1, recipient_name: data.members[1].name, state: "done", reason: "" }]; }
+    data.roomExchanges.push(exchange);
+  }
   if (variant.roomDiscussion || variant.roomWrapup) data.messages.push(...data.roomDiscussionMessages);
   if (variant.roomWrapup) data.messages.push(data.roomWrapupMessage);
   if (variant.roomMissingSource) data.messages[2].reply_reference = { message_id: 999, unavailable: true };
@@ -81,7 +90,12 @@ export function installMock(fixture, config = {}, target = window) {
         return { learned };
       }
       case "dictionary.delete": data.dictionary = data.dictionary.filter(item => item.id !== p.id); return { deleted: true };
-      case "members.list": return { members: data.members, groups: data.groups };
+      case "members.list": return { members: data.members, groups: data.groups, team_context: {
+        schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: 0, chief_id: 0,
+        inventory_state: "complete", room_member_ids: null,
+        members: data.members.map(m => ({ id: m.id, name: m.name, role: m.role, blurb: m.blurb ?? "" })),
+        apps: data.servers.map(s => ({ id: s.id, name: s.name, enabled: s.enabled, state: s.status === "ready" ? "ready" : s.error === "auth" ? "needs_sign_in" : "unknown" })),
+      } };
       case "members.presets": return { presets: data.presets };
       case "members.viewing": case "members.read": return {};
       case "members.tool_choices": return { tools: [], connections: data.servers };

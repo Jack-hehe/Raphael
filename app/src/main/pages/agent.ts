@@ -1799,6 +1799,7 @@ export function createAgent(app: AppContext): Page {
     void send();
   });
   input.addEventListener("input", fit);
+  input.addEventListener("input", () => members.mention(input));
   picker.addEventListener("change", () => {
     const chosen = Array.from(picker.files ?? []);
     if (chosen.length > 0) void attachAll(chosen);

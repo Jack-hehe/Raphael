@@ -706,6 +706,14 @@ export interface MemberGroup {
 export interface MembersList {
   members: Member[];
   groups: MemberGroup[];
+  team_context?: TeamContextSnapshot;
+}
+
+export interface TeamContextSnapshot {
+  schema_version: number; revision: string; self_id: number; count: number;
+  primary_id: number; chief_id: number; inventory_state: string; room_member_ids: number[] | null;
+  members: { id: number; name: string; role: string; blurb: string }[];
+  apps: { id: string; name: string; enabled: boolean; state: string }[];
 }
 
 /** What `members.create` takes (`ui_language` names the language of the routine it may offer). */
@@ -765,6 +773,7 @@ export interface Room {
   id: number; name: string; group_id: number | null; created: number;
   is_team: number; member_ids: number[]; default_responder?: string;
   membership_state?: "ready" | "needs_adjustment";
+  roles?: Record<string, string>;
 }
 export interface RoomMessage {
   id: number; room_id: number; member_id: number | null; text: string; created: number;
@@ -778,6 +787,8 @@ export interface RoomMessage {
 export interface RoomExchange {
   origin_message_id: number; room_id: number; state: "queued" | "running" | "done" | "stopped";
   turns_taken: number; hops: number; chime_ins: number; cost: number; stop_requested: number;
+  routing?: { fallback?: string; model?: string };
+  reply_intents?: { id: number; recipient_id: number; recipient_name: string; state: string; reason: string }[];
 }
 
 /** A routine of `routines.list`. Times are ms; null for never. */

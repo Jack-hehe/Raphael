@@ -1325,6 +1325,7 @@ class App(Router):
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
         self.memory.start()  # and look for turns the reflection pass has not read, soon
         self.members.start()  # the routines: one missed while the core was not running runs now
+        self.rooms.start()
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:

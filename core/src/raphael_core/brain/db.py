@@ -706,6 +706,39 @@ PRAGMA user_version = 28;
 COMMIT;
 """
 _MIGRATIONS[29] = _migrate_room_scope
+_MIGRATIONS[30] = """
+BEGIN;
+ALTER TABLE rooms ADD COLUMN roles TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE room_exchanges ADD COLUMN routing TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE room_reply_intents (
+    id INTEGER PRIMARY KEY,
+    origin_message_id INTEGER NOT NULL REFERENCES room_exchanges(origin_message_id) ON DELETE CASCADE,
+    source_message_id INTEGER NOT NULL REFERENCES room_messages(id) ON DELETE CASCADE,
+    recipient_id INTEGER NOT NULL,
+    recipient_name TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued' CHECK(state IN ('queued','running','done','blocked')),
+    reason TEXT NOT NULL DEFAULT '',
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    UNIQUE(origin_message_id, source_message_id, recipient_id)
+);
+INSERT OR IGNORE INTO room_reply_intents
+    (origin_message_id, source_message_id, recipient_id, recipient_name, state, turn_id)
+SELECT e.origin_message_id, m.reply_to, m.member_id, COALESCE(p.name, 'Raphael'), 'running', m.turn_id
+FROM room_exchanges e JOIN room_messages m ON m.turn_id=e.active_turn
+LEFT JOIN members p ON p.id=m.member_id
+WHERE e.state IN ('queued','running') AND m.reply_to IS NOT NULL AND m.kind='message';
+INSERT OR IGNORE INTO room_reply_intents
+    (origin_message_id, source_message_id, recipient_id, recipient_name)
+SELECT e.origin_message_id, COALESCE(json_extract(q.value,'$.reply_to'),e.origin_message_id),
+       json_extract(q.value,'$.member'), COALESCE(p.name,'Raphael')
+FROM room_exchanges e, json_each(CASE WHEN json_valid(e.pending) THEN e.pending ELSE '[]' END) q
+LEFT JOIN members p ON p.id=json_extract(q.value,'$.member')
+WHERE e.state IN ('queued','running') AND json_type(q.value,'$.member')='integer'
+  AND EXISTS(SELECT 1 FROM room_messages s WHERE s.id=COALESCE(json_extract(q.value,'$.reply_to'),e.origin_message_id)
+             AND s.room_id=e.room_id AND s.member_id IS NOT json_extract(q.value,'$.member'));
+PRAGMA user_version = 30;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

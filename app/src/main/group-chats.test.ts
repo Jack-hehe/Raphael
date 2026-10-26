@@ -100,7 +100,7 @@ test("room rows expose rename, membership and confirmed deletion through more",a
  expect(section.querySelector('[data-room-delete]')).toBeNull();
  const more=section.querySelector<HTMLButtonElement>('[data-room-more="1"]')!;
  expect(more.getAttribute('aria-haspopup')).toBe('menu');more.click();
- expect([...document.querySelectorAll('#app-popover [data-pick]')].map(el=>(el as HTMLElement).dataset.pick)).toEqual(['rename','members','delete']);
+ expect([...document.querySelectorAll('#app-popover [data-pick]')].map(el=>(el as HTMLElement).dataset.pick)).toEqual(['rename','members','roles','delete']);
  document.querySelector<HTMLElement>('[data-pick="delete"]')!.click();await flush();
  expect(api.roomsDelete).not.toHaveBeenCalled();
  document.querySelector<HTMLElement>('[data-dlg="cancel"]')!.click();await flush();

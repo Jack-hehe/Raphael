@@ -22,7 +22,7 @@ export function mountSlashMenu(input: HTMLTextAreaElement | HTMLInputElement, op
   let selected = 0;
   let panel: HTMLElement | null = null;
   function close(): void {
-    if (menuIsOpenFor(input)) closeMenu();
+    if (panel?.isConnected && menuIsOpenFor(input)) closeMenu();
     panel = null;
     input.removeAttribute("aria-activedescendant");
   }
@@ -75,7 +75,7 @@ export function mountSlashMenu(input: HTMLTextAreaElement | HTMLInputElement, op
   const onBlur = (): void => { generation++; close(); };
   const key = (raw: Event): void => {
     const event = raw as KeyboardEvent;
-    if (event.isComposing || event.keyCode === 229 || !menuIsOpenFor(input)) return;
+    if (event.isComposing || event.keyCode === 229 || !panel?.isConnected || !menuIsOpenFor(input)) return;
     if (!["ArrowUp", "ArrowDown", "Enter", "Tab", "Escape"].includes(event.key)) return;
     if (event.key === "Tab" || event.key === "Escape") close();
     else if (event.key === "Enter") choose(selected);

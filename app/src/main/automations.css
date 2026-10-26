@@ -171,3 +171,8 @@
   .au-members { grid-template-columns: minmax(0, 1fr); }
   .team-composer { flex-basis: 100%; }
 }
+.conversation-event-line { display: flex; justify-content: center; margin: 12px 0; color: var(--text-2); }
+.au-room-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.room-intent-blocked { font-size: var(--fs-xs); color: var(--text-2); }
+.room-picked { display: flex; flex-wrap: wrap; gap: 6px; }
+.room-picked span { padding: var(--sp-1) var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-pill); }

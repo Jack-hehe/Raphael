@@ -160,9 +160,9 @@ def check_reply(text, scenario):
     if re.search(r"\b[A-Za-z]{2,}(?:[ ,.;:]+[A-Za-z]{2,}){2}", prose):
         reasons.append("english_sentence_in_zh_TW_reply")
     from opencc import OpenCC
-    # OpenCC's regional vocabulary maps the UI's standard Taiwan term 權限 to
-    # 許可權. Preserve that product term while still rejecting simplified text.
-    traditional = text.replace("權限", "")
+    # Preserve product terms: OpenCC otherwise rewrites permission and primary-contact
+    # wording as a regional synonym or an operating-system window.
+    traditional = text.replace("權限", "").replace("主要窗口", "")
     if OpenCC("s2twp").convert(traditional) != traditional:
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):

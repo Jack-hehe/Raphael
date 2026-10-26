@@ -47,6 +47,8 @@ BASE = (
 )
 
 SCENARIOS = tuple(ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr)
+                  if i not in (2, 7) else ScenarioCell(f"S{i:02}", title, prompt, tuple(checks.split(",")), pr,
+                      "roster" if i == 2 else "meeting")
                   for i, (title, prompt, checks, pr) in enumerate(BASE, 1))
 
 

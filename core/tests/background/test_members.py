@@ -40,7 +40,7 @@ class Team:
     def create(self, **fields):
         raise AssertionError("no member is made here")
 
-    async def tool(self, speaker, name, arguments, *, language, ledger, session_id):
+    async def tool(self, speaker, name, arguments, *, language, ledger, session_id, source_turn_id=None):
         self.asked.append((speaker.id, name, arguments, language, session_id))
         return ToolResult(name, True, {"member": "拉斐爾", "answer": "台北。"}, untrusted=True)
 

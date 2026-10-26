@@ -6,8 +6,11 @@ Grouped board, group creation/rename/delete, zoom/drag targets, team mentions,
 room creation/group assignment, membership and conversation actions. Room messages route
 through bounded, persisted exchanges: explicit mentions/replies, saved automatic/member/everyone
 responders, sequential handoffs, up to two material chime-ins and Raphael's wrap-up.
-Each exchange has at most six member turns and three handoffs; the final turn is reserved
-for a short wrap-up after at least one turn when Raphael participates. Empty and (pass) replies stay hidden.
+Explicit addresses are durable source/recipient reply intents. Six-turn admission slices and
+three-hop limits bound optional chime-ins only; pending replies continue in scheduled slices
+before Raphael concludes. Stop, revoked membership, cost limits and uncertain restart work
+retain named blocked intents. Completed sources recover once without replaying work.
+Room-only moderator/pro/con roles run two sequential rounds before the chief concludes. Empty and (pass) replies stay hidden.
 Explicit mentions use whole names, prefer the longest matching name, ignore email addresses,
 and run in the order they occur in the message. The same rule applies to peer handoffs.
 
@@ -24,13 +27,15 @@ history, preview, search, badges and worker context. Reply chips use server-deri
 authors, including the owner; missing sources display an unavailable label.
 Reply on a member message directs the next owner message to that member; the composer
 shows the recipient and lets the owner cancel the reply. Stop finishes the current speaker
-and discards queued turns. A new owner message takes priority after the current speaker.
+and marks queued recipients blocked. A new owner message takes priority after the current speaker; prior accepted explicit replies survive.
 
 Team's mention menu follows the typed @ character, including text before it and
 newlines. A mirror copies the field's font, wrapping, padding and scroll offsets;
 the menu prefers above the text line and flips below when space is limited. Other
-menus retain their existing alignment. Room composers currently have no mention
-autocomplete menu.
+menus retain their existing alignment. Room and Team composers share the Bots/apps inventory from TeamContextSnapshot,
+including connection states. The Team plus menu opens member creation or a room picker with
+selected chips. Raphael uses room_meeting for discussions, reuses exact membership, posts an
+agenda and leaves a centered private event whose button opens the real room pane.
 
 ## Driving it with look
 
@@ -40,6 +45,7 @@ npm run look -- sidebar compact-rooms new-room room-group-menu room room-draft r
 npm run look -- room-composer-empty room-text room-composer-hover team-composer-empty team-text team-composer-hover --theme both --width 1120,720,1920x1080
 npm run look -- room-replies room-discussion room-thinking room-wrapup room-row-menu new-room-responder room-reply-send room-stop --theme both --width 1120,720,1920x1080
 npm run look -- room-required-chief room-generated-name room-private-isolation room-reply-owner room-reply-peer room-reply-source-missing --theme both --width 1120,720,1920x1080
+npm run look -- team-roster-aware mentions-bots-apps member-mentions-bots-apps plus-create-room room-mentions room-routing-fallback meeting-open-room meeting-chief-event room-role-assignment room-round-typing room-mention-after-hop-limit room-mention-after-turn-limit room-mention-blocked room-wrapup-after-replies --theme both --width 1120,720,1920x1080
 ```
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
@@ -60,8 +66,10 @@ next-step owners are emphasized. The global look audit rejects visible raw Markd
 headings, task markers, bold markers and fenced-code delimiters on every page.
 The room fixture is synthetic IPC only; core tests use a fake brain and shared worker/CLI
 loop with real approval gates. Paid provider discussion, installed CLI execution and native
-persistence still require the owner's isolated live acceptance. Restart stops exchanges
-without replaying tasks or approvals. The earlier forced moderator loop is not implemented.
+persistence still require the owner's isolated live acceptance. Restart settles completed sources and resumes queued replies; uncertain active work remains
+blocked for reconciliation, without replaying tasks or approvals. Fake-brain S02/S07 tests cover
+production API/CLI paths, worker protocol and authenticated MCP; rendered fixtures do not prove
+live role reasoning or provider acceptance.
 
 ## UI audit regression coverage
 

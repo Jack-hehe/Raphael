@@ -17,6 +17,7 @@ import * as api from "./api";
 import { describeError } from "./format";
 import { currentRoomId, openNewGroupChat, openRoomsMenu } from "./group-chats";
 import { getLocale, onLocaleChange, t } from "./i18n";
+import { teamMentions } from "./team-mentions";
 import { createMemberColumn } from "./member-column";
 import { createDetails } from "./member-details";
 import {
@@ -74,6 +75,7 @@ export interface MembersShell {
   groups(): readonly MemberGroup[];
   /** Loaded avatar presets. */
   presets(): readonly AvatarPreset[];
+  mention(input: HTMLTextAreaElement): void;
   /** Opens the thread of member `id`. */
   select(id: number): void;
   /** Reads the list (and what the column and the panel need with it) again. */
@@ -505,6 +507,7 @@ export function createMembers(host: MembersHost): MembersShell {
     await groupChange(() => api.groupsDelete(id));
   }
 
+  window.addEventListener("raphael:new-member", () => newMember(null));
   onLocaleChange(() => { drawAll(); details.refreshMemory(current); });
   details.el.hidden = !open;
   drawAll();
@@ -518,6 +521,7 @@ export function createMembers(host: MembersHost): MembersShell {
     nameOf: (id) => memberOf(list, id)?.name ?? "",
     groups: () => [...(list?.groups ?? [])].sort((a, b) => a.position - b.position),
     presets: () => presets,
+    mention: input => { if (list) teamMentions(input, list); },
     faceOf(id, size) {
       const found = memberOf(list, id);
       return found ? faceHTML(found, size, { cls: "sys-face" }) : "";
@@ -533,7 +537,7 @@ export function createMembers(host: MembersHost): MembersShell {
     },
     follow(event) {
       if (!host.visible()) return;
-      if (event.type === "MembersChanged") {
+      if (event.type === "MembersChanged" || event.type === "ConnectionsChanged") {
         if (refreshTimer !== null) clearTimeout(refreshTimer);
         refreshTimer = null;
         void load();

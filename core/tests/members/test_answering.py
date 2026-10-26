@@ -10,6 +10,7 @@ from agent.conftest import FakeActions, FakeOpenRouter, completion, decision, to
 from agent.test_service import Rig
 from agent.test_narration import chat
 from raphael_core.agent.history import AgentHistory
+from raphael_core.agent.speaker import RAPHAEL
 from raphael_core.agent.team import team_tools_for
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.settings import SettingsStore
@@ -434,6 +435,14 @@ async def test_the_fast_tier_offers_ask_member_only_for_someone_it_may_ask(setup
     assert team_tools_for(team.members, b.asked_by(a), "問小財務") == []  # already in the chain
     assert team_tools_for(team.members, a, "今天天氣") == []
     assert team_tools_for(team.members, a, always=True) == ["ask_member"]
+
+
+@pytest.mark.parametrize("text", ["幫我找行銷跟 PM 開個會議", "大家一起商量上架的事", "schedule a meeting about launch"])
+async def test_raphael_is_offered_the_meeting_tool_when_asked_for_one(setup, text):
+    _, team = setup
+    member(team)
+    assert "room_meeting" in team_tools_for(team.members, RAPHAEL, text)
+    assert "room_meeting" not in team_tools_for(team.members, RAPHAEL, "現在幾點")
 
 
 async def test_raphael_asked_for_the_desktop_says_the_owner_must_ask_him(setup, client, conn):
