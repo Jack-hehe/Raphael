@@ -438,6 +438,25 @@ async def test_the_suite_runs_every_cell_that_has_a_driver(tmp_path):
     assert {cell.id for cell in cells() if cell.driver} <= attempted
 
 
+async def test_a_scenario_with_an_unbuilt_half_never_passes(tmp_path, monkeypatch):
+    # S14 is Gmail (P08a) and Instagram publishing (P08d): a passing Gmail half alone is not S14.
+    from raphael_core.evaluate import guardian_suite
+
+    async def gmail_passes(cell, brain, model, directory, **kwargs):
+        result = guardian_suite.blank(cell, brain, model, "run", "head")
+        result.update(status="PASS" if cell.id == "S14.gmail" else "FAIL",
+                      reason="" if cell.id == "S14.gmail" else "not implemented: " + cell.dependency)
+        return result
+
+    monkeypatch.setattr(guardian_suite, "run_cell", gmail_passes)
+    await run({"C": None, "A": None}, tmp_path, client=FakeClient([]), brains=FakeBrains(tmp_path, installed=False),
+              max_turns=1, head="test-head", include_legacy=False)
+    rows = json.loads(next(tmp_path.glob("run-*/report.json")).read_text(encoding="utf-8"))["results"]
+    assert {(row["brain"], row["status"]) for row in rows if row["scenario_id"] == "S14.gmail"} == {("C", "PASS"), ("A", "PASS")}
+    assert {(row["status"], row["reason"]) for row in rows if row["scenario_id"] == "S14"} == {
+        ("FAIL", "required child cells incomplete")}
+
+
 async def test_rpc_cli_brain_reaches_the_production_authenticated_mcp(tmp_path, monkeypatch):
     from raphael_core.agent.cli import loop
 

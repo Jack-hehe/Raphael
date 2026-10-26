@@ -70,10 +70,12 @@ def cells(registry=(), catalog=(), *, servers=()):
         '現在完成工作並回報證據。',('evidence','chief_last','status_only'),'P04','immediate-room-work'))
     result.append(ScenarioCell('S08.meeting-actions', 'Meeting actions start now', SCENARIOS[7].prompt,
         SCENARIOS[7].assertions, 'P03a/P04', 'meeting-actions'))
-    # The Gmail half of S14; Instagram publishing (P08d) keeps the parent cell open.
+    # S14's two halves: Gmail (P08a) and Instagram publishing (P08d), which keeps the parent open until it has a driver.
     result.append(ScenarioCell('S14.gmail', 'Connect Gmail in chat (P08a scope)',
         '請用 Gmail 找出主旨含本次代號的測試信，告訴我信裡的確認碼。',
         SCENARIOS[13].assertions, 'P08a', 'connect-gmail'))
+    result.append(ScenarioCell('S14.instagram', 'Connect Instagram in chat (P08d scope)', SCENARIOS[13].prompt,
+        SCENARIOS[13].assertions, 'P08d'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,
                                   "請用 Guardian 服務讀取測試信件；如果無法讀取，用一句話說明所缺的連接或權限，不能宣稱完成。",
