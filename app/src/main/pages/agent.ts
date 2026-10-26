@@ -601,11 +601,12 @@ export function createAgent(app: AppContext): Page {
     heading.textContent = t("agent.title");
     sendButton.setAttribute("aria-label", t("chat.send"));
     sendButton.dataset.tooltip = t("chat.send");
+    // The voice slot's tooltip is the custom one drawTaskSlot keeps (voice or Stop); a native title would double it.
+    voiceButton.setAttribute("aria-label", t("agent.voice"));
     for (const [button, label] of [
       [settingsButton, t("agent.settings")],
       [searchButton, t("agent.search")],
       [attachButton, t("agent.attach")],
-      [voiceButton, t("agent.voice")],
       [find.querySelector<HTMLElement>('[data-act="search-close"]')!, t("agent.searchClose")],
     ] as const) {
       button.setAttribute("aria-label", label);
