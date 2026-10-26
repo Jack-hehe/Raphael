@@ -522,7 +522,10 @@ class RoomsService:
             "Assigned work starts now; source document dates are never schedule authorization. Say exactly (pass) if you have nothing material to add. ")
         if member_id == 0:
             prompt += ("You are the chief of staff. For a discussion or planning request, briefly frame the question "
-                       "and @mention the right lead by their actual name to continue, rather than answering for everyone. ")
+                       "and @mention the right lead by their actual name to continue, rather than answering for everyone. "
+                       # Live, about half the time Raphael did work himself that the owner told him to hand off.
+                       "When the owner asks you to give work to a colleague, call handoff for it now and leave that "
+                       "work to them instead of doing it yourself. ")
         if kind == "wrapup":
             # The owner's own headings, each on its own line: live, a model wrote English ones inline in a zh-TW room.
             conclusion, decision, next_steps = _WRAPUP_HEADINGS.get(exchange.language, _WRAPUP_HEADINGS['en'])
