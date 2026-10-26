@@ -1,4 +1,4 @@
-"""The two tools that reach the owner's team (raphael_core.members): `ask_member` and `create_member`.
+"""Team consultation, administration, meetings and durable work (raphael_core.members).
 
 - `ask_member {member, request}` has another assistant answer a request, and gives the answer back
   as tool data. Every assistant may ask any other (Raphael by one of his names): asking is how what
@@ -10,6 +10,8 @@
   of the two who had it, as one line each (`route` "exchange"), and nowhere else.
 - `create_member {name, role, instructions, personality?, group?}` adds a member when the owner asks for one
   (「幫我加一個管行程的成員」), through Raphael, as an alias of `member_create`.
+- `handoff` returns an immediate durable receipt for isolated assigned work. Its task graph has
+  its own persisted depth bound, independent of conversational consultation hops.
 
 Both are T1 in the gate (`gate.TEAM_TOOLS`): they run at once, through the gate like every tool.
 Adding a member changes something, so the owner's safety rules judge it first, as they judge a
@@ -41,8 +43,9 @@ ASK_MEMBER = "ask_member"
 CREATE_MEMBER = "create_member"
 SKILL_READ = "skill_read"
 ROOM_MEETING = "room_meeting"
+HANDOFF = "handoff"
 _MEETING = re.compile(r"meeting|discuss|brainstorm|開會|會議|会议|会議|討論|讨论|商量", re.I)
-TEAM_TOOLS = (ASK_MEMBER, CREATE_MEMBER, SKILL_READ, ROOM_MEETING)
+TEAM_TOOLS = (ASK_MEMBER, CREATE_MEMBER, SKILL_READ, ROOM_MEETING, HANDOFF)
 TEAM_SERVER = "Raphael"
 TEAM_TIER = Tier.T1
 # The most of a request one member hands another, and of the answer that comes back, in characters.
@@ -70,6 +73,14 @@ def names_raphael(text: str) -> bool:
 
 
 def _definition(name: str) -> dict[str, Any]:
+    if name == HANDOFF:
+        return {"description": "Assign real work NOW to a colleague. Returns a durable task receipt immediately. Use handoff for assigned work; an @mention only requests a conversation reply. Source dates and deadlines NEVER schedule or defer work. Supply a stable stage_id per action item; retries of the same stage return the same receipt. Results return to this room/thread or requesting chat. Never claim done from a promise. Only an explicit owner schedule request may use the routine tool instead.",
+                "parameters": {"type":"object", "properties": {
+                    "member_id":{"type":"integer"}, "request":{"type":"string","maxLength":2000},
+                    "stage_id":{"type":"string","maxLength":100},
+                    "mode":{"type":"string","enum":["work","consult"]},
+                    "done_when":{"type":"string","maxLength":2000}},
+                    "required":["member_id","request","stage_id","done_when"], "additionalProperties":False}}
     if name == ROOM_MEETING:
         return {"description": "Start a real group meeting or discussion. Select colleagues by their expertise from the team snapshot, include Raphael (0), and supply an agenda. Reuse a room with exactly these members or create it. Use this for meetings, never a series of ask_member calls. Roles are scoped to this room; the moderator runs rounds and Raphael concludes.",
                 "parameters": {"type": "object", "properties": {
@@ -218,6 +229,8 @@ def team_tools_for(
     the owner's request (not when asked by another). Without `always` (the voice fast tier) only
     the ones the request is about: it names someone it may ask, or asks for a new member."""
     tools = [SKILL_READ] if team is not None and getattr(team, "enabled_skills", lambda member_id: [])(speaker.id) else []
+    if team is not None and (always or any(other.id != speaker.id for other in team.named_in(text))):
+        tools.append(HANDOFF)
     if team is None or not speaker.may_ask:
         return tools
     if always:

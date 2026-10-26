@@ -1,6 +1,7 @@
 """Offline transport fakes; production RPC, stores, loops, gates and MCP remain real."""
 
 import json
+import asyncio
 from dataclasses import replace
 
 import httpx
@@ -28,6 +29,52 @@ class FakeClient(GuardianFakeClient):
 
 def selected(identifier):
     return next(cell for cell in cells() if cell.id == identifier)
+
+
+@pytest.mark.parametrize('identifier',['S03.immediate-start','S08.immediate-start'])
+@pytest.mark.parametrize('brain',['api','cli'])
+async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,monkeypatch,identifier,brain):
+    from raphael_core.agent.cli import loop
+    from raphael_core.background.host import WorkerHost
+    from background.conftest import Links
+    model='cli:codex:owner-model?effort=high' if brain=='cli' else 'fake/model'
+    class Client(FakeClient):
+        async def chat_tools(self,**kwargs):
+            messages=kwargs['messages']
+            child='Acceptance criteria' in messages[0]['content']
+            if child:
+                calls=[] if any(m['role']=='tool' for m in messages) else [('Guardian__read',{})]
+            else:
+                calls=[] if any(m['role']=='tool' for m in messages) or 'handoff_results' in str(messages) or 'Close this exchange' in messages[0]['content'] or 'Close this exchange' in str(messages) else [('handoff',arguments())]
+            self.turns=iter([('已讀取信件。'+driver.nonce if not calls else '',calls)])
+            return await super().chat_tools(**kwargs)
+    def arguments():
+        return {'member_id':2,'request':'Use Guardian to read the test mail now. 明早截止、明天中午提交。',
+            'stage_id':'mail-triage','done_when':'Read the test mail and report its nonce.'}
+    class Driver:
+        def __init__(self,*args,**kwargs):
+            pass
+        async def run(self,*,endpoint,token,system,user,**kwargs):
+            child='Acceptance criteria' in system
+            if child or ('Delegated work results' not in user and 'Close this exchange' not in user):
+                async with httpx.AsyncClient() as http:
+                    response=await http.post(endpoint,headers={'Authorization':'Bearer '+token},json={
+                        'jsonrpc':'2.0','id':1,'method':'tools/call','params':{
+                            'name':'Guardian__read' if child else 'handoff','arguments':{} if child else arguments()}})
+                    assert not response.json()['result']['isError'],response.text
+            yield Event('final','已讀取信件。'+driver.nonce)
+        async def interrupt(self):
+            pass
+    monkeypatch.setattr(loop,'Driver',Driver)
+    driver=RpcDriver(tmp_path,model,Client([]),Budget(40),brains=FakeBrains(tmp_path) if brain=='cli' else None)
+    driver.app.background._host=WorkerHost(connect=Links(),grace_s=.3)
+    try:
+        reasons,_=await asyncio.wait_for(driver.execute(selected(identifier)),10)
+        assert not reasons,reasons
+        assert len(driver.recorder.receipts)==1
+        assert driver.app._conn.execute("SELECT COUNT(*) FROM worker_tasks WHERE mode='work'").fetchone()[0]==1
+    finally:
+        await driver.aclose()
 
 
 def test_registry_contains_all_22_owner_contracts_and_operation_cells():

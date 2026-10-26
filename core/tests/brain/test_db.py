@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 30
+LATEST = 31
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -372,6 +372,20 @@ SCHEMA_V30 = {
         "recipient_id INTEGER NOT NULL", "recipient_name TEXT NOT NULL", "state TEXT NOT NULL DEFAULT 'queued'",
         "reason TEXT NOT NULL DEFAULT ''", "turn_id INTEGER",
     ],
+}
+SCHEMA_V31 = {
+    **SCHEMA_V30,
+    'worker_tasks': [*SCHEMA_V30['worker_tasks'], 'parent_task_id INTEGER','root_task_id INTEGER',
+        'stage_id TEXT','from_member_id INTEGER','source_turn_id INTEGER','model_ref TEXT','mode TEXT',
+        "done_when TEXT NOT NULL DEFAULT ''",'idempotency_key TEXT','ready_at_ms INTEGER',
+        "dispatch_policy TEXT NOT NULL DEFAULT 'immediate'","schedule_provenance TEXT NOT NULL DEFAULT '{}'",'continuation TEXT'],
+    'task_executions': ['id INTEGER PK','task_id INTEGER NOT NULL','attempt INTEGER NOT NULL','state TEXT NOT NULL',
+        'effective_model TEXT','started_at_ms INTEGER NOT NULL','ended_at_ms INTEGER','outcome TEXT'],
+    'task_outbox': ['event_id TEXT PK','task_id INTEGER NOT NULL','type TEXT NOT NULL','destination_turn_id INTEGER NOT NULL',
+        'room_id INTEGER','thread_id INTEGER','created_at_ms INTEGER NOT NULL','delivered_at_ms INTEGER','disposition TEXT'],
+    'task_inbox': ['event_id TEXT PK','parent_task_id INTEGER','consumed_at_ms INTEGER'],
+    'task_evidence': ['id INTEGER PK','task_id INTEGER NOT NULL','tool_call_id TEXT NOT NULL','kind TEXT NOT NULL',
+        'uri TEXT NOT NULL','digest TEXT NOT NULL','mime TEXT NOT NULL','scope TEXT NOT NULL','verified_at_ms INTEGER NOT NULL','verdict TEXT NOT NULL'],
 }
 
 
@@ -418,7 +432,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V30) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V31) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -432,7 +446,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V30.items():
+    for table, columns in SCHEMA_V31.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

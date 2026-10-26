@@ -3,6 +3,10 @@ import { homeEn } from "./home-catalogs";
 import type { Messages } from './zh-TW';
 
 export const en = {
+  "handoff.forwarded": "Forwarded to {p0}", "handoff.asked": "Asked {p0}",
+  "handoff.queued": "Queued", "handoff.running": "Running", "handoff.waiting": "Waiting for results",
+  "handoff.done": "Completed", "handoff.failed": "Incomplete", "handoff.withheld": "Access revoked",
+  "handoff.task": "Task #{p0}",
   ...navEn,
   ...homeEn,
   "conversations.untitled": "New conversation",

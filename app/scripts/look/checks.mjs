@@ -175,12 +175,28 @@ export function checkRendered(name) {
     return { check: name, recipient: 1 };
   }
   if (name === "room-thinking") {
+    const exchange = window.__look.data.roomExchanges.at(-1);
+    require(exchange.active_turn === 2 && exchange.reply_intents.filter(intent => intent.state === "running").length === 1, "the fixture matches one active core turn and queued reply intents");
     const rows = [...document.querySelectorAll('.au-room-thinking')];
     require(rows.length === 1 && visible(rows[0]), "only one member is shown speaking");
     require(getComputedStyle(rows[0]).flexDirection === 'row', "speaker face and status share one row");
     require(visible(rows[0].querySelector('.av')), "the speaker's face is visible");
     require(rows[0].textContent === "小晴 正在發言…", "the speaking row names the member");
     return { check: name, speakingRows: rows.length };
+  }
+  if (name === "p03-handoff" || name === "p03-handoff-expanded") {
+    const task = window.__look.data.roomHandoffs[0], event = document.querySelector(`[data-handoff="${task.task_id}"]`);
+    require(visible(event) && document.querySelectorAll('[data-handoff]').length === 1, "one durable receipt is visible");
+    require(!event.closest('.chat-message'), "handoffs are events outside message bodies");
+    require(event.dataset.state === task.state, "receipt and rendered state agree");
+    require(event.textContent.includes('已轉交給 小晴'), "the receipt names its assignee");
+    require(visible(event.querySelector('.av')), "the compact line includes the member face");
+    const line = event.querySelector('.handoff-event-line').getBoundingClientRect(), bounds = event.getBoundingClientRect();
+    require(Math.abs(line.left + line.width / 2 - bounds.left - bounds.width / 2) <= 2, "the handoff line is centered");
+    require(task.ready_at_ms === task.created_at_ms && task.dispatch_policy === 'immediate', "source dates do not schedule work");
+    if (name === "p03-handoff-expanded") require(event.open && visible(event.querySelector('.handoff-detail .message-text')), "expansion shows the persisted result");
+    else require(!event.open, "handoff details start collapsed");
+    return { check: name, taskId: task.task_id, state: task.state, readyAt: task.ready_at_ms };
   }
   if (name === "room-row-menu") {
     require(!document.querySelector('[data-room-delete]'), "room rows have no direct delete button");

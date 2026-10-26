@@ -2299,7 +2299,7 @@ class AgentService:
         for a failure of the world: "blocked" when the speaker may not, "bad_arguments" for
         arguments it cannot take, "not_found" for nobody of that name."""
         team = self._team
-        if team is None or name not in TEAM_TOOLS or (name != SKILL_READ and not speaker.may_ask):
+        if team is None or name not in TEAM_TOOLS or (name not in (SKILL_READ, "handoff") and not speaker.may_ask):
             return ToolResult(name, False, None, "blocked")
         if name in (CREATE_MEMBER, "room_meeting") and (not speaker.is_raphael or speaker.depth):
             return ToolResult(name, False, None, "blocked")
@@ -2307,6 +2307,11 @@ class AgentService:
             self._gate.check(action or Action(name, dict(arguments)), approval)
         except (UnknownTool, NotApproved):
             return ToolResult(name, False, None, "blocked")
+        if name == "handoff":
+            if self._background is None:
+                return ToolResult(name, False, None, "worker_disabled")
+            return self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
+                                            language=language)
         if name == "room_meeting":
             rooms = getattr(team, 'rooms', None)
             if rooms is None or not source_turn_id:
@@ -3217,6 +3222,7 @@ class AgentService:
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
+            handoffs = self._background.handoff_views(source_turn_id=turn.id)
             views.append(
                 {
                     "id": turn.id,
@@ -3245,6 +3251,7 @@ class AgentService:
                     "steps": [_step_view(step) for step in steps.get(turn.id or 0, [])]
                     + task_steps,
                     "task": task,
+                    **({"handoffs": handoffs} if handoffs else {}),
                     "messages": messages.get(turn.id or 0, []),
                 }
             )

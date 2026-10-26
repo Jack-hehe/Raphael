@@ -2,6 +2,10 @@ import { navZh } from "./nav-catalogs";
 import { homeZh } from "./home-catalogs";
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
+  "handoff.forwarded": "已轉交給 {p0}", "handoff.asked": "已詢問 {p0}",
+  "handoff.queued": "已排隊", "handoff.running": "執行中", "handoff.waiting": "等待結果",
+  "handoff.done": "已完成", "handoff.failed": "未完成", "handoff.withheld": "權限已撤回",
+  "handoff.task": "工作 #{p0}",
   ...navZh,
   ...homeZh,
   "conversations.untitled": "新對話",

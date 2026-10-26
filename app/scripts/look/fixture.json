@@ -398,9 +398,21 @@
     }
   ],
   "roomExchanges": [],
+  "roomHandoffs": [],
+  "roomHandoff": {
+    "task_id": 42, "source_turn_id": 1, "work_turn_id": 101, "member_id": 1,
+    "member_name": "小晴", "from_member_id": 0, "stage_id": "launch-report", "mode": "work",
+    "state": "queued", "reason": null, "created_at_ms": 1792807141000, "ready_at_ms": 1792807141000,
+    "dispatch_policy": "immediate", "result": "已讀取來源，完成上線驗收報告。兩項待確認文案已整理。",
+    "evidence": [{ "kind": "artifact", "digest": "fixture-report-digest", "verdict": "verified" }]
+  },
   "roomActiveExchange": {
     "origin_message_id": 1, "room_id": 1, "state": "running", "turns_taken": 2,
-    "hops": 1, "chime_ins": 0, "cost": 0.003, "stop_requested": 0
+    "hops": 1, "chime_ins": 0, "cost": 0.003, "stop_requested": 0,
+    "active_turn": 2, "pending": "[]", "language": "zh-TW", "spoken": "[0]",
+    "wrapup_sent": 0, "reason": "", "routing": {},
+    "reply_intents": [{ "id": 1, "recipient_id": 1, "recipient_name": "小晴", "state": "running", "reason": "", "turn_id": 2 },
+      { "id": 2, "recipient_id": 2, "recipient_name": "小森", "state": "queued", "reason": "", "turn_id": null }]
   },
   "roomDiscussionMessages": [
     {
@@ -436,20 +448,8 @@
       "reply_to": 1,
       "turn_id": 2,
       "reply_to_member": null,
-      "kind": "message"
-    },
-    {
-      "id": 5,
-      "room_id": 1,
-      "member_id": 2,
-      "text": "",
-      "created": 1792807200000,
-      "status": "running",
-      "request_id": null,
-      "reply_to": 1,
-      "turn_id": 3,
-      "reply_to_member": null,
-      "kind": "message"
+      "kind": "message", "thread_id": 1, "scope": "room",
+      "reply_reference": { "message_id": 1, "author_kind": "owner", "author_member_id": null }
     }
   ],
   "conversations": [

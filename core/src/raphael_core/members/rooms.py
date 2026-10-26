@@ -287,7 +287,8 @@ class RoomsService:
             if len(rows) < 100:
                 break
             cursor = rows[-1]["id"]
-        return {"messages":list(reversed(messages)), "exchange":self._exchanges.latest(room["id"])}
+        return {"messages":list(reversed(messages)), "exchange":self._exchanges.latest(room["id"]),
+                "handoffs":self._background.handoff_views(room_id=room['id'],thread_id=thread_id)}
 
     def _targets(self, room, text):
         # Code and quotations are evidence, not accepted addresses.
@@ -377,7 +378,8 @@ class RoomsService:
         prompt = ("You are in a group chat with colleagues. Use your own persona and the owner's language. "
             "Read the full named transcript. Reply briefly, 1-4 sentences, TO your colleagues: you may agree, "
             "disagree, add evidence, or @mention one colleague to hand over the next turn. Do not independently "
-            "dispatch member turns. Say exactly (pass) if you have nothing material to add. ")
+            "dispatch conversational member turns. Use the handoff tool for concrete work assignments: a mention is not work. "
+            "Assigned work starts now; source document dates are never schedule authorization. Say exactly (pass) if you have nothing material to add. ")
         if member_id == 0:
             prompt += ("You are the chief of staff. For a discussion or planning request, briefly frame the question "
                        "and @mention the right lead by their actual name to continue, rather than answering for everyone. ")

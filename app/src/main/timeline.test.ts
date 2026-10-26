@@ -80,6 +80,17 @@ test("an old turn without messages still renders its answer once", () => {
   expect(html).toContain("《答。台北現在 24 度。》");
 });
 
+test.each([false, true])("a durable receipt renders outside assistant bubbles with public messages=%s", (hasMessages) => {
+  const messages = hasMessages ? [{ seq: 1, kind: "reply" as const, text: "已轉交。", at_ms: T0 }] : [];
+  const html = turnHTML(turn(1, { messages, handoffs: [{ task_id: 42, source_turn_id: 1, work_turn_id: 2,
+    member_id: 3, member_name: "小晴", from_member_id: 0, stage_id: "report", mode: "work", state: "queued",
+    reason: null, created_at_ms: T0, ready_at_ms: T0, dispatch_policy: "immediate", result: "", evidence: [] }] }),
+    emptyTimelineState(), false, { face: () => "" });
+  expect(html.match(/data-handoff="42"/g)).toHaveLength(1);
+  expect(html.indexOf('class="handoff-event"')).toBeLessThan(html.indexOf('class="ra"'));
+  expect(visible(html)).toContain("已轉交給 小晴");
+});
+
 test("an unknown tool connection has a plug with its accessible name, never an initial", () => {
   const html = stepHTML(step({ server: "Files", tool: "list" }), false);
   expect(html).toContain(`<span class="step-ic" role="img" aria-label="Files" title="Files">${ico("plug")}</span>`);

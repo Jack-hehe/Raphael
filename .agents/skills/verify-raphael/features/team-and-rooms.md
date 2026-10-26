@@ -56,6 +56,26 @@ after reopening the isolated dev instance. Record recipients, states and cleanup
 
 ## Gotchas
 
+Durable work uses the shared `handoff` contract, independently of conversational @ reply
+intents. Its receipt creates an isolated assignee task immediately, with an explicit stage,
+model, source thread and schedule provenance. Source dates never defer work. A parent that
+waits releases the worker slot. Safe queued work and waiting continuations survive restart;
+uncertain running effects end as interrupted and are not replayed. Room results are delivered
+once through the persisted outbox/inbox. Removed recipients have named refusals or withheld
+results. Promises without action evidence cannot complete work.
+
+```powershell
+npm run look -- room-handoff-queued room-handoff-running room-handoff-result room-handoff-failed room-immediate-work room-source-dates-not-schedule handoff-centred-line room-thinking --theme both --width 1120,720,1920x1080
+```
+
+Inspect the compact centered face/name/state line, expanded task/result detail and separate
+final member message. The `room-thinking` fixture uses actual active-turn/reply-intent state.
+`handoff-centred-line` covers the requesting private conversation even without public messages;
+the six room handoff scenes cover room dispatch and results.
+Offline P00 S03.immediate-start and S08.immediate-start exercise API/CLI dispatch; they do not
+establish full Gmail/meeting workflow or live provider acceptance. Core handoff tests additionally
+write and hash an actual HTML artifact through the shared gate/tool pipeline.
+
 Room 1 has messages; room 2 is a team room. The compact picker is a different entry
 point and needs 720 coverage. Synthetic drag scenes do not prove pointer/keyboard
 drag accessibility. A confirmation dialog is not proof of deletion or delivery. The row-menu scene uses the

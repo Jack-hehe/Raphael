@@ -197,7 +197,9 @@ class RpcDriver:
         return turns, reasons
 
     async def execute(self, cell):
-        if cell.driver in ('roster', 'meeting'):
+        if cell.driver in ('immediate-dispatch','immediate-room-work'):
+            reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
+        elif cell.driver in ('roster', 'meeting'):
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
         elif cell.driver in ("missing-connection", "missing-permission"):
             await self.install_fixture()
@@ -255,7 +257,12 @@ class RpcDriver:
                 reasons.append("routine_readback_failed")
         else:
             return ["not implemented: " + cell.dependency], []
-        turns, owner_reasons = await self.owner_view()
+        if cell.driver == 'immediate-room-work':
+            # This owner entered through rooms.send; do not invent a private conversation.
+            turns = [{'source':'room','scope':'room','text':result.get('text','')}]
+            owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
+        else:
+            turns, owner_reasons = await self.owner_view()
         reasons += owner_reasons
         if not turns or result.get("status") not in {"done", "denied", "error"}:
             reasons.append("no_terminal_owner_result")
@@ -264,6 +271,50 @@ class RpcDriver:
     async def seed_team(self):
         return [(await self.app.call('members.create', {'name':name, 'role':role}))['member']['id']
                 for name, role in [('行銷','行銷企劃'), ('信件助理','信件管理'), ('HiKari','社群內容'), ('PM','專案規劃'), ('RD','來源研究')]]
+
+    async def immediate_work_scenario(self,*,room):
+        """Scoped P03 acceptance; full Gmail/meeting acceptance remains in the parent S03/S08 cells."""
+        ids = await self.seed_team()
+        await self.install_fixture()
+        target = ids[1]
+        prompt = (f'請用 handoff 立即交給信件助理（member_id={target}），stage_id=mail-triage，'
+            f'工作是用 Guardian 讀取測試信件並回報本次代碼。來源文件寫「明早截止、明天中午提交」，仍現在做；'
+            f'done_when=讀取工具成功並回報測試代碼。不要建立例行任務。')
+        room_id = None
+        if room:
+            room_id = (await self.app.call('rooms.create',{'name':'立即工作驗收','member_ids':[0,target]}))['room']['id']
+            await self.app.call('rooms.send',{'room_id':room_id,'request_id':'work-'+self.nonce,
+                'text':'@拉斐爾 '+prompt,'ui_language':'zh-TW'})
+            result = {'status':'done','text':''}
+        else:
+            result = await self.ask(prompt)
+        # The suite's outer cell timeout bounds this wait. Observe persisted business state.
+        while True:
+            tasks = self.app._conn.execute("SELECT * FROM worker_tasks WHERE mode IS NOT NULL").fetchall()
+            if tasks and all(task['state'] not in ('queued','running','waiting') for task in tasks):
+                if not room or self.app.rooms._exchanges.latest(room_id)['state'] in ('done','stopped'):
+                    break
+            await asyncio.sleep(.02)
+        reasons=[]
+        if len(tasks)!=1 or tasks[0]['member_id']!=target:
+            reasons.append('dispatch_receipt_or_owner')
+        for task in tasks:
+            if task['state']!='done' or task['ready_at_ms']!=task['created_at_ms'] or task['dispatch_policy']!='immediate' or task['started_at_ms'] is None:
+                reasons.append('immediate_start')
+            if task['scope']!=('room' if room else 'exchange') or task['model_ref']!=self.model:
+                reasons.append('work_scope_or_model')
+            if task['room_id']!=room_id or self.nonce not in (task['report_detail'] or task['report_text'] or ''):
+                reasons.append('result_destination_or_nonce')
+            if not self.app._conn.execute("SELECT 1 FROM task_outbox WHERE task_id=? AND type='result' AND disposition='delivered'",(task['id'],)).fetchone():
+                reasons.append('result_not_delivered')
+            if room and not self.app._conn.execute('SELECT 1 FROM room_messages WHERE room_id=? AND thread_id=? AND turn_id=?',
+                (room_id,task['thread_id'],task['turn_id'])).fetchone():
+                reasons.append('result_not_in_room_thread')
+        if not self.recorder.receipts or self.app._conn.execute('SELECT COUNT(*) FROM routines').fetchone()[0]:
+            reasons.append('no_action_or_implicit_schedule')
+        if room:
+            result['text']=' '.join(m['text'] for m in (await self.app.call('rooms.messages',{'room_id':room_id}))['messages'] if m['member_id'] is not None)
+        return reasons,result
 
     async def roster_scenario(self):
         ids = await self.seed_team()

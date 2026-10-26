@@ -219,6 +219,7 @@ class TaskRun:
         self._memory = memory
         # The team tools (`agent.team`), made for this task's speaker on this task's ledger.
         self._team = team
+        self.handoff_receipts = []
         # Whether a call that needs the owner's yes pauses the task (the background service's runs)
         # or is refused (any other).
         self.can_wait = can_wait
@@ -481,6 +482,13 @@ class TaskRun:
             reply, outcome, tier, detail = await self._builtin(ref, arguments, name, call_id)
         if reply.get("ok") and isinstance(reply.get("content"), str):
             self.seen_urls.add_from(reply["content"])  # what it returned may be read next
+        if ref.name == 'handoff' and reply.get('ok'):
+            self.handoff_receipts.append(json.loads(reply['content']))
+            reply['kind'] = 'handoff'
+        if reply.get('ok'):
+            import hashlib
+            self._store.record_evidence(self.task_id,call_id or str(self.tool_calls),kind='tool_receipt',
+                uri=ref.key,digest=hashlib.sha256(reply.get('content','').encode()).hexdigest(),mime='text/plain')
         fields = {
             "tool": ref.name,
             "server": ref.server,

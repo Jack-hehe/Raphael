@@ -110,6 +110,7 @@ class CliLoop:
         self._queue = asyncio.Queue()
         self._resume = None
         self._serial = asyncio.Lock()
+        self._handoff_pending = False
         self._buffer = ""
         self._thought = ""
         self._calls = 0
@@ -125,6 +126,8 @@ class CliLoop:
 
     async def _tool(self, identifier, name, args):
         async with self._serial:
+            if self._handoff_pending:
+                return ToolOutcome(False, 'waiting_for_handoff')
             self._calls += 1
             if self._calls > 200:
                 return ToolOutcome(False, "tool_limit")
@@ -142,6 +145,9 @@ class CliLoop:
                                                         "behavior": "allow", "destination": "session"}]
                 return ToolOutcome(True, content=json.dumps(answer))
             result = await self._execute(identifier, name, args)
+            if result.ok and result.kind == 'handoff':
+                self._handoff_pending = True
+                self._queue.put_nowait(Outcome('stopped',kind='handoff'))
             return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.content or result.kind or "", ok=result.ok))
 
     async def _execute(self, identifier, name, args):
@@ -187,7 +193,7 @@ class CliLoop:
                     logger.warning("CLI turn work failed before an outcome: %s", type(self.task.exception()).__name__)
                 self._failure("error", NAMES[brain_ref(self.model)[0]])
             outcome = await getter
-            if outcome.kind != WAITING:
+            if outcome.kind not in (WAITING, 'handoff'):
                 if self.response is not None:
                     await self.aclose()
                 else:

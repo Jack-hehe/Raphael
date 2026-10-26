@@ -8,6 +8,10 @@ const team = [page("team"), wait(".team-member"), check("team-header")];
 const tools = [...calendar, { action: "calendar-tools" }, check("calendar-tools")];
 const groupMenu = [...team, click('[data-team="group-menu"]')];
 export default [
+  ...["queued", "running", "result", "failed"].map(state => scene(`room-handoff-${state}`, `Durable work ${state}`, [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: state === "result" ? "done" : state })),
+  scene("room-immediate-work", "Assigned work starts immediately", [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: "running" }),
+  scene("room-source-dates-not-schedule", "Document deadlines never defer assigned work", [room(1), wait("[data-handoff]"), check("p03-handoff")], { p03Handoff: "running", p03SourceDates: true }),
+  scene("handoff-centred-line", "Private receipt expands its real result without public message history", [wait("[data-handoff]"), check("p03-handoff"), click("[data-handoff] summary"), wait(".handoff-event[open]"), check("p03-handoff-expanded")], { p03Handoff: "done", p03Private: true }),
   scene("team-roster-aware", "Team inventory agrees with the shared prompt snapshot", [...team, check("p02-roster")]),
   scene("mentions-bots-apps", "Bots and connected apps share the mention inventory", [...team, type(".team-composer textarea", "@"), wait("#app-popover"), check("p02-mentions")]),
   scene("member-mentions-bots-apps", "Private composer shares the current team and app inventory", [type(".composer .cmp-input", "@"), wait("#app-popover"), check("p02-mentions")]),

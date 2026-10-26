@@ -258,6 +258,13 @@ async def run_task(
                 else:
                     content = wrap_untrusted(call.name, refusal, ok=False)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                if refusal is None and outcome.ok and outcome.kind == 'handoff':
+                    # The receipt has returned. Persist this continuation and release the worker;
+                    # calls later in the same model batch have not run.
+                    for unmade in turn.calls[turn.calls.index(call)+1:]:
+                        messages.append({"role":"tool","tool_call_id":unmade.id,
+                            "content":wrap_untrusted(unmade.name,'Not made: waiting for delegated work.',ok=False)})
+                    return Outcome('stopped',kind='handoff',model_calls=model_calls,tool_calls=tool_calls,messages=list(messages))
             if steer:
                 # told after the results of this round, so that it reads them first
                 messages.append({"role": "user", "content": STEER_NOTE})

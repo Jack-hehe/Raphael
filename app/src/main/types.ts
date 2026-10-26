@@ -273,6 +273,7 @@ export interface MediaPayload {
 
 /** A turn of the conversation with Raphael (`agent.history.list`, newest first). */
 export interface AgentTurn {
+  handoffs?: HandoffView[];
   conversation_id?: number;
   quote?: MessageQuote | null;
   /** Ordered public lines; older cores and turns may have none. Text includes Raphael's framing. */
@@ -782,6 +783,14 @@ export interface RoomMessage {
   status: string; cost?: number; attachments?: TurnAttachment[];
   scope?: "room"; thread_id?: number;
   reply_reference?: { message_id: number; author_kind?: "owner" | "member"; author_member_id?: number | null; unavailable?: boolean } | null;
+}
+
+export interface HandoffView {
+  task_id: number; source_turn_id: number; work_turn_id: number; member_id: number;
+  member_name: string; from_member_id: number; stage_id: string; mode: "work" | "consult";
+  state: string; reason: string | null; created_at_ms: number; ready_at_ms: number;
+  dispatch_policy: "immediate"; result: string;
+  evidence: { kind: string; digest: string; verdict: string }[];
 }
 
 export interface RoomExchange {

@@ -67,6 +67,13 @@ The live-scenario-owner-view scene replays S17 synthetic history through the sha
 
 ## Meetings and shared inventory
 
+Durable assignments use `handoff`, which returns a task receipt immediately. The requesting
+conversation displays a compact centered event with expandable task/result detail. Work runs
+in the assignee's isolated work turn; results return only to the requesting source. Quick
+`ask_member` consultation remains tool data. Source-document deadlines never schedule work.
+The room handoff scenes in [Team and rooms](team-and-rooms.md) cover the shared event renderer;
+private and room result destinations are also checked by offline core tests.
+
 Every private/API/CLI/member turn receives the current public TeamContextSnapshot with self,
 count, stable IDs, roles, primary/chief and secret-free app connection states. Meeting requests
 use room_meeting; one centered event opens the room, and quick ask_member answers remain tool

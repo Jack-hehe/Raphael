@@ -10,6 +10,8 @@ import { teamMentions } from "./team-mentions";
 import { roomWrapupHTML } from "./room-wrapup";
 import { filesHTML, messageActionsHTML } from "./timeline";
 import { faceHTML } from "./members";
+import { handoffLineHTML } from "./handoff-line";
+import type { HandoffView } from "./types";
 import type { AppContext, MembersList, Room, RoomMessage, RoomExchange } from "./types";
 import { btn, closeMenu, copyText, esc, ico, iconButton, openMenu, sel, toaster } from "./ui";
 import "./automations.css";
@@ -177,6 +179,7 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
   let room:Room|undefined,list:MembersList={members:[],groups:[]},messages:RoomMessage[]=[],generation=0,opened=false,canOlder=false,loadingOlder=false;
   let requestId:string|undefined,retry="";
   let exchange:RoomExchange|null|undefined,replyTo:RoomMessage|undefined,stopping=false;
+  let handoffs: HandoffView[] = [];
   const drafts=new Map<number,string>();
   const composer=createChatComposer({placeholder:()=>t("rooms.message"),transcriptTarget(){const id=room?.id;return text=>{if(room?.id===id){composer.input.value+=(composer.input.value?" ":"")+text;composer.seedDictation(text);}else if(id){const draft=drafts.get(id)??"";drafts.set(id,draft+(draft?" ":"")+text);}};},async send(text,files){if(!room)return;const id=room.id,key=JSON.stringify([text,files,replyTo?.id]);if(key!==retry)requestId=undefined;retry=key;requestId??=crypto.randomUUID();await api.roomSend(id,text,requestId,getLocale(),files,replyTo?.id);requestId=undefined;if(room?.id===id){replyTo=undefined;await refresh();}changed();}});
   composer.input.addEventListener("input", () => teamMentions(composer.input, list, room?.member_ids));
@@ -198,7 +201,11 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     older.innerHTML=canOlder?btn(esc(t("rooms.older")),"sm",` data-room-act="older"${loadingOlder?" disabled":""}`):"";
     const follow=scroll.scrollHeight-scroll.scrollTop-scroll.clientHeight<80,top=scroll.scrollTop;
     const thinking=messages.find(m=>m.member_id!==null&&m.status==="running");
-    thread.innerHTML=messages.length?messages.map(m=>{
+    const entries = [...messages.map(message => ({ created: message.created, message, task: undefined as HandoffView | undefined })),
+      ...handoffs.map(task => ({ created: task.created_at_ms, message: undefined as RoomMessage | undefined, task }))].sort((a,b)=>a.created-b.created);
+    thread.innerHTML=entries.length?entries.map(entry=>{
+      if(entry.task) return `<li class="tn handoff-row">${handoffLineHTML(entry.task)}</li>`;
+      const m=entry.message!;
       if(m.member_id!==null&&m.status==="running") {
         if(m!==thinking)return "";
         const member=person(m.member_id);
@@ -212,7 +219,7 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
     }).join(""):`<li class="au-empty">${esc(t("rooms.empty"))}</li>`;
     scroll.scrollTop=follow?scroll.scrollHeight:top;composer.draw();onRender();
   }
-  async function refresh():Promise<void>{const mine=++generation,id=room?.id;if(!opened||!id)return;try{const [people,rooms,history]=await Promise.all([api.membersList(getLocale()),api.roomsList(),api.roomMessages(id)]);if(mine!==generation||!opened)return;const found=rooms.rooms.find(r=>r.id===id);if(!found){close();toaster.info(t("rooms.deleted"));return;}list=people;room=found;exchange=history.exchange;const first=history.messages[0]?.id??Infinity;messages=[...messages.filter(m=>m.id<first),...history.messages];draw();}catch(error){if(opened&&mine===generation)toaster.info(describeError(error));}}
+  async function refresh():Promise<void>{const mine=++generation,id=room?.id;if(!opened||!id)return;try{const [people,rooms,history]=await Promise.all([api.membersList(getLocale()),api.roomsList(),api.roomMessages(id)]);if(mine!==generation||!opened)return;const found=rooms.rooms.find(r=>r.id===id);if(!found){close();toaster.info(t("rooms.deleted"));return;}list=people;room=found;exchange=history.exchange;handoffs=history.handoffs??[];const first=history.messages[0]?.id??Infinity;messages=[...messages.filter(m=>m.id<first),...history.messages];draw();}catch(error){if(opened&&mine===generation)toaster.info(describeError(error));}}
   function close():void{if(room)drafts.set(room.id,composer.input.value);opened=false;generation++;el.hidden=true;clearRoomSelection();onClose();}
   el.querySelector('[data-room-menu]')!.addEventListener('click',e=>{if(room)roomActions(e.currentTarget as HTMLElement,room,()=>void refresh(),close);});
   el.addEventListener('click',e=>{const target=(e.target as Element).closest<HTMLElement>('[data-room-act],[data-act]');if(!target)return;const act=target.dataset.roomAct??target.dataset.act;if(["turn","copy-message","copy-code","attachment-open","older"].includes(act??""))e.stopPropagation();
