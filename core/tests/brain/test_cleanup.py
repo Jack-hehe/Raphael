@@ -672,7 +672,7 @@ async def test_the_dictated_text_and_the_reply_are_never_logged(make_svc, fake_c
 def test_the_prompt_is_package_data_with_one_placeholder_at_its_end():
     file = resources.files("raphael_core.brain.prompts").joinpath("cleanup_system.md")
     text = file.read_text(encoding="utf-8")
-    assert text.startswith("You are a careful editor of dictated text.")
+    assert text.startswith("You edit dictated text.")
     assert text.count("{dictionary}") == 1 and text.rstrip().endswith("\n{dictionary}")
     assert text.count("{target_app}") == 1
     assert text.count("{languages}") == 1 and text.count("{script_rules}") == 1
