@@ -96,7 +96,7 @@ from ..agent.plugins import preview
 from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
 from ..agent.safety import asked_with
 from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
-from ..agent.team import Team, team_tools_for, roster_prompt
+from ..agent.team import Team, handoff_refused, team_tools_for, roster_prompt
 from ..agent.tools import ToolResult, Tools
 from ..brain.providers.base import ModelProvider
 from ..brain.settings import DEFAULTS, SettingsStore, api_model
@@ -115,7 +115,7 @@ from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import NOT_MADE_WHILE_WAITING, MemoryReader, RunLimits, TaskRun, Waiting
 from ..agent.toolpick import ToolPicker
 from .snapshot import BUILTIN_SERVER, refine, take_snapshot
-from .tasks import QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
+from .tasks import FINAL_STATES, QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
 
@@ -524,29 +524,34 @@ class BackgroundService:
         """The single API/CLI hand-off contract. Never wait for the assignee in this call."""
         from ..agent.policy import NotApproved, UnknownTool
         name = 'handoff'
+
+        def refused(kind):
+            logger.info("A hand-off was refused: %s", kind)
+            return handoff_refused(kind)
+
         try:
             self._gate.check(Action(name, arguments), None, worker=True)
         except (NotApproved, UnknownTool):
-            return ToolResult(name, False, None, 'blocked')
+            return refused('blocked')
         source = self._history.get(source_turn_id) if source_turn_id else None
         if source is None or source.member_id != speaker.id or source.scope not in ('private','room','exchange'):
-            return ToolResult(name, False, None, 'source_unavailable')
+            return refused('source_unavailable')
         member = arguments.get('member_id')
         request, stage, done_when = (arguments.get(key) for key in ('request','stage_id','done_when'))
         mode = arguments.get('mode','work')
         if (type(member) is not int or not all(isinstance(value,str) and value.strip() for value in (request,stage,done_when))
                 or len(request)>2000 or len(stage)>100 or len(done_when)>2000 or mode not in ('work','consult')
                 or set(arguments)-{'member_id','request','stage_id','done_when','mode'}):
-            return ToolResult(name, False, None, 'bad_arguments')
+            return refused('bad_arguments')
         if member == speaker.id:
-            return ToolResult(name, False, None, 'self_handoff')
+            return refused('self_handoff')
         target = self._speaker(member)
         if target is None:
-            return ToolResult(name, False, None, 'member_unknown_or_removed')
+            return refused('member_unknown_or_removed')
         if source.room_id is not None and not self._handoff_member_allowed(source.room_id,member):
-            return ToolResult(name, False, None, 'member_removed_from_room')
+            return refused('member_removed_from_room')
         if self._host.disabled:
-            return ToolResult(name, False, None, 'worker_disabled')
+            return refused('worker_disabled')
         parents = self._store.for_turns([source.id])
         parent = parents.get(source.id)
         # Bound durable task chains independently from conversational @ reply hops.
@@ -555,14 +560,14 @@ class BackgroundService:
         while ancestor is not None:
             depth += 1
             if depth >= 16:
-                return ToolResult(name, False, None, 'handoff_depth_limit')
+                return refused('handoff_depth_limit')
             ancestor = self._store.get(ancestor.parent_task_id) if ancestor.parent_task_id else None
         model = getattr(target, 'model', None) or self._settings.get('agent_model') or DEFAULTS['agent_model']
         try:
             task_id, duplicate = self._store.accept_handoff(source=source,parent=parent,assignee=member,
                 model=model,request=request.strip(),stage=stage.strip(),mode=mode,done_when=done_when.strip(),language=language)
         except Refused as error:
-            return ToolResult(name,False,None,error.kind)
+            return refused(error.kind)
         task = self._store.get(task_id)
         if not duplicate:
             self._models[task_id] = model
@@ -584,36 +589,42 @@ class BackgroundService:
 
     def _deliver_handoffs(self):
         """At-least-once outbox delivery with an atomic, idempotent room/result inbox projection."""
-        conn = self._metrics_conn
         parents = set()
-        for event in conn.execute('SELECT * FROM task_outbox WHERE delivered_at_ms IS NULL ORDER BY created_at_ms,event_id').fetchall():
-            task = self._store.get(event['task_id'])
-            source = self._history.get(event['destination_turn_id'])
-            allowed = source is not None and self._speaker(task.member_id) is not None and task.reason != 'member_unknown_or_removed'
-            if task.room_id is not None:
-                allowed = allowed and self._handoff_member_allowed(task.room_id,task.member_id) and self._handoff_member_allowed(task.room_id,task.from_member_id)
-            disposition = 'delivered' if allowed else 'withheld'
-            with conn:
-                if event['type']=='result':
-                    conn.execute('INSERT OR IGNORE INTO task_inbox(event_id,parent_task_id) VALUES (?,?)',(event['event_id'],task.parent_task_id))
-                    if allowed and task.room_id is not None:
-                        source_message=conn.execute('SELECT id,member_id,origin_message_id FROM room_messages WHERE turn_id=? AND room_id=? AND thread_id=?',
-                            (task.source_turn_id,task.room_id,task.thread_id)).fetchone()
-                        conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id,reply_to,reply_to_member,origin_message_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
-                            (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id),
-                             source_message['id'] if source_message else None,source_message['member_id'] if source_message else None,
-                             source_message['origin_message_id'] if source_message else None))
-                    if task.parent_task_id:
-                        parents.add(task.parent_task_id)
-                conn.execute('UPDATE task_outbox SET delivered_at_ms=?,disposition=? WHERE event_id=? AND delivered_at_ms IS NULL', (self._now_ms(),disposition,event['event_id']))
-            if allowed:
-                self._notify('agent.turn',{'turn_id':source.id,'member_id':source.member_id})
-                if task.room_id:
-                    self._notify('rooms.changed',{'room_id':task.room_id})
+        for event in self._metrics_conn.execute('SELECT * FROM task_outbox WHERE delivered_at_ms IS NULL ORDER BY created_at_ms,event_id').fetchall():
+            try:
+                self._deliver(event, parents)
+            except Exception as exc:  # stays undelivered for a later delivery; the other events go on
+                logger.warning("Could not deliver hand-off event %s: %s", event['event_id'], type(exc).__name__)
         for parent in parents:
             if self._store.resume_from_inbox(parent):
                 self._queue.append(parent)
                 self._changed(parent,QUEUED)
+
+    def _deliver(self, event, parents):
+        conn = self._metrics_conn
+        task = self._store.get(event['task_id'])
+        source = self._history.get(event['destination_turn_id'])
+        allowed = source is not None and self._speaker(task.member_id) is not None and task.reason != 'member_unknown_or_removed'
+        if task.room_id is not None:
+            allowed = allowed and self._handoff_member_allowed(task.room_id,task.member_id) and self._handoff_member_allowed(task.room_id,task.from_member_id)
+        disposition = 'delivered' if allowed else 'withheld'
+        with conn:
+            if event['type']=='result':
+                conn.execute('INSERT OR IGNORE INTO task_inbox(event_id,parent_task_id) VALUES (?,?)',(event['event_id'],task.parent_task_id))
+                if allowed and task.room_id is not None:
+                    source_message=conn.execute('SELECT id,member_id,origin_message_id FROM room_messages WHERE turn_id=? AND room_id=? AND thread_id=?',
+                        (task.source_turn_id,task.room_id,task.thread_id)).fetchone()
+                    conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id,request_id,reply_to,reply_to_member,origin_message_id) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(room_id,request_id) DO NOTHING",
+                        (task.room_id,task.thread_id,task.member_id,task.report_detail or task.report_text or '',self._now_ms(),task.turn_id,'handoff-'+str(task.id),
+                         source_message['id'] if source_message else None,source_message['member_id'] if source_message else None,
+                         source_message['origin_message_id'] if source_message else None))
+            conn.execute('UPDATE task_outbox SET delivered_at_ms=?,disposition=? WHERE event_id=? AND delivered_at_ms IS NULL', (self._now_ms(),disposition,event['event_id']))
+        if event['type']=='result' and task.parent_task_id:
+            parents.add(task.parent_task_id)
+        if allowed:
+            self._notify('agent.turn',{'turn_id':source.id,'member_id':source.member_id})
+            if task.room_id:
+                self._notify('rooms.changed',{'room_id':task.room_id})
 
     def handoff_views(self, *, room_id=None, thread_id=None, source_turn_id=None):
         rows = self._metrics_conn.execute("SELECT id FROM worker_tasks WHERE mode IS NOT NULL AND "
@@ -865,10 +876,15 @@ class BackgroundService:
                 raise
             except Exception as exc:  # a bug here must not stop the tasks after this one
                 logger.warning("A background task failed unexpectedly: %s", type(exc).__name__)
-                self._conclude(
-                    task, None, "failed", PREFIXES[task.language].negative,
-                    phrase(task.language, "error"), None, "error",
-                )  # fmt: skip
+                try:
+                    current = self._store.get(task.id)
+                    if current is None or current.state not in FINAL_STATES:  # an end already written stays
+                        self._conclude(
+                            task, None, "failed", PREFIXES[task.language].negative,
+                            phrase(task.language, "error"), None, "error",
+                        )  # fmt: skip
+                except Exception as again:
+                    logger.warning("Could not end a background task that failed: %s", type(again).__name__)
             finally:
                 self._executing = False
 
@@ -1082,8 +1098,8 @@ class BackgroundService:
                 self._pause(task, run, {"messages":[{"role":"user","content":task.text}]})
             else:
                 reply = dataclasses.asdict(outcome)
-                if loop.failed:
-                    reply = {"status":"stopped", "kind":"failed"}
+                if loop.failure:
+                    reply = {"status":"stopped", "kind":"failed", "detail":"cli_" + loop.failure, "final":outcome.final}
                 self._conclude_run(task, run, reply)
         except TimeoutError:
             self._conclude_run(task, run, {"status":"stopped", "kind":"limit_time"})
@@ -1599,6 +1615,9 @@ class BackgroundService:
             self._conclude(task, run, "limit", notice, text, None, kind)
         elif status == "stopped" and kind == "failed":
             detail = reply.get("detail")
+            if str(detail).startswith("cli_"):  # the CLI loop's own words already say what happened
+                self._conclude(task, run, "failed", negative, reply.get("final") or phrase(language, "error"), None, detail)
+                return
             if detail == "tools":
                 text = phrase(language, "worker_model")
             else:

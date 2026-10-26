@@ -465,6 +465,24 @@ async def test_the_worker_comes_back_for_the_next_task_after_one_was_stopped(mak
     assert reports[1]["text"] == "Second task." and (first, second) == (reports[0]["task_id"], reports[1]["task_id"])
 
 
+async def test_the_queue_goes_on_after_a_task_whose_failure_handling_raises(make_rig):
+    rig = make_rig()
+    rig.client.replies = [report("First task."), report("Second task.")]
+    first = rig.submit()
+    second = rig.submit()
+    told = rig.service._notify
+
+    def notify(method, params):
+        if method == "worker.report" and params["task_id"] == first:
+            raise RuntimeError("fixture notification failure")
+        told(method, params)
+
+    rig.service._notify = notify
+    await until(lambda: rig.task(second).state == "done")
+    assert rig.task(first).state == "done" and rig.task(first).report_text == "First task."
+    assert [r["task_id"] for r in rig.reports()] == [second]
+
+
 async def test_a_task_that_waits_can_be_taken_out_of_the_queue(make_rig):
     rig = make_rig()
     started = asyncio.Event()

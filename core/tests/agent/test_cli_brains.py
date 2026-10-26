@@ -393,6 +393,72 @@ else:
     assert all("PRIVATE-DIAGNOSTIC" not in event.text for event in events)
 
 
+@pytest.mark.parametrize("shape,expected", [
+    ("notified", ("error", "rate_limited")), ("snake_case", ("error", "rate_limited")),
+    ("retried", ("final", "Public answer.")), ("exhausted", ("error", "quota")), ("other", ("error", "cli_turn_failed")),
+])
+async def test_codex_too_many_requests_is_a_rate_limit_unless_the_plan_is_exhausted(tmp_path, monkeypatch, shape, expected):
+    from raphael_core.agent.cli.drivers import Driver
+    from .test_quota import NOW
+
+    monkeypatch.setattr("raphael_core.agent.cli.drivers.wall_clock_ms", lambda: NOW)
+    script = tmp_path / "rate_limited.py"
+    script.write_text('''import json, sys
+shape, reset = sys.argv[1:3]
+def send(packet): print(json.dumps(packet), flush=True)
+camel = {"message":"exceeded retry limit, last status: 429 Too Many Requests",
+         "codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}}}
+snake = {"message":"exceeded retry limit, last status: 429","codex_error_info":{"response_too_many_failed_attempts":{"http_status_code":429}}}
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize": send({"id":request["id"], "result":{}})
+    elif method == "thread/start": send({"id":request["id"], "result":{"thread":{"id":"one"}}})
+    elif method == "turn/start":
+        if shape == "exhausted":
+            send({"method":"account/rateLimits/updated", "params":{"rateLimits":{"primary":{"usedPercent":100, "resetsAt":int(reset)}}}})
+        if shape in ("notified", "exhausted", "retried"):
+            send({"method":"error", "params":{"error":camel, "willRetry":shape == "retried", "threadId":"one", "turnId":"t"}})
+        if shape == "retried":
+            send({"method":"item/completed", "params":{"item":{"id":"final", "type":"agentMessage", "text":"Public answer."}}})
+            send({"method":"turn/completed", "params":{"turn":{"id":"t", "status":"completed"}}})
+        else:
+            error = snake if shape == "snake_case" else {"message":"PRIVATE-DIAGNOSTIC"} if shape == "other" else camel
+            send({"method":"turn/completed", "params":{"turn":{"id":"t", "status":"failed", "error":error}}})
+        break
+''', encoding="utf-8")
+    environ = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CODEX_", "OPENAI_"))}
+    environ["USERPROFILE"] = environ["HOME"] = str(tmp_path)
+    driver = Driver("codex", [sys.executable, str(script), shape, str(NOW // 1000 + 3600)], environ=environ, home=tmp_path)
+    events = [event async for event in driver.run(user="hello", system="persona", endpoint="http://127.0.0.1:1/mcp",
+                                                 token="ephemeral", permission=None, cwd=str(tmp_path / "workspace"))]
+    assert (events[-1].kind, events[-1].text) == expected
+    assert all("PRIVATE-DIAGNOSTIC" not in event.text and "429" not in event.text for event in events)
+
+
+@pytest.mark.parametrize("shape,expected", [("limited", "rate_limited"), ("exhausted", "quota"), ("other", "cli_failed")])
+async def test_claude_api_429_is_a_rate_limit_unless_the_plan_window_is_rejected(tmp_path, monkeypatch, shape, expected):
+    from raphael_core.agent.cli.drivers import Driver
+    from .test_quota import NOW
+
+    monkeypatch.setattr("raphael_core.agent.cli.drivers.wall_clock_ms", lambda: NOW)
+    script = tmp_path / "claude_429.py"
+    script.write_text('''import json, sys
+shape, reset = sys.argv[1:3]
+def send(packet): print(json.dumps(packet), flush=True)
+json.loads(sys.stdin.readline())
+if shape == "exhausted":
+    send({"type":"rate_limit_event", "rate_limit_info":{"status":"rejected", "rateLimitType":"five_hour", "resetsAt":int(reset)}})
+send({"type":"result", "subtype":"success", "is_error":True, "terminal_reason":"api_error",
+      "api_error_status":500 if shape == "other" else 429, "result":"PRIVATE-DIAGNOSTIC"})
+''', encoding="utf-8")
+    driver = Driver("claude", [sys.executable, str(script), shape, str(NOW // 1000 + 3600)])
+    events = [event async for event in driver.run(user="hello", system="persona", endpoint="http://127.0.0.1:1/mcp",
+                                                 token="ephemeral", permission=None, cwd=str(tmp_path))]
+    assert (events[-1].kind, events[-1].text) == ("error", expected)
+    assert all("PRIVATE-DIAGNOSTIC" not in event.text for event in events)
+
+
 async def test_discovery_reports_changes_without_reading_credentials(tmp_path, monkeypatch):
     from pathlib import Path
     script = tmp_path / "version.py"

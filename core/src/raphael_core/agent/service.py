@@ -230,6 +230,7 @@ from .team import (
     SKILL_READ,
     Team,
     asks_to_create_member,
+    handoff_refused,
     names_raphael,
     roster_prompt,
     team_tool,
@@ -1444,7 +1445,8 @@ class AgentService:
 
     @staticmethod
     def _loop_result(result: ToolResult) -> ToolOutcome:
-        return ToolOutcome(result.ok, result.error, json.dumps(result.data, ensure_ascii=False))
+        return ToolOutcome(result.ok, result.error, json.dumps(result.data, ensure_ascii=False),
+                           instruction=result.instruction or "")
 
     def _computer_result(self, loop: NarratedLoop, result: dict) -> ToolOutcome:
         """Screen-derived answers remain untrusted for memory and future tool input."""
@@ -1672,6 +1674,7 @@ class AgentService:
                 common["execute"] = cli_execute
                 loop = CliLoop(brains=self._cli_brains, sessions=self._cli_sessions,
                     attachments=ask.attachments, resume_session=not ask.quick and not ask.nested,
+                    retry_rate_limits=not ask.quick,
                     conversation_id=ask.conversation_id, quota=self.quotas.record,
                     member_id=ask.speaker.id, event=lambda text: self._message(ask, "event", text),
                     expire=lambda: self._expire(self._confirmations.sweep()), spoken=ask.voiced and ask.language != "ja", **common)
@@ -1691,7 +1694,7 @@ class AgentService:
         if loop.response is not None:
             return loop.response
         reply = loop.reply(outcome)
-        if isinstance(loop, CliLoop) and loop.failed:
+        if isinstance(loop, CliLoop) and loop.failure:
             return self._finish(ask, "answer", "negative", reply.text, ledger, status="error")
         if ask.admin_pending:
             return await self._propose_admin(ask, ledger, loop.seen)
@@ -2332,10 +2335,10 @@ class AgentService:
         try:
             self._gate.check(action or Action(name, dict(arguments)), approval)
         except (UnknownTool, NotApproved):
-            return ToolResult(name, False, None, "blocked")
+            return handoff_refused("blocked") if name == "handoff" else ToolResult(name, False, None, "blocked")
         if name == "handoff":
             if self._background is None:
-                return ToolResult(name, False, None, "worker_disabled")
+                return handoff_refused("worker_disabled")
             return self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
                                             language=language)
         if name == "room_meeting":

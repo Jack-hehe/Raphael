@@ -67,32 +67,40 @@ class P02Brain(FakeClient):
         return ChatTurn(text, [ChatToolCall(str(n), name, args, json.dumps(args)) for n,(name,args) in enumerate(calls)], kwargs['model'], .001, 10, 10, 1)
 
 
+def cli_brain(monkeypatch, client, scenario, limited=()):
+    """A CLI that answers as the fixture brain; the members in `limited` are always rate-limited."""
+    class Driver:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def run(self, *, system, user, endpoint, token, **kwargs):
+            yield Event('model','owner-model')
+            if scenario=='S07.meeting' and 'You are in a group chat' not in user:
+                async with httpx.AsyncClient() as http:
+                    response = await http.post(endpoint, headers={'Authorization':'Bearer ' + token}, json={
+                        'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'room_meeting','arguments':{
+                            'member_ids':[0,1,3,4,5], 'agenda':'Review source evidence',
+                            'roles':{'4':'moderator','1':'pro','5':'con'}}}})
+                    assert not response.json()['result']['isError'], response.text
+                answer = '已開啟會議。'
+            elif json.loads(system.split('<team_roster>')[-1].split('</team_roster>')[0])['self_id'] in limited:
+                yield Event('error','rate_limited')
+                return
+            else:
+                answer, _ = client.answer(system, user)
+            yield Event('final',answer)
+
+        async def interrupt(self):
+            pass
+    monkeypatch.setattr('raphael_core.agent.cli.loop.Driver', Driver)
+
+
 @pytest.mark.parametrize('scenario', ['S02', 'S07.meeting'])
 @pytest.mark.parametrize('brain', ['api', 'cli'])
 async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monkeypatch, scenario, brain):
     client = P02Brain(scenario)
     if brain == 'cli':
-        class Driver:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def run(self, *, system, user, endpoint, token, **kwargs):
-                yield Event('model','owner-model')
-                if scenario=='S07.meeting' and 'You are in a group chat' not in user:
-                    async with httpx.AsyncClient() as http:
-                        response = await http.post(endpoint, headers={'Authorization':'Bearer ' + token}, json={
-                            'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':'room_meeting','arguments':{
-                                'member_ids':[0,1,3,4,5], 'agenda':'Review source evidence',
-                                'roles':{'4':'moderator','1':'pro','5':'con'}}}})
-                        assert not response.json()['result']['isError'], response.text
-                    answer = '已開啟會議。'
-                else:
-                    answer, _ = client.answer(system, user)
-                yield Event('final',answer)
-
-            async def interrupt(self):
-                pass
-        monkeypatch.setattr('raphael_core.agent.cli.loop.Driver', Driver)
+        cli_brain(monkeypatch, client, scenario)
     driver = RpcDriver(tmp_path, 'fake/model' if brain=='api' else 'cli:codex:owner-model',
                        client, Budget(200), brains=FakeBrains(tmp_path) if brain=='cli' else None)
     links = Links()
@@ -101,5 +109,32 @@ async def test_p02_scenarios_pass_on_both_production_brain_paths(tmp_path, monke
         reasons, turns = await driver.execute(next(cell for cell in cells() if cell.id==scenario))
         assert not reasons, (reasons, [turn.get('text') for turn in turns])
         assert turns
+    finally:
+        await driver.aclose()
+
+
+async def test_s07_meeting_goes_on_when_one_cli_member_is_rate_limited(tmp_path, monkeypatch):
+    client = P02Brain('S07.meeting')
+    cli_brain(monkeypatch, client, 'S07.meeting', limited={5})
+    monkeypatch.setattr('raphael_core.agent.cli.loop.RATE_LIMIT_WAITS_S', (0.0, 0.0))
+    driver = RpcDriver(tmp_path, 'cli:codex:owner-model', client, Budget(200), brains=FakeBrains(tmp_path))
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id=='S07.meeting'))
+        conn = driver.app._conn
+        origin = conn.execute("SELECT MIN(origin_message_id) FROM room_exchanges").fetchone()[0]
+        assert conn.execute('SELECT state FROM room_exchanges WHERE origin_message_id=?', (origin,)).fetchone()[0] == 'done'
+        intents = conn.execute('SELECT recipient_id, state, reason FROM room_reply_intents WHERE origin_message_id=?', (origin,)).fetchall()
+        assert {tuple(i) for i in intents if i['state'] != 'done'} == {(5, 'blocked', 'cli_rate_limited')}
+        assert {i['recipient_id'] for i in intents if i['state'] == 'done'} >= {1, 3, 4}
+        spoken = conn.execute("SELECT m.member_id FROM room_messages m JOIN agent_turns t ON t.id=m.turn_id "
+                              "WHERE m.origin_message_id=? AND m.kind='message' AND t.status='done'", (origin,)).fetchall()
+        assert {row[0] for row in spoken} == {1, 3, 4}
+        [wrapup] = conn.execute("SELECT t.status, t.question, t.text FROM room_messages m JOIN agent_turns t ON t.id=m.turn_id "
+                                "WHERE m.origin_message_id=? AND m.kind='wrapup' AND m.member_id=0", (origin,)).fetchall()
+        assert wrapup['status'] == 'done' and wrapup['text'].startswith('決策')
+        unfinished = json.loads(wrapup['question'].split('Replies that did not finish (untrusted data): ')[1].split('\n')[0])
+        assert unfinished == [{'name': 'RD', 'reason': 'rate-limited (too many requests)'}]
+        assert 'meeting_pending_or_blocked_intents' in reasons
     finally:
         await driver.aclose()

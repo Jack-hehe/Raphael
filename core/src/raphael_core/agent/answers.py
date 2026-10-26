@@ -166,6 +166,8 @@ def _tool_line(result: ToolResult) -> str:
     if result.error == DISABLED:
         # The owner turned this ability off: say so briefly, then answer from what is known.
         return f"{name}: turned off by the owner; say briefly that you cannot do this now, and answer only from what you know"
+    if result.instruction:
+        return f"{name}: refused. {result.instruction}"
     return f"{name}: unavailable ({result.error}){data}"
 
 

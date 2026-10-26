@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 # The line a CLI brain puts between two chat messages of one reply.
 MESSAGE_BREAK = "<<<next message>>>"
+# A rate-limited turn that has not acted yet runs again after each of these waits.
+RATE_LIMIT_WAITS_S = (20.0, 60.0)
 
 APPROVE = {"type": "function", "function": {"name": "approve", "description": "Ask the owner for permission. Never grants permission by itself.",
            "parameters": {"type": "object", "properties": {"tool_name": {"type": "string"}, "input": {"type": "object"}}, "additionalProperties": True}}}
@@ -78,11 +80,13 @@ class Sessions:
 class CliLoop:
     def __init__(self, *, brains, sessions, member_id, model, ledger, language, plain,
                  system, user, tools, progress, thinking, event, execute, expire=None, spoken=False,
-                 conversation_id=None, quota=None, attachments=(), wait_timeout_s=None, resume_session=True):
+                 conversation_id=None, quota=None, attachments=(), wait_timeout_s=None, resume_session=True,
+                 retry_rate_limits=True):
         self.brains, self.sessions, self.member_id, self.model = brains, sessions, member_id, model
         self.conversation_id = sessions.conversations.resolve(member_id, conversation_id) if sessions else conversation_id
         self.quota = quota
         self.resume_session = resume_session
+        self.retry_rate_limits = retry_rate_limits
         self.ledger, self.language, self.plain = ledger, language, plain
         self.spoken = spoken
         self.system = system + "\n" + PUBLIC_PROGRESS_RULES + "\nUse only Raphael MCP tools for actions and lookups. "
@@ -103,7 +107,8 @@ class CliLoop:
         self.seen, self.batch_calls = [], []
         self.response = None
         self.permission_always = False
-        self.failed = False
+        # Why the turn failed ("missing", "login", "busy", "error", "quota", "rate_limited"), else None.
+        self.failure = None
         self.actual_model = None
         self.driver = None
         self.task = None
@@ -114,6 +119,8 @@ class CliLoop:
         self._buffer = ""
         self._thought = ""
         self._calls = 0
+        self._acted = False
+        self._usage = {}
         self._repeats = RepeatGuard()
         self.on_done = None
         self.expire = expire
@@ -148,7 +155,7 @@ class CliLoop:
             if result.ok and result.kind == 'handoff':
                 self._handoff_pending = True
                 self._queue.put_nowait(Outcome('stopped',kind='handoff'))
-            return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.content or result.kind or "", ok=result.ok))
+            return ToolOutcome(result.ok, result.kind, wrap_untrusted(name, result.instruction or result.content or result.kind or "", ok=result.ok))
 
     async def _execute(self, identifier, name, args):
         self.batch_calls = [Call(identifier, name, args)]
@@ -220,13 +227,14 @@ class CliLoop:
         self._failure("login", NAMES[brain_ref(self.model)[0]])
 
     def _failure(self, reason, name):
-        self.failed = True
+        self.failure = reason
         messages = {
             "missing": f"請先安裝 {name}，再到設定 › 模型與用量登入。",
             "login": f"請先到設定 › 模型與用量 › 訂閱帳號，為 {name} 按下「連線」。",
             "busy": "這個對話仍有 CLI 回合執行中，請先完成或取消它。",
             "error": f"{name} 回合中斷。請確認 CLI 登入狀態後再試一次。",
             "quota": f"{name} 的訂閱額度暫時用完了，請稍後再試，或換一個模型。",
+            "rate_limited": f"{name} 目前請求太頻繁而被限流，請稍後再試。",
         }
         if str(self.language).startswith("ja"):
             messages = {
@@ -235,15 +243,25 @@ class CliLoop:
                 "busy": "この会話ではまだ CLI ターンが実行中です。完了するかキャンセルしてください。",
                 "error": f"{name} が予期せず停止しました。ログイン状態を確認してからもう一度お試しください。",
                 "quota": f"{name} の利用上限に達しました。しばらく待つか、別のモデルを選んでください。",
+                "rate_limited": f"{name} はリクエストが多すぎるため一時的に制限されています。しばらくしてからもう一度お試しください。",
             }
         elif self.language != "zh-TW":
             messages = {"missing": f"Install {name}, then sign in in Settings > Models & usage.",
                         "login": f"Connect {name} in Settings > Models & usage > Subscription accounts.",
                         "busy": "This thread has an active CLI turn. Finish or cancel it first.",
                         "error": f"{name} stopped unexpectedly. Check its login and try again.",
-                        "quota": f"{name} has used up its subscription quota for now. Try again later or pick another model."}
+                        "quota": f"{name} has used up its subscription quota for now. Try again later or pick another model.",
+                        "rate_limited": f"{name} is rate-limited right now (too many requests). Try again in a little while."}
         self.event(messages[reason])
         self._queue.put_nowait(Outcome("done", final=messages[reason]))
+
+    def _rate_limit_wait(self, name, seconds):
+        seconds = f"{seconds:g}"
+        if str(self.language).startswith("ja"):
+            return f"{name} はレート制限中です。{seconds} 秒後に再試行します。"
+        if self.language != "zh-TW":
+            return f"{name} is rate-limited; retrying in {seconds} s."
+        return f"{name} 暫時限流，{seconds} 秒後重試。"
 
     async def _work(self):
         name, model = brain_ref(self.model)
@@ -263,47 +281,23 @@ class CliLoop:
             return
         async with lock:
             began = time.perf_counter()
-            usage = {}
             try:
                 # A stable, empty workspace keeps native CLI resume independent of turn temp files.
                 workspace = self.brains.home / ".raphael" / "cli-workspaces" / str(self.member_id) / str(self.conversation_id) / name
                 workspace.mkdir(parents=True, exist_ok=True)
                 await secure_directory(workspace)
                 async with asyncio.timeout(1800), RaphaelMcp(lambda: self.tools, self._tool) as server:
-                    self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota, home=self.brains.home)
-                    async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
-                            token=server.token, session=self.sessions.get(self.member_id, self.model, self.conversation_id) if self.resume_session else None, permission=self._native_permission,
-                            cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:
-                        async for event in stream:
-                            if event.kind == "session" and self.resume_session:
-                                self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
-                            elif event.kind == "model":
-                                self.actual_model = event.text
-                            elif event.kind == "text_delta":
-                                self._buffer = (self._buffer + event.text)[-64000:]
-                            elif event.kind == "thinking":
-                                self._thought = (self._thought + event.text)[-240:]
-                            elif event.kind in ("tool_start", "permission"):
-                                self._progress()
-                                if line := public_line(self._thought, self.language):
-                                    self.thinking(line[:240])
-                                self._thought = ""
-                            elif event.kind == "usage":
-                                usage = event.data
-                            elif event.kind == "tool_end" and event.data.get("effect") and event.data.get("ok"):
-                                self.event("CLI 回報檔案已變更" if self.language == "zh-TW" else "CLI reported a file change")
-                            elif event.kind == "error":
-                                self._failure("quota" if event.text == "quota" else "error", NAMES[name])
-                                return
-                            elif event.kind == "final":
-                                final = event.text.strip()
-                                if not final:
-                                    self._progress()
-                                    self._failure("error", NAMES[name])
-                                else:
-                                    self._queue.put_nowait(Outcome("done", final=final))
-                                return
-                self._failure("error", NAMES[name])
+                    session = self.sessions.get(self.member_id, self.model, self.conversation_id) if self.resume_session else None
+                    waits = list(RATE_LIMIT_WAITS_S) if self.retry_rate_limits else []
+                    failure = await self._attempt(name, command, model, server, session, workspace)
+                    # Running the request again is safe only while nothing of it has happened yet.
+                    while failure == "rate_limited" and waits and not (self._acted or self._calls):
+                        wait = waits.pop(0)
+                        self.progress(self._rate_limit_wait(NAMES[name], wait))
+                        await asyncio.sleep(wait)
+                        failure = await self._attempt(name, command, model, server, session, workspace)
+                if failure:
+                    self._failure(failure, NAMES[name])
             except asyncio.CancelledError:
                 raise
             except Exception as error:
@@ -315,12 +309,49 @@ class CliLoop:
                 if self.driver:
                     await self.driver.interrupt()
                 def tokens(*keys):
-                    value = next((usage[key] for key in keys if key in usage), 0)
+                    value = next((self._usage[key] for key in keys if key in self._usage), 0)
                     return value if type(value) is int and 0 <= value < 10**10 else 0
                 self.ledger.add(model=self.model, cost_usd=0,
                     ms=int((time.perf_counter() - began) * 1000),
                     prompt_tokens=tokens("input_tokens", "inputTokens", "promptTokenCount"),
                     completion_tokens=tokens("output_tokens", "outputTokens", "candidatesTokenCount"))
+
+    async def _attempt(self, name, command, model, server, session, workspace):
+        """Run the CLI once for this turn: None once its answer is queued, else why it failed."""
+        self._buffer = self._thought = ""
+        self.driver = Driver(name, command, model=model, effort=brain_effort(self.model), environ=self.brains.environ, quota=self.quota, home=self.brains.home)
+        async with aclosing(self.driver.run(user=self.user, system=self.system, endpoint=server.url,
+                token=server.token, session=session, permission=self._native_permission,
+                cwd=str(workspace), images=self.images if name in ("codex", "claude") else ())) as stream:
+            async for event in stream:
+                if event.kind == "session" and self.resume_session:
+                    self.sessions.put(self.member_id, self.model, event.text, self.conversation_id)
+                elif event.kind == "model":
+                    self.actual_model = event.text
+                elif event.kind == "text_delta":
+                    self._buffer = (self._buffer + event.text)[-64000:]
+                elif event.kind == "thinking":
+                    self._thought = (self._thought + event.text)[-240:]
+                elif event.kind in ("tool_start", "permission"):
+                    self._acted = True
+                    self._progress()
+                    if line := public_line(self._thought, self.language):
+                        self.thinking(line[:240])
+                    self._thought = ""
+                elif event.kind == "usage":
+                    self._usage = event.data
+                elif event.kind == "tool_end" and event.data.get("effect") and event.data.get("ok"):
+                    self.event("CLI 回報檔案已變更" if self.language == "zh-TW" else "CLI reported a file change")
+                elif event.kind == "error":
+                    return event.text if event.text in ("quota", "rate_limited") else "error"
+                elif event.kind == "final":
+                    final = event.text.strip()
+                    if final:
+                        self._queue.put_nowait(Outcome("done", final=final))
+                        return None
+                    self._progress()
+                    return "error"
+        return "error"
 
     async def _native_permission(self, args):
         async with self._serial:

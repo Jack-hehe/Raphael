@@ -794,6 +794,48 @@ CREATE TABLE task_stage_owners (
 PRAGMA user_version = 32;
 COMMIT;
 """
+# v33: a member may reply to one message more than once (a second meeting round, several reply
+# intents, a hand-off result), so the first group chat's UNIQUE(reply_to, member_id) goes. The
+# table is rebuilt as v29 made it otherwise; deduplication stays with request_id and the
+# exchange's own state. The sequence is carried over so a deleted message's id is never reused.
+_MIGRATIONS[33] = """
+BEGIN;
+CREATE TABLE room_messages_v33 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id INTEGER NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    member_id INTEGER, text TEXT NOT NULL, created INTEGER NOT NULL,
+    request_id TEXT, attachments TEXT, reply_to INTEGER,
+    turn_id INTEGER REFERENCES agent_turns(id) ON DELETE SET NULL,
+    reply_to_member INTEGER,
+    kind TEXT NOT NULL DEFAULT 'message' CHECK(kind IN ('message','wrapup')),
+    origin_message_id INTEGER, exchange_settled INTEGER NOT NULL DEFAULT 0,
+    thread_id INTEGER REFERENCES room_threads(id),
+    UNIQUE(room_id,request_id)
+);
+INSERT INTO room_messages_v33 SELECT * FROM room_messages;
+UPDATE sqlite_sequence SET seq=MAX(seq,(SELECT seq FROM sqlite_sequence WHERE name='room_messages'))
+WHERE name='room_messages_v33' AND EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='room_messages');
+DROP TABLE room_messages;
+ALTER TABLE room_messages_v33 RENAME TO room_messages;
+CREATE INDEX room_messages_room ON room_messages(room_id,id);
+CREATE TRIGGER room_message_thread AFTER INSERT ON room_messages WHEN NEW.thread_id IS NULL BEGIN
+    UPDATE room_messages SET thread_id=(SELECT id FROM room_threads WHERE room_id=NEW.room_id ORDER BY id LIMIT 1) WHERE id=NEW.id;
+END;
+CREATE TRIGGER room_message_scope_insert BEFORE INSERT ON room_messages
+WHEN NEW.thread_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM room_threads WHERE id=NEW.thread_id AND room_id=NEW.room_id)
+BEGIN SELECT RAISE(ABORT,'cross-scope room thread'); END;
+CREATE TRIGGER room_reply_insert BEFORE INSERT ON room_messages WHEN NEW.reply_to IS NOT NULL
+AND NOT EXISTS(SELECT 1 FROM room_messages s WHERE s.id=NEW.reply_to AND s.room_id=NEW.room_id
+    AND (NEW.thread_id IS NULL OR s.thread_id=NEW.thread_id) AND s.member_id IS NOT NEW.member_id)
+BEGIN SELECT RAISE(ABORT,'invalid room reply'); END;
+CREATE TRIGGER room_message_scope_update BEFORE UPDATE OF room_id, thread_id, reply_to, member_id ON room_messages
+WHEN NOT EXISTS(SELECT 1 FROM room_threads WHERE id=NEW.thread_id AND room_id=NEW.room_id)
+OR (NEW.reply_to IS NOT NULL AND NOT EXISTS(SELECT 1 FROM room_messages s WHERE s.id=NEW.reply_to
+    AND s.room_id=NEW.room_id AND s.thread_id=NEW.thread_id AND s.member_id IS NOT NEW.member_id))
+BEGIN SELECT RAISE(ABORT,'invalid room message scope or reply'); END;
+PRAGMA user_version = 33;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

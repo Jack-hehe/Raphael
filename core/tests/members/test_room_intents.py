@@ -81,9 +81,88 @@ async def test_accepted_intents_become_named_blocks(rig, exchange, action, reaso
     summaries=[m for m in result['messages'] if m['kind']=='wrapup']
     assert len(summaries)==1 and summaries[0]['member_id']==0
     assert result['messages'][-1]['kind']=='wrapup'
-    assert 'Completed actions are preserved' in summaries[0]['text'] or '已完成的動作保留' in summaries[0]['text']
+    named = {'owner':[], 'cost':['Bob：預算已用完'], 'revoked':['Bob：已不在房間']}[reason]
+    first = '已停止本次工作，已完成的動作保留。' if reason=='owner' else '本次討論沒有全部完成。'
+    assert summaries[0]['text'].split('\n')[1:2+len(named)] == [first, *named]
     await exchange._exchanges.drive(room['id'])
     assert len([m for m in (await history(rig,room))['messages'] if m['kind']=='wrapup'])==1
+
+
+LIMITED = 'Codex CLI 目前請求太頻繁而被限流，請稍後再試。'
+
+
+async def fail(rig, exchange, reason='cli_rate_limited'):
+    task_id, turn = rig.background.attached[-1]
+    AgentHistory(rig.conn).resolve(turn, prefix='', text=LIMITED, status='error')
+    rig.background.store.finish(task_id, 'failed', prefix='', text=LIMITED, detail=None, reason=reason)
+    exchange.turn_arrived(turn)
+    await exchange.wait_idle()
+
+
+def wrapups(result):
+    return [m['text'] for m in result['messages'] if m['kind'] == 'wrapup']
+
+
+async def test_a_failed_reply_blocks_only_its_intent_and_raphael_still_wraps_up(rig, exchange):
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice and @Bob answer')
+    await fail(rig, exchange)
+    assert [s['member_id'] for s in rig.background.submitted] == ids
+    await finish(rig, exchange, 'Ready')
+    assert rig.background.submitted[-1]['member_id'] == 0
+    prompt = rig.background.submitted[-1]['text']
+    assert 'Replies that did not finish' in prompt and '"name": "Alice"' in prompt and 'rate-limited' in prompt
+    await finish(rig, exchange, 'Conclusion: Alice was rate-limited; Bob is ready.')
+    result = await history(rig, room)
+    assert result['exchange']['state'] == 'done'
+    assert [(i['recipient_id'], i['state'], i['reason']) for i in result['exchange']['reply_intents']] == [
+        (ids[0], 'blocked', 'cli_rate_limited'), (ids[1], 'done', '')]
+    assert wrapups(result) == ['Conclusion: Alice was rate-limited; Bob is ready.']
+
+
+async def test_a_failed_meeting_turn_is_named_and_owner_stop_still_stops_everyone(rig, exchange):
+    room, ids = await team(rig)
+    await rig.call('rooms.update', {'room_id':room['id'], 'roles':{str(ids[0]):'moderator', str(ids[1]):'con'}})
+    await send(rig, room, 'Discuss the evidence')
+    await fail(rig, exchange)
+    assert [s['member_id'] for s in rig.background.submitted] == ids
+    await rig.call('rooms.stop', {'room_id':room['id']})
+    await finish(rig, exchange, 'Evidence reviewed')
+    result = await history(rig, room)
+    assert len(rig.background.submitted) == 2
+    assert (result['exchange']['state'], result['exchange']['reason']) == ('stopped', 'owner')
+    assert [(i['recipient_id'], i['reason']) for i in result['exchange']['reply_intents']] == [(ids[0], 'cli_rate_limited')]
+    [text] = wrapups(result)
+    assert text.split('\n')[1:3] == ['已停止本次工作，已完成的動作保留。', 'Alice：請求太頻繁而被限流']
+
+
+async def test_a_reply_cut_off_by_the_owners_stop_is_not_called_an_error(rig, exchange):
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice and @Bob answer')
+    await rig.call('rooms.stop', {'room_id':room['id']})
+    task_id, turn = rig.background.attached[-1]
+    AgentHistory(rig.conn).resolve(turn, prefix='', text='Stopped.', status='denied')
+    rig.background.store.finish(task_id, 'cancelled', prefix='', text='Stopped.', detail=None, reason='cancelled')
+    exchange.turn_arrived(turn)
+    await exchange.wait_idle()
+    result = await history(rig, room)
+    assert [(i['recipient_id'], i['reason']) for i in result['exchange']['reply_intents']] == [(ids[0], 'owner'), (ids[1], 'owner')]
+    [text] = wrapups(result)
+    assert text.split('\n')[1:3] == ['已停止本次工作，已完成的動作保留。', '沒有已驗證的交付成果。']
+
+
+async def test_the_no_model_wrapup_names_a_rate_limit_without_claiming_an_owner_stop(rig, exchange):
+    room, ids = await team(rig)
+    await send(rig, room, '@Alice and @Bob answer')
+    await fail(rig, exchange)
+    await finish(rig, exchange, 'Ready')
+    await fail(rig, exchange)
+    result = await history(rig, room)
+    assert (result['exchange']['state'], result['exchange']['reason']) == ('stopped', 'cli_rate_limited')
+    failed, text = wrapups(result)
+    assert failed == LIMITED
+    assert text.split('\n')[1:3] == ['本次討論沒有全部完成。', 'Alice：請求太頻繁而被限流']
+    assert '已停止本次工作' not in text
 
 
 async def test_restart_settles_completed_source_once_and_preserves_queued_intents(rig, exchange):
