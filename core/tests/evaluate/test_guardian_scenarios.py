@@ -77,6 +77,25 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
         await driver.aclose()
 
 
+async def test_room_work_done_without_a_handoff_fails_at_once(tmp_path):
+    # Live, Raphael read the mail himself and the cell waited out its whole timeout before failing.
+    from raphael_core.background.host import WorkerHost
+    from background.conftest import Links
+    class Client(FakeClient):
+        async def chat_tools(self,**kwargs):
+            messages=kwargs['messages']
+            calls=[] if any(m['role']=='tool' for m in messages) or 'Close this exchange' in str(messages) else [('Guardian__read',{})]
+            self.turns=iter([('已讀取信件。' if not calls else '',calls)])
+            return await super().chat_tools(**kwargs)
+    driver=RpcDriver(tmp_path,'fake/model',Client([]),Budget(40))
+    driver.app.background._host=WorkerHost(connect=Links(),grace_s=.3)
+    try:
+        reasons,_=await asyncio.wait_for(driver.execute(selected('S08.immediate-start')),10)
+        assert 'dispatch_receipt_or_owner' in reasons
+    finally:
+        await driver.aclose()
+
+
 @pytest.mark.parametrize("brain", ["A", "C"])
 async def test_s01_edits_cancels_and_applies_once_on_both_production_brains(tmp_path, monkeypatch, brain):
     calls = [("group_create", {"name": "驗證團隊"}), *[("member_create", {

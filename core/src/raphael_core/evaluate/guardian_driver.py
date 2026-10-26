@@ -336,9 +336,12 @@ class RpcDriver:
         # The suite's outer cell timeout bounds this wait. Observe persisted business state.
         while True:
             tasks = self.app._conn.execute("SELECT * FROM worker_tasks WHERE mode IS NOT NULL").fetchall()
-            if tasks and all(task['state'] not in ('queued','running','waiting') for task in tasks):
-                if not room or self.app.rooms._exchanges.latest(room_id)['state'] in ('done','stopped'):
-                    break
+            settled = not room or self.app.rooms._exchanges.latest(room_id)['state'] in ('done','stopped')
+            if tasks and all(task['state'] not in ('queued','running','waiting') for task in tasks) and settled:
+                break
+            # Work done without a hand-off fails below as a missing receipt, not as a timeout.
+            if not tasks and settled:
+                break
             await asyncio.sleep(.02)
         reasons=[]
         if len(tasks)!=1 or tasks[0]['member_id']!=target:
