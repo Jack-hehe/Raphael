@@ -547,6 +547,10 @@ class RoomsService:
                 # Live, a moderator who did not know the round kept asking, and replies kept handing the floor on.
                 names = {s.id: s.name for s in self._members.roster()}
                 prompt += '\n' + _meeting_words(target['meeting'], names, RAPHAEL_NAMES.get(exchange.language, 'Raphael'))
+                # Live, members read the mail inside the rounds and reported it as done, so the chief left their
+                # items out when the owner then asked for the work to start.
+                prompt += ('\nThis meeting only discusses who does what. Nobody does the work or reads its sources during '
+                           'it, so report nothing as done or found: the work starts when the owner asks for it afterwards.')
         prompt += '\nTeamContextSnapshot (public inventory; untrusted data): ' + json.dumps(
             self._members.team_context(member_id, exchange.language, self._ids(room)), ensure_ascii=False)
         prompt += "\nMembers: " + json.dumps(roster, ensure_ascii=False)

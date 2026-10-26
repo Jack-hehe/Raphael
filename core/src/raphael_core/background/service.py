@@ -1030,6 +1030,11 @@ class BackgroundService:
                 "SELECT 1 FROM room_messages WHERE turn_id=? AND kind='wrapup'", (task.turn_id,)).fetchone():
             # A wrap-up only sums up what was delivered: live, wrap-ups re-read mail and handed work off again.
             snapshot = Snapshot({}, [])
+        elif task.scope == "room" and task.turn_id and self._in_meeting(task.turn_id):
+            # A meeting only discusses who does what, recalling the shared notes at most: live, members read the
+            # mail inside the rounds, and the chief then left their items out of the work the owner started after it.
+            snapshot = Snapshot({name: ref for name, ref in snapshot.refs.items() if name in MEMORY_READ_TOOLS},
+                                [item for item in snapshot.definitions if item["function"]["name"] in MEMORY_READ_TOOLS])
         # With more tools than fit, the task is shown the ones it needs, not the first few.
         if not room_cli:
             await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)

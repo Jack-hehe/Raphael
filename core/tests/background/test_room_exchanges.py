@@ -65,3 +65,47 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
         await rooms.aclose()
         await members.aclose()
         await memory.aclose()
+
+
+async def test_a_meeting_discusses_with_the_shared_notes_alone(make_rig, conn, tmp_path):
+    # Live, members read the mail inside a meeting's rounds and reported it done, so the chief left their items out
+    # of the work the owner asked to start after it.
+    rig = make_rig()
+    memory = MemoryService(conn, tmp_path / "memory", QuietModel(), MemoryKeyStore(), quiet_s=3600, start_delay_s=3600)
+    members = MembersService(conn, tmp_path, background=rig.service, memory=memory, now_ms=rig.wall, tz=timezone.utc)
+    memory.member_exists = members.member_exists
+    members.register(rig.rpc)
+    rooms = RoomsService(conn, members=members, background=rig.service)
+    rooms.register(rig.rpc)
+
+    async def unused(*args, **kwargs):
+        pytest.fail("No team administration is needed")
+
+    rig.service.use_memory(memory)
+    rig.service.use_team(members, unused)
+    notify = rig.service._notify
+    def arrived(method, params):
+        notify(method, params)
+        if method == "agent.turn":
+            rooms.turn_arrived(params["turn_id"])
+    rig.service._notify = arrived
+    alice = members.store.create_member(name="Alice", role="PM", personality="PRECISE-PLANNER")
+    bob = members.store.create_member(name="Bob", role="Mail", personality="CAUTIOUS-ENGINEER")
+    rig.client.replies.extend(report(text) for text in (
+        "Who reads today's mail? @Bob", "I can read it once we start. @Alice", "And the reply points? @Bob",
+        "You list them, I read. @Alice", "Bob reads, Alice lists. @Raphael please conclude",
+        "### Conclusion\nBob reads, Alice lists.\n### Owner decision\nNone.\n### Next steps\nBob: read the mail.",
+    ))
+    try:
+        room = await rooms.meeting({"member_ids": [0, alice.id, bob.id], "agenda": "Who reads today's mail",
+                                    "roles": {str(alice.id): "moderator", str(bob.id): "participant"}}, "en", 2**50 - 1)
+        await until(lambda: rooms._exchanges.latest(room["room_id"])["state"] in ("done", "stopped"), timeout=10)
+        messages = (await rig.rpc.call("rooms.messages", {"room_id": room["room_id"]}))["messages"]
+        said = [call for call, message in zip(rig.client.chat_calls, messages[1:]) if message["kind"] == "message"]
+        assert said and messages[-1]["kind"] == "wrapup"
+        assert all([tool["function"]["name"] for tool in call["tools"]] == ["memory_read"] for call in said)
+        assert all("only discusses who does what" in str(call["messages"]) for call in said)
+    finally:
+        await rooms.aclose()
+        await members.aclose()
+        await memory.aclose()
