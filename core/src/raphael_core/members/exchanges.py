@@ -32,7 +32,7 @@ class ResponderDecision:
 
 
 def is_pass(text):
-    return not text.strip() or bool(re.fullmatch(r"\(?\s*pass\s*\)?\.?", text.strip(), re.IGNORECASE))
+    return not text.strip() or bool(re.fullmatch(r"[(（]?\s*pass\s*[)）]?[.。]?", text.strip(), re.IGNORECASE))
 
 
 @dataclass(frozen=True)

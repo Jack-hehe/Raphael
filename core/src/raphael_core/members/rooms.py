@@ -23,7 +23,7 @@ MAX_MESSAGE = 10000
 _WRAPUP_HEADINGS = {'zh-TW':('結論','待你決定','下一步'), 'en':('Conclusion','Owner decision','Next steps'),
                     'ja':('結論','所有者の判断','次の手順')}
 # A reply's trailing protocol token, when the reply also says something.
-_TRAILING_PASS = re.compile(r'(\S[\s\S]*?)\s*\(\s*pass\s*\)\.?\s*$', re.IGNORECASE)
+_TRAILING_PASS = re.compile(r'(\S[\s\S]*?)\s*[(（]\s*pass\s*[)）][.。]?\s*$', re.IGNORECASE)
 # The owner's Stop, and a new owner message that preempts the exchange.
 _OWNER_STOPS = ('owner', 'interjection')
 # An unfinished reply in words, by the reason its intent was blocked for; any other reason is an error.
