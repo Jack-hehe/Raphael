@@ -7,6 +7,14 @@ const firstBot = { name: "晨星", personality: "沉穩、精準", instructions:
 const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
   click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
 const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
+// Pick the quick conversation, then close the details panel, which covers the composer at compact width.
+const quickOpen = [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.tn[data-id="90"]'),
+  click('.mb-det [data-det="close"]'), wait('.conversation-trigger[aria-expanded="false"]')];
+// An Alt+Space answer as the core writes it: its public step, then the answer as the turn's text.
+const quickAnswer = { id: 91, session_id: "look-quick-umbrella", member_id: 0, conversation_id: 4, created_at_ms: 1792807160000,
+  question: "明天早上要帶傘嗎？", route: "answer", source: "voice", prefix: "答", text: "明天早上降雨機率七成，出門記得帶傘。",
+  detail: null, status: "done", cost_usd: 0.0008, model: "openai/gpt-6-luna", steps: [], attachments: [],
+  messages: [{ seq: 1, kind: "progress", text: "《告。正在查看明天早上的天氣。》", at_ms: 1792807161000 }] };
 export default [
   scene("admin-description-draft", "Describe a new member from the conversation creation picker", [{ action: "member-column", collapsed: false }, click('[data-col="add"]'), click('[data-pick="conversation"]'), wait('.mb-chat-picker'), type('[data-chat-search]', "整理未讀信並準備回覆"), click('[data-dlg="describe"]'), check("admin-description-draft")]),
   scene("admin-cli-draft-edit", "The common draft edits and removes sequential CLI proposals", adminDraftEdits, { adminApproval: "draft" }),
@@ -19,6 +27,15 @@ export default [
   scene("live-scenario-owner-view", "Guardian S17 owner-visible failure and separate public work", [check("conversation-design"), check("live-scenario-owner-view")], { liveScenarioOwnerView: true }),
   scene("quick-conversation-list", "Persistent quick questions at the top of Raphael conversations", [{ action: "open-details" }, check("quick-conversation-list")]),
   scene("quick-conversation", "Open and continue the persistent quick conversation", [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.ra .chat-message[data-expandable]'), check("quick-conversation")]),
+  scene("quick-question-result", "An Alt+Space answer arrives in the open quick conversation, answered by the quick model",
+    [...quickOpen, { action: "main-event", event: { type: "AgentTurn", turn_id: 91, member_id: 0 } }, wait('.tn[data-id="91"] .ra .chat-message[data-expandable]'), check("quick-question-result")],
+    { arrivals: [quickAnswer] }),
+  scene("quick-formal-isolation", "A formal question names its thread, a quick follow-up names the quick destination, and neither thread shows the other",
+    [check("quick-formal-isolation-formal"), type(".composer textarea", "整理這週的研究重點"), click(".cmp-send"),
+      ...quickOpen, type(".composer textarea", "那明天呢？"), click(".cmp-send"), check("quick-formal-isolation")]),
+  scene("quick-stop", "Stop in the gold slot ends a running quick question and leaves the formal thread alone",
+    [...quickOpen, wait('.composer[data-task-state="running"] .cmp-voice'), click('.composer[data-task-state="running"] .cmp-voice'),
+      wait('.tn[data-id="90"][data-status="denied"]'), check("quick-stop")], { quickRunning: true }),
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
     { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
     type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),

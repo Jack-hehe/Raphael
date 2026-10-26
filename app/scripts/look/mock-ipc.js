@@ -23,13 +23,15 @@ export function installMock(fixture, config = {}, target = window) {
     adminTurn.messages = adminTurn.messages.filter(message => message.kind !== "reply");
     adminTurn.text = "";
   }
-  if (variant.running) {
-    const formalConversation = data.conversations.find(conversation => conversation.member_id === 0 && conversation.is_default);
-    const runningTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === formalConversation?.id);
+  if (variant.running || variant.quickRunning) {
+    const conversation = data.conversations.find(item => item.member_id === 0 && (variant.quickRunning ? item.kind === "quick" : item.is_default));
+    const runningTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === conversation?.id);
     runningTurn.status = "running";
     runningTurn.messages = runningTurn.messages.filter(message => message.kind !== "reply");
     runningTurn.text = "";
   }
+  // Turns the core writes later and then announces (agent.turn), such as an Alt+Space answer.
+  const arrivals = new Map((variant.arrivals ?? []).map(turn => [turn.id, structuredClone(turn)]));
   if (variant.p04Blocked) {
     data.roomHandoffs=[{...data.roomHandoff,state:"failed",reason:"missing_artifact",result:"",evidence:[]}];
     data.messages.at(-1).text="尚未取得檔案，目前沒有可驗收結果。";
@@ -130,7 +132,10 @@ export function installMock(fixture, config = {}, target = window) {
   }
   // Sidebar and overview use the same ledger rows, including floating-point totals.
   if (!variant.homeEmpty) data.status.spend.month_usd = usageBill("month").cost_usd;
-  const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) { state.channel?.onmessage(event); } };
+  const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) {
+    if (event.type === "AgentTurn" && arrivals.has(event.turn_id)) { data.turns.push(arrivals.get(event.turn_id)); arrivals.delete(event.turn_id); }
+    state.channel?.onmessage(event);
+  } };
   let maximized = false;
   target.__look = state;
   const copy = value => value === undefined ? undefined : structuredClone(value);
@@ -195,6 +200,14 @@ export function installMock(fixture, config = {}, target = window) {
       }
       case "agent.history.search": case "messages.search": return { turns: byMember(data.turns, p).filter(turn => `${turn.question} ${turn.text} ${turn.messages.map(message => message.text).join(" ")}`.includes(p.query)).map(turn => ({ ...turn, conversation_title: data.conversations.find(c => c.id === turn.conversation_id)?.title })) };
       case "agent.history.delete": data.turns = data.turns.filter(item => item.id !== p.id); notify("AgentTurn", { turn_id: p.id, member_id: p.member_id ?? 0 }); return { deleted: true };
+      case "agent.history.stop": {
+        // As the core settles a stopped request: denied, with no answer, keeping its public steps.
+        for (const turn of data.turns.filter(item => item.session_id === p.session_id && item.member_id === (p.member_id ?? 0) && ["running", "confirm"].includes(item.status))) {
+          Object.assign(turn, { status: "denied", prefix: "了", text: "已取消。", messages: turn.messages.filter(message => message.kind !== "reply") });
+          notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        }
+        return { stopped: true };
+      }
       case "agent.speech.status": return data.speech;
       case "agent.question.open": return null;
       case "background.questions.list": return { questions: [] };

@@ -14,6 +14,11 @@ const dictation = tab => [page("dictation"), click(`[data-dictation-tab="${tab}"
 export default [
   scene("quick-model-menu", "Quick questions shared model picker in existing model settings", [...settings("models"), click('[data-k="quick-model"]'), wait('.model-chooser'), click('[data-source="openrouter"]'), wait('.model-chooser [data-model="openai/gpt-6-luna"]')]),
   scene("quick-effort-menu", "Quick questions supported reasoning effort dropdown", [...settings("models"), check("quick-model-row"), click('[data-k="quick-effort"]'), wait('.menu [data-value="low"]')]),
+  scene("quick-model-selection", "Quick questions take a subscription model and its own effort while Raphael's answer model stays", [
+    ...settings("models"), click('[data-k="quick-model"]'), wait('.model-chooser'), click('.model-chooser [data-source="cli:codex"]'),
+    click('.model-chooser [data-model="cli:codex:gpt-6.1"]'), click('.model-chooser [data-dlg="use"]'),
+    wait('[data-k="quick-model"][aria-label*="GPT-6.1"]'), click('[data-k="quick-effort"]'), click('.menu [data-value="high"]'),
+    wait('[data-k="quick-effort"][title="高"]'), check("quick-model-row"), check("quick-model-selection")]),
   ...["answer", "cleanup", "stt"].map(role => scene(`model-choices-${role}`, `Spaced ${role} choices with separate metadata and actions`, [...modelChooser(role), check("model-choice-layout")])),
   scene("model-choices-local", "Local speech choices keep subtle borders, spacing and readable metadata", [...localChooser, scroll('.lm-row:last-child'), check("model-choice-scroll"), scroll('.lm-row:first-child'), check("model-choice-layout")]),
   scene("model-choices-local-selected", "Preview a local model without downloading and keep keyboard focus visible", [...localChooser, click('.lm-main[data-name="qwen3-asr"]'), key("Tab"), { action: "focus", selector: '.lm-main[data-name="qwen3-asr"]' }, check("model-choice-selection"), check("model-choice-layout")]),

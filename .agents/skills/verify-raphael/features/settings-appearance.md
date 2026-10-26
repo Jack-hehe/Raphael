@@ -8,7 +8,7 @@ and uses the shared dropdown aligned beneath the model card.
 API effort metadata and CLI effort mappings follow their existing catalogs.
 
 ```powershell
-npm run look -- quick-model-menu quick-effort-menu --theme both --width 1120,720,1920x1080
+npm run look -- quick-model-menu quick-effort-menu quick-model-selection --theme both --width 1120,720,1920x1080
 ```
 
 ## Sub-features

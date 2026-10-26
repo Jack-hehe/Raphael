@@ -216,6 +216,48 @@ export function checkRendered(name) {
     require(!document.querySelector('.tn[data-id="1"]'), "formal history stays out of quick questions");
     return { check: name, conversation: 4 };
   }
+  if (name === "quick-question-result") {
+    const turn = document.querySelector('.tn[data-id="91"]');
+    require(visible(turn) && turn.querySelector('.me')?.textContent.includes("明天早上要帶傘嗎"), "the Alt+Space question arrived in the open quick conversation");
+    require(visible(turn.querySelector('.ra [data-expandable]')) && turn.querySelector('.ra [data-expandable]').textContent.includes("出門記得帶傘"), "its answer shows below its public step");
+    const meta = turn.querySelector('.ra-face')?.getAttribute('title') ?? "";
+    require(/luna/i.test(meta) && !/\bsol\b/i.test(meta), `the answer names the quick model that answered it: ${meta}`);
+    require(document.querySelector('.conversation-trigger')?.textContent.includes("快速提問"), "the quick conversation stays open");
+    require(!document.querySelector('.tn[data-id="1"]'), "formal history stays out of quick questions");
+    return { check: name, model: meta, words: plainWords() };
+  }
+  if (name === "quick-formal-isolation-formal") {
+    require(visible(document.querySelector('.tn[data-id="1"]')), "Raphael's formal thread is open");
+    require(!document.querySelector('.tn[data-id="90"]'), "quick questions stay out of the formal thread");
+    return { check: name };
+  }
+  if (name === "quick-formal-isolation") {
+    const sent = window.__look.calls.filter(call => call.command === "agent_ask_text");
+    require(sent.length === 2, `two typed questions reached the native boundary, found ${sent.length}`);
+    require(sent[0].text === "整理這週的研究重點" && sent[0].conversationId === 1 && !("destination" in sent[0]), "the formal question names its thread and no quick destination");
+    require(sent[1].text === "那明天呢？" && sent[1].conversationId === 4 && sent[1].destination === "quick", "the quick follow-up names the quick destination and its conversation");
+    require(visible(document.querySelector('.tn[data-id="90"]')) && !document.querySelector('.tn[data-id="1"]'), "the quick thread shows only quick questions");
+    return { check: name, sent: sent.map(call => ({ conversation: call.conversationId, destination: call.destination ?? null })) };
+  }
+  if (name === "quick-stop") {
+    const stops = window.__look.calls.filter(call => call.method === "agent.history.stop");
+    require(stops.length === 1 && stops[0].params.session_id === "look-quick" && stops[0].params.member_id === 0, "Stop names the running quick request alone");
+    const turn = document.querySelector('.tn[data-id="90"]');
+    require(turn?.dataset.status === "denied" && !turn.dataset.live, "the quick question ended where it ran");
+    require(!document.querySelector('.composer[data-task-state="running"]'), "the gold slot is free again");
+    require(window.__look.data.turns.find(item => item.id === 1)?.status === "done", "the formal thread is untouched");
+    return { check: name };
+  }
+  if (name === "quick-model-selection") {
+    const sets = window.__look.calls.filter(call => call.method === "settings.set").map(call => call.params);
+    require(sets.some(set => set.key === "quick_model" && set.value === "cli:codex:gpt-6.1"), "the quick model is saved as the subscription model, its effort apart");
+    require(sets.some(set => set.key === "quick_effort" && set.value === "high"), "the quick effort is saved on its own");
+    require(!sets.some(set => set.key === "agent_model") && window.__look.data.settings.agent_model === "openai/gpt-6-sol", "Raphael's answer model stays as it was");
+    const row = document.querySelector('[data-row="quick-model"]');
+    require(row.querySelector('[data-k="quick-model"]')?.getAttribute('aria-label')?.includes("GPT-6.1"), "the row shows the chosen model");
+    require(row.querySelector('[data-price="quick-model"]')?.textContent.trim() === "訂閱", "a subscription model shows it is billed by subscription");
+    return { check: name, saved: sets.filter(set => set.key.startsWith("quick_")) };
+  }
   if (name === "overlay-step") {
     require(document.getElementById('progress')?.textContent === "《告。正在查看今天下午的行程。》", "the latest shared turn narration is the subtitle");
     return { check: name, text: document.getElementById('progress').textContent };

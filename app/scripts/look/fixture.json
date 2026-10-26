@@ -616,8 +616,7 @@
       "source": "voice", "prefix": "答", "text": "下午兩點有專案會議。", "detail": null,
       "status": "done", "cost_usd": 0.001, "model": "openai/gpt-6-luna",
       "messages": [
-        { "seq": 1, "kind": "progress", "text": "《告。正在查看今天下午的行程。》", "at_ms": 1792807155000 },
-        { "seq": 2, "kind": "reply", "text": "《答。下午兩點有專案會議。》", "at_ms": 1792807156000 }
+        { "seq": 1, "kind": "progress", "text": "《告。正在查看今天下午的行程。》", "at_ms": 1792807155000 }
       ],
       "steps": [], "attachments": []
     },

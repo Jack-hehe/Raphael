@@ -11,6 +11,8 @@ Raphael's single persistent quick-question conversation is created on the first 
 voice question, pinned above formal conversations as 快速提問 / Quick questions / クイック質問.
 Its fixed title and permanent identity have no rename/delete menu; individual messages
 can still be deleted. Opening it and typing continues with the quick model and effort.
+Alt+Space and a question typed there name the quick destination; nothing reaches quick or
+formal by default (see Quick questions below).
 
 ## How to get to it (user POV)
 
@@ -24,7 +26,7 @@ the compact picker's search action, for messages.
 
 ```powershell
 npm run look -- composer-task-stop chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
-npm run look -- quick-conversation-list quick-conversation --theme both --width 1120,720,1920x1080
+npm run look -- quick-conversation-list quick-conversation quick-question-result quick-formal-isolation quick-stop --theme both --width 1120,720,1920x1080
 npm run look -- live-scenario-owner-view --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
 npm run look -- member-composer-empty member-text member-composer-hover conversation-notice --theme both --width 1120,720,1920x1080
@@ -130,6 +132,33 @@ The scenes seed 小森 asking 小晴 through the IPC fixture (`colleagues`, `sha
 a member's exchanges in its main conversation as the core does. Model behaviour is covered by Guardian
 S04 and S12: offline with honest fake brains on both brain paths and both ways of asking, live on the API
 brain. Rendered fixtures do not prove a live consult.
+
+## Quick questions (P19)
+
+The Alt+Space hotkey (and Raphael's own voice button) sends `agent.ask` with
+`destination: "quick"`; a question typed in the quick conversation sends the same destination
+with its conversation ID, and a formal thread sends only its ID. The core refuses a spoken
+question to Raphael that names neither, a quick request naming another conversation and a
+formal request naming the quick one. The quick model and effort answer quick turns, CLI quick
+turns keep no native session, and each turn records the model that actually answered (Raphael's
+face tooltip). A request replaces only the YES/NO questions waiting in its own conversation, so
+quick use leaves a formal approval waiting and adds no formal rows. A spoken answer with public
+progress has no reply message: the thread shows its text after the work line.
+
+```powershell
+npm run look -- quick-question-result quick-formal-isolation quick-stop quick-model-selection --theme both --width 1120,720,1920x1080
+```
+
+`quick-question-result` announces an Alt+Space answer through the native `AgentTurn` event while
+the quick conversation is open and checks its answer and quick model. `quick-formal-isolation`
+sends one formal and one quick question through the real composer and checks the destination
+each names at the native boundary and that neither thread shows the other. `quick-stop` presses
+Stop in the gold slot on a running quick question; only that session stops and the formal turn
+is untouched. `quick-model-selection` (Settings › Models) picks a Codex model and High effort for
+quick questions and checks that Raphael's answer model stays. The existing `quick-conversation`,
+`quick-model-menu` and `quick-effort-menu` scenes cover opening the stored quick thread and the two
+quick setting menus. Rendered fixtures do not prove the native hotkey, routing or a live model:
+core tests and Guardian S16 cover those, and the native Alt+Space entry needs its own live check.
 
 ## P04 task lifecycle
 

@@ -39,6 +39,20 @@ describe("shared look IPC boundary", () => {
     expect(turn.messages.some(message => message.kind === 'reply')).toBe(false);
     expect((await history(4)).turns[0].status).toBe('done');
   });
+  it("stops only the named quick request and delivers an announced quick answer, leaving formal history alone", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { quickRunning: true, arrivals: [{ ...fixture.turns[0], id: 91, session_id: "look-quick-later" }] } }, target);
+    const invoke = target.__TAURI_INTERNALS__.invoke;
+    const history = conversation_id => invoke("core_call", { method: "agent.history.list", params: { member_id: 0, conversation_id } });
+    const formal = await history(1);
+    expect((await history(4)).turns.map(turn => [turn.id, turn.status])).toEqual([[90, "running"]]);
+    expect(await invoke("core_call", { method: "agent.history.stop", params: { session_id: "look-quick", member_id: 0 } })).toEqual({ stopped: true });
+    const [stopped] = (await history(4)).turns;
+    expect([stopped.status, stopped.text, stopped.messages.some(message => message.kind === "reply")]).toEqual(["denied", "已取消。", false]);
+    target.__look.emit({ type: "AgentTurn", turn_id: 91, member_id: 0 });
+    expect((await history(4)).turns.map(turn => turn.id)).toEqual([91, 90]);
+    expect(await history(1)).toEqual(formal);
+  });
   it.each([true, false])("settles draft approval in the formal conversation while preserving quick history (%s)", async approved => {
     const target = {};
     installMock(fixture, { fixture: { adminApproval: "draft" } }, target);
