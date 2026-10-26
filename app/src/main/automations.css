@@ -105,7 +105,9 @@
 .au-room-faces { display: flex; gap: var(--sp-1); flex-shrink: 0; max-width: 140px; overflow: hidden; }
 .au-room-pane .ra-dock .composer { width: 100%; max-width: var(--pa-colw); margin-inline: auto; }
 .au-room-author { font-size: var(--fs-2xs); color: var(--text-2); }
-.au-room-thread { padding: var(--sp-3) 0; }
+/* Each message keeps its hover actions' row under it, which already parts it from the next. */
+.au-room-thread { padding: var(--sp-3) 0; gap: var(--sp-2); }
+.au-room-thread > .handoff-row, .au-room-thread > .room-intent-blocked { margin-block: var(--sp-2); }
 .au-room-thread .ra { align-items: flex-start; }
 .au-room-thread .room-turn { white-space: nowrap; }
 .au-room-row [aria-current="true"] { background: var(--accent-soft) !important; color: var(--text); }
