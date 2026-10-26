@@ -147,8 +147,9 @@ export const agentHistorySearch = (query: string, memberId = 0, conversationId?:
  * images and PDFs of the composer go with it as `attachments` (`agent.ask`'s, in base64), and only
  * when there are some: a question with files may have no words. `memberId` asks a member in its
  * own thread instead of Raphael (`agent.ask`'s `member_id`); it goes only when it is not 0.
+ * `destination: "quick"` names Raphael's quick conversation, which the core never picks by default.
  */
-export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote; conversationId?: number } = {}): Promise<void> =>
+export const agentAskText = (text: string, attachments: WireAttachment[] = [], memberId = 0, options: { requestId?: string; replaceTurnId?: number; quote?: import("./types").MessageQuote; conversationId?: number; destination?: "quick" } = {}): Promise<void> =>
   invoke("agent_ask_text", {
     text,
     ...(attachments.length > 0 ? { attachments } : {}),

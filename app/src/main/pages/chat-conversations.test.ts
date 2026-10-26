@@ -88,6 +88,28 @@ test("switching conversations scopes history, quotes the entire answer and sends
   page.hide();
 });
 
+test("a question typed in the quick conversation names the quick destination, and a formal one never does", async () => {
+  api.agentQuestionOpen.mockResolvedValue(null);
+  api.agentHistoryList.mockResolvedValue({ turns: [] });
+  api.agentAskText.mockResolvedValue(undefined);
+  const conversations = [{ id: 4, member_id: 0, title: "", is_default: 0, kind: "quick" }, { id: 1, member_id: 0, title: "Main", is_default: 1, kind: "standard" }];
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations } : method === "background.questions.list" ? { questions: [] } : {});
+  const page = createAgent({ go() {}, device: () => ({}), onEvent: () => () => {}, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  const ask = async (text: string) => {
+    const input = page.el.querySelector<HTMLTextAreaElement>(".cmp-input")!; input.value = text; input.dispatchEvent(new Event("input"));
+    page.el.querySelector(".composer")!.dispatchEvent(new Event("submit", { cancelable: true })); await flush();
+  };
+  await ask("Formal question");
+  expect(api.agentAskText).toHaveBeenLastCalledWith("Formal question", [], 0, expect.objectContaining({ conversationId: 1 }));
+  expect(api.agentAskText.mock.lastCall![3]).not.toHaveProperty("destination");
+  if (page.el.querySelector(".conversation-trigger")!.getAttribute("aria-expanded") !== "true") page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
+  document.querySelector<HTMLButtonElement>('.mb-det [data-conversation-open="4"]')!.click(); await flush();
+  await ask("Quick follow-up");
+  expect(api.agentAskText).toHaveBeenLastCalledWith("Quick follow-up", [], 0, expect.objectContaining({ conversationId: 4, destination: "quick" }));
+  page.hide();
+});
+
 test("two conversations of one member retain independent approval cards", async () => {
   api.agentQuestionOpen.mockResolvedValue(null);
   api.agentHistoryList.mockResolvedValue({ turns: [] });

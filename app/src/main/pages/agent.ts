@@ -323,6 +323,10 @@ export function createAgent(app: AppContext): Page {
   let quotaTimer: ReturnType<typeof setTimeout> | undefined;
   const conversationId = (): number | undefined => chosenConversations.get(memberId());
   const belongs = (sent: Outgoing): boolean => sent.member === memberId() && sent.conversationId === conversationId();
+  /** Where a typed question goes: its conversation, named as the quick one when it is (the core never defaults to it). */
+  const destinationOf = (member: number, conversation: number | undefined): { conversationId?: number; destination?: "quick" } =>
+    conversation === undefined ? {} : { conversationId: conversation,
+      ...(conversationCache.get(member)?.find(c => c.id === conversation)?.kind === "quick" ? { destination: "quick" as const } : {}) };
 
   function drawConversation(): void {
     const selected = conversationCache.get(memberId())?.find(c => c.id === conversationId());
@@ -1043,7 +1047,7 @@ export function createAgent(app: AppContext): Page {
     render(true);
     askingMember = member;
     try {
-      await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
+      await api.agentAskText(text, wireAttachments(sending), member, { requestId, ...destinationOf(member, sentConversation), ...(draft.replacing !== undefined ? { replaceTurnId: draft.replacing } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
       void learnComposerCorrections(corrections);
     } catch (err) {
       if (retracted.has(requestId)) return;
@@ -1604,7 +1608,7 @@ export function createAgent(app: AppContext): Page {
     outgoing.push(mine); render(true);
     askingMember = member;
     try {
-      await api.agentAskText(turn.question, wireAttachments(draft.files), member, { requestId, ...(sentConversation !== undefined ? { conversationId: sentConversation } : {}), ...(draft.quote ? { quote: draft.quote } : {}) });
+      await api.agentAskText(turn.question, wireAttachments(draft.files), member, { requestId, ...destinationOf(member, sentConversation), ...(draft.quote ? { quote: draft.quote } : {}) });
       if (visible && memberId() === member) await load(false);
       else members.changed();
     } catch (err) { toaster.info(describeError(err)); }
