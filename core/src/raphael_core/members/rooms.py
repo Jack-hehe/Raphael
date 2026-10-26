@@ -463,7 +463,6 @@ class RoomsService:
                                     source="room", member_id=member_id, attachments=metadata,
                                     scope="room", room_id=room["id"], thread_id=thread_id)
         with self._conn:
-            # Wrap-ups belong to the exchange, outside the legacy one-reply-per-member key.
             self._conn.execute("INSERT INTO room_messages (room_id, member_id, text, created, reply_to, turn_id, "
                 "origin_message_id, reply_to_member, kind, thread_id) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?)",
                 (room["id"], member_id, self._now(), source_id, turn_id, exchange.origin_message_id,

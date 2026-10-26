@@ -55,6 +55,24 @@ async def test_refused_handoff_has_named_reason_and_no_receipt(make_rig,bad,reas
     assert rig.conn.execute('SELECT COUNT(*) FROM task_outbox').fetchone()[0]==0
 
 
+async def test_a_result_reaches_the_room_after_its_worker_already_replied_there(make_rig):
+    rig=make_rig()
+    target,source=setup(rig)
+    with rig.conn:
+        asked=rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,turn_id) VALUES (?,?,0,'@Writer check',1,?)",
+            (source.room_id,source.thread_id,source.id)).lastrowid
+        rig.conn.execute("INSERT INTO room_messages(room_id,thread_id,member_id,text,created,reply_to,reply_to_member) VALUES (?,?,?,'Checked',2,?,0)",
+            (source.room_id,source.thread_id,target.id,asked))
+    rig.client.replies.append(report('Consulted answer'))
+    accepted=rig.service.handoff(RAPHAEL,args(target,mode='consult'),source_turn_id=source.id,language='en')
+    task_id=accepted.data['task_id']
+    await until(lambda:rig.task(task_id).state in ('done','failed'))
+    assert rig.task(task_id).state=='done'
+    assert rig.conn.execute("SELECT disposition FROM task_outbox WHERE event_id=?",(f'{task_id}:result',)).fetchone()[0]=='delivered'
+    result=rig.conn.execute('SELECT member_id,reply_to,text FROM room_messages WHERE request_id=?',(f'handoff-{task_id}',)).fetchone()
+    assert tuple(result)==(target.id,asked,'Consulted answer')
+
+
 async def test_receipt_dedupe_stage_conflict_and_removed_member(make_rig):
     rig=make_rig()
     target,source=setup(rig)

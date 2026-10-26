@@ -144,6 +144,48 @@ def test_legacy_dev_shapes_migrate_losslessly_and_quarantine_ambiguity(tmp_path)
     conn.close()
 
 
+def test_v33_lets_a_member_reply_twice_and_keeps_rows_triggers_and_ids(tmp_path):
+    path = tmp_path / "v32.db"
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    for version in range(1,33):
+        step = db._MIGRATIONS[version]
+        step(conn) if callable(step) else conn.executescript(step)
+    conn.execute("INSERT INTO members(id,name,position,created_at_ms) VALUES (1,'Alice',0,1),(2,'Bob',1,1)")
+    conn.executemany("INSERT INTO rooms(id,name,created) VALUES (?,?,1)", [(1,'Plans'),(2,'Other')])
+    conn.executemany("INSERT INTO room_members VALUES (?,?)", [(1,0),(1,1),(1,2),(2,0),(2,1)])
+    conn.execute("INSERT INTO room_messages(room_id,text,created,request_id) VALUES (1,'@Alice plan',1,'first')")
+    conn.execute("INSERT INTO room_messages(room_id,member_id,text,created,reply_to,origin_message_id) VALUES (1,1,'Plan',2,1,1)")
+    conn.execute("INSERT INTO room_messages(room_id,member_id,text,created,reply_to,origin_message_id) VALUES (1,2,'Removed',3,2,1)")
+    conn.execute("DELETE FROM room_messages WHERE id=3")
+    conn.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language) VALUES (1,1,'running','en')")
+    conn.execute("INSERT INTO room_reply_intents(origin_message_id,source_message_id,recipient_id,recipient_name,state) VALUES (1,1,1,'Alice','done')")
+    before = [tuple(r) for r in conn.execute("SELECT * FROM room_messages ORDER BY id")]
+    conn.commit(); conn.close()
+    conn = db.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 33
+    assert [tuple(r) for r in conn.execute("SELECT * FROM room_messages ORDER BY id")] == before
+    assert conn.execute("SELECT state FROM room_exchanges").fetchone()[0] == 'running'
+    assert conn.execute("SELECT recipient_name FROM room_reply_intents").fetchone()[0] == 'Alice'
+    thread = before[0][-1]
+    with conn:
+        again = conn.execute("INSERT INTO room_messages(room_id,member_id,text,created,reply_to,origin_message_id) "
+                             "VALUES (1,1,'Round two',4,1,1)").lastrowid
+    assert again == 4, "a deleted message id is never reused"
+    assert conn.execute("SELECT thread_id FROM room_messages WHERE id=?", (again,)).fetchone()[0] == thread
+    other = conn.execute("SELECT id FROM room_threads WHERE room_id=2").fetchone()[0]
+    for statement, values in (
+        ("INSERT INTO room_messages(room_id,text,created,request_id) VALUES (1,'Again',5,'first')", ()),
+        ("INSERT INTO room_messages(room_id,member_id,text,created,reply_to) VALUES (1,1,'Self',5,2)", ()),
+        ("INSERT INTO room_messages(room_id,member_id,text,created,reply_to) VALUES (2,2,'Cross',5,1)", ()),
+        ("INSERT INTO room_messages(room_id,thread_id,text,created) VALUES (1,?,'Cross thread',5)", (other,)),
+        ("UPDATE room_messages SET room_id=2 WHERE id=2", ()),
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(statement, values)
+    conn.close()
+
+
 def test_scope_migration_rolls_back_data_and_schema_on_failure(monkeypatch):
     from raphael_core.brain import room_scope
     conn = sqlite3.connect(":memory:")
