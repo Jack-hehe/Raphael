@@ -223,6 +223,7 @@ from .targets import OpenTargets
 from .team import (
     ANSWER_MAX_CHARS,
     ASK_MEMBER,
+    CONSULTED,
     CREATE_MEMBER,
     REQUEST_MAX_CHARS,
     TEAM_SERVER,
@@ -585,6 +586,9 @@ class AgentService:
         self._tool_support = ToolSupport(models, clock=clock)
         # pending id -> what the call of a plugin's tool that waits for that yes needs.
         self._followups: dict[str, _Followup] = {}
+        # Conversation turns under way that consulted a colleague durably: when one ends, the
+        # background answers the owner once with what came back (`BackgroundService.settle_asker`).
+        self._consulting: set[int] = set()
         self._catalog = AppCatalog(actions, clock=clock)
         self._targets = OpenTargets(conn, now_ms)
         self._warming: set[asyncio.Task[None]] = set()
@@ -1122,7 +1126,8 @@ class AgentService:
                 continue
             allowed.append(item)
         began = time.perf_counter()
-        applied = self._memory.apply_said(allowed, 0, ask.speaker.id)
+        # A turn already written (every CLI call, a narrated one) is the note's provenance now.
+        applied = self._memory.apply_said(allowed, ask.turn_id or 0, ask.speaker.id)
         for _ in applied.written:
             ask.steps.append(self._step("tool", "memory_write", BUILTIN_SERVER, "ok", began, None))
         for _ in applied.deleted:
@@ -1477,6 +1482,8 @@ class AgentService:
                     memory_index=index, narrated=True,
                 )
             system += roster_prompt(self._team, ask.speaker, ask.language) + owner_context(self._settings)
+            if ask.exchange_speakers is not None:
+                system += "\nA colleague, another of the owner's assistants, asks you this for the owner. " + CONSULTED
             if ask.speaker.is_raphael:
                 system += LEADERSHIP
                 if ask.speaker.name:
@@ -2339,8 +2346,11 @@ class AgentService:
         if name == "handoff":
             if self._background is None:
                 return handoff_refused("worker_disabled")
-            return self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
-                                            language=language)
+            result = self._background.handoff(speaker, dict(arguments), source_turn_id=source_turn_id,
+                                              language=language)
+            if result.ok and arguments.get("mode") == "consult" and source_turn_id:
+                self._consulting.add(source_turn_id)
+            return result
         if name == "room_meeting":
             rooms = getattr(team, 'rooms', None)
             if rooms is None or not source_turn_id:
@@ -3240,15 +3250,18 @@ class AgentService:
         # A limit is clamped into 1..200: SQLite reads a negative LIMIT as "no limit".
         limit = HISTORY_DEFAULT_LIMIT if limit is None else min(max(limit, 1), HISTORY_MAX_LIMIT)
         self._expire(self._confirmations.sweep())
+        conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
+        # Colleagues' questions and hand-offs arrive in the member's main chat, as Grok Bot's do.
+        exchanges = conversation_id == self.conversations.main(member_id)
         turns = self._history.list(limit=limit, before_id=before_id, member_id=member_id,
-                                   conversation_id=self.conversations.resolve(member_id, _opt_int(params, "conversation_id")))
+                                   conversation_id=conversation_id, exchanges=exchanges)
         if around_id is not None:
-            conversation_id = self.conversations.resolve(member_id, _opt_int(params, "conversation_id"))
             anchor = self._history.get(around_id)
             if anchor is None or anchor.member_id != member_id or anchor.conversation_id != conversation_id:
                 raise invalid_params("around_id must name a turn in this conversation")
-            before = self._history.list(limit=limit, before_id=around_id + 1, member_id=member_id, conversation_id=conversation_id)
-            after = self._history.after(around_id, member_id=member_id, conversation_id=conversation_id)
+            before = self._history.list(limit=limit, before_id=around_id + 1, member_id=member_id,
+                                        conversation_id=conversation_id, exchanges=exchanges)
+            after = self._history.after(around_id, member_id=member_id, conversation_id=conversation_id, exchanges=exchanges)
             turns = sorted([*before, *after[:limit]], key=lambda turn: turn.id, reverse=True)
         return {"turns": self._turn_views(turns)}
 
@@ -3278,10 +3291,11 @@ class AgentService:
         steps = self._history.steps(ids)
         messages = self._history.messages(ids)
         tasks = self._background.tasks_for_turns(ids)
+        asked = self._history.asked_from(ids)
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
-            handoffs = self._background.handoff_views(source_turn_id=turn.id)
+            handoffs = self._colleague_events(turn, asked.get(turn.id or 0, []))
             views.append(
                 {
                     "id": turn.id,
@@ -3315,6 +3329,27 @@ class AgentService:
                 }
             )
         return views
+
+    def _colleague_events(self, turn: Turn, asked: list[Turn]) -> list[dict]:
+        """What a turn asked or handed colleagues, as its centred lines: its durable hand-offs, and
+        each quick question (`ask_member`), which has no task, read from the colleague's record."""
+        views = self._background.handoff_views(source_turn_id=turn.id)
+        tasked = {view["work_turn_id"] for view in views}
+        for exchange in asked:
+            if exchange.id in tasked:
+                continue
+            state = {"done": "done", "running": "running", "confirm": "waiting"}.get(exchange.status, "failed")
+            speaker = self._speaker(exchange.member_id)
+            views.append({
+                "task_id": None, "source_turn_id": turn.id, "work_turn_id": exchange.id,
+                "member_id": exchange.member_id, "member_name": speaker.name if speaker else "",
+                "from_member_id": exchange.peer_id, "stage_id": "", "mode": "consult", "state": state,
+                "reason": None, "created_at_ms": exchange.created_at_ms, "ready_at_ms": exchange.created_at_ms,
+                "dispatch_policy": "immediate", "request": exchange.question,
+                "result": (exchange.detail or exchange.text) if state == "done" else "",
+                "evidence": [], "completion_state": state,
+            })
+        return sorted(views, key=lambda view: view["created_at_ms"])
 
     async def _history_clear(self, params: dict) -> dict:
         """Clear the conversations: every thread, with every summary (each member's too), what
@@ -3625,16 +3660,13 @@ class AgentService:
     ) -> int:
         """Write a turn to the history, in the thread of the request's speaker, with the steps of
         its request; 0 if that fails, since the answer matters more. A request one member handed
-        another is written as an exchange with the asker (`peer_id`)."""
+        another is written as an exchange with the asker (`peer_id`): the plain request and answer,
+        which the exchange's line shows; the asker's model is handed the answer with its speaker."""
         member_id = ask.speaker.id
         question = ask.original_text if ask.original_text is not None else ask.text
         if ask.exchange_speakers is not None:
-            requester, respondent = ask.exchange_speakers
-            question = labelled_lines(requester, question)
-            text = relayed_answer(respondent, "\n".join(ask.replies) if ask.replies else text, ask.exchange_owner_sources)
-            ask.exchange_answer = text
-            if detail:
-                detail = relayed_answer(respondent, detail, ask.exchange_owner_sources)
+            text = "\n".join(ask.replies) if ask.replies else text
+            ask.exchange_answer = relayed_answer(ask.exchange_speakers[1], text, ask.exchange_owner_sources)
         try:
             cost = max(ledger.total - ask.cost_base, 0.0)
             if ask.turn_id:
@@ -3673,6 +3705,9 @@ class AgentService:
         self._turn_changed(turn_id, member_id, hold=hold)
         if hold and turn_id:
             ask.held = turn_id
+        if turn_id in self._consulting and status not in ("running", "confirm"):
+            self._consulting.discard(turn_id)
+            self._background.settle_asker(turn_id, answered=status == "done")
         if self._memory is not None and not ask.nested and status not in ("running", "confirm"):
             try:
                 # The fold and, for Raphael's, the reflection pass, in the background.

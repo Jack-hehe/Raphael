@@ -184,11 +184,13 @@ class RpcDriver:
         self.app.integrations._config.add(ServerConfig("guardian-mail", "Guardian", "http",
                                                        url="https://example.invalid/mcp", tools=[tool]))
 
-    async def owner_view(self):
-        turns = (await self.app.call("agent.history.list", {"member_id": 0}))["turns"]
+    async def owner_view(self, member=0):
+        turns = (await self.app.call("agent.history.list", {"member_id": member}))["turns"]
         reasons = []
         for turn in turns:
-            if turn.get("member_id", 0) != 0 or turn.get("source") != "app":
+            if turn.get("scope", "private") == "exchange":
+                continue  # a colleague's question in this chat is that colleague's, drawn as one line
+            if turn.get("member_id", 0) != member or turn.get("source") != "app":
                 reasons.append("wrong_conversation_scope")
             for message in turn.get("messages", []):
                 kind, text = message.get("kind"), message.get("text", "")
@@ -212,6 +214,8 @@ class RpcDriver:
             reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
         elif cell.driver in ('roster', 'meeting'):
             reasons, result = await (self.roster_scenario() if cell.driver == 'roster' else self.meeting_scenario())
+        elif cell.driver in ('consult', 'memory'):
+            reasons, result = await (self.consult_scenario() if cell.driver == 'consult' else self.memory_scenario())
         elif cell.driver == "team-setup":
             reasons = []
             async def team_state():
@@ -314,7 +318,8 @@ class RpcDriver:
             turns = [{'source':'room','scope':'room','status':result.get('status'),'text':result.get('text','')}]
             owner_reasons = check_reply(result.get('text',''),Scenario('room-work',''))
         else:
-            turns, owner_reasons = await self.owner_view()
+            # A member's own conversation is the owner's view when the owner spoke to that member.
+            turns, owner_reasons = await self.owner_view(result.get('viewer', 0))
         reasons += owner_reasons
         if not turns or result.get("status") not in {"done", "denied", "error"}:
             reasons.append("no_terminal_owner_result")
@@ -474,6 +479,96 @@ class RpcDriver:
                 if refresh and claims_on(reply, 'Guardian'):
                     reasons.append('roster_disconnected_app_stale')
         return reasons, result
+
+    async def settled(self):
+        # Consultations, their answers and an asker's return are read back once nothing is under way.
+        while self.app._conn.execute("SELECT 1 FROM worker_tasks WHERE state IN ('queued','running','waiting')").fetchone():
+            await asyncio.sleep(.02)
+
+    async def said_to(self, member):
+        """What the owner reads in their own conversation with `member`: its answers, never a
+        colleague's question drawn there."""
+        turns = (await self.app.call('agent.history.list', {'member_id': member}))['turns']
+        return '\n'.join(part for turn in turns if turn['scope'] == 'private' for part in
+                         [turn['text'], *(m['text'] for m in turn.get('messages', []) if m['kind'] == 'reply')])
+
+    def consulted(self, asked, asker, words):
+        """The colleague records of `asker` asking `asked`, and those whose answer holds `words`."""
+        rows = self.app._conn.execute("SELECT id, text, detail FROM agent_turns WHERE scope='exchange' AND member_id=? AND peer_id=?",
+                                      (asked, asker)).fetchall()
+        return rows, [row for row in rows if words in (row['text'] or '') + (row['detail'] or '')]
+
+    async def consult_scenario(self):
+        """S04: what the owner told 行銷 alone reaches 信件助理 only as 行銷's answer to its question."""
+        ids = await self.seed_team()
+        marketing, mail = ids[0], ids[1]
+        code, other = 'NX-' + self.nonce, 'TR-' + self.nonce[::-1]
+        await self.ask(f'下週上市的新品代號是 {code}。另外，我週五要看的房子編號是 {other}。', member=marketing)
+        await self.settled()
+        result = await self.ask('請向行銷詢問下週上市的新品代號，問到後告訴我。', member=mail)
+        await self.settled()
+        reasons = list((await self.owner_view(marketing))[1])
+        asked, answered = self.consulted(marketing, mail, code)
+        if not answered:
+            reasons.append('consult_answer_missing')
+        if any(other in (row['text'] or '') + (row['detail'] or '') for row in asked):
+            reasons.append('consult_copied_private_history')
+        if any(code in note.description + note.body for note in [*self.app.memory.shared.all(), *self.app.memory.store_for(mail).all()]):
+            reasons.append('consult_before_recall')
+        relayed = await self.said_to(mail)
+        if code not in relayed:
+            reasons.append('private_nonce_not_relayed')
+        if other in relayed:
+            reasons.append('private_history_leaked')
+        turns = (await self.app.call('agent.history.list', {'member_id': mail}))['turns']
+        events = [event for turn in turns for event in turn.get('handoffs', [])
+                  if event['mode'] == 'consult' and event['member_id'] == marketing]
+        if not events:
+            reasons.append('source_event_missing')
+        elif not any(event['state'] == 'done' and event['work_turn_id'] in {row['id'] for row in answered} for event in events):
+            reasons.append('task_link_missing')
+        theirs = (await self.app.call('agent.history.list', {'member_id': marketing}))['turns']
+        if not any(turn['scope'] == 'exchange' and turn['peer_id'] == mail for turn in theirs):
+            reasons.append('message_from_missing')
+        return reasons, {**result, 'viewer': mail}
+
+    async def memory_scenario(self):
+        """S12: a team-wide fact told to 拉斐爾 reaches 行銷 with its provenance; a fact told to 行銷
+        alone stays out of PM's reach until PM asks 行銷."""
+        ids = await self.seed_team()
+        marketing, pm = ids[0], ids[3]
+        brand, secret = 'BC-' + self.nonce, 'PV-' + self.nonce[::-1]
+        told = await self.ask(f'請記住，這是全團隊都要知道的共同資訊：我們的品牌主色是金色，色號 {brand}。')
+        await self.settled()
+        reasons = []
+        shared = [note for note in self.app.memory.shared.all() if brand in note.description + note.body]
+        if not shared:
+            reasons.append('global_fact_not_shared')
+        elif not any(note.member == 0 and note.origin == 'said' and told.get('turn_id') in note.turns
+                     and 'member 0' in self.app.memory.index(marketing).shared for note in shared):
+            reasons.append('provenance')
+        listed = (await self.app.call('memory.list', {'space': 'shared', 'member_id': marketing}))['memories']
+        if shared and not any(item['name'] == shared[0].name and item['member'] == 0 for item in listed):
+            reasons.append('provenance_not_listed')
+        await self.ask('我們的品牌主色和色號是什麼？', member=marketing)
+        await self.settled()
+        if brand not in await self.said_to(marketing):
+            reasons.append('global_recall')
+        await self.ask(f'跟你說一件我自己的事：我週五要看的房子編號是 {secret}。', member=marketing)
+        await self.settled()
+        await self.ask('我週五要看的房子編號是多少？只根據你自己知道的回答，這次不要問任何人。', member=pm)
+        await self.settled()
+        if secret in await self.said_to(pm) or self.consulted(marketing, pm, '')[0]:
+            reasons.append('private_isolation')
+        if any(secret in note.description + note.body for note in [*self.app.memory.shared.all(), *self.app.memory.store_for(pm).all()]):
+            reasons.append('private_fact_shared')
+        result = await self.ask('請向行銷詢問我週五要看的房子編號，問到後告訴我。', member=pm)
+        await self.settled()
+        if not self.consulted(marketing, pm, secret)[1] or secret not in await self.said_to(pm):
+            reasons.append('authorized_consult')
+        for member in (0, marketing):
+            reasons += (await self.owner_view(member))[1]
+        return reasons, {**result, 'viewer': pm}
 
     async def meeting_scenario(self):
         ids = await self.seed_team()

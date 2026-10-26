@@ -28,6 +28,9 @@ routine's title and whose answer is what the run reported.
 
 Private reads always select scope=private. Room turns require a room/thread, never resolve or
 touch a private conversation, and remain available through the room service and internal audit.
+A member's own chat also lists its exchanges with colleagues where they came (`list` and `after`
+with `exchanges`), each drawn as one line; what a model reads (context, search, reflection) never
+includes them.
 
 The conversation is not pruned: unlike the dictations, which go after the retention setting, the
 turns stay until the user clears them (`clear`). Nothing here logs a question or an answer.
@@ -120,6 +123,23 @@ def _to_turn(row: sqlite3.Row) -> Turn:
         # Damaged saved context must not prevent reading the rest of a thread.
         data["quote"] = None
     return Turn(**data)
+
+
+# A member's exchanges with colleagues: what another member asked it (`ask_member`) or handed it
+# (`handoff`), written in its thread outside its private conversations. Room work stays in rooms.
+_EXCHANGES = "scope = 'exchange' AND peer_id IS NOT NULL"
+
+
+def _thread(member_id: int, conversation_id: int | None, exchanges: bool) -> tuple[str, list[object]]:
+    """The conditions of a member's thread as its chat lists it, and their params."""
+    where, params = "scope = 'private' AND member_id = ?", [member_id]
+    if conversation_id is not None:
+        where += " AND conversation_id = ?"
+        params.append(conversation_id)
+    if exchanges:
+        where = f"(({where}) OR ({_EXCHANGES} AND member_id = ?))"
+        params.append(member_id)
+    return where, params
 
 
 def _filters(
@@ -374,20 +394,35 @@ class AgentHistory:
 
     def list(
         self, limit: int = 50, before_id: int | None = None, *, member_id: int = 0,
-        conversation_id: int | None = None,
+        conversation_id: int | None = None, exchanges: bool = False,
     ) -> list[Turn]:
         """The thread of `member_id`, newest first. `before_id` keeps the turns made before that
-        one: the cursor for the next page."""
-        conditions = " WHERE scope = 'private' AND member_id = ?" + ("" if before_id is None else " AND id < ?")
-        params: list[object] = [member_id] if before_id is None else [member_id, before_id]
-        if conversation_id is not None:
-            conditions += " AND conversation_id = ?"
-            params.append(conversation_id)
+        one: the cursor for the next page. With `exchanges`, what colleagues asked or handed the
+        member (`_EXCHANGES`) is among them, where it came: the line its own chat shows."""
+        where, params = _thread(member_id, conversation_id, exchanges)
+        if before_id is not None:
+            where += " AND id < ?"
+            params.append(before_id)
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns{conditions} ORDER BY id DESC LIMIT ?",
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE {where} ORDER BY id DESC LIMIT ?",
             [*params, limit],
         )
         return [_to_turn(row) for row in rows]
+
+    def asked_from(self, turn_ids: Iterable[int]) -> dict[int, list[Turn]]:
+        """What each of `turn_ids` asked or handed colleagues while it ran, by that turn: the
+        exchanges written in the colleagues' own threads, oldest first."""
+        found: dict[int, list[Turn]] = {}
+        ids = sorted({int(turn_id) for turn_id in turn_ids})
+        for start in range(0, len(ids), 500):
+            chunk = ids[start : start + 500]
+            rows = self._conn.execute(
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE source_turn_id IN ({','.join('?' * len(chunk))})"
+                f" AND {_EXCHANGES} ORDER BY id", chunk,
+            )
+            for turn in map(_to_turn, rows):
+                found.setdefault(turn.source_turn_id, []).append(turn)
+        return found
 
     def recent(self, count: int, *, member_id: int = 0, conversation_id: int | None = None) -> list[Turn]:
         """The last `count` turns of the thread of `member_id` that were answered, oldest first:
@@ -405,23 +440,23 @@ class AgentHistory:
 
     def after(
         self, turn_id: int, *, limit: int | None = None, member_id: int = 0,
-        conversation_id: int | None = None,
+        conversation_id: int | None = None, exchanges: bool = False,
     ) -> list[Turn]:
         """The turns of the thread of `member_id` made after the turn `turn_id`, whatever their
-        status, oldest first; with a `limit`, only the newest that many of them."""
-        condition = "" if conversation_id is None else " AND conversation_id = ?"
-        params = [turn_id, member_id, *([] if conversation_id is None else [conversation_id])]
+        status, oldest first; with a `limit`, only the newest that many of them. `exchanges` as
+        for `list`."""
+        where, params = _thread(member_id, conversation_id, exchanges)
+        where = f"id > ? AND {where}"
+        params = [turn_id, *params]
         if limit is None:
             rows = self._conn.execute(
-                f"SELECT {_COLUMNS} FROM agent_turns WHERE scope = 'private' AND id > ? AND member_id = ?" + condition + " ORDER BY id",
-                params,
+                f"SELECT {_COLUMNS} FROM agent_turns WHERE {where} ORDER BY id", params,
             ).fetchall()
             return self._with_messages([_to_turn(row) for row in rows])
         if limit <= 0:
             return []
         rows = self._conn.execute(
-            f"SELECT {_COLUMNS} FROM agent_turns WHERE scope = 'private' AND id > ? AND member_id = ?"
-            + condition + " ORDER BY id DESC LIMIT ?",
+            f"SELECT {_COLUMNS} FROM agent_turns WHERE {where} ORDER BY id DESC LIMIT ?",
             [*params, limit],
         ).fetchall()
         return self._with_messages([_to_turn(row) for row in reversed(rows)])

@@ -4,6 +4,7 @@ import type { Messages } from './zh-TW';
 
 export const en = {
   "handoff.forwarded": "Forwarded to {p0}", "handoff.asked": "Asked {p0}",
+  "exchange.from": "Message from {p0}", "exchange.count": "{p0} messages with {p1}",
   "handoff.queued": "Queued", "handoff.running": "Running", "handoff.waiting": "Waiting for results",
   "handoff.missingArtifact": "Required artifact is missing",
   "handoff.noAction": "No verified action",
@@ -1126,7 +1127,6 @@ export const en = {
   "members.offerYes": "Add",
   "members.nameEmpty": "Enter a name",
   "members.nameTaken": "There is already a member called {p0}",
-  "members.exchange": "{p0} messages with ",
   "members.routineLine": "Routine",
   "auto.new": "New",
   "auto.newRoutine": "New routine",

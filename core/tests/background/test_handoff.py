@@ -12,9 +12,11 @@ from raphael_core.agent.history import AgentHistory
 from raphael_core.agent.speaker import RAPHAEL, Speaker
 from raphael_core.background.tasks import TaskStore
 from raphael_core.brain.db import connect
+from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.settings import SettingsStore
 from raphael_core.integrations.client import CallOutcome
 from raphael_core.members.store import MemberStore
+from raphael_core.memory.service import MemoryService
 from raphael_core.worker.loop import Outcome
 from .conftest import call, report, turn, until
 
@@ -233,6 +235,128 @@ async def test_parent_releases_slot_real_file_result_and_resume_once(make_rig,tm
     assert not rig.service._store.resume_from_inbox(parent)
     assert AgentHistory(rig.conn).recent(10,member_id=target.id)==[]
     assert '已核對成果' in AgentHistory(rig.conn).get(source.id).text
+
+
+class NoMemoryModel:
+    async def complete_json(self, **kwargs):
+        raise AssertionError('no memory model call is expected')
+
+
+def knowing(rig, tmp_path, target):
+    """The asked member knows a code from its own conversation and a date from its own note; every
+    member knows the brand colour."""
+    memory = MemoryService(rig.conn, tmp_path/'memory', NoMemoryModel(), MemoryKeyStore())
+    memory.store_for(target.id).write('reference-launch', type='reference', description='上市日 PRIVATE-NOTE', body='上市日 PRIVATE-NOTE')
+    memory.shared.write('user-brand', type='user', description='品牌主色是金色', body='品牌主色是金色', member=0)
+    rig.service.use_memory(memory)
+    AgentHistory(rig.conn, rig.wall).add(session_id='private', question='只告訴你：新品代號 PRIVATE-CHAT', route='chat',
+                                         prefix='', text='好，我記住了。', status='done', member_id=target.id)
+
+
+@pytest.mark.parametrize('brain',['api','cli'])
+async def test_a_consultation_answers_from_what_the_asked_member_knows_and_the_asker_resumes_once(make_rig,tmp_path,monkeypatch,brain):
+    rig=make_rig()
+    model='cli:codex:gpt-5.6-terra' if brain=='cli' else 'fake/model'
+    SettingsStore(rig.conn).set('agent_model',model)
+    target,source=setup(rig,model=model,room=brain=='cli')
+    knowing(rig,tmp_path,target)
+    ask=args(target,mode='consult',stage_id='code',request='新品代號是什麼？',done_when='Answer the question.')
+    seen={}
+    if brain=='api':
+        def asked(**kwargs):
+            seen['asked']=json.dumps(kwargs['messages'],ensure_ascii=False)
+            seen['tools']=[tool['function']['name'] for tool in kwargs['tools']]
+            return report('新品代號是 PRIVATE-CHAT。')
+        def resumed(**kwargs):
+            seen['asker']=json.dumps(kwargs['messages'],ensure_ascii=False)
+            return report('行銷說新品代號是 PRIVATE-CHAT。')
+        rig.client.replies.extend([turn(calls=[call('handoff',ask)]),asked,resumed])
+    else:
+        rig.service.use_cli(object())
+        async def work(loop):
+            if loop.member_id==0 and 'Delegated work results' not in loop.user:
+                await loop._tool('handoff','handoff',ask)
+            elif loop.member_id==target.id:
+                seen['asked']=loop.system+loop.user
+                seen['tools']=[tool['function']['name'] for tool in loop.tools]
+                loop._queue.put_nowait(Outcome('done',final='新品代號是 PRIVATE-CHAT。'))
+            else:
+                seen['asker']=loop.user
+                loop._queue.put_nowait(Outcome('done',final='行銷說新品代號是 PRIVATE-CHAT。'))
+        monkeypatch.setattr(CliLoop,'_work',work)
+    parent=rig.service.submit(session_id='parent',text='問行銷新品代號',language='zh-TW',model=model)
+    rig.service.attach_turn(parent,source.id)
+    await until(lambda:rig.task(parent).state in ('done','failed'),timeout=10)
+    assert rig.task(parent).state=='done', rig.task(parent)
+    [child]=rig.service._store.handoffs(source.id)
+    assert all(known in seen['asked'] for known in ('PRIVATE-CHAT','PRIVATE-NOTE','品牌主色是金色'))
+    assert {'memory_read','history_search'} <= set(seen['tools'])
+    # Only the answer reaches the asker: never the asked member's conversation or notes.
+    assert 'PRIVATE-CHAT' in seen['asker'] and 'PRIVATE-NOTE' not in seen['asker'] and '好，我記住了' not in seen['asker']
+    exchange=AgentHistory(rig.conn).get(child.turn_id)
+    assert (exchange.question,exchange.text,exchange.member_id,exchange.peer_id)==('新品代號是什麼？','新品代號是 PRIVATE-CHAT。',target.id,0)
+    assert rig.conn.execute('SELECT COUNT(*) FROM task_executions WHERE task_id=?',(parent,)).fetchone()[0]==2
+    rig.service._deliver_handoffs()
+    assert not rig.service._store.resume_from_inbox(parent)
+    assert '行銷說新品代號是 PRIVATE-CHAT' in AgentHistory(rig.conn).get(source.id).text
+
+
+@pytest.mark.parametrize('answer_first',[False,True])
+async def test_a_conversation_turn_that_consults_comes_back_once_with_the_answer(make_rig,tmp_path,answer_first):
+    rig=make_rig()
+    target,source=setup(rig,room=False)
+    knowing(rig,tmp_path,target)
+    seen={}
+    def resumed(**kwargs):
+        seen['asker']=json.dumps(kwargs['messages'],ensure_ascii=False)
+        return report('行銷說新品代號是 PRIVATE-CHAT。')
+    rig.client.replies.extend([report('新品代號是 PRIVATE-CHAT。'),resumed])
+    receipt=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='code',request='新品代號是什麼？'),
+                                source_turn_id=source.id,language='zh-TW')
+    child=rig.task(receipt.data['task_id'])
+    asker=rig.task(child.parent_task_id)
+    # While the turn is being answered its asker stays off the turn, so the chat shows no second task.
+    assert (asker.state,asker.member_id,asker.turn_id)==('running',0,None) and rig.service.tasks_for_turns([source.id])=={}
+    if answer_first:
+        await until(lambda:rig.task(child.id).state=='done')
+        assert rig.task(asker.id).state=='running'
+    AgentHistory(rig.conn,rig.wall).resolve(source.id,prefix='答',text='我去問 Writer。',status='done')
+    rig.service.settle_asker(source.id,answered=True)
+    await until(lambda:rig.task(asker.id).state in ('done','failed'))
+    assert rig.task(asker.id).state=='done' and rig.task(asker.id).turn_id==source.id
+    assert 'PRIVATE-CHAT' in seen['asker'] and 'PRIVATE-NOTE' not in seen['asker']
+    assert '行銷說新品代號是 PRIVATE-CHAT' in AgentHistory(rig.conn).get(source.id).text
+    rig.service._deliver_handoffs()
+    rig.service.settle_asker(source.id,answered=True)
+    assert not rig.service._store.resume_from_inbox(asker.id)
+    assert rig.conn.execute('SELECT COUNT(*) FROM task_executions WHERE task_id=?',(asker.id,)).fetchone()[0]==1
+    assert rig.client.replies==[]
+
+
+async def test_a_stopped_conversation_turn_stops_the_questions_it_sent(make_rig,tmp_path):
+    rig=make_rig()
+    target,source=setup(rig,room=False)
+    knowing(rig,tmp_path,target)
+    receipt=rig.service.handoff(RAPHAEL,args(target,mode='consult',stage_id='code',request='新品代號是什麼？'),
+                                source_turn_id=source.id,language='zh-TW')
+    child=rig.task(receipt.data['task_id'])
+    AgentHistory(rig.conn,rig.wall).resolve(source.id,prefix='答',text='已取消。',status='denied')
+    rig.service.settle_asker(source.id,answered=False)
+    assert rig.task(child.id).state=='cancelled' and rig.task(child.parent_task_id).state=='cancelled'
+    assert AgentHistory(rig.conn).get(source.id).text=='已取消。'
+    assert not rig.reports() and rig.client.chat_calls==[]
+
+
+async def test_assigned_work_never_reads_the_assignees_private_conversation_or_notes(make_rig,tmp_path):
+    rig=make_rig()
+    target,source=setup(rig,room=False)
+    knowing(rig,tmp_path,target)
+    rig.client.replies.append(report('明早我會完成。'))
+    task_id=rig.service.handoff(RAPHAEL,args(target),source_turn_id=source.id,language='zh-TW').data['task_id']
+    await until(lambda:rig.task(task_id).state in ('done','failed'))
+    [assigned]=rig.client.chat_calls
+    shown=json.dumps(assigned['messages'],ensure_ascii=False)
+    assert 'PRIVATE-CHAT' not in shown and 'PRIVATE-NOTE' not in shown
 
 
 @pytest.mark.parametrize('room',[True,False])

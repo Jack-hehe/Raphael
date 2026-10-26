@@ -232,9 +232,11 @@ async def test_raphael_asks_a_member_and_exchange_is_audit_only(setup, client, c
     history = AgentHistory(conn)
     assert history.list(member_id=one.id) == []
     (theirs,) = [history.get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'", (one.id,))]
+    # The record keeps the plain words for the exchange's line; the asker's model gets them attributed.
     assert (theirs.route, theirs.source, theirs.peer_id, theirs.question, theirs.text) == (
-        "exchange", "member", 0, "Raphael: 主人明天有什麼行程？", "小行程: 明天九點開會。",
+        "exchange", "member", 0, "主人明天有什麼行程？", "明天九點開會。",
     )  # fmt: skip
+    assert "小行程: 明天九點開會。" in raphael_call["user"]
     mine = history.list(member_id=0)
     assert [t.route for t in mine] == ["answer"]
     steps = (await rig.turns())[0]["steps"]
@@ -408,12 +410,44 @@ async def test_a_member_asks_another_and_only_those_two_threads_hold_it(setup, c
     history = AgentHistory(conn)
     assert history.list(member_id=b.id) == []
     (bs,) = [history.get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=? AND scope='exchange'", (b.id,))]
-    assert (bs.route, bs.peer_id, bs.question) == ("exchange", a.id, "小財務: PRIVATE-REQUEST 上季的數字")
+    assert (bs.route, bs.peer_id, bs.question) == ("exchange", a.id, "PRIVATE-REQUEST 上季的數字")
     assert {(t.route, t.peer_id) for t in history.list(member_id=a.id)} == {("answer", None)}
     # A third member, and Raphael, see nothing of it.
     assert history.list(member_id=c.id) == [] and history.list(member_id=0) == []
     assert team.memory.search("上季", member_id=c.id).data["turns"] == []
     assert (await rig.call("agent.history.search", {"query": "上季", "member_id": c.id}))["turns"] == []
+
+
+async def test_both_chats_show_the_question_where_it_happened_and_nothing_else_reads_it(setup, client, conn):
+    rig, team = setup
+    a = member(team, name="小財務")
+    b = member(team, name="小研究")
+    client.decisions.append(decision("chat"))
+    client.chats.append(live_said("記下了。"))
+    await typed(rig, "記一下：上季營收兩百萬", b.id)
+    client.decisions.append(decision("answer"))  # A's request
+    client.chats.append(chat("我先問小研究。", ("ask_member", {"member": "小研究", "request": "上季的數字是多少？"})))
+    client.decisions.append(decision("answer"))  # B's flags
+    client.chats.append(live_said("上季營收兩百萬。"))
+    client.chats.append(live_said("小研究說上季營收兩百萬。"))
+    await typed(rig, "問小研究上季的數字", a.id)
+    # B's chat lists the question where it came, after B's own turn, as its plain words.
+    exchange, own = (await rig.call("agent.history.list", {"member_id": b.id}))["turns"]
+    assert (exchange["scope"], exchange["peer_id"], exchange["question"], exchange["text"]) == (
+        "exchange", a.id, "上季的數字是多少？", "上季營收兩百萬。")
+    assert own["scope"] == "private" and own["question"] == "記一下：上季營收兩百萬"
+    # A's turn names what it asked and what came back, with no task behind a quick question.
+    [mine] = (await rig.call("agent.history.list", {"member_id": a.id}))["turns"]
+    [asked] = mine["handoffs"]
+    assert (asked["mode"], asked["member_id"], asked["state"], asked["request"], asked["result"], asked["task_id"]) == (
+        "consult", b.id, "done", "上季的數字是多少？", "上季營收兩百萬。", None)
+    # Another conversation of B, the previews and every search leave it out.
+    named = (await rig.call("conversations.create", {"member_id": b.id}))["conversation"]
+    assert (await rig.call("agent.history.list", {"member_id": b.id, "conversation_id": named["id"]}))["turns"] == []
+    assert AgentHistory(conn).latest_by_member()[b.id].scope == "private"
+    found = (await rig.call("agent.history.search", {"query": "上季的數字", "member_id": b.id}))["turns"]
+    assert all(turn["scope"] == "private" for turn in found)
+    assert all(t["scope"] == "private" for t in team.memory.search("數字", member_id=b.id).data["turns"])
 
 
 async def test_a_chain_is_at_most_two_deep_and_never_comes_back(setup):
@@ -472,7 +506,7 @@ async def test_raphael_asked_for_the_desktop_says_the_owner_must_ask_him(setup, 
     await typed(rig, "請拉斐爾打開小算盤", one.id)
     assert AgentHistory(conn).list(member_id=0) == []
     (raphaels,) = [AgentHistory(conn).get(r[0]) for r in conn.execute("SELECT id FROM agent_turns WHERE member_id=0 AND scope='exchange'")]
-    assert raphaels.text == "Raphael: 需要主人在電腦前直接要求操作。"
+    assert raphaels.text == "需要主人在電腦前直接要求操作。"
     assert rig.actions.calls == []
 
 

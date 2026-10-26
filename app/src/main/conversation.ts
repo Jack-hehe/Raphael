@@ -16,48 +16,39 @@ export const TYPED = "app";
 /** Where a turn came from: `voice`, `app` (typed in the page) or the chat app (`telegram`). */
 export const sourceOf = (turn: AgentTurn): string => turn.source || VOICE;
 
-/** One line of the thread: the heading of a day, or a turn. */
+/** One line of the thread: the heading of a day, a turn, or what one colleague asked in a row. */
 export type ThreadItem =
   | { kind: "day"; key: string; label: string }
-  | { kind: "turn"; key: string; turn: AgentTurn; inner?: AgentTurn[] };
+  | { kind: "turn"; key: string; turn: AgentTurn }
+  | { kind: "exchange"; key: string; turns: AgentTurn[] };
 
-/** Whether a turn is one member asking another (`ask_member`), not the owner's own words. */
-const exchangeTurn = (turn: AgentTurn): boolean => turn.route === "exchange" || sourceOf(turn) === "member";
+/** Whether a turn is a colleague's question or hand-off to this member, not the owner's own words. */
+export const exchangeTurn = (turn: AgentTurn): boolean =>
+  turn.scope === "exchange" || turn.route === "exchange" || sourceOf(turn) === "member";
 
 /**
  * The thread: the turns (in any order) oldest first, each day under its heading (「今天」, 「昨天」, the
- * date). A turn's key is its id, so that the page can tell the lines it drew before. An exchange
- * that was had while a turn of the thread was being answered (its speaker asking a member before it
- * answered) goes inside that turn (`inner`), so that the answer comes after what the members said.
+ * date). A turn's key is its id, so that the page can tell the lines it drew before. What one
+ * colleague asked or handed this member, several times in a row on one day, is one line.
  */
 export function threadItems(turns: readonly AgentTurn[], nowMs: number): ThreadItem[] {
   const oldestFirst = [...turns].sort((a, b) => a.created_at_ms - b.created_at_ms || a.id - b.id);
   const items: ThreadItem[] = [];
   let day: string | null = null;
-  let host: { turn: AgentTurn; inner: AgentTurn[] } | null = null;
   for (const turn of oldestFirst) {
-    if (exchangeTurn(turn)) {
-      if (host && turn.id > host.turn.id && turn.created_at_ms <= answeredAt(host.turn)) {
-        host.inner.push(turn);
-        continue;
-      }
-    } else {
-      host = (turn.messages?.length ?? 0) > 0 ? { turn, inner: [] } : null;
-    }
     const label = dayLabel(turn.created_at_ms, nowMs);
+    const last = items[items.length - 1];
+    if (exchangeTurn(turn) && label === day && last?.kind === "exchange" && last.turns[0].peer_id === turn.peer_id) {
+      last.turns.push(turn);
+      continue;
+    }
     if (label !== day) {
       day = label;
       items.push({ kind: "day", key: `day:${label}`, label });
     }
-    items.push(host?.turn === turn ? { kind: "turn", key: `turn:${turn.id}`, turn, inner: host.inner } : { kind: "turn", key: `turn:${turn.id}`, turn });
+    items.push(exchangeTurn(turn) ? { kind: "exchange", key: `exchange:${turn.id}`, turns: [turn] } : { kind: "turn", key: `turn:${turn.id}`, turn });
   }
   return items;
-}
-
-/** When a turn was answered: its last message, or never while it is still being answered. */
-function answeredAt(turn: AgentTurn): number {
-  if (turn.status === "running" || turn.status === "confirm") return Infinity;
-  return Math.max(turn.created_at_ms, ...(turn.messages ?? []).map((message) => message.at_ms));
 }
 
 /** Text as the search compares it: the same width and case for every way of typing it. */

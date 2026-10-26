@@ -31,7 +31,7 @@ selection. Native proof must also relaunch the isolated dev instance and confirm
 persistence, then remove test data.
 
 Memory, routine, skill and command rows put edit/delete in their overflow menus
-(R-UI-11). Routine switches remain on their rows. Existing edit, approval and undo
+(R-UI-11). A shared note's row names whom the owner told it to and when (`global-private-memory`). Routine switches remain on their rows. Existing edit, approval and undo
 behavior remains in the shared editors and controllers.
 
 ## Gotchas

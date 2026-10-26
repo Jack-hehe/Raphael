@@ -312,9 +312,9 @@ export interface AgentTurn {
   room_id?: number | null;
   thread_id?: number | null;
   /**
-   * For an exchange between two members (`route` "exchange", `source` "member": one asked the other
-   * with `ask_member`, `question` what was asked and `text` the answer), the requester: 0 is Raphael.
-   * Exchanges remain audit rows outside private histories.
+   * For an exchange (`scope` "exchange": a colleague asked this member something or handed it work,
+   * `question` what was asked and `text` the answer), the colleague: 0 is Raphael. The member's main
+   * conversation lists its exchanges where they came, each drawn as one centred line.
    */
   peer_id?: number | null;
 }
@@ -788,10 +788,13 @@ export interface RoomMessage {
 }
 
 export interface HandoffView {
-  task_id: number; source_turn_id: number; work_turn_id: number; member_id: number;
+  /** Null for a quick question (`ask_member`), which has no task: `work_turn_id` is its record. */
+  task_id: number | null; source_turn_id: number; work_turn_id: number; member_id: number;
   member_name: string; from_member_id: number; stage_id: string; mode: "work" | "consult";
   state: string; reason: string | null; created_at_ms: number; ready_at_ms: number;
   dispatch_policy: "immediate"; result: string;
+  /** What was sent to the colleague: a consultation's question. */
+  request?: string;
   /** An artifact's `uri` is its path inside the task's workspace. */
   evidence: { kind: string; digest: string; verdict: string; uri?: string; mime?: string }[];
 }

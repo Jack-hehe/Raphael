@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { columnHTML } from "./member-column";
 import { faceHTML, raphaelOf } from "./members";
-import { exchangeHTML } from "./timeline";
+import { exchangeLineHTML } from "./exchange-line";
+import type { AgentTurn } from "./types";
 
 const MAIN = __dirname;
 const sheets = readdirSync(MAIN)
@@ -71,11 +72,11 @@ describe("Raphael's emblem stands bare", () => {
     expect(face.getAttribute("style")).toBe("--av:64px");
   });
 
-  test("on the line of an exchange with him, too", () => {
+  test("on the line of what he asked a member, too", () => {
     const line = document.createElement("ol");
-    const turn = { id: 5, created_at_ms: 0, question: "問", route: "exchange", prefix: "", text: "答", detail: null, status: "done", source: "member", member_id: 3, peer_id: 0 };
-    line.innerHTML = exchangeHTML(turn, "拉斐爾", false, faceHTML(raphaelOf(null), 18, { cls: "sys-face" }));
-    const face = line.querySelector(".sys-x > .av")!;
+    const turn: AgentTurn = { id: 5, created_at_ms: 0, question: "問", route: "exchange", prefix: "", text: "答", detail: null, status: "done", source: "member", scope: "exchange", member_id: 3, peer_id: 0 };
+    line.innerHTML = exchangeLineHTML([turn], { face: () => "", memberName: (id) => (id ? "小晴" : "拉斐爾"), memberFace: () => faceHTML(raphaelOf(null), 18, { cls: "sys-face" }) });
+    const face = line.querySelector(".event-line > .av")!;
     expect(face.className).toBe("av sys-face");
     expect(face.querySelector("img.em-l")).not.toBeNull();
   });

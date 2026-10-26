@@ -44,6 +44,13 @@ describe("the memory's rows", () => {
     expect(html).not.toContain("規劃週末");
   });
 
+  test("a shared note says whom the owner told it to and when; a note with no provenance says nothing more", () => {
+    const told = { ...LIST.memories[0], member: 0, updated: "2026-10-27T00:44:52+08:00" };
+    const html = memoryHTML(view({ expanded: true, status: { memories: [told, LIST.memories[1]], summary: null },
+      nameOf: (id) => (id === 0 ? "拉斐爾" : "") }));
+    expect(visible(html)).toBe("記憶 2 本人 主人住在台北 拉斐爾 · 10/27 偏好 回答保持兩三句 推測 全部清除");
+  });
+
   test("with no notes it says so and opens on nothing", () => {
     const html = memoryHTML(view({ status: { memories: [], summary: null }, expanded: true }));
     expect(visible(html)).toBe("記憶 尚無記憶");

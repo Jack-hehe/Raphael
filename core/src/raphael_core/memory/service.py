@@ -10,14 +10,16 @@ they all share one more:
   should know about the owner, and only that (who they are, their stable preferences, the people in
   their life, their life and work, how they like to be spoken to). Every assistant reads it and may
   write to it; never what was decided or discussed with one of them, a task, a plan made in one
-  thread, or what a tool or the web said (`reflection.about_the_owner` holds to it);
+  thread, or what a tool or the web said (`reflection.about_the_owner` holds to it). Each of its
+  notes keeps its provenance: the assistant it was told to (`member`), when, and the turns;
 - each assistant's own: Raphael's is the memory folder itself (`memory\\`), a member's
   `memory\\members\\<id>\\`. Only that assistant reads and writes it: its role, what its routines
   found, how the owner wants it to work.
 
 The conversations are private to each assistant: its prompt, its summary, its search of the past
-(`history_search`) and its reflection pass read only its own thread. The one text two of them share
-is an exchange of `ask_member`, which is written in the threads of those two.
+(`history_search`) and its reflection pass read only its own thread. What one of them was told
+reaches another only as the answer to a question it was asked (`ask_member`, or a hand-off in
+`consult` mode), which the asked one words from its own notes and conversation.
 
 The prompt carries both indexes, the shared one first (`store.MemoryIndex`), each within the limits
 of an index. A write chooses its space (`space`); a note read by name is looked for in the
@@ -32,8 +34,8 @@ The RPC methods (the main window only; the shell checks their params before they
 takes `space` ("own", the default, or "shared") and `member_id` (whose own: 0, Raphael, by default):
 
 - `memory.list {space?, member_id?}` -> `{memories: [{name, description, type, origin, updated,
-  expires}], summary: {text, updated_at_ms} | null}` (the summary is the member's conversation's;
-  none for the shared space)
+  expires, member}], summary: {text, updated_at_ms} | null}` (the summary is the member's
+  conversation's; none for the shared space; `member` is a shared note's provenance, or null)
 - `memory.get {name, space?, member_id?}` -> the memory, with its body and the turns it came from
 - `memory.update {name, body, description?, space?, member_id?}` -> the memory as it is now. An edit
   by the user is a memory the user stated (`origin: said`); it passes the same checks as any other
@@ -374,7 +376,8 @@ class MemoryService:
         said = [replace(a, origin="said") for a in actions]
         try:
             return apply_spaced(
-                said, self.store_for(member_id), self.shared, turns=[turn_id] if turn_id else []
+                said, self.store_for(member_id), self.shared, turns=[turn_id] if turn_id else [],
+                member=member_id,
             )
         except OSError as exc:
             logger.warning("Could not write to the memory: %s", type(exc).__name__)
@@ -430,6 +433,7 @@ class MemoryService:
                     "updated": memory.updated[:10],
                     "origin": memory.origin,
                     "space": space,
+                    "member": memory.member,
                 }
             )
         return ToolResult("memory_read", True, {"memories": found, "missing": missing})
@@ -671,6 +675,7 @@ class MemoryService:
             current=current,
             shared=self.shared,
             agent=self._name_of(member_id),
+            member=member_id,
         )
         if applied.failed:
             self._failed_at = self._clock()
@@ -782,6 +787,7 @@ class MemoryService:
                 "origin": m.origin,
                 "updated": m.updated,
                 "expires": m.expires,
+                "member": m.member,
             }
             for m in self.space(space, member_id).all()
         ]

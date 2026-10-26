@@ -25,6 +25,7 @@ import {
   cleanName,
   faceHTML,
   isMemberNameTaken,
+  memberOf,
   scheduleText,
   sourceLabel,
 } from "./members";
@@ -137,6 +138,7 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     undo: host.app.undo,
     memberId: () => host.member().id,
     ownerName: () => host.member().name,
+    memberName: (id: number) => memberOf(host.list(), id)?.name ?? "",
     expanded: true,
   };
   const shared = createMemory({ ...memoryHost, space: "shared", onMoved: () => void own.load() });

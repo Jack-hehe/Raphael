@@ -13,7 +13,7 @@ import { handoffLineHTML } from "./handoff-line";
 import { t } from "./i18n";
 import type { MessageKey } from "./i18n/zh-TW";
 
-import { plainReplies, userLine } from "../shared/anime";
+import { plainReplies } from "../shared/anime";
 import { TYPED, VOICE, hasDetail, highlightHTML, sourceOf } from "./conversation";
 import { isBotRename, isSettledDraftTurn, settledDraftHTML } from "./member-draft";
 import { messageHTML } from "./message-content";
@@ -495,16 +495,11 @@ export interface TurnLook {
   face: (loop: boolean) => string;
   /** The words being looked for, marked wherever they are; blank for none. */
   query?: string;
-  /** The exchanges between members that are open, by turn id (their line opens on the messages). */
-  openExchanges?: ReadonlySet<number>;
-  /** The name of member `id` (0 is Raphael), for the line of an exchange. */
+  /** The name of member `id` (0 is Raphael), for the lines of colleague events. */
   memberName?: (id: number) => string;
-  /** The small face of member `id` on the line of an exchange (Raphael's bare emblem for 0). */
+  /** The small face of member `id` on those lines (Raphael's bare emblem for 0). */
   memberFace?: (id: number) => string;
 }
-
-/** Whether a turn is an exchange between two members, not the owner's own words. */
-export const isExchange = (turn: AgentTurn): boolean => turn.route === "exchange" || sourceOf(turn) === "member";
 
 /**
  * The line of a routine's run above its answer: 「例行任務 <title>」, the title being the run's
@@ -513,29 +508,6 @@ export const isExchange = (turn: AgentTurn): boolean => turn.route === "exchange
 export function routineLineHTML(turn: AgentTurn): string {
   const title = turn.question.trim();
   return `<div class="sys">${ico("repeat")}<span>${esc(t("members.routineLine"))}</span>${title ? `<b>${esc(title)}</b>` : ""}</div>`;
-}
-
-/**
- * An exchange between two members, as one line: 「N 則訊息往來：<name>」 (the question and the answer,
- * as many as there are), which opens on them: what was asked in 「」, and what was answered. They
- * are drawn only while it is open. `name` is the member on the other side.
- */
-export function exchangeHTML(turn: AgentTurn, name: string, open: boolean, face = "", tag: "li" | "div" = "li"): string {
-  const id = esc(turn.id);
-  const messages = [turn.question.trim() ? userLine(turn.question.trim()) : "", turn.text.trim()].filter(Boolean);
-  // the line ends in a colon that leads to the name; with no name it ends without one
-  const said = t("members.exchange", { p0: messages.length });
-  const label = name ? said : said.replace(/[：:]\s*$/, "");
-  return (
-    `<${tag} class="${tag === "li" ? "tn " : ""}tn-x" data-id="${id}">` +
-    btn(
-      `${face}<span>${esc(label)}</span>${name ? `<b>${esc(name)}</b>` : ""}<span class="steps-chev">${ico("right")}</span>`,
-      "sys sys-x",
-      ` data-act="exchange" aria-expanded="${open}" aria-controls="tn-x-${id}"`,
-    ) +
-    (open ? `<ol class="x-list" id="tn-x-${id}">` + messages.map((m) => `<li>${messageHTML(m)}</li>`).join("") + `</ol>` : "") +
-    `</${tag}>`
-  );
 }
 
 /**
@@ -672,10 +644,10 @@ function meetingEvent(text: string): { room_id: number; name: string } | null {
 const plainLine = (text: string): string => plainReplies([text])[0];
 
 /** Keep all work behind one closed chip; running turns show their latest public update. */
-function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, exchanges = ""): string {
+function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string): string {
   const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && !meetingEvent(m.text) && m.text.trim())
     .map(m => ({ ...m, text: plainLine(m.text) }));
-  if (!messages.length && !exchanges && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
+  if (!messages.length && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
   const live = turn.status === "running" || isLive(turn.task);
   const firstReply = (turn.messages ?? []).find(m => m.kind === "reply" && m.at_ms >= turn.created_at_ms)?.at_ms;
   const end = live ? state.nowMs : turn.task?.finished_at_ms ?? firstReply ?? Math.max(turn.created_at_ms, ...messages.map(m => m.at_ms), ...(turn.steps ?? []).map(step => step.at_ms + step.ms));
@@ -686,7 +658,7 @@ function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, e
     ? `<span class="work-latest">${esc(latest?.text ?? t("agent.thinking"))}</span><span class="work-time">${esc(t("chat.workingFor", { p0: seconds }))}</span>`
     : `<span>${esc(t("chat.workedFor", { p0: seconds }))}</span>`;
   const indicator = live ? `<span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span>` : ico("check");
-  const body = messages.map(m => `<div class="chat-message" data-message="${m.seq}"><div class="${m.kind === "event" ? "turn-event" : "work-progress"}">${messageHTML(m.text, query)}</div></div>`).join("") + exchanges +
+  const body = messages.map(m => `<div class="chat-message" data-message="${m.seq}"><div class="${m.kind === "event" ? "turn-event" : "work-progress"}">${messageHTML(m.text, query)}</div></div>`).join("") +
     ((turn.steps?.length ?? 0) > 0 ? `<ol class="step-list">${shownSteps(turn).map(step => stepHTML(step, false)).join("")}</ol>` : "");
   return `<div class="work-section think-box${open ? " is-open" : ""}${live ? " is-live" : ""}" data-thinking-turn="${turn.id}">` +
     btn(`${indicator}${label}<span class="work-chevron">${ico("right")}</span>`, "work-toggle", ` data-act="thinking" aria-expanded="${open}" aria-controls="work-${turn.id}"`) +
@@ -763,12 +735,12 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 }
 
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
-function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, regenerate: boolean, inner = ""): string {
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, regenerate: boolean): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
   const replies = ordered.filter(m => m.kind === "reply");
   const said = new Map(plainReplies(replies.map(m => m.text)).map((text, index) => [replies[index].seq, text.trim()]));
   const lastReply = [...replies].reverse().find(m => said.get(m.seq))?.seq;
-  const work = workSectionHTML(turn, state, query, inner);
+  const work = workSectionHTML(turn, state, query);
   const settledDraft = isSettledDraftTurn(turn);
   return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && said.get(message.seq) === turn.text.trim())) || message.kind === "media").map(message => {
     const text = message.kind === "reply" ? said.get(message.seq) ?? "" : message.text.trim();
@@ -783,38 +755,20 @@ function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, 
 
 /**
  * The centred event lines of a turn, outside Raphael's messages: the work it handed over (each opens on
- * what the owner asked) and the meetings it opened, whose line opens the room.
+ * what the owner asked), what it asked colleagues (each opens on the question sent and the answer)
+ * and the meetings it opened, whose line opens the room.
  */
 function turnEventsHTML(turn: AgentTurn, look: TurnLook, said: boolean): string {
-  const request = said ? { author: t("rooms.owner"), text: turn.question.trim() } : undefined;
+  const owner = said ? { author: t("rooms.owner"), text: turn.question.trim() } : undefined;
   const meetings = (turn.messages ?? []).filter(m => m.kind === "event").map(m => meetingEvent(m.text)).filter(event => event !== null);
-  return (turn.handoffs ?? []).map(task => handoffLineHTML(task, look.memberFace?.(task.member_id) ?? "", request)).join("") +
+  return (turn.handoffs ?? []).map(task => handoffLineHTML(task, look.memberFace?.(task.member_id) ?? "",
+    task.mode === "consult" && task.request ? { author: look.memberName?.(task.from_member_id) ?? "", text: task.request } : owner,
+    look.memberName?.(task.member_id) || task.member_name)).join("") +
     meetings.map(event => `<div class="conversation-event-line">${btn(eventLineHTML(t("rooms.meetingOpened", { p0: NAME }), ico("chat"), event.name), "event-open", ` data-meeting-room="${event.room_id}"`)}</div>`).join("");
 }
 
-/** The line of an exchange, named and faced after the member on its other side. */
-function exchangeLine(turn: AgentTurn, look: TurnLook, tag: "li" | "div"): string {
-  const peer = turn.peer_id ?? null;
-  return exchangeHTML(
-    turn,
-    peer === null ? "" : (look.memberName?.(peer) ?? ""),
-    look.openExchanges?.has(turn.id) ?? false,
-    peer === null ? "" : (look.memberFace?.(peer) ?? ""),
-    tag,
-  );
-}
-
-/**
- * One question and its answer, with what was done in between; `inner` are the exchanges had while
- * it was answered, drawn before the answer.
- */
-export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook, inner: readonly AgentTurn[] = []): string {
-  if (isExchange(turn)) {
-    // A request an asked member handed to the background (route "delegate", source "member") names
-    // who asked in `peer_id`; one from before the core wrote it names no one, and its line then
-    // says no name (not Raphael's) and shows no face.
-    return exchangeLine(turn, look, "li");
-  }
+/** One question and its answer, with what was done in between. */
+export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: boolean, look: TurnLook): string {
   const id = esc(turn.id);
   const query = look.query ?? "";
   const hasMsgs = (turn.messages?.length ?? 0) > 0;
@@ -844,8 +798,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, regenerate, inner.map((x) => exchangeLine(x, look, "div")).join(""))
-      : workSectionHTML(turn, state, query, inner.map(x => exchangeLine(x, look, "div")).join("")) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)
+      ? turnMessagesHTML(turn, state, query, regenerate)
+      : workSectionHTML(turn, state, query) + ((turn.status === "running" && turn.text.trim() === "" || turn.status === "confirm" || settledDraft)
         ? "" : turn.text.trim() ? messageBlockHTML(turn, "reply", turn.text, turn.created_at_ms, query, state, true, regenerate) : "")) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +

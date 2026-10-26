@@ -770,18 +770,16 @@ describe("a member's thread", () => {
     api.core.mockReset();
   });
 
-  test("an exchange between members is one line in the thread, opened on what was asked and answered", async () => {
-    THREADS[4] = [turn(42, { member_id: 4, peer_id: 0, route: "exchange", source: "member", question: "主人明天幾點有空？", text: "下午兩點以後" })];
+  test("what a colleague asked a member is one closed line in its chat, holding the question and the answer", async () => {
+    THREADS[4] = [turn(42, { member_id: 4, peer_id: 0, route: "exchange", source: "member", scope: "exchange", question: "主人明天幾點有空？", text: "下午兩點以後" })];
     mount();
     await flush();
     await pick(4);
-    const line = $('[data-act="exchange"]');
-    expect(line.textContent).toBe("2 則訊息往來：拉斐爾");
-    expect(document.querySelector(".x-list")).toBeNull();
+    const line = $<HTMLDetailsElement>('.exchange-event[data-exchange="42"]');
+    expect(line.querySelector("summary")!.textContent).toBe("訊息來自 拉斐爾");
+    expect(line.open).toBe(false);
     expect(document.querySelector('.tn[data-id="42"] .bubble')).toBeNull();
-    line.click();
-    expect([...document.querySelectorAll(".x-list li")].map((li) => li.textContent)).toEqual(["「主人明天幾點有空？」", "下午兩點以後"]);
-    expect($('[data-act="exchange"]').getAttribute("aria-expanded")).toBe("true");
+    expect([...line.querySelectorAll(".exchange-message")].map((message) => message.textContent)).toEqual(["拉斐爾主人明天幾點有空？", "行程管家下午兩點以後"]);
   });
 
   test("the core is told which thread is on screen, and none once the page goes", async () => {

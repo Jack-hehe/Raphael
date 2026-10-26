@@ -3,6 +3,7 @@ import { homeZh } from "./home-catalogs";
 // Traditional Chinese is the source catalogue. Placeholders are interpolated by t().
 export const zhTW = {
   "handoff.forwarded": "已轉交給 {p0}", "handoff.asked": "已詢問 {p0}",
+  "exchange.from": "訊息來自 {p0}", "exchange.count": "{p0} 則訊息往來：{p1}",
   "handoff.queued": "已排隊", "handoff.running": "執行中", "handoff.waiting": "等待結果",
   "handoff.missingArtifact": "缺少驗收所需的檔案",
   "handoff.noAction": "尚無可驗證的執行成果",
@@ -1125,7 +1126,6 @@ export const zhTW = {
   "members.offerYes": "加入",
   "members.nameEmpty": "請輸入名字",
   "members.nameTaken": "已經有叫「{p0}」的成員",
-  "members.exchange": "{p0} 則訊息往來：",
   "members.routineLine": "例行任務",
   "auto.new": "新增",
   "auto.newRoutine": "新增例行任務",

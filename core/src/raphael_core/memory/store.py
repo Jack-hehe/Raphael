@@ -11,6 +11,7 @@ memory's type (`preference-answer-length`), with a frontmatter and a body:
     created: 2026-10-22T21:40:00+08:00
     updated: 2026-10-22T21:40:00+08:00
     origin: said
+    member: 0
     turns: [1234, 1240]
     ---
     主人偏好簡短的回答……
@@ -19,13 +20,17 @@ memory's type (`preference-answer-length`), with a frontmatter and a body:
   (`preference`), people they mention (`person`), plans and open loops (`ongoing`, which must carry
   an `expires` date) and where things are (`reference`, never a credential).
 - `origin` is `said` when the user said it, `inferred` when the reflection pass deduced it.
+- `member` is the assistant whose conversation it came from (0 is Raphael): with `origin` and
+  `updated` it is a shared note's provenance, who was told it and when. A note of an assistant's
+  own memory needs none, and a write that names none keeps the one the note had.
 - `turns` are the ids of the turns (`agent_turns`) it came from, for "why do you remember that?".
 - `description` is one line, and it is the memory's line in the index.
 - `created` and `updated` are stamped here, never by a model.
 
 The index (`index`, also written to `MEMORY.md` for whoever opens the folder) is made from the
 frontmatter by this code, never by a model, so it can never drift from the files: one line a
-memory, `- [type] description (MM/DD) → name`, by type and then in the order the memories were made,
+memory, `- [type] description (MM/DD) → name` (`(MM/DD, member N)` for a note with a `member`), by
+type and then in the order the memories were made,
 the `ongoing` ones whose date has passed left out. It is the same text until a memory changes, so
 the prompt that carries it stays the same from one turn to the next (and the provider's prompt
 cache keeps it). It is held to `INDEX_MAX_LINES` lines and `INDEX_MAX_CHARS` characters.
@@ -89,6 +94,7 @@ class Memory:
     origin: str = "said"
     expires: str | None = None  # YYYY-MM-DD
     turns: tuple[int, ...] = field(default=())
+    member: int | None = None
 
     def expired(self, today: date) -> bool:
         """Whether its date has passed (only a memory with an `expires` date ever has)."""
@@ -111,6 +117,7 @@ class Memory:
             "origin": self.origin,
             "expires": self.expires,
             "turns": list(self.turns),
+            "member": self.member,
         }
 
 
@@ -143,7 +150,8 @@ def _iso(now: datetime) -> str:
 
 def _index_line(memory: Memory) -> str:
     day = memory.updated[5:10].replace("-", "/") if len(memory.updated) >= 10 else ""
-    return f"- [{memory.type}] {memory.description} ({day}) → {memory.name}"
+    told = "" if memory.member is None else f", member {memory.member}"
+    return f"- [{memory.type}] {memory.description} ({day}{told}) → {memory.name}"
 
 
 def index_of(memories: Iterable[Memory], today: date) -> list[str]:
@@ -175,6 +183,8 @@ def render(memory: Memory) -> str:
     if memory.expires:
         lines.append(f"expires: {memory.expires}")
     lines.append(f"origin: {memory.origin}")
+    if memory.member is not None:
+        lines.append(f"member: {memory.member}")
     lines.append(f"turns: {json.dumps(list(memory.turns))}")
     lines.append("---")
     return "\n".join(lines) + "\n" + memory.body.strip() + "\n"
@@ -217,6 +227,7 @@ def parse(text: str, name: str) -> Memory | None:
     except ValueError:
         pass
     origin = fields.get("origin", "said")
+    member = fields.get("member", "")
     return Memory(
         name=name,
         description=_one_line(text_of("description")),
@@ -227,6 +238,7 @@ def parse(text: str, name: str) -> Memory | None:
         origin=origin if origin in ORIGINS else "said",
         expires=fields.get("expires") or None,
         turns=turns,
+        member=int(member) if member.isascii() and member.isdigit() else None,
     )
 
 
@@ -441,9 +453,11 @@ class MemoryStore:
         origin: str = "said",
         turns: Sequence[int] = (),
         leaving: Iterable[str] = (),
+        member: int | None = None,
     ) -> Memory:
         """Create the memory `name`, or replace it. Its `created` stays what it was, `updated` is
-        now, and the turns it came from are added to the ones it had. MemoryRefused when it breaks
+        now, and the turns it came from are added to the ones it had; `member`, when given, is the
+        assistant it was told to now, else it keeps the one it had. MemoryRefused when it breaks
         a limit or holds something it may not. `leaving` are memories about to be deleted (the
         ones a merge folds into this one): the index is checked without them."""
         description, body, expires = self.check(
@@ -471,6 +485,7 @@ class MemoryStore:
             origin=origin if origin in ORIGINS else "said",
             expires=expires,
             turns=tuple(kept_turns[-MAX_TURNS:]),
+            member=member if member is not None else (old.member if old is not None else None),
         )
         existing[name] = memory
         gone = set(leaving) - {name}

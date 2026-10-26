@@ -28,7 +28,7 @@
 // shows in the thread whose member asked. While the page is on screen the main sidebar is an icon rail (main.ts). Above the composer
 // is the slot of the thread's questions from the background (background-mount.ts). A member's
 // thread is its own: the search looks in it alone, and no turn of another thread shows in it but
-// the collapsed line of an exchange it had a part in.
+// the closed line of what a colleague asked it (exchange-line.ts).
 
 import { conversationTitle, conversationChange, type ConversationInfo } from "../conversation-list";
 import { openActions } from "../member-column";
@@ -53,7 +53,8 @@ import { RAPHAEL_ID, faceHTML, memberPlaceholder } from "../members";
 import { createMembers } from "../members-shell";
 import { createDraftPanel, hasDrafts } from "../member-draft";
 import { mountBackgroundQuestions } from "../background-mount";
-import { TYPED, VOICE, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
+import { TYPED, VOICE, exchangeTurn, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
+import { exchangeLineHTML } from "../exchange-line";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
 import {
@@ -508,8 +509,6 @@ export function createAgent(app: AppContext): Page {
   let askingMember: number | null = null;
   /** The thread of the question that waits (see `setQuestion`). */
   let questionOwner = RAPHAEL_ID;
-  /** The exchanges between members that are open, by turn id. */
-  const openExchanges = new Set<number>();
   /** The search: open or not, its words, and what the core found (null: the page looks itself). */
   let searching = false;
   let query = "";
@@ -522,6 +521,8 @@ export function createAgent(app: AppContext): Page {
   let newestDrawn = 0;
   let drewOnce = false;
 
+  /** The thread's own turns: what colleagues asked this member is drawn, never stopped or searched here. */
+  const own = (): AgentTurn[] => turns.filter((turn) => !exchangeTurn(turn));
   const atBottom = (): boolean => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= BOTTOM_SLACK_PX;
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
   const isEmpty = (): boolean =>
@@ -529,8 +530,8 @@ export function createAgent(app: AppContext): Page {
 
   const look = (): TurnLook => {
     const latest = turns.filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
-    const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || turns.some(turn => turn.status === "running" || isLive(turn.task));
-    const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", openExchanges, memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
+    const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || own().some(turn => turn.status === "running" || isLive(turn.task));
+    const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
     return { ...shared, face: () => faceHTML(member, 26) };
@@ -684,7 +685,7 @@ export function createAgent(app: AppContext): Page {
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
     selectQuestion();
-    const active = outgoing.some(belongs) || turns.some(turn=>turn.status==="running" || turn.status==="confirm" || isLive(turn.task) || turn.task?.state==="waiting");
+    const active = outgoing.some(belongs) || own().some(turn=>turn.status==="running" || turn.status==="confirm" || isLive(turn.task) || turn.task?.state==="waiting");
     voiceButton.innerHTML = avatarHTML({size:32,avatar:null});
     voiceButton.setAttribute("aria-label",t("agent.voice"));
     drawTaskSlot(composer, active ? question ? "waiting" : outgoing.some(belongs) ? "ack" : "running" : "idle");
@@ -730,12 +731,14 @@ export function createAgent(app: AppContext): Page {
 
   /** One line of the thread as HTML, with the key it keeps across draws. */
   function lines(): { key: string; html: string; turnId?: number }[] {
-    const base = searching && query.trim() !== "" ? (found ?? turns.filter((turn) => turnMatches(turn, query))) : turns;
+    const base = searching && query.trim() !== "" ? (found ?? own().filter((turn) => turnMatches(turn, query))) : turns;
     const shape = look();
     const out = threadItems(base, state.nowMs).map((item) =>
       item.kind === "day"
         ? { key: item.key, html: dayHTML(item.label) }
-        : { key: item.key, html: turnHTML(pacing.view(item.turn), state, details.has(item.turn.id), shape, item.inner), turnId: item.turn.id },
+        : item.kind === "exchange"
+          ? { key: item.key, html: exchangeLineHTML(item.turns, shape), turnId: item.turns[item.turns.length - 1].id }
+          : { key: item.key, html: turnHTML(pacing.view(item.turn), state, details.has(item.turn.id), shape), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
       for (const sent of outgoing) if (belongs(sent)) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
@@ -1334,14 +1337,6 @@ export function createAgent(app: AppContext): Page {
     rememberLine(button);
   }
 
-  /** Opens or closes the messages of an exchange between members, under its line. */
-  function toggleExchange(button: HTMLElement): void {
-    const id = Number(button.closest<HTMLElement>(".tn-x, .tn")?.dataset.id);
-    if (openExchanges.has(id)) openExchanges.delete(id);
-    else openExchanges.add(id);
-    rememberLine(button);
-    render();
-  }
 
   /**
    * The questions from the background that wait in the open thread (background-mount.ts): the gold
@@ -1387,7 +1382,6 @@ export function createAgent(app: AppContext): Page {
     newestDrawn = 0;
     drewOnce = false;
     details.clear();
-    openExchanges.clear();
     if (searching) closeSearch(false);
     thread.replaceChildren();
     if (voice.isUp) voice.drop();
@@ -1672,9 +1666,9 @@ export function createAgent(app: AppContext): Page {
   }
 
   async function stopComposerTask(): Promise<void> {
-    const task=turns.find(turn=>isLive(turn.task)||turn.task?.state==="waiting")?.task;
+    const task=own().find(turn=>isLive(turn.task)||turn.task?.state==="waiting")?.task;
     if(task){await api.workerCancel(task.id);void load(false);return;}
-    const turn=turns.find(turn=>turn.status==="running" || turn.status==="confirm");
+    const turn=own().find(turn=>turn.status==="running" || turn.status==="confirm");
     const request=outgoing.find(belongs)?.requestId ?? turn?.session_id;
     if(request)await api.agentStop(request,memberId());
     void load(false);
@@ -1683,7 +1677,7 @@ export function createAgent(app: AppContext): Page {
   async function cancelMessage(control?: HTMLElement): Promise<void> {
     const source = control ? messageSource(control) : null;
     const pending = control ? outgoing.find(item => item.requestId === control.closest<HTMLElement>("[data-session]")?.dataset.session) : [...outgoing].reverse().find(item => item.member === memberId());
-    const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? turns.find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
+    const turn = pending ? turns.find(turn => turn.session_id === pending.requestId) : source?.turn ?? (!control ? own().find(turn => sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && (turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting")) : undefined);
     const session = pending?.requestId ?? turn?.session_id;
     if (!session || retracting.has(session)) return;
     const member = memberId(), sentConversation = conversationId();
@@ -1797,9 +1791,6 @@ export function createAgent(app: AppContext): Page {
         break;
       case "pdf-expand":
         togglePdfExpand(act);
-        break;
-      case "exchange":
-        toggleExchange(act);
         break;
       case "stop":
         void stop(act);

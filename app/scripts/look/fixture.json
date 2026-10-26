@@ -503,6 +503,112 @@
       "updated_at_ms": 1792807140000
     }
   ],
+  "sharedMemories": [],
+  "colleagueConversation": {
+    "id": 21,
+    "member_id": 2,
+    "title": "新品準備",
+    "is_default": true,
+    "created_at_ms": 1792807140000,
+    "updated_at_ms": 1792807176000
+  },
+  "colleagueTurn": {
+    "id": 70,
+    "session_id": "look-colleague",
+    "member_id": 2,
+    "conversation_id": 21,
+    "scope": "private",
+    "created_at_ms": 1792807170000,
+    "question": "請問小晴下週上市的新品代號，問到後告訴我。",
+    "route": "answer",
+    "source": "app",
+    "prefix": "",
+    "text": "小晴說下週上市的新品代號是 NX-2026。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.004,
+    "model": "openai/gpt-6-luna",
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "小晴說下週上市的新品代號是 NX-2026。",
+        "at_ms": 1792807176000
+      }
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "ask_member",
+        "server": "Raphael",
+        "outcome": "ok",
+        "ms": 3200,
+        "reason": null
+      }
+    ],
+    "attachments": [],
+    "handoffs": [
+      {
+        "task_id": null,
+        "source_turn_id": 70,
+        "work_turn_id": 71,
+        "member_id": 1,
+        "member_name": "小晴",
+        "from_member_id": 2,
+        "stage_id": "",
+        "mode": "consult",
+        "state": "done",
+        "reason": null,
+        "created_at_ms": 1792807171000,
+        "ready_at_ms": 1792807171000,
+        "dispatch_policy": "immediate",
+        "request": "下週上市的新品代號是多少？",
+        "result": "下週上市的新品代號是 NX-2026。",
+        "evidence": [],
+        "completion_state": "done"
+      }
+    ]
+  },
+  "colleagueExchanges": [
+    {
+      "id": 71,
+      "session_id": "look-colleague",
+      "member_id": 1,
+      "peer_id": 2,
+      "conversation_id": null,
+      "scope": "exchange",
+      "created_at_ms": 1792807171000,
+      "question": "下週上市的新品代號是多少？",
+      "route": "exchange",
+      "source": "member",
+      "prefix": "",
+      "text": "下週上市的新品代號是 NX-2026。",
+      "detail": null,
+      "status": "done",
+      "messages": [],
+      "steps": [],
+      "attachments": []
+    },
+    {
+      "id": 72,
+      "session_id": "look-colleague",
+      "member_id": 1,
+      "peer_id": 2,
+      "conversation_id": null,
+      "scope": "exchange",
+      "created_at_ms": 1792807175000,
+      "question": "上市日是哪一天？",
+      "route": "exchange",
+      "source": "member",
+      "prefix": "",
+      "text": "11 月 3 日上市，當天上午十點開賣。",
+      "detail": null,
+      "status": "done",
+      "messages": [],
+      "steps": [],
+      "attachments": []
+    }
+  ],
   "turns": [
     {
       "id": 90, "session_id": "look-quick", "member_id": 0, "conversation_id": 4,

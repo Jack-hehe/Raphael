@@ -28,6 +28,8 @@ export interface MemoryItem {
   origin: string;
   updated: string;
   expires: string | null;
+  /** A shared note's provenance: the agent the owner told it to (0 is Raphael). */
+  member?: number | null;
 }
 
 export interface MemoryList {
@@ -58,6 +60,8 @@ export interface MemoryView {
   title?: string;
   /** What the menu of a note says to move it to the other space. */
   moveTo?: string;
+  /** The name of agent `id`, for a shared note's provenance. */
+  nameOf?: (id: number) => string;
   expanded: boolean;
   editing: MemoryEditor | null;
   /** Deleted, and waiting out their 10 s of 「復原」: not drawn. */
@@ -111,8 +115,10 @@ function itemRows(v: MemoryView, list: MemoryList): string[] {
   return shown(v, list).flatMap((m) => {
     const open = v.editing?.name === m.name;
     const inferred = m.origin === "inferred" ? `<span class="mem-tag">${esc(t("mem.inferred"))}</span>` : "";
+    // who the owner told it to and when, as every agent's prompt reads it
+    const told = m.member != null && v.nameOf ? `<span class="mem-from">${esc(`${v.nameOf(m.member)} · ${m.updated.slice(5, 10).replace("-", "/")}`)}</span>` : "";
     const line = row(
-      `<span class="mem-line"><span class="mem-type">${esc(typeLabel(m.type))}</span><span class="mem-desc">${esc(m.description)}</span>${inferred}</span>`,
+      `<span class="mem-line"><span class="mem-type">${esc(typeLabel(m.type))}</span><span class="mem-desc">${esc(m.description)}</span>${inferred}${told}</span>`,
       "",
       iconButton("more", t("mem.more", { p0: m.description }), ` data-mem="more" data-name="${esc(m.name)}" aria-haspopup="menu" aria-expanded="false"${off}`),
       { cls: "mem-sub", attrs: ` data-mem-item="${esc(m.name)}"` },
@@ -174,6 +180,8 @@ export interface MemoryHost {
   ownerName?: () => string;
   /** A note was moved to the other space: the list of that space reads it again. */
   onMoved?: () => void;
+  /** The name of agent `id`, for a shared note's provenance. */
+  memberName?: (id: number) => string;
 }
 
 export interface MemoryPanel {
@@ -218,7 +226,7 @@ export function createMemory(host: MemoryHost): MemoryPanel {
     if (host.visible()) host.redraw();
   };
   const view = (): MemoryView => ({
-    status, expanded, editing, hidden, confirmingClear, confirmingSummary, busy,
+    status, expanded, editing, hidden, confirmingClear, confirmingSummary, busy, nameOf: host.memberName,
     ...(space
       ? {
           space,

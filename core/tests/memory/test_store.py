@@ -56,6 +56,21 @@ def test_an_update_keeps_when_it_was_made_stamps_when_it_changed_and_adds_its_tu
     assert store.get(second.name).body == "主人偏好一句話的回答。"
 
 
+def test_a_note_keeps_who_it_was_told_to_until_a_write_names_another(store, clock):
+    told = write(store, member=0, turns=[3])
+    text = (store.root / "preference-answer-length.md").read_text(encoding="utf-8")
+    assert "origin: said\nmember: 0\nturns: [3]\n---" in text
+    assert MemoryStore(store.root).get(told.name).member == 0
+    assert "(10/22, member 0) → preference-answer-length" in store.index()
+    clock.advance(days=1)
+    assert write(store, body="主人要一句話。").member == 0  # an edit that names nobody keeps it
+    assert write(store, member=7).member == 7
+    assert "(10/23, member 7)" in store.index()
+    assert write(store, "user-city", type="user").member is None
+    assert "member:" not in (store.root / "user-city.md").read_text(encoding="utf-8")
+    assert "(10/23) → user-city" in store.index()
+
+
 def test_a_description_with_a_colon_and_quotes_survives_the_frontmatter(store):
     memory = write(store, description='Master\'s "work" folder: D:\\Work')
     assert store.get(memory.name).description == 'Master\'s "work" folder: D:\\Work'
@@ -240,7 +255,7 @@ def test_a_memory_view_has_every_field():
     memory = Memory("user-x", "d", "user", "b", "c", "u", "inferred", "2026-11-01", (1,))
     assert memory.view() == {
         "name": "user-x", "description": "d", "type": "user", "body": "b", "created": "c",
-        "updated": "u", "origin": "inferred", "expires": "2026-11-01", "turns": [1],
+        "updated": "u", "origin": "inferred", "expires": "2026-11-01", "turns": [1], "member": None,
     }  # fmt: skip
 
 
