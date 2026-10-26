@@ -54,7 +54,7 @@ describe("one thread", () => {
       ],
       now,
     );
-    expect(items.map((item) => (item.kind === "day" ? item.label : item.turn.id))).toEqual([
+    expect(items.map((item) => (item.kind === "day" ? item.label : item.kind === "turn" ? item.turn.id : item.key))).toEqual([
       "2025 年 12 月 31 日", 1, "10 月 17 日", 2, "昨天", 3, 4, "今天", 5, 6,
     ]);
     // the keys say which line is which across draws
@@ -71,18 +71,19 @@ describe("one thread", () => {
     expect(threadItems([], now)).toEqual([]);
   });
 
-  test("the members asked while a turn was answered go inside it, before the answer", () => {
-    const msg = (seq: number, when: string, kind = "reply") => ({ seq, kind, text: `m${seq}`, at_ms: at(when) }) as NonNullable<AgentTurn["messages"]>[number];
-    const asked = turn(2, "2026-10-20T09:00:00+08:00", { messages: [msg(1, "2026-10-20T09:00:01+08:00", "progress"), msg(2, "2026-10-20T09:00:30+08:00")] });
-    const doctor = turn(4, "2026-10-20T09:00:07+08:00", { route: "exchange", source: "member", peer_id: 3 });
-    const teacher = turn(6, "2026-10-20T09:00:14+08:00", { route: "exchange", source: "member", peer_id: 1 });
-    const later = turn(8, "2026-10-20T09:05:00+08:00", { route: "exchange", source: "member", peer_id: 1 });
-    const items = threadItems([later, teacher, doctor, asked], now);
-    const lines = items.flatMap((item) => (item.kind === "turn" ? [[item.turn.id, (item.inner ?? []).map((x) => x.id)]] : []));
-    // one asked after the answer is a line of its own
-    expect(lines).toEqual([[2, [4, 6]], [8, []]]);
-    const running = threadItems([{ ...asked, status: "running" }, later], now);
-    expect(running.flatMap((item) => (item.kind === "turn" ? [[item.turn.id, (item.inner ?? []).map((x) => x.id)]] : []))).toEqual([[2, [8]]]);
+  test("what one colleague asks in a row is one line where it came; another colleague, a turn or a day apart is another", () => {
+    const asked = (id: number, when: string, peer: number) => turn(id, when, { route: "exchange", source: "member", scope: "exchange", peer_id: peer });
+    const items = threadItems([
+      asked(9, "2026-10-20T10:00:00+08:00", 1),
+      turn(8, "2026-10-20T09:30:00+08:00"),
+      asked(7, "2026-10-20T09:20:00+08:00", 3),
+      asked(6, "2026-10-20T09:10:00+08:00", 1),
+      asked(5, "2026-10-20T09:05:00+08:00", 1),
+      asked(4, "2026-10-19T09:05:00+08:00", 1),
+    ], now);
+    const lines = items.flatMap((item): (number | number[])[] => item.kind === "exchange" ? [item.turns.map((x) => x.id)] : item.kind === "turn" ? [item.turn.id] : []);
+    expect(lines).toEqual([[4], [5, 6], [7], 8, [9]]);
+    expect(items.filter((item) => item.kind === "exchange").map((item) => item.key)).toEqual(["exchange:4", "exchange:5", "exchange:7", "exchange:9"]);
   });
 
   test("a turn from a core that keeps no source is a spoken one", () => {

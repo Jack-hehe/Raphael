@@ -377,23 +377,19 @@ describe("停止", () => {
 const LOOK: TurnLook = { face: (loop) => `<i class="face${loop ? " loop" : ""}"></i>` };
 
 describe("a turn", () => {
-  test("a request handed to the background by a member is one exchange line, named for whoever asked", () => {
-    const delegate = turn(8, { route: "delegate", source: "member", prefix: "", member_id: 4, peer_id: 3, question: "整理報告", text: "我交給背景處理了" });
-    const look: TurnLook = { ...LOOK, memberName: (id) => (id === 3 ? "小幫手" : "拉斐爾"), memberFace: () => "<i></i>" };
-    const html = turnHTML(delegate, emptyTimelineState(), false, look);
-    expect(html).toContain('class="tn tn-x"');
-    expect(html).toContain("<b>小幫手</b>");
-    expect(html).not.toContain('class="bubble"');
-  });
-
-  test("the same turn with no one named says no name and no dangling colon, and is no broken row", () => {
-    const delegate = turn(8, { route: "delegate", source: "member", prefix: "", member_id: 4, peer_id: null, question: "整理報告", text: "我交給背景處理了" });
-    const look: TurnLook = { ...LOOK, memberName: () => "拉斐爾", memberFace: () => "<i></i>" };
-    const html = turnHTML(delegate, emptyTimelineState(), false, look);
-    expect(html).toContain('class="tn tn-x"');
-    expect(html).not.toContain("<b>");
-    expect(html).not.toContain("拉斐爾");
-    expect(html).toContain("<span>2 則訊息往來</span>");
+  test("a question asked of a colleague is one 已詢問 line naming the colleague, opening on the question and its answer", () => {
+    const asked = { task_id: null, source_turn_id: 5, work_turn_id: 9, member_id: 0, member_name: "", from_member_id: 4,
+      stage_id: "", mode: "consult" as const, state: "done", reason: null, created_at_ms: T0, ready_at_ms: T0,
+      dispatch_policy: "immediate" as const, result: "新品代號是 NX-1。", request: "新品代號是什麼？", evidence: [] };
+    const look: TurnLook = { ...LOOK, memberName: (id) => (id === 4 ? "PM" : "拉斐爾"), memberFace: () => "<i></i>" };
+    const html = turnHTML(turn(5, { handoffs: [asked] }), emptyTimelineState(), false, look);
+    expect(html).toContain('data-handoff="x9"');
+    expect(visible(html.slice(html.indexOf("<summary>"), html.indexOf("</summary>")))).toContain("已詢問 拉斐爾");
+    const detail = visible(html.slice(html.indexOf('class="handoff-detail"')));
+    expect(detail).toContain("PM");
+    expect(detail).toContain("新品代號是什麼？");
+    expect(detail).toContain("新品代號是 NX-1。");
+    expect(detail).not.toContain("主人");
   });
 
   test("the person on the right without 「」 with where and when; Raphael on the left with his face and plain words", () => {

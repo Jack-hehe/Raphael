@@ -4,6 +4,7 @@ import type { Messages } from './zh-TW';
 
 export const ja = {
   "handoff.forwarded": "{p0} に引き継ぎました", "handoff.asked": "{p0} に確認しました",
+  "exchange.from": "{p0} からのメッセージ", "exchange.count": "{p1} との {p0} 件のやりとり",
   "handoff.queued": "待機中", "handoff.running": "実行中", "handoff.waiting": "結果待ち",
   "handoff.missingArtifact": "必要な成果物がありません",
   "handoff.noAction": "検証済みの実行結果がありません",
@@ -1126,7 +1127,6 @@ export const ja = {
   "members.offerYes": "追加",
   "members.nameEmpty": "名前を入力してください",
   "members.nameTaken": "「{p0}」というメンバーはすでにいます",
-  "members.exchange": "{p0} 件のやりとり：",
   "members.routineLine": "定期タスク",
   "auto.new": "新規",
   "auto.newRoutine": "定期タスクを追加",

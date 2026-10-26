@@ -184,6 +184,10 @@
 .handoff-event > summary::-webkit-details-marker { display: none; }
 .handoff-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: fit-content; max-width: min(calc(560px + 160 * var(--pa-u)), 100%); margin: var(--sp-2) auto 0; padding: calc(10px + 4 * var(--pa-u)) calc(12px + 6 * var(--pa-u)); border-radius: var(--r-lg); background: var(--surface-2); font-size: var(--pa-fs-d); line-height: 1.6; color: var(--text-2); overflow-wrap: anywhere; }
 .handoff-detail > .message-quote { margin: 0; }
+/* What a colleague asked this member (exchange-line.ts): each question and answer under its speaker's name. */
+.exchange-detail { gap: var(--sp-3); }
+.exchange-message { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; user-select: text; }
+.exchange-message > b { font-size: var(--pa-sys); font-weight: 600; color: var(--text-3); }
 .handoff-files { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; }
 .handoff-files li { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; padding: var(--sp-1) var(--sp-2); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font-size: var(--fs-xs); }
 .au-room-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
