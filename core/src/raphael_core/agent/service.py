@@ -1125,7 +1125,8 @@ class AgentService:
                 continue
             allowed.append(item)
         began = time.perf_counter()
-        applied = self._memory.apply_said(allowed, 0, ask.speaker.id)
+        # A turn already written (every CLI call, a narrated one) is the note's provenance now.
+        applied = self._memory.apply_said(allowed, ask.turn_id or 0, ask.speaker.id)
         for _ in applied.written:
             ask.steps.append(self._step("tool", "memory_write", BUILTIN_SERVER, "ok", began, None))
         for _ in applied.deleted:
