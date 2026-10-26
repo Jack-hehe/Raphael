@@ -34,6 +34,7 @@ from ..brain import db
 from ..brain.openrouter import OpenRouterClient
 from ..brain.settings import DEFAULTS
 from ..brain.spend import SpendTracker
+from ..brain.textnorm import convert_leftover_simplified
 from ..paths import db_path
 from ..services.attachments import Attachment
 from ..worker.loop import Stop, ToolOutcome, WAITING
@@ -150,8 +151,10 @@ class Recorder:
 
 
 # Words only the mainland writes, where Taiwan has its own: 影片, 軟體, 硬體, 螢幕, 滑鼠, 預設, 網路, 伺服器, 資料庫,
-# 資料夾, 部落格, 連結.
-_MAINLAND_WORDS = re.compile("視頻|軟件|硬件|屏幕|鼠標|默認|網絡|服務器|數據庫|文件夾|博客|鏈接")
+# 資料夾, 部落格, 連結; and 以後, 之後, 然後, 最後, 後來, 裡面, 那裡, 哪裡, which the character check misses
+# because Traditional has 后 and 里 too.
+_MAINLAND_WORDS = re.compile("視頻|軟件|硬件|屏幕|鼠標|默認|網絡|服務器|數據庫|文件夾|博客|鏈接|"
+                             "以后|之后|然后|最后|后来|里面|那里|哪里")
 
 
 def check_reply(text, scenario):
@@ -164,12 +167,10 @@ def check_reply(text, scenario):
     prose = re.sub(r"\b(?:Raphael|OpenRouter|OpenAI|Codex|Claude|Gemini|Antigravity|GitHub|Telegram|Google|Notion|MCP|PDF|CLI|HTML|YES|NO)\b", "", prose, flags=re.I)
     if re.search(r"\b[A-Za-z]{2,}(?:[ ,.;:]+[A-Za-z]{2,}){2}", prose):
         reasons.append("english_sentence_in_zh_TW_reply")
-    from opencc import OpenCC
-    # Taiwan writing is Traditional characters (台 and 臺 alike) without the mainland's unmistakable words.
-    # OpenCC's Taiwan phrases are not a test of it: live they rewrote Taiwan's own 權限, 主要窗口, 代碼,
-    # 項目, 登錄 and 對象 as other words, failing correct replies four times in one night.
-    traditional = text.replace("臺", "台")
-    if OpenCC("s2tw").convert(traditional).replace("臺", "台") != traditional or _MAINLAND_WORDS.search(text):
+    # Taiwan writing is what the app itself leaves as it is (台 and 臺 alike), without the mainland's unmistakable
+    # words. OpenCC alone is no test of it: it takes its input for Simplified and rewrote Taiwan's own 了解, 權限,
+    # 主要窗口, 代碼, 項目, 登錄 and 對象 live, failing correct replies.
+    if convert_leftover_simplified(text) != text or _MAINLAND_WORDS.search(text):
         reasons.append("reply_not_traditional_Taiwan")
     if re.search(r'\{\s*"|```\s*json|"(?:progress|thinking|tool_calls)"\s*:', text):
         reasons.append("raw_json_reply")

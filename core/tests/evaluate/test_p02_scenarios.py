@@ -39,9 +39,11 @@ def test_a_removed_app_is_stale_only_when_a_reply_still_calls_it_on():
 
 def test_taiwan_writing_is_traditional_characters_without_mainland_words():
     # Live, OpenCC's Taiwan phrases failed Taiwan's own 項目 (items), 登錄 (registered) and 對象 (the person handed to).
-    for written in ('核對完成項目，目前沒有已登錄的應用程式。', '已要求每位回應前一位並標註交棒對象。'):
+    # Even OpenCC's plain phrases rewrote 了解 (瞭解), 干擾 (幹擾) and 准許 (準許), failing Codex's S12 live.
+    for written in ('核對完成項目，目前沒有已登錄的應用程式。', '已要求每位回應前一位並標註交棒對象。',
+                    '了解，你週五要看的房子編號是 PV-3fb813520ede。', '這會干擾排程，准許後再做。'):
         assert not check_reply(written, Scenario('owner-view', '')), written
-    for written in ('核对完成项目。', '請看這段視頻，再更新軟件。'):
+    for written in ('核对完成项目。', '請看這段視頻，再更新軟件。', '我們以后再看。', '資料放在里面。', '這個網站裏有說明。'):
         assert 'reply_not_traditional_Taiwan' in check_reply(written, Scenario('owner-view', '')), written
 
 
