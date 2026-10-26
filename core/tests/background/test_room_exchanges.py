@@ -50,6 +50,8 @@ async def test_api_room_team_hands_off_and_wraps_up_through_shared_worker(make_r
             "### Conclusion", "Test first.", "### Owner decision", "The release date.", "### Next steps",
             "Alice owns testing; Bob owns rollout."]
         assert len(rig.client.chat_calls) == 5 and not rig.client.replies and rig.reports() == []
+        # Live, wrap-ups re-read the mail and even handed work off again: a conclusion only sums up.
+        assert rig.client.chat_calls[4]["tools"] == [] and rig.client.chat_calls[3]["tools"]
         assert "PRECISE-PLANNER" in rig.client.chat_calls[1]["messages"][0]["content"]
         assert "CAUTIOUS-ENGINEER" in rig.client.chat_calls[2]["messages"][0]["content"]
         assert "I disagree: test first" in str(rig.client.chat_calls[3]["messages"])

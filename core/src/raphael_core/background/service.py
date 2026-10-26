@@ -114,7 +114,7 @@ from .brief import BRIEF_WINDOW_MS, TaskBrief, ToolUse
 from .host import WorkerCrashed, WorkerHost, WorkerStopped, WorkerUnavailable
 from .run import NOT_MADE_WHILE_WAITING, MemoryReader, RunLimits, TaskRun, Waiting
 from ..agent.toolpick import ToolPicker
-from .snapshot import BUILTIN_SERVER, refine, take_snapshot
+from .snapshot import BUILTIN_SERVER, Snapshot, refine, take_snapshot
 from .tasks import FINAL_STATES, QUEUED, RUNNING, WAITING, Question, Refused, Step, Task, TaskStore
 
 logger = logging.getLogger(__name__)
@@ -974,6 +974,10 @@ class BackgroundService:
             team=team,
             turned_off=self._tools.turned_off(),
         )
+        if task.scope == "room" and self._metrics_conn.execute(
+                "SELECT 1 FROM room_messages WHERE turn_id=? AND kind='wrapup'", (task.turn_id,)).fetchone():
+            # A wrap-up only sums up what was delivered: live, wrap-ups re-read mail and handed work off again.
+            snapshot = Snapshot({}, [])
         # With more tools than fit, the task is shown the ones it needs, not the first few.
         if not room_cli:
             await refine(snapshot, self._picker, task.text, context, model=model, ledger=ledger)
