@@ -301,7 +301,7 @@ async def cell(model, member, scenario, *, brains, client, sessions, conn, budge
 
 
 async def run(models, output, *, max_turns=200, seconds=90, brains=None, client=None, api_only=False):
-    if not 1 <= max_turns <= HARD_TURNS or not 1 <= seconds <= 300:
+    if not 1 <= max_turns <= HARD_TURNS or not 1 <= seconds <= 900:
         raise ValueError("invalid_budget")
     output.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix="run-", dir=output))

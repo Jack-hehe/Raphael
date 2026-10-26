@@ -453,10 +453,12 @@ class RpcDriver:
     async def meeting_scenario(self):
         ids = await self.seed_team()
         selected = [0, ids[0], *ids[2:]]
-        prompt = ('請為行銷、HiKari、PM、RD 開真正的行銷會議，包含拉斐爾，不需要信件助理。'
-                  '用 room_meeting，讓 PM 主持兩輪、行銷正方、RD 反方。議題代碼：' + self.nonce +
-                  '。每位必須回應前一人的論點；同事使用有效 @ 交棒至少四次並跨過第六輪，最後停止點名，'
-                  '由拉斐爾在所有回覆完成後整理決策與具名負責人。')
+        # An owner's request with a real topic: a code-only agenda left the members nothing to discuss.
+        prompt = ('請開會討論「新款保溫瓶上架後兩週的行銷計畫」（議題代碼 ' + self.nonce + '）。'
+                  '預算新台幣 5 萬元，目標是兩週內 300 筆預購。邀行銷、HiKari、PM、RD，不需要信件助理。'
+                  '請 PM 主持兩輪：行銷是正方，主張先投放廣告；RD 是反方，主張先做小規模測試；'
+                  'HiKari 從社群內容補充。每位回應前一位的論點，並 @ 你要交棒的同事。'
+                  '最後由拉斐爾整理決策和每項工作的負責人。')
         result = await self.ask(prompt)
         reasons = []
         rooms = (await self.app.call('rooms.list'))['rooms']

@@ -166,7 +166,7 @@ async def run_cell(cell, brain, model, directory, *, client, brains, budget, sec
 
 async def run(pair, output, *, max_turns=200, seconds=90, client=None, brains=None,
               api_only=False, registry=None, mapping=None, catalog=(), head=None, include_legacy=True, servers=()):
-    if set(pair) != set(BRAINS) or not 1 <= max_turns <= HARD_TURNS or not 1 <= seconds <= 300:
+    if set(pair) != set(BRAINS) or not 1 <= max_turns <= HARD_TURNS or not 1 <= seconds <= 900:
         raise ValueError("invalid_suite_config")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
