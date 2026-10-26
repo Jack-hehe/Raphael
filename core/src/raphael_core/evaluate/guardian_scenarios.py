@@ -72,7 +72,7 @@ def cells(registry=(), catalog=(), *, servers=()):
         SCENARIOS[7].assertions, 'P03a/P04', 'meeting-actions'))
     # The Gmail half of S14; Instagram publishing (P08d) keeps the parent cell open.
     result.append(ScenarioCell('S14.gmail', 'Connect Gmail in chat (P08a scope)',
-        '請用 Gmail 找出主旨含本次代號的測試信，告訴我信裡的確認碼；Gmail 還沒連接就先在這裡給我連接卡片。',
+        '請用 Gmail 找出主旨含本次代號的測試信，告訴我信裡的確認碼。',
         SCENARIOS[13].assertions, 'P08a', 'connect-gmail'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,

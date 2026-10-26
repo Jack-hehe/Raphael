@@ -783,8 +783,8 @@ class RpcDriver:
         self.app.connectors.open_browser = google.browser
         self.recorder.production = self.production_connector
         await self.app.call("connectors.google.configure", {"client_id": CLIENT_ID, "gmail": "read", "calendar": "read"})
-        asked = await self.ask(f"請用 Gmail 找出主旨含 {self.nonce} 的測試信，告訴我信裡的確認碼。"
-                               "Gmail 還沒連接就先在這裡給我連接卡片，連好後再繼續。", member=mail)
+        # The owner's plain words, as L42 asks it: the card must come from the brain, not from the request.
+        asked = await self.ask(f"請用 Gmail 找出主旨含 {self.nonce} 的測試信，告訴我信裡的確認碼。", member=mail)
 
         async def turn(turn_id):
             turns = (await self.app.call("agent.history.list", {"member_id": mail}))["turns"]
