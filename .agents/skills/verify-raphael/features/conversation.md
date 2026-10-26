@@ -47,6 +47,17 @@ external-editor correction tracking and persistence still require isolated nativ
 
 ## Gotchas
 
+Typed requests run independently per request id, including different conversations of
+one member, while the voice slot owns microphone and overlay priority. A queued typed
+YES/NO card opens in its conversation immediately; either the card or overlay can answer
+first, and the question follows foreground focus once voice releases the overlay.
+The existing `admin-approval` look scene now opens a second member question through the
+native event boundary, visits that member, then returns to Raphael and requires his original
+approval card. Window cards retain independent ids across members and conversations.
+
+Typed progress never goes to the overlay. See `DICTATION-NOTES.md` for native concurrency,
+Esc, spoken-question and paste-last acceptance; browser fixtures cannot prove these.
+
 Collapsed work contains hidden `.chat-message` elements before the visible reply.
 Answer scenes target `.chat-message[data-expandable]`; the driver chooses a visible
 match. The title reflects the details panel with aria-expanded; opening rooms preserves

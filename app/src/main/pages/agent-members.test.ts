@@ -682,6 +682,26 @@ describe("a member's thread", () => {
     expect($(".ask-card").hidden).toBe(false);
   });
 
+  test("concurrent members keep their own approval cards and closed questions stay closed", async () => {
+    const agent = mount(); await flush();
+    send({ type: "AgentQuestion", id: "raphael", member_id: 0, prefix: "問", text: "儲存摘要？", tier: "T2", timeout_ms: 60_000 });
+    send({ type: "AgentQuestion", id: "teacher", member_id: 3, prefix: "問", text: "開始練習？", tier: "T2", timeout_ms: 60_000 });
+    expect($(".ask-q").textContent).toContain("儲存摘要？");
+    await pick(3);
+    expect($(".ask-q").textContent).toBe("開始練習？");
+    await pick(4);
+    expect($(".ask-card").hidden).toBe(true);
+    send({ type: "AgentQuestionClosed", id: "teacher" });
+    await pick(0);
+    expect($(".ask-card").hidden).toBe(false);
+    expect($(".ask-q").textContent).toContain("儲存摘要？");
+    agent.hide(); agent.show(); await flush();
+    expect($(".ask-card").hidden).toBe(false);
+    await pick(3);
+    expect($(".ask-card").hidden).toBe(true);
+    agent.hide();
+  });
+
   test("a turn of another thread reads the list again, not the open thread", async () => {
     vi.useFakeTimers();
     mount();

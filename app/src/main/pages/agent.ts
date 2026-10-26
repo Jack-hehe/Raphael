@@ -493,6 +493,8 @@ export function createAgent(app: AppContext): Page {
   const fileChips = new Map<number, HTMLElement>();
   /** The YES/NO question that waits for an answer, and whether an answer is on its way. */
   let question: AgentQuestion | null = null;
+  const questions = new Map<string, { prompt: AgentQuestion; owner: number }>();
+  const answeringQuestions = new Set<string>();
   let answering = false;
   /** The member a typed question is on its way to, while it is: a question it asks is its thread's. */
   let askingMember: number | null = null;
@@ -531,8 +533,18 @@ export function createAgent(app: AppContext): Page {
    * does not move it.
    */
   function setQuestion(next: AgentQuestion | null): void {
-    if (next !== null && next.id !== question?.id) questionOwner = next.member_id ?? askingMember ?? RAPHAEL_ID;
-    question = next;
+    if (next) questions.set(next.id, { prompt: next, owner: next.member_id ?? questions.get(next.id)?.owner ?? askingMember ?? RAPHAEL_ID });
+    else if (question) { questions.delete(question.id); answeringQuestions.delete(question.id); }
+    selectQuestion();
+  }
+
+  /** Keep other conversations' cards while selecting the question this thread can answer. */
+  function selectQuestion(): void {
+    const selected = [...questions.values()].find(({ prompt, owner }) => owner === memberId() &&
+      (prompt.conversation_id !== undefined ? prompt.conversation_id === conversationId() : conversationCache.get(memberId())?.find(c => c.id === conversationId())?.is_default !== 0));
+    question = selected?.prompt ?? null;
+    answering = question !== null && answeringQuestions.has(question.id);
+    questionOwner = selected?.owner ?? RAPHAEL_ID;
   }
 
   const voice = new VoiceMode({
@@ -662,13 +674,13 @@ export function createAgent(app: AppContext): Page {
 
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
+    selectQuestion();
     const home = empty.hidden ? dock : slot;
     if (backgroundSlot.parentElement !== home) home.prepend(backgroundSlot);
     if (composer.parentElement !== home) home.append(composer);
     if (!quotaHost.hidden && quotaHost.nextElementSibling !== composer) home.insertBefore(quotaHost, composer);
     if (!problemNotice.el.hidden) home.insertBefore(problemNotice.el, composer);
-    const asking = question !== null && questionOwner === memberId() &&
-      (question.conversation_id !== undefined ? question.conversation_id === conversationId() : conversationCache.get(memberId())?.find(c => c.id === conversationId())?.is_default !== 0);
+    const asking = question !== null;
     const waitingTurn = [...turns].reverse().find((turn) => turn.status === "confirm");
     const inline = asking && waitingTurn ? thread.querySelector<HTMLElement>(`[data-question-turn="${waitingTurn.id}"]`) : null;
     const cardHome = inline ?? home;
@@ -698,8 +710,7 @@ export function createAgent(app: AppContext): Page {
     // a member asks in plain words, Raphael in his 《prefix。》
     askText.textContent = inRaphael() ? replyLine(q.prefix, q.text) : q.text;
     drawAskLabels();
-    answering = false;
-    noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
+    noButton.disabled = alwaysButton.disabled = yesButton.disabled = answering;
     yesButton.dataset.hold = "idle";
   }
 
@@ -1181,6 +1192,8 @@ export function createAgent(app: AppContext): Page {
   async function answer(approved: boolean, always = false, editedDrafts?: MemberDraft[]): Promise<void> {
     if (!question || answering) return;
     if (always && !question.always) return;
+    const id = question.id;
+    answeringQuestions.add(id);
     answering = true;
     noButton.disabled = alwaysButton.disabled = yesButton.disabled = true;
     try {
@@ -1191,9 +1204,12 @@ export function createAgent(app: AppContext): Page {
           ? api.agentQuestionAnswer(question.id, true, true)
           : api.agentQuestionAnswer(question.id, approved));
     } catch (err) {
-      answering = false;
-      noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
-      if (hasDrafts(question)) draftPanel.sync(question, false);
+      answeringQuestions.delete(id);
+      if (question?.id === id) {
+        answering = false;
+        noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
+        if (hasDrafts(question)) draftPanel.sync(question, false);
+      }
       toaster.info(describeError(err));
     }
   }
@@ -1904,10 +1920,9 @@ export function createAgent(app: AppContext): Page {
       drawDock();
       if (visible) members.changed();
     } else if (event.type === "AgentQuestionClosed") {
-      if (question?.id === event.id) {
-        setQuestion(null);
-        drawDock();
-      }
+      questions.delete(event.id);
+      answeringQuestions.delete(event.id);
+      drawDock();
       if (visible) members.changed();
     } else if (event.type === "VoiceLevel") {
       voice.level(event.value);
@@ -2008,7 +2023,7 @@ export function createAgent(app: AppContext): Page {
       void api
         .agentQuestionOpen()
         .then((open) => {
-          setQuestion(open && openQuestion(open));
+          if (open) setQuestion(openQuestion(open));
           drawDock();
           refocus();
         })

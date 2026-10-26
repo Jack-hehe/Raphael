@@ -7,7 +7,7 @@ import { Cleared } from "../cleared";
 import { closeMenu } from "../ui";
 import { setLocale } from "../i18n";
 import { ico } from "../ui";
-import type { AppContext } from "../types";
+import type { AppContext, MainEvent } from "../types";
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); vi.useRealTimers(); });
 
@@ -85,6 +85,26 @@ test("switching conversations scopes history, quotes the entire answer and sends
   expect(document.querySelector('[data-pick="speak"]')).not.toBeNull();
   document.querySelector<HTMLButtonElement>('[data-pick="speak"]')!.click(); await flush();
   expect(api.core).toHaveBeenCalledWith("agent.speak", { member_id: 0, conversation_id: 2, turn_id: 2 });
+  page.hide();
+});
+
+test("two conversations of one member retain independent approval cards", async () => {
+  api.agentQuestionOpen.mockResolvedValue(null);
+  api.agentHistoryList.mockResolvedValue({ turns: [] });
+  const conversations = [{ id: 1, member_id: 0, title: "Main", is_default: 1 }, { id: 2, member_id: 0, title: "Research", is_default: 0 }];
+  api.core.mockImplementation(async method => method === "conversations.list" ? { conversations } : method === "background.questions.list" ? { questions: [] } : {});
+  let emit: (event: MainEvent) => void = () => {};
+  const page = createAgent({ go() {}, device: () => ({}), onEvent(handler: typeof emit) { emit = handler; return () => {}; }, undo: { begin() {} }, cleared: new Cleared() } as unknown as AppContext);
+  document.body.append(page.el); page.show(); await flush();
+  for (const id of [1, 2]) emit({ type: "AgentQuestion", id: `q-${id}`, member_id: 0, conversation_id: id, text: `儲存摘要 ${id}？`, prefix: "問", tier: "T2", timeout_ms: 60_000 });
+  expect(page.el.querySelector<HTMLElement>(".ask-card")!.dataset.id).toBe("q-1");
+  if (page.el.querySelector(".conversation-trigger")!.getAttribute("aria-expanded") !== "true") page.el.querySelector<HTMLButtonElement>(".conversation-trigger")!.click(); await flush();
+  document.querySelector<HTMLButtonElement>('.mb-det [data-conversation-open="2"]')!.click(); await flush();
+  expect(page.el.querySelector<HTMLElement>(".ask-card")!.dataset.id).toBe("q-2");
+  emit({ type: "AgentQuestionClosed", id: "q-1" });
+  expect(page.el.querySelector<HTMLElement>(".ask-card")!.dataset.id).toBe("q-2");
+  document.querySelector<HTMLButtonElement>('.mb-det [data-conversation-open="1"]')!.click(); await flush();
+  expect(page.el.querySelector<HTMLElement>(".ask-card")!.hidden).toBe(true);
   page.hide();
 });
 

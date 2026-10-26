@@ -19,7 +19,12 @@ export default [
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
   scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),
-  scene("admin-approval", "Raphael asks before creating a member", [wait('.ask-card:not([hidden])'), check("admin-approval")], { adminApproval: "create" }),
+  scene("admin-approval", "Raphael's approval survives a concurrent member question", [
+    wait('.ask-card:not([hidden])'),
+    { action: "main-event", event: { type: "AgentQuestion", id: "concurrent-member", member_id: 1, prefix: "問", text: "要儲存研究摘要嗎？", tier: "T2", timeout_ms: 30_000 } },
+    member(1), wait('.ask-card[data-id="concurrent-member"]:not([hidden])'),
+    member(0), wait('.ask-card:not([data-id="concurrent-member"]):not([hidden])'), check("admin-approval"),
+  ], { adminApproval: "create" }),
   scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
   scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
   scene("admin-delete-approval", "Deleting a member always requires held approval", [wait('.ask-card[data-tier="T3"]:not([hidden])'), check("admin-approval")], { adminApproval: "delete" }),

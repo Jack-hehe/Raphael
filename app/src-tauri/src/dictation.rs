@@ -9,7 +9,9 @@
 //! has its own session id; a result for a session that is no longer the current one (cancelled,
 //! or the core restarted meanwhile) is dropped.
 //!
-//! There are two kinds of session, and only one at a time:
+//! The voice slot owns the microphone and overlay, with only one voice session at a time.
+//! Typed turns have independent session states keyed by request id and never occupy that slot.
+//! There are two kinds of voice session:
 //!
 //! - **Dictation** (the dictation keys): the text is cleaned up and pasted.
 //! - **Agent** (the agent keys, `Right Alt+Space`): the recording is a question for Raphael, who
@@ -60,13 +62,22 @@
 //!   session, so whatever begins next replaces it.
 //!
 //! The main window takes part in two ways ([`Desk`]). A question typed in its composer
-//! ([`DictationController::ask_typed_with`]) is an agent session without a recording: it goes to
+//! ([`DictationController::ask_typed_with`]) is an independent agent turn without a recording: it goes to
 //! `agent.ask` with the source `app` and on from there as a spoken one does, the overlay showing the
 //! answer and any YES/NO question only once the person has left the window (see below), and never
 //! the reports of the wait (the window shows its own). And
 //! the YES/NO question on screen is the window's too: it hears of every question that opens and
 //! closes ([`QuestionNews`]), and its card answers through [`DictationController::on_answer`]
 //! as the overlay's buttons do. Whichever answers first wins; the other finds nothing to answer.
+//! Multiple typed turns may run concurrently, including in different conversations of one member.
+//! They never block dictation, spoken questions or paste-last. Esc targets the voice slot first;
+//! while it is idle, Esc targets the typed turn on the overlay, or the first active typed turn.
+//! Typed progress never reaches the overlay. A typed YES/NO question opens its window card at
+//! once, but waits for the overlay while a voice session or another typed question owns it.
+//! Its original deadline keeps running; either card may answer it even while queued. Once the
+//! overlay is free, polling shows the question with its remaining time. Starting voice revokes
+//! typed overlay ownership without cancelling the turn. Late answers, failures and playback
+//! completion cannot hide or replace a voice overlay; failure notices wait until it is free.
 //!
 //! The overlay is for a question asked from elsewhere. While the main window is in front with the
 //! 拉斐爾 page on screen ([`AppFront`]), that page shows the question itself: its voice mode while
@@ -85,6 +96,7 @@
 //! [`spawn`] builds the controller from the app state and runs it in a task that listens to the
 //! hotkeys, the core's notifications and the overlay's buttons.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -264,8 +276,7 @@ pub enum QuestionNews {
 /// Told of every YES/NO question that opens or closes (see [`QuestionNews`]).
 pub type QuestionReport = Arc<dyn Fn(QuestionNews) + Send + Sync>;
 
-/// Why a typed question was not taken: something else is under way (a recording, or another
-/// question that has not been answered yet).
+/// Why a typed question was not taken: its request id is already active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Busy;
 
@@ -350,6 +361,8 @@ struct State {
     on_overlay: bool,
 }
 
+type TypedTurns = Arc<Mutex<BTreeMap<String, Arc<Mutex<State>>>>>;
+
 impl State {
     fn kind(&self) -> Option<Kind> {
         self.session.as_ref().map(|session| session.kind)
@@ -410,6 +423,13 @@ pub struct DictationController<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSw
     /// The language of every notice the controller shows.
     language: LanguageCell,
     state: Arc<Mutex<State>>,
+    /// Typed turns reuse the conversation lifecycle with their own state, never the voice slot.
+    typed: TypedTurns,
+    /// Present only in a typed turn's context; the root state owns microphone and overlay priority.
+    voice: Option<Arc<Mutex<State>>>,
+    /// Esc stays registered while any turn or recording needs it. Each context owns one entry.
+    cancel_owners: Arc<Mutex<BTreeSet<(bool, String)>>>,
+    cancel_owner: String,
     /// Serializes state transitions with their overlay calls, so that the calls of one cannot come
     /// between those of another. A quick look at the state (is this session still the current
     /// one?) takes only `state`, which is never held across an overlay call.
@@ -438,6 +458,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Clone
             mode: self.mode.clone(),
             language: self.language.clone(),
             state: self.state.clone(),
+            typed: self.typed.clone(),
+            voice: self.voice.clone(),
+            cancel_owners: self.cancel_owners.clone(),
+            cancel_owner: self.cancel_owner.clone(),
             transitions: self.transitions.clone(),
             after_paste: self.after_paste.clone(),
             phase_report: self.phase_report.clone(),
@@ -483,6 +507,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 on_overlay: false,
             })),
             transitions: Arc::new(Mutex::new(())),
+            typed: Arc::new(Mutex::new(BTreeMap::new())),
+            voice: None,
+            cancel_owners: Arc::new(Mutex::new(BTreeSet::new())),
+            cancel_owner: String::new(),
             after_paste: None,
             phase_report: None,
             voice_level: None,
@@ -514,9 +542,94 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             return false;
         }
+        if !self.overlay_available() {
+            return false;
+        }
+        self.claim_typed_overlay();
         lock(&self.state).on_overlay = true;
         call(&self.overlay);
         true
+    }
+
+    /// Snapshot before locking turn states: never hold the registry over a state/window call.
+    fn typed_contexts(&self) -> Vec<Self> {
+        let turns: Vec<_> = lock(&self.typed)
+            .iter()
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect();
+        turns
+            .into_iter()
+            .map(|(id, state)| {
+                let mut turn = self.clone();
+                turn.voice = Some(self.voice.as_ref().unwrap_or(&self.state).clone());
+                turn.state = state;
+                turn.cancel_owner = id;
+                turn
+            })
+            .collect()
+    }
+
+    fn set_cancel(&self, on: bool) {
+        let mut owners = lock(&self.cancel_owners);
+        let owner = (self.voice.is_some(), self.cancel_owner.clone());
+        if on {
+            owners.insert(owner);
+        } else {
+            owners.remove(&owner);
+        }
+        self.cancel.set(!owners.is_empty());
+    }
+
+    /// Called with transitions held. Voice always has priority; typed questions share the free
+    /// overlay one at a time.
+    fn overlay_available(&self) -> bool {
+        let Some(voice) = &self.voice else {
+            return true;
+        };
+        if lock(voice).phase != Phase::Idle {
+            return false;
+        }
+        let others: Vec<_> = self
+            .typed_contexts()
+            .into_iter()
+            .filter(|turn| turn.cancel_owner != self.cancel_owner)
+            .collect();
+        if others.iter().any(|turn| {
+            let state = lock(&turn.state);
+            state.on_overlay && state.agent != Some(AgentStage::Speaking)
+        }) {
+            return false;
+        }
+        true
+    }
+
+    /// Replacing a typed reading answer revokes its later hide/release. Only a publication may
+    /// claim ownership; checking availability alone must not change another turn's ownership.
+    fn claim_typed_overlay(&self) {
+        if self.voice.is_some() {
+            for turn in self.typed_contexts() {
+                if turn.cancel_owner != self.cancel_owner {
+                    lock(&turn.state).on_overlay = false;
+                }
+            }
+        }
+    }
+
+    /// A recording replaces any typed overlay, but leaves every typed turn and question alive.
+    fn take_voice_overlay(&self) {
+        let mut shown = false;
+        for turn in self.typed_contexts() {
+            shown |= std::mem::replace(&mut lock(&turn.state).on_overlay, false);
+        }
+        if shown {
+            self.overlay.hide();
+        }
+    }
+
+    fn forget_typed(&self) {
+        if self.voice.is_some() {
+            lock(&self.typed).remove(&self.cancel_owner);
+        }
     }
 
     /// The controller, telling `report` where each session is.
@@ -628,7 +741,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             HotkeyEvent::Cancel => self.cancel_current(),
             HotkeyEvent::PasteLast => {
-                if lock(&self.state).agent == Some(AgentStage::Asking) {
+                if lock(&self.state).agent == Some(AgentStage::Asking)
+                    || (self.phase() == Phase::Idle
+                        && self
+                            .typed_contexts()
+                            .iter()
+                            .any(|turn| lock(&turn.state).agent == Some(AgentStage::Asking)))
+                {
                     // Like the other keys: while a question waits for its answer, nothing else
                     // may put a report or a paste in its way.
                     log::debug!("paste-last key ignored: Raphael is asking");
@@ -675,6 +794,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let Some(session) = params.get("session_id").and_then(Value::as_str) else { return; };
         let Some(text) = params.get("text").and_then(Value::as_str).filter(|text| !text.trim().is_empty()) else { return; };
         let language = params.get("language").and_then(Value::as_str).unwrap_or("zh-TW");
+        let _transition = lock(&self.transitions);
         if self.is_current(session) && lock(&self.state).agent == Some(AgentStage::Thinking) {
             self.question_on_overlay(|overlay| overlay.step(text, language));
         }
@@ -683,6 +803,11 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// A terminal playback notification can precede the RPC reply. Correlate only by
     /// turn id: a preview without one, or an old turn, cannot dismiss a new answer.
     fn on_speech_state(&self, params: &Value) {
+        if self.voice.is_none() {
+            for turn in self.typed_contexts() {
+                turn.on_speech_state(params);
+            }
+        }
         if params.get("state").and_then(Value::as_str) != Some("done") {
             return;
         }
@@ -797,11 +922,20 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// unvoiced answer stays as well; a held voiced answer is released because playback is lost.
     fn reset(&self) {
         let _transition = lock(&self.transitions);
+        for turn in self.typed_contexts() {
+            let shown = lock(&turn.state).on_overlay;
+            lock(&turn.state).go_idle();
+            turn.set_cancel(false);
+            turn.forget_typed();
+            if shown && self.phase() == Phase::Idle {
+                self.overlay.hide();
+            }
+        }
         let (was, stage, held) = {
             let mut state = lock(&self.state);
             let before = (state.phase, state.agent, state.speaking_turn.is_some());
             state.go_idle();
-            self.cancel.set(false);
+            self.set_cancel(false);
             before
         };
         if was != Phase::Idle {
@@ -856,12 +990,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             // The emblem of a dictation that a question takes over is the question's now.
             state.on_overlay = kind == Kind::Agent && replaced.is_some();
             state.started_ms = now_ms;
-            self.cancel.set(true);
+            self.set_cancel(true);
             // A recording that takes another over is the same recording, and already holds the
             // media: nothing is paused twice, and nothing is played in between.
             state.media.begin();
             replaced
         };
+        self.take_voice_overlay();
         if let Some(hook) = &self.after_paste {
             hook.dictation_started();
         }
@@ -1057,7 +1192,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// listening, transcribing, thinking, confirming or being shown. Only a YES/NO question on
     /// screen is different: Esc answers NO, and the turn goes on with the denial.
     fn cancel_current(&self) -> Option<JoinHandle<()>> {
-        let (session, stage) = {
+        if self.voice.is_none() && self.phase() == Phase::Idle {
+            let turns = self.typed_contexts();
+            if let Some(turn) = turns
+                .iter()
+                .find(|turn| lock(&turn.state).on_overlay)
+                .or_else(|| turns.first())
+            {
+                return turn.cancel_current();
+            }
+        }
+        let (session, stage, shown) = {
             let mut state = lock(&self.state);
             if state.phase == Phase::Idle {
                 return None;
@@ -1073,9 +1218,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 }
                 return None;
             }
+            let shown = state.on_overlay;
             let session = state.go_idle();
-            self.cancel.set(false);
-            (session, stage)
+            self.set_cancel(false);
+            (session, stage, shown)
         };
         log::info!(
             "{}: cancelled",
@@ -1085,7 +1231,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 "dictation"
             }
         );
-        self.overlay.hide();
+        if self.voice.is_none() || shown {
+            self.overlay.hide();
+        }
+        self.forget_typed();
         self.tell(DictationPhase::Cancelled, stage.is_some());
         let session = session?;
         let core = self.core.clone();
@@ -1119,7 +1268,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 && state.kind() == Some(Kind::Dictation)
                 && now_ms.saturating_sub(state.started_ms) < CHORD_CANCELS_WITHIN_MS;
             if fresh {
-                self.cancel.set(false);
+                self.set_cancel(false);
                 state.go_idle()
             } else {
                 None
@@ -1269,6 +1418,22 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
 
     /// Shows `notice` in the interface language, and only in that one.
     fn show(&self, notice: Notice) {
+        if self.voice.is_some() && !self.overlay_available() {
+            let this = self.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(FRONT_POLL).await;
+                    let _transition = lock(&this.transitions);
+                    if this.overlay_available() {
+                        this.claim_typed_overlay();
+                        this.overlay.notice(notice.text(&this.language.get()));
+                        break;
+                    }
+                }
+            });
+            return;
+        }
+        self.claim_typed_overlay();
         self.overlay.notice(notice.text(&self.language.get()));
     }
 
@@ -1332,7 +1497,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // Under the lock, with the phase: a dictation started right after this one must not have
         // its cancel keys switched off by us. The switch is a flag (a channel send), so this
         // neither waits nor calls the overlay.
-        self.cancel.set(false);
+        self.set_cancel(false);
+        drop(state);
+        self.forget_typed();
         true
     }
 
@@ -1498,8 +1665,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// goes to `agent.ask` at once with the source [`TYPED_SOURCE`] and on from there as a spoken
     /// question does ([`Self::converse`]). The overlay shows its answer and any YES/NO question
     /// only when the 拉斐爾 page is no longer in front ([`AppFront`]), and never Raphael's reports
-    /// while he thinks: the window shows its own, and the window is where the person is. Esc
-    /// cancels it as it cancels a spoken one.
+    /// while he thinks: the window shows its own. Voice has overlay and Esc priority; a pending
+    /// typed confirmation waits for that overlay while remaining answerable from its window card.
     ///
     /// The images and PDFs the composer attached go to `agent.ask` as its `attachments`
     /// (`{name, mime, data}`, the bytes in base64), untouched, and only when there are some. The
@@ -1508,8 +1675,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// `member` is the member whose thread on the 拉斐爾 page it was typed in: it goes to
     /// `agent.ask` as `member_id`, and only when it is not 0 (Raphael, the core's default).
     ///
-    /// Refused ([`Busy`]) while a recording, a question or a dictation is under way; an answer that
-    /// is only being shown gives way, as it does to a key. Never logs the words. Returns the task
+    /// Refused ([`Busy`]) only for a duplicate active request id. Independent of recordings and
+    /// other typed turns, including other conversations of the same member. Never logs the words. Returns the task
     /// that runs the question, which ends when its turn is over.
     pub fn ask_typed_with(
         &self,
@@ -1537,15 +1704,28 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         replace_turn_id: Option<u64>, quote: Option<Value>, conversation_id: Option<u64>,
     ) -> Result<JoinHandle<()>, Busy> {
         let _transition = lock(&self.transitions);
-        self.end_speaking();
         let id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if lock(&self.typed).contains_key(&id) {
+            return Err(Busy);
+        }
+        // Reuse the same reply/confirmation machinery with an independent turn state.
+        let mut turn = Self::new(
+            self.core.clone(),
+            self.overlay.clone(),
+            self.paster.clone(),
+            self.cancel.clone(),
+            self.mode.clone(),
+        );
+        turn.transitions = self.transitions.clone();
+        turn.typed = self.typed.clone();
+        turn.voice = Some(self.state.clone());
+        turn.cancel_owners = self.cancel_owners.clone();
+        turn.cancel_owner = id.clone();
+        turn.language = self.language.clone();
+        turn.front = self.front.clone();
+        turn.phase_report = self.phase_report.clone();
         {
-            let mut state = lock(&self.state);
-            if state.phase != Phase::Idle {
-                log::info!("agent: a typed question is refused: something else is under way");
-                return Err(Busy);
-            }
-            // Nothing is recorded: the core has no dictation session to start, stop or cancel.
+            let mut state = lock(&turn.state);
             let (_, started) = watch::channel(Started::Yes);
             state.phase = Phase::Processing;
             state.session = Some(Session {
@@ -1555,10 +1735,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 started,
             });
             state.agent = Some(AgentStage::Thinking);
-            self.cancel.set(true);
+            state.questions = lock(&self.state).questions.clone();
         }
+        lock(&self.typed).insert(id.clone(), turn.state.clone());
+        turn.set_cancel(true);
         log::info!("agent: a typed question");
-        let (this, text) = (self.clone(), text.to_owned());
+        let (this, text) = (turn, text.to_owned());
         Ok(tokio::spawn(async move {
             this.converse(&id, &text, None, Some(TYPED_SOURCE), attachments, member, replace_turn_id, quote, conversation_id)
                 .await;
@@ -1696,13 +1878,13 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         // A member's answer is in its thread on the 拉斐爾 page, and it has no prefix: the overlay is
         // Raphael's alone. The turn is over, as when an answer has been on screen long enough.
         if member != 0 && reply.get("status").and_then(Value::as_str) == Some("done") {
-            if lock(&self.state).session.as_ref().is_some_and(|current| current.id == id) {
-                lock(&self.state).go_idle();
-                self.cancel.set(false);
-            }
+            let shown = lock(&self.state).on_overlay;
+            self.end_session(id);
             // A member's recording may have shown the shared listening overlay. Its answer
             // stays in the thread, so no answer overlay will replace that listening state.
-            self.overlay.hide();
+            if self.voice.is_none() || shown {
+                self.overlay.hide();
+            }
             return None;
         }
         let parsed = if may_ask {
@@ -1724,7 +1906,8 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
                 None
             }
             Ok(Reply::Ask(mut prompt)) => {
-                prompt.member_id = (member != 0).then_some(member);
+                // Typed Raphael turns must name member 0 too: another composer may now be active.
+                prompt.member_id = (self.voice.is_some() || member != 0).then_some(member);
                 prompt.conversation_id = reply.get("conversation_id").and_then(Value::as_u64).or(conversation_id);
                 let (answer, wait) = oneshot::channel();
                 {
@@ -1771,7 +1954,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let deadline = tokio::time::sleep(Duration::from_millis(prompt.timeout_ms));
         tokio::pin!(deadline);
         // Only a controller that can tell whether the 拉斐爾 page is in front follows it.
-        let mut front = self.front.is_some().then(|| {
+        let mut front = (self.front.is_some() || self.voice.is_some()).then(|| {
             let mut ticks = tokio::time::interval(FRONT_POLL);
             ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             ticks
@@ -1828,6 +2011,9 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// session is over. The answer still comes from either page, Esc or the clock.
     fn follow_front(&self, id: &str) {
         let _transition = lock(&self.transitions);
+        if !self.overlay_available() {
+            return;
+        }
         let in_front = self.app_shows_question();
         let prompt = {
             let mut state = lock(&self.state);
@@ -1853,6 +2039,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         match prompt {
             Some(prompt) => {
                 log::info!("agent: the window is left; the question goes to the overlay");
+                self.claim_typed_overlay();
                 self.overlay.ask(&prompt);
             }
             None => {
@@ -1905,6 +2092,18 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         always: bool,
         drafts: Option<Vec<Value>>,
     ) {
+        if self.voice.is_none() {
+            let turn = self.typed_contexts().into_iter().find(|turn| {
+                lock(&turn.state)
+                    .ask
+                    .as_ref()
+                    .is_some_and(|ask| ask.prompt.id == id)
+            });
+            if let Some(turn) = turn {
+                turn.confirm(id, approved, in_app, always, drafts);
+                return;
+            }
+        }
         let pending = {
             let mut state = lock(&self.state);
             let Some(ask) = state.ask.as_ref().filter(|ask| ask.prompt.id == id) else {
@@ -1941,7 +2140,17 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// The YES/NO question that waits for its answer now, if one does, with the time it has left
     /// as its `timeout_ms`.
     pub fn open_question(&self) -> Option<AskPrompt> {
-        lock(&self.state).ask.as_ref().map(PendingAsk::remaining)
+        let own = lock(&self.state).ask.as_ref().map(PendingAsk::remaining);
+        own.or_else(|| {
+            self.voice
+                .is_none()
+                .then(|| {
+                    self.typed_contexts()
+                        .iter()
+                        .find_map(|turn| turn.open_question())
+                })
+                .flatten()
+        })
     }
 
     /// Shows Raphael's answer until its voice ends (with a bounded fallback), or for its ordinary
@@ -1995,9 +2204,10 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
             }
             let release = state.speaking_turn.is_some() && state.on_overlay;
             state.go_idle();
-            self.cancel.set(false);
+            self.set_cancel(false);
             release
         };
+        self.forget_typed();
         if release {
             self.overlay.release_say();
         }
@@ -2009,7 +2219,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
     /// in a session: whatever begins next, a recording or a question, replaces it.
     fn say_in_background(&self, prefix: &str, text: &str) -> Option<Duration> {
         let _transition = lock(&self.transitions);
-        if lock(&self.state).phase != Phase::Idle {
+        if lock(&self.state).phase != Phase::Idle || !lock(&self.typed).is_empty() {
             return None;
         }
         self.overlay.say(prefix, text);
@@ -2022,7 +2232,7 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         let mut state = lock(&self.state);
         if state.agent == Some(AgentStage::Speaking) {
             state.go_idle();
-            self.cancel.set(false);
+            self.set_cancel(false);
             // The new dictation.start/agent.ask stops the voice in the core. Do not
             // spawn a separate stop that could arrive after the next answer starts.
         }
@@ -2116,17 +2326,32 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> Desk
     }
 
     fn retract(&self, session: String, member: u64, turn_id: Option<u64>) -> JoinHandle<Result<Value, RpcError>> {
+        if self.voice.is_none() {
+            let turn = self.typed_contexts().into_iter().find(|turn| {
+                lock(&turn.state)
+                    .session
+                    .as_ref()
+                    .is_some_and(|active| active.id == session && active.member == member)
+            });
+            if let Some(turn) = turn {
+                return turn.retract(session, member, turn_id);
+            }
+        }
         let _transition = lock(&self.transitions);
+        let shown = lock(&self.state).on_overlay;
         let current = {
             let mut state = lock(&self.state);
             if state.session.as_ref().is_some_and(|active| active.id == session && active.member == member) {
                 state.go_idle();
-                self.cancel.set(false);
+                self.set_cancel(false);
                 true
             } else { false }
         };
         if current {
-            self.overlay.hide();
+            self.forget_typed();
+            if self.voice.is_none() || shown {
+                self.overlay.hide();
+            }
             self.tell(DictationPhase::Cancelled, true);
         }
         let core = self.core.clone();
@@ -2259,7 +2484,12 @@ impl<C: CoreApi, O: OverlayApi, P: Paster, S: CancelSwitch> DictationController<
         self.language.clone()
     }
     fn agent_stage(&self) -> Option<AgentStage> {
-        lock(&self.state).agent
+        let voice = lock(&self.state).agent;
+        voice.or_else(|| {
+            self.typed_contexts()
+                .iter()
+                .find_map(|turn| lock(&turn.state).agent)
+        })
     }
 }
 
@@ -2624,7 +2854,7 @@ mod tests {
     use crate::hotkey::{CancelSwitch, HotkeyEvent};
     use crate::notices::{
         ASK_FAILED, BUDGET, CORE_DOWN, ELEVATED, FOCUS_CHANGED, GREETING, INCOMPLETE,
-        NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NO_MIC, NO_SOUND, NOT_READY, OFFLINE, WAITING,
+        NO_LOCAL_MODEL as NO_LOCAL_NOTICE, NO_MIC, NO_SOUND, NOT_READY, OFFLINE,
     };
     use crate::overlay::{Mode, OverlayApi, OverlayEvent, Progress, takes_clicks};
     use crate::paste::{CopyReason, PasteOutcome, Paster, Target};
@@ -5942,27 +6172,361 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_typed_question_waits_for_nothing_else_but_an_answer_gives_way() {
-        let c = agent(answer("答", "好"));
-        run(&c, AgentDown, 0).await;
-        assert_eq!(
-            c.ask_typed("你好").err(),
-            Some(Busy),
-            "Raphael is listening"
-        );
-        run(&c, AgentUp, 900).await;
-        assert_eq!(c.agent_stage(), Some(AgentStage::Speaking));
-        // The answer on screen gives way, as it does to a key.
-        c.ask_typed("再問一次").unwrap().await.unwrap();
-        assert_eq!(c.core().count("agent.ask"), 2);
+    async fn typed_turns_are_accepted_while_voice_is_listening() {
+        for event in [AgentDown, DictationDown] {
+            let c = agent(answer("Answer", "Hello"));
+            run(&c, event, 0).await;
+            let before = c.overlay().events();
+            c.ask_typed("Hello").unwrap().await.unwrap();
+            assert_eq!(c.phase(), Phase::Recording);
+            assert_eq!(c.overlay().events(), before);
+            assert_eq!(c.cancel().last(), Some(true));
+            run(&c, Cancel, 100).await;
+        }
+    }
 
-        let c = controller(FakeCore::default(), FakePaster::pasting("chrome.exe"));
+    #[tokio::test]
+    async fn dictation_starts_stops_and_pastes_while_any_member_is_thinking() {
+        for member in [0, 3] {
+            for mode in BOTH_MODES {
+                let (core, gate) = agent_core(answer("Answer", "Done")).gated("agent.ask");
+                core.script("dictation.stop", Ok(stop_result("Dictated text", None)));
+                let c = controller_in(mode, core, FakePaster::pasting("notepad.exe"));
+                let typed = c.ask_typed_with("Think", Vec::new(), member).unwrap();
+                until_stage(&c, AgentStage::Thinking).await;
+                run(&c, DictationDown, 0).await;
+                assert_eq!(c.phase(), Phase::Recording);
+                if let Some(stop) = end_dictation(&c, mode, 1200) {
+                    stop.await.unwrap();
+                }
+                assert_eq!(c.paster().delivered(), ["Dictated text"]);
+                assert_eq!(c.phase(), Phase::Idle);
+                assert_eq!(lock(&c.typed).len(), 1);
+                gate.notify_one();
+                typed.await.unwrap();
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_typed_confirmation_waits_for_dictation_then_shows_with_remaining_time() {
+        let (c, heard) = questioning(question("typed-confirm", 30_000));
         run(&c, DictationDown, 0).await;
-        assert_eq!(
-            c.ask_typed("你好").err(),
-            Some(Busy),
-            "a dictation is under way"
+        let typed = c
+            .ask_composed_in("Confirm", Vec::new(), 3, None, None, None, Some(42))
+            .unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        let shown = c.overlay().events();
+        assert_eq!(shown, ["show:listening"]);
+        assert!(
+            matches!(&heard.lock().unwrap()[0], QuestionNews::Open(prompt)
+            if prompt.id == "typed-confirm" && prompt.member_id == Some(3)
+                && prompt.conversation_id == Some(42))
         );
+        tokio::time::advance(Duration::from_secs(2)).await;
+        let stop = c.on_hotkey(DictationUp, 2000).unwrap();
+        // Keep the paused clock still while the blocking paste thread finishes.
+        while !stop.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        stop.await.unwrap();
+        tokio::time::advance(FRONT_POLL).await;
+        settle().await;
+        assert!(
+            c.overlay()
+                .events()
+                .contains(&asked("typed-confirm", 27_750))
+        );
+        c.on_confirm_in_app("typed-confirm", true);
+        c.on_confirm("typed-confirm", false);
+        typed.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            [json!({"id":"typed-confirm", "approved":true})]
+        );
+    }
+
+    #[tokio::test]
+    async fn esc_during_dictation_leaves_the_typed_turn_running() {
+        let (core, gate) = agent_core(answer("Answer", "Still running")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        let typed = c.ask_typed("Think").unwrap();
+        settle().await;
+        run(&c, DictationDown, 0).await;
+        run(&c, Cancel, 100).await;
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.core().count("agent.cancel"), 0);
+        assert_eq!(lock(&c.typed).len(), 1);
+        assert_eq!(c.cancel().last(), Some(true));
+        gate.notify_one();
+        typed.await.unwrap();
+        assert!(
+            c.overlay()
+                .events()
+                .contains(&"say:Answer|Still running".to_owned())
+        );
+    }
+
+    #[tokio::test]
+    async fn right_alt_space_starts_its_own_voice_session_during_a_typed_turn() {
+        for mode in BOTH_MODES {
+            let (core, gate) = agent_core(answer("Answer", "Done")).gated("agent.ask");
+            let c = controller_in(mode, core, FakePaster::pasting("notepad.exe"));
+            let typed = c
+                .ask_composed_in(
+                    "Typed",
+                    Vec::new(),
+                    0,
+                    Some("typed".into()),
+                    None,
+                    None,
+                    Some(42),
+                )
+                .unwrap();
+            settle().await;
+            run(&c, DictationDown, 0).await;
+            run(&c, AgentDown, 100).await;
+            let voice_id = lock(&c.state).session.as_ref().unwrap().id.clone();
+            assert_ne!(voice_id, "typed");
+            assert_eq!(c.core().call_params("dictation.start")["purpose"], "agent");
+            let spoken = end_question(&c, mode, 1200).unwrap();
+            settle().await;
+            let asks = c.core().all_params("agent.ask");
+            assert_eq!(asks.len(), 2);
+            assert_eq!(asks[0]["conversation_id"], 42);
+            assert_eq!(asks[1]["session_id"], voice_id);
+            assert!(asks[1].get("conversation_id").is_none());
+            assert!(asks[1].get("source").is_none());
+            gate.notify_waiters();
+            typed.await.unwrap();
+            spoken.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn two_typed_conversations_of_the_same_member_run_independently() {
+        let (core, gate) = agent_core(answer("", "Done")).gated("agent.ask");
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        let first = c
+            .ask_composed_in(
+                "First",
+                Vec::new(),
+                3,
+                Some("first".into()),
+                None,
+                None,
+                Some(41),
+            )
+            .unwrap();
+        let second = c
+            .ask_composed_in(
+                "Second",
+                Vec::new(),
+                3,
+                Some("second".into()),
+                None,
+                None,
+                Some(42),
+            )
+            .unwrap();
+        assert_eq!(
+            c.ask_composed("Duplicate", Vec::new(), 3, Some("first".into()), None, None)
+                .err(),
+            Some(Busy)
+        );
+        settle().await;
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.core().count("agent.ask"), 2);
+        c.retract("first".into(), 3, None).await.unwrap().unwrap();
+        assert_eq!(lock(&c.typed).len(), 1);
+        assert!(lock(&c.typed).contains_key("second"));
+        gate.notify_waiters();
+        first.await.unwrap();
+        second.await.unwrap();
+        assert!(lock(&c.typed).is_empty());
+        assert_eq!(c.cancel().last(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn typed_completion_and_progress_cannot_replace_a_recording_overlay() {
+        for member in [0, 3] {
+            let (core, gate) = agent_core(answer("Answer", "Done")).gated("agent.ask");
+            let c = controller(core, FakePaster::pasting("notepad.exe"));
+            let typed = c
+                .ask_composed(
+                    "Think",
+                    Vec::new(),
+                    member,
+                    Some("typed".into()),
+                    None,
+                    None,
+                )
+                .unwrap();
+            settle().await;
+            c.on_agent_progress(&json!({"session_id":"typed", "text":"Working", "language":"en"}));
+            assert!(c.overlay().events().is_empty());
+            run(&c, DictationDown, 0).await;
+            gate.notify_one();
+            typed.await.unwrap();
+            assert_eq!(c.overlay().events(), ["show:listening"]);
+            assert_eq!(c.phase(), Phase::Recording);
+            assert_eq!(c.cancel().last(), Some(true));
+            run(&c, Cancel, 100).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn a_typed_confirmation_may_be_answered_in_app_while_dictation_owns_the_overlay() {
+        let (c, _) = questioning(question("queued", 30_000));
+        run(&c, DictationDown, 0).await;
+        let typed = c.ask_typed("Confirm").unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        c.on_confirm_in_app("queued", false);
+        c.on_confirm("queued", true);
+        typed.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            [json!({"id":"queued", "approved":false})]
+        );
+        assert_eq!(c.overlay().events(), ["show:listening"]);
+        run(&c, Cancel, 100).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn voice_preempts_a_typed_question_and_esc_restores_it_without_denial() {
+        let (c, _) = questioning(question("waiting", 30_000));
+        let typed = c.ask_typed("Confirm").unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        run(&c, DictationDown, 0).await;
+        let before = c.overlay().events();
+        assert_eq!(before.last().map(String::as_str), Some("show:listening"));
+        run(&c, Cancel, 100).await;
+        tokio::time::advance(FRONT_POLL).await;
+        settle().await;
+        assert_eq!(c.core().count("agent.confirm"), 0);
+        assert_eq!(c.open_question().unwrap().id, "waiting");
+        assert!(
+            c.overlay()
+                .events()
+                .last()
+                .unwrap()
+                .starts_with("ask:waiting|")
+        );
+        c.on_confirm("waiting", false);
+        typed.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn independent_typed_confirmations_keep_their_cards_and_answers() {
+        let core = agent_core(question("first-question", 30_000));
+        core.script_each(
+            "agent.ask",
+            vec![
+                question("first-question", 30_000),
+                question("second-question", 30_000),
+            ],
+        );
+        core.script("agent.confirm", Ok(answer("", "Done")));
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        let first = c
+            .ask_composed_in(
+                "First",
+                Vec::new(),
+                3,
+                Some("first".into()),
+                None,
+                None,
+                Some(41),
+            )
+            .unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        let second = c
+            .ask_composed_in(
+                "Second",
+                Vec::new(),
+                3,
+                Some("second".into()),
+                None,
+                None,
+                Some(42),
+            )
+            .unwrap();
+        settle().await;
+        assert_eq!(c.overlay().events(), [asked("first-question", 30_000)]);
+        assert_eq!(
+            c.typed_contexts()
+                .iter()
+                .filter(|turn| turn.open_question().is_some())
+                .count(),
+            2
+        );
+        c.on_confirm_in_app("second-question", true);
+        second.await.unwrap();
+        assert_eq!(c.open_question().unwrap().id, "first-question");
+        assert_eq!(c.overlay().events(), [asked("first-question", 30_000)]);
+        c.on_confirm("first-question", false);
+        first.await.unwrap();
+        assert_eq!(
+            c.core().all_params("agent.confirm"),
+            [
+                json!({"id":"second-question", "approved":true}),
+                json!({"id":"first-question", "approved":false}),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_typed_question_expires_without_touching_the_recording() {
+        let (c, heard) = questioning(question("expires", 1000));
+        run(&c, DictationDown, 0).await;
+        let typed = c.ask_typed("Confirm").unwrap();
+        until_stage(&c, AgentStage::Asking).await;
+        tokio::time::advance(Duration::from_secs(1)).await;
+        typed.await.unwrap();
+        assert_eq!(
+            c.core().call_params("agent.confirm"),
+            json!({"id":"expires", "approved":false})
+        );
+        assert!(
+            matches!(heard.lock().unwrap().last(), Some(QuestionNews::Closed(id)) if id == "expires")
+        );
+        assert_eq!(c.overlay().events(), ["show:listening"]);
+        assert_eq!(c.phase(), Phase::Recording);
+        run(&c, Cancel, 1000).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_typed_failure_waits_until_the_recording_releases_the_overlay() {
+        let core = FakeCore::failing("agent.ask", RpcError::new(-32603, "failure"));
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        run(&c, DictationDown, 0).await;
+        c.ask_typed("Think").unwrap().await.unwrap();
+        assert_eq!(c.overlay().events(), ["show:listening"]);
+        assert_eq!(c.cancel().last(), Some(true));
+        run(&c, Cancel, 100).await;
+        tokio::time::advance(FRONT_POLL).await;
+        settle().await;
+        assert_eq!(c.overlay().events().last(), Some(&notice(ASK_FAILED.zh)));
+    }
+
+    #[tokio::test]
+    async fn paste_last_during_a_typed_turn_cancels_only_the_chord_recording() {
+        let (core, gate) = agent_core(answer("", "Done")).gated("agent.ask");
+        core.script(
+            "history.latest",
+            Ok(json!({"item":{"text":"Last dictation"}})),
+        );
+        let c = controller(core, FakePaster::pasting("notepad.exe"));
+        let typed = c.ask_typed_with("Think", Vec::new(), 3).unwrap();
+        settle().await;
+        run(&c, DictationDown, 0).await;
+        run(&c, HotkeyEvent::PasteLast, 100).await;
+        assert_eq!(c.paster().delivered(), ["Last dictation"]);
+        assert_eq!(c.core().count("dictation.cancel"), 1);
+        assert_eq!(c.core().count("agent.cancel"), 0);
+        assert_eq!(lock(&c.typed).len(), 1);
+        gate.notify_one();
+        typed.await.unwrap();
     }
 
     #[tokio::test]
@@ -5993,15 +6557,27 @@ mod tests {
         until_stage(&c, AgentStage::Asking).await;
         assert_eq!(
             *heard.lock().unwrap(),
-            [QuestionNews::Open(prompt("c-1", 30_000))]
+            [QuestionNews::Open(AskPrompt {
+                member_id: Some(0),
+                ..prompt("c-1", 30_000)
+            })]
         );
-        assert_eq!(c.open_question(), Some(prompt("c-1", 30_000)));
+        assert_eq!(
+            c.open_question(),
+            Some(AskPrompt {
+                member_id: Some(0),
+                ..prompt("c-1", 30_000)
+            })
+        );
         c.on_confirm_in_app("c-1", true);
         turn.await.unwrap();
         assert_eq!(
             *heard.lock().unwrap(),
             [
-                QuestionNews::Open(prompt("c-1", 30_000)),
+                QuestionNews::Open(AskPrompt {
+                    member_id: Some(0),
+                    ..prompt("c-1", 30_000)
+                }),
                 QuestionNews::Closed("c-1".to_owned())
             ]
         );
@@ -8633,7 +9209,10 @@ mod tests {
         let (c, _front, heard, turn) = question_in_front(30_000).await;
         assert_eq!(
             *heard.lock().unwrap(),
-            vec![QuestionNews::Open(prompt("c-1", 30_000))]
+            vec![QuestionNews::Open(AskPrompt {
+                member_id: Some(0),
+                ..prompt("c-1", 30_000)
+            })]
         );
         assert_eq!(c.overlay().events(), Vec::<String>::new());
         c.on_confirm_in_app("c-1", true);

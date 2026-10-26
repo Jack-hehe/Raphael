@@ -63,6 +63,18 @@ deletes a word through it and restores it with Undo.
 
 ## Gotchas
 
+Typed main-window turns have independent request states and never hold the microphone or
+voice session slot. Dictation and Right Alt+Space must work while any member, including
+Raphael, replies; typing must also work during dictation. Voice owns the overlay first:
+typed YES/NO cards remain answerable in the window and move to the overlay with their
+remaining timeout once voice ends. Esc during dictation cancels only that recording.
+The existing `admin-approval` look scene now opens a second member question through the
+native event boundary, visits that member, then returns to Raphael and requires his original
+approval card. Window cards retain independent ids across members and conversations.
+
+Controller regressions live beside the existing fake-core/overlay Rust tests in
+`app/src-tauri/src/dictation.rs`. Native steps and evidence are in `DICTATION-NOTES.md`.
+
 The fixture's populated history day is 2026-10-24; the first heatmap cell may have no
 history. Mock devices/status do not prove permissions, STT or global hotkeys. Silence
 must not close recording; only explicit stop/cancel or genuine microphone/STT failure
