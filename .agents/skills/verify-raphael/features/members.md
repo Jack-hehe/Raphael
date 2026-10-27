@@ -107,7 +107,9 @@ Raphael is the primary until another is chosen, and exactly one is at a time. Ch
 or a right click): it opens 「選擇主要成員」, a list of real buttons (Raphael and the other visible members, not the primary now) with the member whose menu
 it was chosen already, 取消 and the primary 設為主要. The primary wears a round star at the corner of its face in the column, the face strip and the details.
 Raphael's row has no menu, so he is chosen again from another member's menu. Raphael stays the chief of staff, in every room and the one wrap-up, whoever
-the primary is: nothing about rooms, tasks, exchanges or conversations changes when the primary does.
+the primary is: nothing about rooms, tasks, exchanges or conversations changes when the primary does. The primary does not move the owner's own entry points
+either (the video and the spec say nothing about them): the 拉斐爾 page still opens on Raphael, Alt+Space quick questions stay his (P19), and a new conversation lists
+him first; the owner reaches the primary by selecting its row, and it is the other Bots and the brains that route new work to it.
 
 ```powershell
 npm run look -- primary-contact-menu primary-contact-picker primary-contact-set --theme both --width 1120,720,1920x1080
