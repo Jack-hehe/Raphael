@@ -24,6 +24,18 @@ describe("look browser interaction contracts", () => {
     expect(target.click).toHaveBeenCalledTimes(3);
     expect(target.dispose).toHaveBeenCalledTimes(3);
   });
+  it("waits for an absence by its selector and says what is still there when it does not come", async () => {
+    const page = { waitForFunction: vi.fn().mockResolvedValue(undefined) };
+    await perform(page, { action: "wait-gone", selector: ".row" });
+    expect(page.waitForFunction).toHaveBeenCalledWith(expect.any(Function), { timeout: 6000 }, ".row");
+    const gone = page.waitForFunction.mock.calls[0][0];
+    document.body.innerHTML = '<div class="row"></div>';
+    expect(gone(".row")).toBe(false);
+    document.body.innerHTML = "";
+    expect(gone(".row")).toBe(true);
+    page.waitForFunction.mockRejectedValue(new Error("timeout"));
+    await expect(perform(page, { action: "wait-gone", selector: ".row" })).rejects.toThrow("Still present: .row");
+  });
   it("finds the visible result when a collapsed work section matches first", () => {
     document.body.innerHTML = '<div hidden><button data-action="reply">Work</button></div><button data-action="reply">Answer</button>';
     for (const element of document.querySelectorAll("button")) element.getBoundingClientRect = () => ({ width: 28, height: 28 });
