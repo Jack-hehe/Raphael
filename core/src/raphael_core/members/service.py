@@ -250,6 +250,7 @@ class MembersService:
     def register(self, router: Router) -> None:
         methods = {
             "members.skills.list": self._skills_list,
+            "members.skills.read": self._skills_read,
             "members.skills.import": self._skills_import,
             "members.skills.update": self._skills_update,
             "members.skills.delete": self._skills_delete,
@@ -633,9 +634,25 @@ class MembersService:
         self._changed()
         return {"skill": added[0], "skills": added}
 
+    async def _skills_read(self, params: dict) -> dict:
+        """A skill and its whole document, for the owner's page of it (the model reads one by `skill_read`)."""
+        skill, text = self._cap(self.capabilities.document, self._cap_member(params), _whole(params, "id", least=1))
+        return {"skill": skill, "text": text}
+
     async def _skills_update(self, params: dict) -> dict:
+        """The skill switched on or off (`enabled`), its document edited (`text`), or both: the switch is
+        checked first, so that a refused edit changes nothing."""
         member_id = self._cap_member(params)
-        skill = self._cap(self.capabilities.update_skill, member_id, _whole(params, "id", least=1), params.get("enabled"))
+        skill_id = _whole(params, "id", least=1)
+        enabled = params.get("enabled")
+        if "text" in params:
+            if "enabled" in params and type(enabled) is not bool:
+                raise _rpc_error(MemberError("enabled", "enabled must be true or false"))
+            skill = self._cap(self.capabilities.rewrite_skill, member_id, skill_id, params["text"])
+            if "enabled" in params:
+                skill = self._cap(self.capabilities.update_skill, member_id, skill_id, enabled)
+        else:
+            skill = self._cap(self.capabilities.update_skill, member_id, skill_id, enabled)
         self._changed("members.skills.changed", member_id)
         self._changed()
         return {"skill": skill}

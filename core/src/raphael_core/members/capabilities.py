@@ -6,6 +6,7 @@ dependencies, redirects, or arbitrary URLs are accepted. Documents remain untrus
 
 import asyncio
 import json
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -233,6 +234,56 @@ class MemberCapabilities:
         with self.conn:
             self.conn.execute("UPDATE member_skills SET enabled = ? WHERE member_id = ? AND id = ?", (enabled, member_id, skill_id))
         return next(skill for skill in self.skills(member_id) if skill["id"] == skill_id)
+
+    def _skill(self, member_id: int, skill_id: int) -> dict:
+        self.check(member_id)
+        skill = next((skill for skill in self.skills(member_id) if skill["id"] == skill_id), None)
+        if skill is None:
+            raise MemberError("not_found", "no such member skill")
+        return skill
+
+    def document(self, member_id: int, skill_id: int) -> tuple[dict, str]:
+        """A skill and its whole Markdown document, as the owner's page for it shows them (one that is
+        switched off too: only the model's `read_skill` leaves those out)."""
+        skill = self._skill(member_id, skill_id)
+        path = self._path(member_id, skill_id)
+        try:
+            if path.stat().st_size > MAX_SKILL_BYTES:
+                raise MemberError("size", "skill document is too large")
+            return skill, path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise MemberError("not_found", "the skill document is gone") from None
+        except (OSError, UnicodeError):
+            raise MemberError("io", "could not read the skill document") from None
+
+    def rewrite_skill(self, member_id: int, skill_id: int, text: object) -> dict:
+        """Replace the document of a skill with what the owner edited it to. Its name and description, which
+        are what the model is shown of it and say when to use it, are read from the new document, so they
+        change with it; the next `read_skill` gives the new text at once. The old document stays when the new
+        one cannot be kept."""
+        self._skill(member_id, skill_id)
+        if not isinstance(text, str):
+            raise MemberError("skill", "skill must be a UTF-8 Markdown document")
+        text = text.replace("\r\n", "\n")
+        if len(text.encode("utf-8")) > MAX_SKILL_BYTES:
+            raise MemberError("size", "skill document is too large")
+        if not text.strip() or "\x00" in text:
+            raise MemberError("skill", "skill must be a UTF-8 Markdown document")
+        name, description = skill_metadata(text)
+        if any(other["id"] != skill_id and other["name"].casefold() == name.casefold() for other in self.skills(member_id)):
+            raise MemberError("taken", "a skill with that name already exists")
+        path = self._path(member_id, skill_id)
+        temporary = path.with_suffix(".md.tmp")
+        try:
+            with self.conn:
+                self.conn.execute("UPDATE member_skills SET name = ?, description = ? WHERE member_id = ? AND id = ?", (name, description, member_id, skill_id))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_text(text, encoding="utf-8", newline="\n")
+                os.replace(temporary, path)
+        except OSError:
+            temporary.unlink(missing_ok=True)
+            raise MemberError("io", "could not keep the skill document") from None
+        return self._skill(member_id, skill_id)
 
     def delete_skill(self, member_id: int, skill_id: int) -> bool:
         self.check(member_id)
