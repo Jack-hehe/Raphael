@@ -48,6 +48,8 @@ class RecordingConnector:
 
     def __init__(self, *, failure="", nonce="", production=None):
         self.failure, self.nonce, self.production = failure, nonce, production
+        # The servers whose calls go on to `production` besides a managed one (S15's recorded MCP server).
+        self.production_servers = set()
         self.receipts = []
 
     def __getattr__(self, name):
@@ -56,7 +58,7 @@ class RecordingConnector:
         return getattr(self.production, name)
 
     async def call_tool(self, server, name, arguments, *, expected, **kwargs):
-        if server.managed_by == "google" and self.production is not None:
+        if (server.managed_by == "google" or server.id in self.production_servers) and self.production is not None:
             return await self.production.call_tool(server, name, arguments, expected=expected, **kwargs)
         tool = server.tool(name)
         if not server.id.startswith("guardian-") or tool is None or expected != tool.fingerprint:
@@ -932,7 +934,8 @@ class RpcDriver:
         ids = await self.seed_team()
         member = ids[1]
         server = self.secret_server = SecretServer(self.nonce)
-        self.app.integrations._connector = McpConnector(self.app.vault, opener=server.opener)
+        self.recorder.production = McpConnector(self.app.vault, opener=server.opener)
+        self.recorder.production_servers.add(SERVER_ID)
         self.app.integrations._config.add(server.config())
         slot = secret_name(SERVER_ID, "header", "Authorization")
         prompt = "請用天氣服務查明天台北的預報，告訴我服務回傳的預報代號。"

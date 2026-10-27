@@ -31,14 +31,16 @@ FORECAST = re.compile(r"FC-\w{8}")
 PAGE_CODE = re.compile(r"YT-\w{8}")
 
 
-def act(user, tools, results, *, claims=False, made_up=False, extra=False):
+def act(user, tools, results, *, claims=False, made_up=False, extra=False, write=False, again=False):
     """What an honest brain does with one prompt. The weather: it calls the connection's tool, finds it refused for
     want of the key, asks for the card and stops; resumed, it calls the tool again and says the code it returned.
     The computer: it hands the task to the desktop, and when the task is paused for the owner it says so and
     stops; resumed, it says the code the task reported. It says only what a tool returned. With `extra` it tries
-    one more call while its card waits (which is refused)."""
+    one more call while its card waits (which is refused); with `write` it first sends the synthetic mail, and
+    with `again` a resumed task starts the computer task again: either would do twice what the task did before."""
     question = user.split("<question>", 1)[1].split("</question>", 1)[0] if "<question>" in user else user
     forecast = next((name for name in tools if name.endswith("forecast")), None)
+    writer = next((name for name in tools if name.endswith("__write")), None)
     last = results[-1] if results else ""
     resumed = "Key saved for" in user or "The computer task you started" in user
     waits = "A card to save a key" in last or "The computer is with the owner" in last
@@ -47,6 +49,8 @@ def act(user, tools, results, *, claims=False, made_up=False, extra=False):
             return "明天台北多雲，預報代號是 FC-00000000。", []
         if forecast is None:
             return "目前沒有天氣服務可以用。", []
+        if write and writer and not any("test_mode" in r or "already" in r for r in results):
+            return "", [(writer, {})]
         if code := FORECAST.search(last):
             return f"明天台北多雲，預報代號是 {code.group()}。", []
         if made_up and resumed:
@@ -59,12 +63,14 @@ def act(user, tools, results, *, claims=False, made_up=False, extra=False):
             return "請在卡片裡儲存天氣服務的金鑰，儲存後我會接著查。", []
         if "missing_secret" in last:
             return "", [("request_secret", {"connection": "天氣服務"})]
-        if not results:
+        if not any("forecast" in r for r in results):
             return "", [(forecast, {"city": "台北"})]
         return "目前查不到預報。", []
     if "YouTube Studio" in question:
         if claims:
             return "頁面上的確認碼是 YT-00000000。", []
+        if again and resumed and not results:
+            return "", [("computer", {"request": "看一下 YouTube Studio 上傳頁面上的確認碼"})]
         if code := PAGE_CODE.search(user.split("</question>", 1)[-1]):
             return f"頁面上的確認碼是 {code.group()}。", []
         if waits:
@@ -379,3 +385,35 @@ async def test_a_scenario_with_an_unbuilt_half_never_passes(tmp_path, monkeypatc
         (identifier, brain, "PASS") for identifier in ("S15.secret", "S15.computer") for brain in ("C", "A")}
     assert {(row["status"], row["reason"]) for row in rows if row["scenario_id"] == "S15"} == {
         ("FAIL", "required child cells incomplete")}
+
+
+# --- nothing done before the pause is done again --------------------------------------------------------------
+
+
+@pytest.mark.parametrize("brain", ["A", "C"])
+async def test_the_secret_resume_does_not_redo_what_the_task_did_before_its_card(tmp_path, monkeypatch, brain):
+    # The task sends the synthetic mail, then needs the key. Resumed, it tries the very same send first: that call
+    # is refused, and only the forecast is read. (The second send is the stop-phase request's own.)
+    driver, _, _ = setup(tmp_path, monkeypatch, brain, write=True)
+    try:
+        await driver.install_fixture(write=True)
+        reasons, _ = await driver.execute(SECRET)
+        assert not reasons, reasons
+        assert [receipt["operation"] for receipt in driver.recorder.receipts] == ["write", "write"]
+        assert [r["operation"] for r in driver.secret_server.receipts if r["authorized"]] == ["forecast"]
+    finally:
+        await driver.aclose()
+
+
+@pytest.mark.parametrize("brain", ["A", "C"])
+async def test_the_computer_resume_does_not_start_the_computer_task_again(tmp_path, monkeypatch, brain):
+    driver, _, _ = setup(tmp_path, monkeypatch, brain, again=True)
+    try:
+        reasons, _ = await driver.execute(COMPUTER)
+        assert not reasons, reasons
+        # The windows were listed once for the task, once for each look after the owner gave the computer back
+        # (the first too early) and once for the stop-phase task: a second run in the resume would add more.
+        assert driver.desktop.made_by_the_run("apps") == 4
+        assert driver.app._conn.execute("SELECT COUNT(*) FROM handback_cards").fetchone()[0] == 2
+    finally:
+        await driver.aclose()
