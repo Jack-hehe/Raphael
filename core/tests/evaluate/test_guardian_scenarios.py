@@ -31,7 +31,7 @@ def selected(identifier):
     return next(cell for cell in cells() if cell.id == identifier)
 
 
-@pytest.mark.parametrize('identifier',['S03.immediate-start','S08.immediate-start','S08.completion'])
+@pytest.mark.parametrize('identifier',['S03.immediate-start','S03.primary-dispatch','S08.immediate-start','S08.completion'])
 @pytest.mark.parametrize('brain',['api','cli'])
 async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,monkeypatch,identifier,brain):
     from raphael_core.agent.cli import loop
@@ -79,6 +79,43 @@ async def test_p03_immediate_start_uses_production_rpc_worker_and_mcp(tmp_path,m
         if brain=='cli':
             # Live, a room-only cell verified no CLI model: its turns all ran as background tasks.
             assert set(driver.actual_cli_models)=={'owner-model'},driver.actual_cli_models
+    finally:
+        await driver.aclose()
+
+
+@pytest.mark.parametrize('way,expected',[
+    ('does it itself',{'dispatch_receipt_or_owner','handoff_line_missing'}),
+    ('does it and hands it off',{'primary_did_the_work'}),
+    ('goes through Raphael',{'dispatch_receipt_or_owner','dispatcher_not_primary','handoff_line_missing'})])
+async def test_a_primary_contact_that_does_not_dispatch_what_it_is_given_fails_s03(tmp_path,way,expected):
+    # The owner chose 行銷 as the primary contact and told it to have 信件助理 read the mail. It must hand the work over itself:
+    # reading the mail, or sending the work round by Raphael, is not the primary dispatching.
+    from raphael_core.background.host import WorkerHost
+    from background.conftest import Links
+    read=('Guardian__read',{})
+    def handoff(member):
+        return ('handoff',{'member_id':member,'request':'Use Guardian to read the test mail now.','stage_id':'mail-triage',
+                           'done_when':'Read the test mail and report its nonce.'})
+    class Client(FakeClient):
+        async def chat_tools(self,**kwargs):
+            messages=kwargs['messages']
+            system=messages[0]['content']
+            me=json.loads(system.split('<team_roster>')[-1].split('</team_roster>')[0])['self_id']
+            done=any(m['role']=='tool' for m in messages)
+            calls=[]
+            if not done and me==1:
+                calls={'does it itself':[read],'does it and hands it off':[read,handoff(2)],'goes through Raphael':[handoff(0)]}[way]
+            elif not done and me==0:
+                calls=[handoff(2)]
+            elif not done and me==2:
+                calls=[read]
+            self.turns=iter([('已讀取信件。'+driver.nonce if not calls else '',calls)])
+            return await super().chat_tools(**kwargs)
+    driver=RpcDriver(tmp_path,'fake/model',Client([]),Budget(60))
+    driver.app.background._host=WorkerHost(connect=Links(),grace_s=.3)
+    try:
+        reasons,_=await asyncio.wait_for(driver.execute(selected('S03.primary-dispatch')),20)
+        assert expected<=set(reasons),reasons
     finally:
         await driver.aclose()
 
