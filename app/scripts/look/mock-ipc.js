@@ -176,6 +176,49 @@ export function installMock(fixture, config = {}, target = window) {
     if (!item) throw new Error(`Fixture item not found: ${id}`);
     Object.assign(item, patch); return item;
   };
+  // The core's inventory of the owner's apps (integrations/inventory.py) as a double, computed from the fixture's connections so that
+  // every scene that switches, signs in or uninstalls moves the count as the core moves it: an app is connected when its tools can be
+  // called now; one that waits for a sign-in, failed, is off, has every tool off, or is a second way to an app that is counted already
+  // is listed and never counted. `inventoryUnreadable` is a core that cannot say.
+  const inventory = () => {
+    if (variant.inventoryUnreadable) return { state: "unknown", count: null, apps: [] };
+    const entries = [
+      ...data.servers.map(server => {
+        const tools = server.enabled ? server.tools.filter(tool => tool.enabled).length : 0;
+        const state = !server.enabled ? "disabled" : server.error === "auth" ? "needs_sign_in" : server.error ? "error" : server.status === "unchecked" ? "unchecked" : tools ? "ready" : "no_tools";
+        return { id: server.id, name: server.name, enabled: server.enabled, state, tools, services: server.catalog_id ? [server.catalog_id] : [], rank: 2 };
+      }),
+      ...data.managedConnectors.map(connector => {
+        const off = new Set(connector.disabled_tools ?? []);
+        const ready = connector.enabled && connector.status === "ACTIVE" ? connector.enabled_tools.filter(tool => !off.has(tool)) : [];
+        const waiting = ["INITIALIZING", "INITIATED", "EXPIRED", "REVOKED", "INACTIVE"].includes(connector.status);
+        const state = !connector.enabled ? "disabled" : waiting ? "needs_sign_in" : connector.status === "FAILED" ? "error" : ready.length ? "ready" : "no_tools";
+        const google = connector.kind === "google";
+        const services = google ? [["gmail", "gmail_"], ["googlecalendar", "calendar_"]].filter(([, prefix]) => ready.some(tool => tool.startsWith(prefix))).map(([id]) => id) : [connector.id.replace("composio:", "")];
+        return { id: connector.id, name: connector.name || connector.id, enabled: connector.enabled, state, tools: ready.length, services, rank: google ? 0 : 1 };
+      }),
+    ];
+    const claimed = new Set();
+    for (const entry of [...entries].sort((a, b) => a.rank - b.rank)) {
+      if (entry.state !== "ready") continue;
+      if (entry.services.length && entry.services.every(service => claimed.has(service))) entry.state = "duplicate";
+      else entry.services.forEach(service => claimed.add(service));
+    }
+    const apps = entries.map(({ id, name, enabled, state, tools }) => ({ id, name, enabled, state, tools, connected: state === "ready" }));
+    return { state: "complete", count: apps.filter(app => app.connected).length, apps };
+  };
+  // A skill's document: its frontmatter says its name and when to use it, as the core reads them (members/capabilities.py `skill_metadata`).
+  const skillText = skill => skill.text ?? `---\nname: ${skill.name}\ndescription: ${skill.description}\n---\n`;
+  const skillRow = ({ text, ...skill }) => skill;
+  const skillOf = p => {
+    const skill = data.skills.find(item => item.id === p.id && item.member_id === p.member_id);
+    if (!skill) throw new Error("Invalid params: no such member skill");
+    return skill;
+  };
+  const frontmatter = (text, key) => {
+    const head = text.startsWith("---") ? text.split("---")[1] ?? "" : "";
+    return head.split("\n").map(line => line.trim()).find(line => line.startsWith(`${key}:`))?.slice(key.length + 1).trim() ?? "";
+  };
   async function core(method, p = {}) {
     switch (method) {
       case "settings.get": return { settings: data.settings };
@@ -203,7 +246,8 @@ export function installMock(fixture, config = {}, target = window) {
         schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: 0, chief_id: 0,
         inventory_state: "complete", room_member_ids: null,
         members: data.members.map(m => ({ id: m.id, name: m.name, role: m.role, blurb: m.blurb ?? "" })),
-        apps: data.servers.map(s => ({ id: s.id, name: s.name, enabled: s.enabled, state: s.status === "ready" ? "ready" : s.error === "auth" ? "needs_sign_in" : "unknown" })),
+        // the roster of every model carries the same inventory and the same count as the sidebar and the connections page
+        apps: inventory().apps, connected: inventory().count,
       } };
       case "members.presets": return { presets: data.presets };
       case "members.viewing": case "members.read": return {};
@@ -211,7 +255,28 @@ export function installMock(fixture, config = {}, target = window) {
       case "members.update": { const member = update(data.members, p.id, p); notify("MembersChanged", { member_id: p.id }); return { member }; }
       case "members.create": { const member = { ...data.members[1], ...p, id: nextId(data.members) }; data.members.push(member); notify("MembersChanged", { member_id: member.id }); return { member, routine_offer: null }; }
       case "members.delete": data.members = data.members.filter(item => item.id !== p.id); notify("MembersChanged", { member_id: p.id }); return { deleted: true };
-      case "members.skills.list": return { skills: byMember(data.skills, p) };
+      case "members.skills.list": return { skills: byMember(data.skills, p).map(skillRow) };
+      case "members.skills.read": { const skill = skillOf(p); return { skill: skillRow(skill), text: skillText(skill) }; }
+      case "members.skills.update": {
+        const skill = skillOf(p);
+        if (p.text !== undefined) {
+          // as the core refuses a document it cannot keep: nothing changes
+          const name = frontmatter(p.text, "name"), description = frontmatter(p.text, "description");
+          if (!name) throw new Error("Invalid params: name must not be empty");
+          if (!description) throw new Error("Invalid params: description must not be empty");
+          if (data.skills.some(other => other !== skill && other.member_id === skill.member_id && other.name.toLowerCase() === name.toLowerCase())) throw new Error("Invalid params: a skill with that name already exists");
+          Object.assign(skill, { name, description, text: p.text });
+        }
+        if (p.enabled !== undefined) skill.enabled = p.enabled;
+        notify("MembersChanged", { member_id: p.member_id });
+        return { skill: skillRow(skill) };
+      }
+      case "members.skills.delete": {
+        const deleted = data.skills.some(item => item.id === p.id && item.member_id === p.member_id);
+        data.skills = data.skills.filter(item => !(item.id === p.id && item.member_id === p.member_id));
+        notify("MembersChanged", { member_id: p.member_id });
+        return { deleted };
+      }
       case "members.commands.list": return { commands: byMember(data.commands, p) };
       case "members.voices": return data.voices;
       case "groups.create": { const group = { ...p, id: nextId(data.groups), position: data.groups.length, sources: [] }; data.groups.push(group); notify("MembersChanged", { member_id: 0 }); return { group }; }
@@ -433,6 +498,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "toolsets.list": return { groups: data.servers };
       case "integrations.catalog": return { services: data.services };
       case "integrations.audit": return { entries: [] };
+      case "integrations.inventory": return inventory();
       case "integrations.test": return { ok: true, tools: ["search", "save"] };
       case "integrations.preview": { const entries = Object.entries(JSON.parse(p.text).mcpServers ?? {}); return { candidates: entries.map(([name, definition], index) => ({ ...data.candidates[0], ...definition, id: `paste-${index}`, name })), rejected: 0 }; }
       case "integrations.discover": return { candidates: data.candidates, rejected: 0 };

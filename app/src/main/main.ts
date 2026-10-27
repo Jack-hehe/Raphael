@@ -29,7 +29,8 @@ import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { Navigation, type Place, samePage } from "./nav-history";
 import { installNavInput } from "./nav-input";
-import { labelNavItem, navItemHTML, navHomeHTML } from "./nav-items";
+import { labelNavItem, navAppsHTML, navItemHTML, navHomeHTML, renderAppsEntry } from "./nav-items";
+import type { InventoryView } from "./apps-inventory";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { installFocusKeys } from "./focus-keys";
 import { followTray } from "./tray-open";
@@ -182,7 +183,7 @@ async function start(): Promise<void> {
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
-    `<div class="side-foot">${button("settings", t("nav.settings"), "gear")}</div>`;
+    `<div class="side-foot">${navAppsHTML()}${button("settings", t("nav.settings"), "gear")}</div>`;
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
   const agentItem = nav.querySelector<HTMLElement>('.nav[data-go="agent"]')!;
   // 拉斐爾 shows Raphael's face, the person's picture once there is one.
@@ -205,6 +206,24 @@ async function start(): Promise<void> {
     markQuestion(waitingQuestion);
     for (const item of NAV) labelNavItem(nav, item.id, item.name);
     labelNavItem(nav, "settings", t("nav.settings"));
+    renderAppsEntry(nav, appsInventory);
+    nameRailItems();
+  }
+
+  /** The owner's apps as the core counts them, for the sidebar's 「連結應用程式」: the one number every screen shows. */
+  let appsInventory: InventoryView = "loading";
+  let appsReads = 0;
+  async function refreshApps(): Promise<void> {
+    const mine = ++appsReads;
+    let next: InventoryView;
+    try {
+      next = await api.integrationsInventory();
+    } catch {
+      next = "failed";
+    }
+    if (mine !== appsReads) return;
+    appsInventory = next;
+    renderAppsEntry(nav, appsInventory);
     nameRailItems();
   }
 
@@ -213,7 +232,7 @@ async function start(): Promise<void> {
   /** In the rail each icon says its page in its tooltip; in the whole sidebar the name is beside it. */
   function nameRailItems(): void {
     nav.querySelectorAll<HTMLElement>(".nav").forEach((item) => {
-      const name = item.querySelector(".nav-t")?.textContent ?? "";
+      const name = item.dataset.navTitle ?? item.querySelector(".nav-t")?.textContent ?? "";
       if (rail && name) item.title = name;
       else item.removeAttribute("title");
     });
@@ -241,6 +260,9 @@ async function start(): Promise<void> {
   }
   ctx.onEvent(event => { if (event.type === "SettingsChanged") void refreshOwner(); });
   void refreshOwner();
+  // The count of connected apps moves with them: a sign-in, a switch, an uninstall, a call that failed.
+  ctx.onEvent(event => { if (event.type === "ConnectionsChanged") void refreshApps(); });
+  void refreshApps();
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   // The panel goes before the window controls, which come last in the document.
   document.getElementById("window-chrome")!.before(settings.el);
@@ -367,6 +389,7 @@ async function start(): Promise<void> {
     opener = null;
     tellAgentPage();
     void refreshUsage();
+    void refreshApps();
   }
 
   /** This month's spend in the sidebar; hidden when the core does not answer. */
@@ -387,6 +410,7 @@ async function start(): Promise<void> {
     shownAt = performance.now();
     void pages[current].show();
     void refreshUsage();
+    void refreshApps();
   };
   window.addEventListener("focus", comeBack);
   document.addEventListener("visibilitychange", () => {

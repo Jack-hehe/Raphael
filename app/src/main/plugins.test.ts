@@ -9,6 +9,7 @@ const api = vi.hoisted(() => ({
   connectorsStatus: vi.fn(), connectorsCatalog: vi.fn(), connectorsCategories: vi.fn(),
   connectorsTools: vi.fn(), connectorsSetTools: vi.fn(), connectorsConnect: vi.fn(),
   connectorsGoogleConnect: vi.fn(), connectorsDisconnect: vi.fn(), connectorsSetKey: vi.fn(),
+  integrationsInventory: vi.fn(), membersList: vi.fn(), membersSkillsList: vi.fn(),
 }));
 vi.mock("./api", () => api);
 vi.mock("./ui", async original => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
@@ -32,6 +33,9 @@ beforeEach(() => {
   api.toolsetsList.mockResolvedValue({ groups: [{ ...managedGroup(connectors[0]!), id: "custom", source: undefined, catalog_id: null, auth: "none", name: "Local MCP" },
     { ...managedGroup(connectors[0]!), id: "connectors_composio" }, { ...managedGroup(connectors[1]!), id: "connectors_google" }] });
   api.integrationsAudit.mockResolvedValue({ entries: [] });
+  api.integrationsInventory.mockResolvedValue({ state: "complete", count: 0, apps: [] });
+  api.membersList.mockResolvedValue({ members: [], groups: [] });
+  api.membersSkillsList.mockResolvedValue({ skills: [] });
   api.connectorsStatus.mockImplementation(async () => ({ connectors: structuredClone(connectors), composio_configured: true, google_configured: true }));
   api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "github", name: "GitHub" }], next_cursor: null });
   api.connectorsCategories.mockResolvedValue({ items: [{ id: "docs", name: "Documents" }] });

@@ -92,6 +92,20 @@
 .cs-meta > span { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; overflow-wrap: anywhere; }
 .cs-key { color: var(--text-2); }
 
+/* The account(s) a service is signed in with, by status only: a row each, the name on the left and the state on the right */
+.cs-accts { display: grid; grid-template-columns: minmax(0, 1fr); }
+.cs-acct { display: flex; align-items: center; gap: var(--sp-2); min-height: 34px; padding: 0 var(--sp-1); font-size: var(--fs-xs); }
+.cs-acct > .i { flex: none; color: var(--text-3); }
+.cs-acct .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.cs-acct .st { flex: none; font-size: var(--fs-xs); }
+.cs-acct + .cs-acct { border-top: 1px solid var(--line); }
+
+/* The page of a skill is the dialog of an app, wider for the document it holds */
+.cs-dialog.wide { width: min(640px, 100%); }
+.cs-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.cs-field > .flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+.cs-skill-text { width: 100%; min-height: 260px; padding: var(--sp-3); resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; }
+
 /* A notice that something waits for the user */
 .ca-alert { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: var(--fs-sm); }
 .ca-alert > .i { color: var(--warn); }

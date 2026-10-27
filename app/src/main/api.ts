@@ -13,6 +13,7 @@ import type { CliAllowances, RunReport, RunRequest } from "./run-analytics-types
 import type {
   AgentQuestion,
   AgentTurn,
+  AppsInventory,
   AuditEntry,
   ConnectResult,
   ConnectionGroup,
@@ -358,6 +359,8 @@ export const integrationsSetToolEnabled = (id: string, tool: string, enabled: bo
 export const integrationsSetToolsEnabled = (id: string, tools: string[], enabled: boolean): Promise<Record<string, unknown>> =>
   core("integrations.set_tools_enabled", { id, tools, enabled });
 export const integrationsAudit = (limit = 8): Promise<{ entries: AuditEntry[] }> => core("integrations.audit", { limit });
+/** The owner's apps and how many are connected: the one count the sidebar, the 連接 tab and every model's roster share. */
+export const integrationsInventory = (): Promise<AppsInventory> => core("integrations.inventory");
 
 // ---------- messaging apps (Telegram) ----------
 
@@ -462,6 +465,10 @@ export const keepAwakeSet = (enabled: boolean): Promise<boolean> => invoke("sche
 export const membersSkillsList = (memberId: number): Promise<{ skills: import("./types").MemberSkill[] }> => core("members.skills.list", { member_id: memberId });
 export const membersSkillsImport = (memberId: number, source: string): Promise<{ skill: import("./types").MemberSkill; skills?: import("./types").MemberSkill[] }> => core("members.skills.import", { member_id: memberId, source });
 export const membersSkillsUpdate = (memberId: number, id: number, enabled: boolean): Promise<unknown> => core("members.skills.update", { member_id: memberId, id, enabled });
+/** A skill and its whole Markdown document, for its page (one that is switched off too). */
+export const membersSkillsRead = (memberId: number, id: number): Promise<{ skill: import("./types").MemberSkill; text: string }> => core("members.skills.read", { member_id: memberId, id });
+/** Replaces the document of a skill; its name and description (when the model should use it) are read from the new one. */
+export const membersSkillsEdit = (memberId: number, id: number, text: string): Promise<{ skill: import("./types").MemberSkill }> => core("members.skills.update", { member_id: memberId, id, text });
 export const membersSkillsDelete = (memberId: number, id: number): Promise<unknown> => core("members.skills.delete", { member_id: memberId, id });
 export const membersCommandsList = (memberId: number): Promise<{ commands: import("./types").MemberCommand[] }> => core("members.commands.list", { member_id: memberId });
 export const membersCommandsSave = (memberId: number, command: Omit<import("./types").MemberCommand, "id"> & { id?: number }): Promise<unknown> => core("members.commands.save", { member_id: memberId, ...command });
