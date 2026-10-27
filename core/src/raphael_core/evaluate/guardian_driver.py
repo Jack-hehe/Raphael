@@ -643,7 +643,9 @@ class RpcDriver:
                 await self.app.call('members.set_primary', {'id':ids[0]})
             for member in [0,*ids]:
                 authority = self.app.members.team_context(member, 'zh-TW')
-                result = await self.ask('請根據 TeamContextSnapshot 列出全員名字與原文角色、團隊總人數、主要窗口、幕僚長及應用程式連線狀態，'
+                # Each member is asked for as 名字（角色）: live, the colon lines below made Raphael list them as 行銷：行銷企劃,
+                # which reads as a speaker's name prefix (name_prefix_in_message) though it is the roster's content.
+                result = await self.ask('請根據 TeamContextSnapshot 列出全員，每位寫成「名字（原文角色）」，再寫團隊總人數、主要窗口、幕僚長及應用程式連線狀態，'
                                         '並用「主要窗口：名字」「幕僚長：名字」「已連結應用程式：N 個」的格式各寫一行；不要輸出 JSON。', member=member)
                 turns = (await self.app.call('agent.history.list', {'member_id':member}))['turns']
                 latest = max(turns, key=lambda turn: turn['id']) if turns else {}
