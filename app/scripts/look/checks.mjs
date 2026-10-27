@@ -618,6 +618,39 @@ export function checkRendered(name) {
     }
     return { check: name, popover: !!popover, weekdays: weekdays.map(day => day.textContent) };
   }
+  if (name === "team-no-overlap") {
+    const nodes = [...document.querySelectorAll('.team-group:not([hidden]), .team-chief .team-member')];
+    const boxes = nodes.map(node => ({ id: node.dataset.teamGroup ?? 'chief', box: node.getBoundingClientRect() }));
+    for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i], b = boxes[j];
+      require(Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left) <= 0.5 || Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top) <= 0.5, `team panels ${a.id} and ${b.id} must not overlap`);
+    }
+    return { check: name, panels: boxes.map(({ id, box }) => ({ id, x: box.x, y: box.y, width: box.width, height: box.height })) };
+  }
+  if (name.startsWith("team-canvas-")) {
+    const viewport = document.querySelector('.team-board-scroll'), board = document.querySelector('.team-board');
+    const view = viewport.getBoundingClientRect();
+    const matrix = new DOMMatrix(getComputedStyle(board).transform);
+    if (name === 'team-canvas-panned') require(Math.abs(matrix.e - 60) <= 1 && Math.abs(matrix.f + 40) <= 1 && !document.querySelector('#app-popover'), 'right drag moves the canvas without a menu');
+    if (name === 'team-canvas-rearranged') {
+      const positions = JSON.parse(localStorage.getItem('raphael.team.positions'));
+      require(Number.isFinite(positions['1']?.x) && getComputedStyle(document.querySelector('[data-team-group="1"]')).transform !== 'none', 'the moved group has a saved device-local position');
+    }
+    if (name === 'team-canvas-drop') {
+      const target = document.querySelector('[data-team-group="2"]');
+      require(target.classList.contains('is-drop-target') && visible(target.querySelector('.team-drop-preview')), 'the destination lights up and shows the arriving member');
+      require(getComputedStyle(target).outlineStyle === 'solid', 'the destination has a visible outline');
+      const preview = target.querySelector('.team-drop-preview').getBoundingClientRect();
+      require(preview.top >= view.top && preview.bottom <= view.bottom && preview.left >= view.left && preview.right <= view.right, 'the arriving card is visible inside the canvas');
+    }
+    if (name === 'team-canvas-fit') {
+      const boxes = [...board.querySelectorAll('.team-chief, .team-group:not([hidden])')].map(node => node.getBoundingClientRect());
+      require(boxes.every(box => box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1), 'fit keeps the team inside the canvas');
+    }
+    const controls = document.querySelector('.team-zoom').getBoundingClientRect(), composer = document.querySelector('.team-composer').getBoundingClientRect();
+    require(controls.left >= 0 && controls.right <= innerWidth && controls.bottom <= innerHeight && (composer.right <= controls.left + 1 || composer.bottom <= controls.top + 1), 'zoom and composer remain reachable without overlap');
+    return { check: name, zoom: matrix.a, x: matrix.e, y: matrix.f };
+  }
   if (name === "team-board-space") {
     const workspace = document.querySelector('.team-board-scroll').getBoundingClientRect();
     const groups = [...document.querySelectorAll('.team-group:not([hidden])')].map(group => group.getBoundingClientRect());

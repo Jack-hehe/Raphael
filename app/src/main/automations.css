@@ -73,8 +73,8 @@
 .au-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--err); pointer-events: none; z-index: 2; }
 .team-page > .page-head { padding: 8px 32px 16px; flex-shrink: 0; }
 .team-page > .page-head h1 { margin: 0; font: 600 var(--fs-h1)/1.3 var(--display); letter-spacing: -0.015em; }
-.team-board-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; background-image: radial-gradient(var(--edge) 1px, transparent 1px); background-size: 20px 20px; }
-.team-board { padding: var(--sp-5) 32px; min-height: 100%; }
+.team-board-scroll { flex: 1; min-height: 0; overflow: hidden; position: relative; touch-action: none; background-image: radial-gradient(var(--edge) 1px, transparent 1px); background-size: 20px 20px; }
+.team-board { position: relative; transform-origin: 0 0; will-change: transform; padding: var(--sp-5) 32px; min-height: 100%; }
 .team-chief { display: flex; justify-content: center; margin-bottom: var(--sp-6); }
 .team-chief .team-member { border-color: var(--accent-text); width: 256px; }
 .team-groups { display: flex; flex-wrap: wrap; gap: var(--sp-5); justify-content: center; align-items: flex-start; }
@@ -86,7 +86,7 @@
 .team-member { padding: var(--sp-4); border: 0; border-radius: 0; background: transparent; min-width: 0; }
 .team-member[draggable] { cursor: grab; }
 .team-member-head { display: flex; gap: var(--sp-3); align-items: center; }
-.team-member-head > div { display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; overflow-wrap: anywhere; }
+.team-member-head > div { flex: 1; display: flex; flex-direction: column; gap: var(--sp-1); min-width: 0; overflow-wrap: anywhere; }
 .team-member-head b { font-size: var(--fs-sm); }
 .team-member-head span { color: var(--text-3); font-size: var(--fs-2xs); }
 .team-member footer { display: flex; gap: var(--sp-2); justify-content: space-between; align-items: center; border-top: 1px solid var(--line); margin-top: var(--sp-3); padding-top: var(--sp-2); }
@@ -112,7 +112,15 @@
 .au-room-thread .room-turn { white-space: nowrap; }
 .au-room-row [aria-current="true"] { background: var(--accent-soft) !important; color: var(--text); }
 .au-occurrence.is-past { opacity: 0.65; background: var(--surface-2); }
-.team-drop-empty { border-style: dashed; }
+.team-drop-empty { border: 1px dashed var(--edge); }
+.team-group > header { cursor: grab; user-select: none; }
+.team-board-scroll.is-panning, .team-board-scroll.is-panning * { cursor: grabbing; user-select: none; }
+.team-member.is-dragging { opacity: 0.4; }
+.team-group.is-drop-target { background: var(--selected); outline: 2px solid var(--accent-icon); outline-offset: -2px; }
+.team-drop-preview { border: 1px dashed var(--accent-icon); opacity: 0.7; pointer-events: none; }
+.team-member-head > .mb-dot { position: static; flex-shrink: 0; }
+.team-zoom { flex-shrink: 0; }
+.team-bottom { flex-shrink: 0; }
 .au-rooms-section { border-top: 1px solid var(--line); margin-top: var(--sp-4); padding: var(--sp-2) 0; }
 /* The ⋯ sits inside the row on its right, as on member rows, and shows on hover, keyboard focus or while its menu is open. */
 .au-room-row { position: relative; display: flex; align-items: center; margin: var(--sp-1) 0; }
@@ -152,7 +160,7 @@
   .team-group { width: auto; padding: clamp(24px, 2cqw, 36px); min-height: clamp(320px, 42cqh, 480px); }
   .team-group-members { gap: var(--sp-5); }
   .team-member { padding: var(--sp-5); }
-  .team-member-head > div { max-width: 36ch; }
+  .team-member-head > div { flex: 1; max-width: 36ch; }
   .team-member-head b { font-size: var(--fs-md); }
   .team-member-head span { font-size: var(--fs-xs); }
   .team-member footer { margin-top: var(--sp-4); padding-top: var(--sp-3); }

@@ -141,3 +141,40 @@ brains. Native controller/microphone behavior and paid providers require separat
 A right click on a room's row in the sidebar, on the header of an open room, on a group's header in the member column or on a group's header on the team board opens the
 menu of its ⋯ at the pointer, the same one the ⋯ opens (rename, members, delete, and the rest). The rule and its table are in [Members](members.md); the scenes above show
 those ⋯ and the audit of every look scene fails one that no row reaches.
+
+## Team canvas and member actions (P15b1)
+
+```powershell
+npm run look -- team team-panned team-rearranged team-member-menu team-drop-target team-fit team-zoom team-new-menu team-group-menu team-composer-empty --theme both --width 1120,720,1920x1080
+```
+
+The board pans with a right or middle drag anywhere except an action, or a left drag on empty canvas.
+Wheel movement pans; Ctrl+wheel zooms at the pointer, within 50-150%. Minus/plus zoom about the
+viewport center. The monitor icon fits the chief and all groups in view within the same zoom range.
+If a layout is larger than the viewport even at 50%, fit centers its bounds; reset restores the automatic layout.
+The chief remains above the automatic groups. Drag a group's header to move that panel independently.
+Device-local positions are keyed by group id in `raphael.team.positions`; missing, invalid or inaccessible
+localStorage falls back to automatic layout/in-memory placement. The Add menu's Reset group layout
+clears all manual positions and restores the initial pan/zoom. Manual groups take priority; automatic groups
+flow around them. Each drag resolves to the nearest free position with a 16px gap, including the chief as
+an obstacle. Loading, resizing and zooming resolve conflicting saved positions without rewriting the
+saved preference. Drop previews also trigger layout so growing groups do not cover their neighbours.
+
+Every ordinary member card has the column's shared overflow menu (pin, move, primary, unread,
+read all, edit, duplicate, clear, hide, delete), including the same submenus, confirmations and RPCs.
+Raphael keeps the column's protected chief behavior: conversation action and double click, no destructive
+member menu. Cards show waiting/unread dots and `member.model`, falling back to the answer model.
+A card double click opens its private conversation. During a cross-group drag the destination is outlined
+and tinted, with an inert preview of the arriving member at the end of its list; leaving or ending the drag
+clears it. Dropping updates group membership, not ordering inside a group.
+
+The panned and rearranged scenes use real pointer drags; member-menu right-clicks the card and checks
+menu identity/position with the shared R-UI-44 assertion. Drop highlighting uses the existing synthetic
+HTML drag boundary. Fit checks every visible group and the chief against the canvas bounds.
+The `team-no-overlap` rendered check compares every visible group rectangle and the chief card in
+team, panned, rearranged, member-menu, drop-target, fit and zoom scenes. `team-canvas.test.ts` covers
+nearest free placement, multiple obstacles, automatic flow, saved collisions, resize/zoom and growing previews.
+Inspect every contact sheet and full-size image, especially the 720px composer and zoom controls.
+DOM tests in `pages/team.test.ts` cover pointer/wheel math, persistence/reset, unavailable storage,
+menu equality and each action's effect, confirmation cancellation, drop cleanup and double-click navigation.
+Browser fixtures prove rendered interactions and localStorage writes, not native relaunch or provider calls.

@@ -1,4 +1,4 @@
-import { scene, click, hover, type, wait, page, key, scroll, room, newRoom, check } from "./steps.mjs";
+import { scene, click, hover, type, wait, page, key, scroll, room, newRoom, check, rightClick } from "./steps.mjs";
 
 const auto = [page("home"), click('.ho-today [data-home-go="calendar"]'), wait(".au-toolbar")];
 const calendar = [...auto, wait(".au-occurrence"), check("calendar-chips"), check("calendar-shell")];
@@ -50,15 +50,19 @@ export default [
   scene("automation-delete", "Delete an automation confirmation", [...auto, click('[data-au="edit"]'), click('[data-dlg="delete"]'), check("delete-confirmation")]),
   scene("automation-drag-prefill", "Calendar drop opens a prefilled automation", [...tools, { action: "drag-start", selector: '[data-drag-member="2"]' }, { action: "drop", selector: '[data-slot][data-hour="9"]', memberId: 2 }]),
   scene("automation-more-bottom", "Scrollable automation advanced fields", [...more, click('[data-dlg="end"]'), click('[data-value="after"]'), scroll(".au-more")]),
-  scene("team", "Grouped team board", [...team, check("team-board-space")]),
+  scene("team", "Grouped team board", [...team, check("team-board-space"), check("team-no-overlap")]),
+  scene("team-panned", "Right-button drag pans without a menu", [...team, { action: "pointer-drag", selector: '[data-team-card="1"] .team-member-head b', button: "right", dx: 60, dy: -40, expectMenuClosed: true }, check("team-canvas-panned"), check("team-no-overlap")]),
+  scene("team-rearranged", "Group headers move independently on the canvas", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check("team-canvas-rearranged"), check("team-no-overlap")]),
+  scene("team-member-menu", "Right click on a team card opens its shared member menu", [...team, rightClick('[data-team-card="1"]'), wait('#app-popover'), check('context-menu'), rightClick('[data-team-card="1"]'), wait('#app-popover'), check('team-no-overlap')]),
+  scene("team-fit", "Fit includes a moved group and the chief", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check('team-canvas-rearranged'), click('[data-team="fit"]'), check('team-canvas-fit'), check('team-no-overlap')]),
   scene("team-group-menu", "Team group actions", groupMenu),
   ...["rename", "delete"].map(action => scene(`team-${action}`, `Team group ${action}`, [...groupMenu, click(`[data-pick="${action}"]`), ...(action === "delete" ? [check("delete-confirmation")] : [])])),
   scene("team-new-menu", "Team creation menu", [...team, click('[data-team="new"]')]),
   scene("team-new-group", "New team group", [...team, click('[data-team="new"]'), wait('#app-popover [data-pick="group"]'), click('#app-popover [data-pick="group"]'), wait(".mb-dialog")]),
   scene("team-mentions", "Mentions follow the character at line start, after a newline and inline", [...team, type(".team-composer textarea", "@"), check("team-mentions"), type(".team-composer textarea", "請整理進度。\n@"), check("team-mentions"), type(".team-composer textarea", "請 @"), check("team-mentions")]),
   scene("team-empty", "Team board with Raphael only", team, { groups: [], onlyRaphael: true }),
-  scene("team-drop-target", "Team member drag destination", [...team, { action: "drag-start", selector: ".team-member[draggable]" }]),
-  scene("team-zoom", "Zoomed team board", [...team, click('[data-team="zoom-in"]')]),
+  scene("team-drop-target", "Team member drag destination", [...team, { action: "drag-start", selector: ".team-member[draggable]" }, { action: "wheel", selector: ".team-board-scroll", reveal: '[data-team-group="2"]', marginBottom: 180 }, { action: "drag-over", selector: '[data-team-group="2"]', memberId: 1 }, check("team-canvas-drop"), check("team-no-overlap")]),
+  scene("team-zoom", "Zoomed team board at the wheel pointer", [...team, click('[data-team="zoom-in"]'), { action: "wheel", selector: ".team-board-scroll", ctrl: true, deltaY: -40 }, check("team-no-overlap")]),
   scene("sidebar", "Conversation sidebar and rooms", []),
   scene("compact-rooms", "Rooms in the compact picker", [{ action: "rooms-menu" }]),
   scene("new-room", "New room dialog", [newRoom()]),

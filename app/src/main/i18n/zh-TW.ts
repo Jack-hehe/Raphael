@@ -1200,6 +1200,8 @@ export const zhTW = {
   "team.newGroup": "新增分組",
   "team.composer": "傳訊息給團隊",
   "team.everyone": "所有人",
+  "team.fit": "顯示整個團隊",
+  "team.resetLayout": "重設分組排版",
   "team.zoomIn": "放大",
   "team.zoomOut": "縮小",
   "rooms.title": "群組對話",

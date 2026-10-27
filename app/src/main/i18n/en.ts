@@ -1201,6 +1201,8 @@ export const en = {
   "team.newGroup": "New group",
   "team.composer": "Message your team",
   "team.everyone": "everyone",
+  "team.fit": "Fit team in view",
+  "team.resetLayout": "Reset group layout",
   "team.zoomIn": "Zoom in",
   "team.zoomOut": "Zoom out",
   "rooms.title": "Group chats",

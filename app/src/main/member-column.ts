@@ -152,6 +152,26 @@ export function openActions(anchor: HTMLElement, items: readonly { id: string; l
   el.querySelector<HTMLElement>("button")?.focus();
 }
 
+export function memberMenu(id: number, anchor: HTMLElement, host: Pick<ColumnHost, "view" | "moveMember" | "deleteMember" | "memberAction">): void {
+  const member = host.view().list?.members.find(m => m.id === id);
+  openActions(anchor, [
+    { id: "pin", label: t(member?.pinned ? "members.sideUnpin" : "members.sidePin"), icon: "pin" },
+    { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
+    { id: "primary", label: t("members.sidePrimary"), icon: "star" },
+    { id: "unread", label: t("members.sideUnread"), icon: "chat" },
+    { id: "read-all", label: t("members.sideReadAll"), icon: "check" },
+    { id: "edit", label: t("members.sideEdit"), icon: "pencil" },
+    { id: "duplicate", label: t("members.sideDuplicate"), icon: "copy" },
+    { id: "clear", label: t("members.sideClear"), icon: "trash" },
+    { id: "hide", label: t("members.sideHide"), icon: "eyeOff" },
+    { id: "delete", label: t("members.delete"), icon: "trash" },
+  ], pick => {
+    if (pick === "move") host.moveMember(id, null, anchor);
+    else if (pick === "delete") host.deleteMember(id);
+    else host.memberAction?.(id, pick);
+  });
+}
+
 export function createMemberColumn(host: ColumnHost): MemberColumn {
   const el = document.createElement("aside");
   el.className = "mb-col";
@@ -222,26 +242,6 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     }
   }
 
-  function memberMenu(id: number, anchor: HTMLElement): void {
-    const member = host.view().list?.members.find(m => m.id === id);
-    openActions(anchor, [
-      { id: "pin", label: t(member?.pinned ? "members.sideUnpin" : "members.sidePin"), icon: "pin" },
-      { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
-      { id: "primary", label: t("members.sidePrimary"), icon: "star" },
-      { id: "unread", label: t("members.sideUnread"), icon: "chat" },
-      { id: "read-all", label: t("members.sideReadAll"), icon: "check" },
-      { id: "edit", label: t("members.sideEdit"), icon: "pencil" },
-      { id: "duplicate", label: t("members.sideDuplicate"), icon: "copy" },
-      { id: "clear", label: t("members.sideClear"), icon: "trash" },
-      { id: "hide", label: t("members.sideHide"), icon: "eyeOff" },
-      { id: "delete", label: t("members.delete"), icon: "trash" },
-    ], pick => {
-      if (pick === "move") host.moveMember(id, null, anchor);
-      else if (pick === "delete") host.deleteMember(id);
-      else host.memberAction?.(id, pick);
-    });
-  }
-
   function groupMenu(id: number, anchor: HTMLElement): void {
     openActions(
       anchor,
@@ -288,7 +288,7 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
       );
     }
     const more = target.closest<HTMLElement>("[data-member-more]");
-    if (more) return memberMenu(Number(more.dataset.memberMore), more);
+    if (more) return memberMenu(Number(more.dataset.memberMore), more, host);
     const groupMore = target.closest<HTMLElement>("[data-group-more]");
     if (groupMore) return groupMenu(Number(groupMore.dataset.groupMore), groupMore);
     const fold = target.closest<HTMLElement>("[data-group-fold]");
@@ -343,5 +343,5 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     });
     redraw(); input.focus();
   }
-  return { el, draw, openSearch, query: () => query, menu: memberMenu };
+  return { el, draw, openSearch, query: () => query, menu: (id, anchor) => memberMenu(id, anchor, host) };
 }

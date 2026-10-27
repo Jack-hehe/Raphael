@@ -72,6 +72,18 @@ describe("rendered look checks", () => {
     glyph.getBoundingClientRect = () => ({ left: 52.3, top: 17.3, right: 67.7, bottom: 32.7, width: 15.4, height: 15.4 });
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-19']);
   });
+  it.each([0.5, 0.8, 1.1, 1.5])("measures transformed canvas glyphs at scale %s without allowing wrong sizes (R-UI-19)", scale => {
+    const { window, audit } = productAudit(`<div class="team-board" style="transform:matrix(${scale},0,0,${scale},60,-40)"><button class="btn icon" style="border:0;background:transparent"><svg class="i"></svg></button></div>`);
+    const glyph = window.document.querySelector('svg');
+    const rect = size => ({ left: 60 - size / 2, top: 25 - size / 2, right: 60 + size / 2, bottom: 25 + size / 2, width: size, height: size });
+    glyph.getBoundingClientRect = () => rect(16 * scale);
+    expect(audit().productRules).toEqual([]);
+    glyph.getBoundingClientRect = () => rect(14 * scale);
+    expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-19']);
+    window.document.querySelector('.team-board').style.transform = `translate(60px, -40px) scale(${scale})`;
+    glyph.getBoundingClientRect = () => rect(16 * scale);
+    expect(audit().productRules).toEqual([]);
+  });
   it("rejects low-contrast selected dates, including hover overrides (R-UI-22)", () => {
     const { window, audit } = productAudit('<div class="au-month-grid"><button class="btn" aria-pressed="true" style="border:0;color:rgb(30,30,30);background:rgb(40,40,40)">28</button></div>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-22']);
