@@ -61,15 +61,17 @@ test("unifies managed, private Google and custom MCP without bridge duplicates",
   expect(c.view().groups).toHaveLength(3);
   expect(root.querySelectorAll(".cs-list")).toHaveLength(1);
   for (const row of root.querySelectorAll(".cs-item")) {
-    expect(row.querySelector('[role="switch"]')).not.toBeNull();
+    expect(row.querySelector('[data-conn="enable"]')).not.toBeNull();
     expect(row.querySelector(".chev")).not.toBeNull();
     expect(row.querySelector('[data-conn="server-menu"]')).toBeNull();
   }
   expect(root.textContent).toContain("Google (private)");
 });
 
-test("managed detail groups individual switches and contains disconnect only in overflow", async () => {
+test("managed detail folds its tools into one line that unfolds into a switch each, and contains disconnect only in overflow", async () => {
   const { c, root, click } = setup(); await c.load(); click("open", "composio:notion"); await settle();
+  expect(root.querySelectorAll('[data-conn="tool"]')).toHaveLength(0);
+  click("tool-list");
   expect(root.querySelectorAll(".cs-plugin-tools section")).toHaveLength(2);
   expect(root.querySelectorAll('[data-conn="tool"]')).toHaveLength(3);
   expect(root.querySelector('[data-tool="NOTION_DELETE"]')?.getAttribute("aria-checked")).toBe("false");
@@ -90,23 +92,26 @@ test("a failed managed status read is visible and retry restores the complete li
 });
 
 test("individual tool toggles preserve all other exclusions and refresh immediately", async () => {
-  const { c, root, click } = setup(); await c.load(); click("open", "composio:notion"); await settle();
+  const { c, root, click } = setup(); await c.load(); click("open", "composio:notion"); await settle(); click("tool-list");
   c.click(root.querySelector('[data-tool="NOTION_SEARCH"]')!); await settle();
   expect(api.connectorsSetTools).toHaveBeenCalledWith("composio:notion", { disabled_tools: ["NOTION_DELETE", "NOTION_SEARCH"] });
   expect(root.querySelector('[data-tool="NOTION_SEARCH"]')?.getAttribute("aria-checked")).toBe("false"); c.reset();
 });
 
-test("service switch does not overwrite tool preferences", async () => {
+test("the service switch turns every tool on while some are off, then the service off with its tools kept", async () => {
   const { c, click } = setup(); await c.load(); click("enable", "composio:notion"); await settle();
-  expect(api.connectorsSetTools).toHaveBeenCalledWith("composio:notion", { enabled: false });
-  expect(connectors[0]!.disabled_tools).toEqual(["NOTION_DELETE"]);
+  expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { enabled: true, disabled_tools: [] });
+  expect(connectors[0]!.disabled_tools).toEqual([]);
+  click("enable", "composio:notion"); await settle();
+  expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { enabled: false });
+  expect(connectors[0]!.disabled_tools).toEqual([]);
 });
 
 test("failed tool reads remain visible and can be retried", async () => {
   api.connectorsTools.mockRejectedValueOnce(new Error("network"));
   const { c, root, click } = setup(); await c.load(); click("open", "composio:notion"); await settle();
   expect(root.querySelector('[role="alert"]')).not.toBeNull();
-  click("refresh", "composio:notion"); await settle();
+  click("refresh", "composio:notion"); await settle(); click("tool-list");
   expect(root.querySelectorAll('[data-conn="tool"]')).toHaveLength(3); c.reset();
 });
 
