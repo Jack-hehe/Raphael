@@ -84,9 +84,9 @@ function dictationHTML(data: HomeOverview): string {
 
 export function homeHTML(data: HomeOverview): string {
   const report = buildReport(data.report, data.generated_at_ms);
-  const hero = `<section class="ho-hero">${avatarHTML({ size: 96, avatar: null })}<p class="ho-said">${esc(report.text)}</p>` +
-    (report.action ? iconButton(report.action.target === "retry" ? "refresh" : "info", report.action.label, ' data-home-go="report"') : "") +
-    iconButton("chat", t("home.askRaphael"), ' data-home-go="agent"', "ho-ask") + `</section>`;
+  // His emblem turns while the window allows motion (avatar.ts keeps it still otherwise); nothing sits right of his report but its fix.
+  const hero = `<section class="ho-hero">${avatarHTML({ size: 96, avatar: null, loop: true })}<p class="ho-said">${esc(report.text)}</p>` +
+    (report.action ? iconButton(report.action.target === "retry" ? "refresh" : "info", report.action.label, ' data-home-go="report"') : "") + `</section>`;
   const date = new Date(data.generated_at_ms).toLocaleDateString(getLocale(), { month: "numeric", day: "numeric", weekday: "short" });
   const pending = data.today.filter(item => item.kind !== "routine");
   return hero + `<div class="ho-board">` +
@@ -107,7 +107,19 @@ export function createHome(app: AppContext): Page {
   let visible = false, generation = 0;
   let data: HomeOverview | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
-  const paint = (): void => { if (data) el.innerHTML = homeHTML(data); };
+  // Drawn again on every refresh, but the emblem stays the node it is while its picture is the same: a new <img> would start its turn over.
+  const paint = (): void => {
+    if (!data) return;
+    const html = homeHTML(data), emblem = el.querySelector<HTMLElement>(".ho-hero > .av");
+    if (!emblem) { el.innerHTML = html; return; }
+    const next = document.createElement("div");
+    next.innerHTML = html;
+    const fresh = next.querySelector<HTMLElement>(".ho-hero")!;
+    if (fresh.querySelector(".av")?.outerHTML !== emblem.outerHTML) { el.innerHTML = html; return; }
+    for (const child of [...emblem.parentElement!.children]) if (child !== emblem) child.remove();
+    emblem.parentElement!.append(...[...fresh.children].filter(child => !child.matches(".av")));
+    el.querySelector(".ho-board")!.replaceWith(next.querySelector(".ho-board")!);
+  };
   async function load(): Promise<void> {
     const mine = ++generation;
     if (!data) el.innerHTML = loadingHTML();

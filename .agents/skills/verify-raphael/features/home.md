@@ -14,7 +14,7 @@ reports belong in Reports.
 
 Launch the app, complete onboarding, click Home (first in the rail), or click the
 Raphael brand. A report opens its member's conversation at that exact turn;
-routines open Automations. Spend and allowance buttons open Usage, and the dictation card icon opens Dictation. The Today icon and timeline items open the calendar. The status report keeps Raphael's emblem visible.
+routines open Automations. Spend and allowance buttons open Usage, and the dictation card icon opens Dictation. The Today icon and timeline items open the calendar. The status report keeps Raphael's emblem visible and turning: it plays his loop (the one of the 拉斐爾 page) while the window allows motion and is the still picture under reduced motion, following the preference as it changes. Nothing sits right of the report except its one fixing icon when something is wrong: asking Raphael is done on his own page (owner, 2026-10-25), so the hero has no ask icon.
 The bottom of the sidebar holds 連結應用程式, above Settings, with the number of connected apps
 (a badge on its icon in the 拉斐爾 page's rail and in the sidebar at 880px and narrower); it opens
 Settings > Connections (see [Connections and MCP](connections-mcp.md)).
@@ -22,8 +22,12 @@ Settings > Connections (see [Connections and MCP](connections-mcp.md)).
 ## Driving it with look
 
 ```powershell
-npm run look -- home home-empty home-720 home-report home-routine home-calendar home-many --theme both --width 1120,720,1920x1080
+npm run look -- home home-empty home-720 home-report home-routine home-calendar home-many home-motion --theme both --width 1120,720,1920x1080
 ```
+
+Scenes run with reduced motion, so every home scene above shows the emblem's still picture, and its `home-overview` check asserts that (and that the hero has no ask icon).
+`home-motion` allows motion (`motion: true`, with `freeze-motion` for the CSS animations) and asserts that the page asks for the loop and that the loop is an animation (a WebP of 144 frames over 6 s):
+the loop plays by itself, which a canvas cannot sample, so its screenshot shows whichever frame the clock was at. A refresh of Home does not replace the emblem's node, so his turn is not started over (pages/home.test.ts).
 
 The Today card spans seven columns on desktop, pending/reports span five, and each chart spans four. Compact windows stack the board.
 

@@ -1,11 +1,10 @@
 .page-home { max-width: 1360px; margin: 0 auto; padding: var(--sp-6); container: home / inline-size; }
 .page-home .btn { white-space: normal; line-height: inherit; }
 
-/* Raphael: his emblem large, his report beside it, a small icon to ask him. */
+/* Raphael: his emblem large and turning, his report beside it. */
 .ho-hero { display: flex; align-items: center; gap: var(--sp-5); padding: var(--sp-5) var(--sp-6); background: var(--panel); border: 1px solid var(--edge); border-radius: var(--r-lg); margin-bottom: var(--sp-5); }
 .ho-hero > .av { flex-shrink: 0; }
 .ho-said { flex: 1; min-width: 0; margin: 0; font: 600 var(--fs-lg)/1.6 var(--voice, var(--ui)); color: var(--text); overflow-wrap: anywhere; }
-.ho-hero .ho-ask { flex-shrink: 0; }
 
 .ho-board { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: var(--sp-5); align-items: start; }
 .ho-today { grid-column: span 7; align-self: stretch; }

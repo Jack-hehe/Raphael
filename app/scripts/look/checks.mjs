@@ -473,8 +473,10 @@ export function checkRendered(name) {
     const emblem = home?.querySelector('.ho-hero > .av');
     require(visible(emblem) && emblem.getBoundingClientRect().width >= 60, "Raphael's emblem is large on Home");
     require(!home.querySelector('h1'), "Home has no headline or slogan");
-    const ask = home.querySelector('.ho-ask');
-    require(visible(ask) && !ask.textContent.trim() && ask.getAttribute('aria-label'), "asking Raphael is a small labelled icon, not words");
+    require(!home.querySelector('.ho-hero [data-home-go="agent"], .ho-ask'), "the hero has no ask-Raphael icon: Raphael is asked on his own page");
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const pictures = [...emblem.querySelectorAll('img')].map(image => image.getAttribute('src'));
+    require(pictures.length === 2 && pictures.every(src => /-loop\.webp$/.test(src) !== reduced), reduced ? "under reduced motion Raphael's emblem is his still picture" : "Raphael's emblem is the turning loop");
     require(!home.querySelector('.ho-pending [data-home-item^="routine:"], .ho-pending [data-home-item^="report:"]'), "Pending lists only what waits for the owner");
     for (const card of home.querySelectorAll('.ho-card')) require(visible(card.querySelector(':scope > header .ho-open')), "every card opens its details from an icon");
     require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "Home is the selected rail destination");
@@ -484,6 +486,25 @@ export function checkRendered(name) {
     for (const label of document.querySelectorAll('#nav .nav .nav-t')) if (visible(label))
       require(label.getBoundingClientRect().height < (parseFloat(getComputedStyle(label).lineHeight) || 20) * 1.5, `"${label.textContent}" does not fit on one line in the sidebar`);
     return { check: name, items: home.querySelectorAll('[data-home-item]').length, width: home.clientWidth };
+  }
+  if (name === "home-emblem-motion") {
+    // The loop plays by itself, which a canvas cannot show (it draws the first frame), so the check is that the page
+    // asks for the loop, and that what it asks for is an animation: its RIFF holds an ANIM header and many frames.
+    const picture = [...document.querySelectorAll('.page-home:not([hidden]) .ho-hero > .av img')].find(visible);
+    require(!matchMedia('(prefers-reduced-motion: reduce)').matches, "this scene runs with motion allowed");
+    require(picture && /app-emblem-(?:light|dark)-loop\.webp$/.test(picture.getAttribute('src')), "Raphael's emblem on Home is the turning loop when motion is allowed");
+    require(!document.querySelector('.page-home .ho-hero [data-home-go="agent"]'), "the hero has no ask-Raphael icon");
+    return fetch(picture.getAttribute('src')).then(response => response.arrayBuffer()).then(buffer => {
+      const view = new DataView(buffer), tag = at => String.fromCharCode(...new Uint8Array(buffer, at, 4));
+      require(tag(0) === 'RIFF' && tag(8) === 'WEBP', "the loop is a WebP picture");
+      let frames = 0, milliseconds = 0, animated = false;
+      for (let at = 12; at + 8 <= buffer.byteLength; at += 8 + view.getUint32(at + 4, true) + (view.getUint32(at + 4, true) & 1)) {
+        if (tag(at) === 'ANIM') animated = true;
+        if (tag(at) === 'ANMF') { frames++; milliseconds += view.getUint8(at + 8 + 12) | view.getUint8(at + 8 + 13) << 8 | view.getUint8(at + 8 + 14) << 16; }
+      }
+      require(animated && frames > 24 && milliseconds >= 2000, `the loop is an animation of many frames: ${frames} frames, ${milliseconds} ms`);
+      return { check: name, frames, milliseconds };
+    });
   }
   if (name === "home-report") {
     require(window.__look.calls.some(call => call.method === "agent.history.list" && call.params.member_id === 1), "Reported member history was requested");
