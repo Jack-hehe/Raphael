@@ -6,7 +6,7 @@ import type { MembersList } from "./types";
 import { closeMenu, ico, menuIsOpenFor, openMenu } from "./ui";
 import { textPositionRect } from "./text-position";
 
-const APP_STATES = { ready: "rooms.appConnected", needs_sign_in: "rooms.appSignIn" } as const;
+const APP_STATES = { ready: "rooms.appConnected", needs_sign_in: "rooms.appSignIn", needs_secret: "rooms.appKey" } as const;
 
 /**
  * Prompts and menus consume the same public inventory; apps never become bot recipients. Each row leads

@@ -24,6 +24,15 @@ const FAILURES: Record<string, MessageKey> = {
 
 const plain = (key: MessageKey): string => (t as (key: MessageKey) => string)(key);
 
+/**
+ * The words of a card's state line with their clauses kept whole: a line that wraps breaks where a comma is, so that
+ * no word of Chinese or Japanese is split across two lines (English breaks at its spaces anyway).
+ */
+export function clausesHTML(text: string): string {
+  if (getLocale() === "en") return esc(text);
+  return text.split(/(?<=[，、])/u).map(clause => `<span class="cc-clause">${esc(clause)}</span>`).join("");
+}
+
 /** The app's bare mark: its brand path in its brand colour, or the generic plug. */
 export function appMarkHTML(app: string): string {
   const mark = MARKS[app];

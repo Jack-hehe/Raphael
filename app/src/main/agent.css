@@ -242,6 +242,19 @@
 .connector-card[data-card-state="failed"] .cc-state, .connector-card[data-card-state="expired"] .cc-state { color: var(--text-3); }
 .cc-actions { display: flex; justify-content: flex-end; }
 .event-line > .mono { width: 16px; height: 16px; }
+/* The cards of a key (secret-card.ts) and of the owner's turn at the computer (computer-card.ts) are connector cards
+   with a second row: the masked field and Save, or Stop and 我完成了. */
+.connector-card.has-form { row-gap: var(--sp-2); }
+.sc-form { grid-column: 2 / -1; display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.sc-field { flex: 1 1 auto; min-width: 0; }
+.secret-card > .cc-actions, .computer-card > .cc-actions { grid-column: 2 / -1; gap: var(--sp-2); }
+.secret-card .cc-state > span:last-child, .computer-card .cc-state > span:last-child { text-wrap: balance; }
+.computer-card > .mono { align-self: start; }
+.computer-card .cc-name { display: flex; align-items: baseline; gap: var(--sp-2); }
+.cc-clause { display: inline-block; }
+.sc-field input::-ms-reveal { display: none; }
+.cc-live { flex: none; font-size: var(--pa-sys); font-weight: 400; color: var(--text-2); }
+.cc-hint { color: var(--text-3); }
 
 /* image lightbox */
 .media-lightbox .lb-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: min(860px, 100%); max-height: 100%; padding: var(--sp-3); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--pop); }

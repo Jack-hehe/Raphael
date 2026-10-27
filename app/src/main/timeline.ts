@@ -1,7 +1,9 @@
 import { fileKind, sentFileHTML } from "./attachments";
+import { computerCardsHTML, computerResumedLineHTML } from "./computer-card";
 import { connectorCardsHTML, resumedLineHTML } from "./connector-card";
 import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
+import { secretCardsHTML, secretResumedLineHTML } from "./secret-card";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
 // in order. Events are small chips, questions mount inline, and pending work shows three dots.
@@ -794,7 +796,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
     (routine ? routineLineHTML(turn) : "") +
-    (resumed ? resumedLineHTML(turn) : "") +
+    (resumed ? resumedLineHTML(turn) + secretResumedLineHTML(turn) + computerResumedLineHTML(turn) : "") +
     (asked
       ? `<div class="me">` +
         `<div class="chat-message owner-message" data-message="question">` +
@@ -808,7 +810,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
       ? turnMessagesHTML(turn, state, query, regenerate) + (turn.messages!.some(m => m.kind === "reply") ? "" : textAnswer)
       : workSectionHTML(turn, state, query) + textAnswer) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
-    connectorCardsHTML(turn) +
+    connectorCardsHTML(turn) + secretCardsHTML(turn) + computerCardsHTML(turn) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +

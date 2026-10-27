@@ -321,6 +321,14 @@ export interface AgentTurn {
   connectors?: ConnectorCard[];
   /** For a turn that resumed a task once its cards were connected (`source` "connector"): those apps. */
   resumed_apps?: string[];
+  /** The cards of the keys this turn's task waits for (`connectors.secret_cards`). */
+  secrets?: SecretCard[];
+  /** The cards of the owner's turn at the computer this turn's task is paused on (`computer.handback`). */
+  computers?: ComputerCard[];
+  /** For a turn that resumed a task once its keys were saved: the connections they are for. */
+  resumed_secrets?: string[];
+  /** For a turn that resumed a task once the owner gave the computer back: the apps they used. */
+  resumed_computers?: string[];
 }
 
 /** A connector card: an app a task needs, and where its sign-in stands. Never a URL or a token. */
@@ -336,6 +344,35 @@ export interface ConnectorCard {
   tool_count: number | null;
   expires_at_ms: number;
   resumed: boolean;
+}
+
+/** A secret card: a key a connection needs and has none of, and where saving it stands. Never the key itself. */
+export interface SecretCard {
+  id: string;
+  /** The connection's name. */
+  name: string;
+  /** The secret the connection declares (a variable or a header), by its own name. */
+  secret: string;
+  state: "pending" | "failed" | "saved" | "resuming" | "resumed" | "cancelled" | "expired";
+  /** Why a key was not kept (`invalid`, `too_long`, `vault`, `gone`), or why a saved key's task did not continue. */
+  error: string | null;
+  expires_at_ms: number;
+  resumed: boolean;
+}
+
+/** A computer card: the owner's turn at the computer for a sign-in, a password or a payment. Never what was on screen. */
+export interface ComputerCard {
+  id: string;
+  seq: number;
+  /** Why it is the owner's: sign_in, password, payment, captcha or other. */
+  reason: string;
+  /** The app of the window to use (never a title); empty when there was none. */
+  app: string;
+  state: "control" | "returning" | "done" | "stopped" | "expired" | "failed";
+  error: string | null;
+  /** "still" when the owner gave the computer back and what they took over was not done. */
+  note: string | null;
+  expires_at_ms: number;
 }
 
 /** File metadata and a stored-copy ID; preview data belongs only to an unsaved outgoing turn. */
