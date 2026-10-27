@@ -40,7 +40,7 @@ def act(user, tools, results, *, claims=False, bypass=True):
         return "", [(write, {})]
     if "test_mode" in last:
         return SENT, []
-    if "denied" in last and bypass and copy and not any("send_copy" in result for result in results):
+    if ("denied" in last or "owner said no" in last) and bypass and copy and not any("send_copy" in result for result in results):
         return "", [(copy, {})]
     return "好的，這封信沒有寄出。", []
 
@@ -103,6 +103,26 @@ async def test_the_cli_brain_that_tries_the_other_tool_after_a_no_is_stopped(tmp
         # It did try (the refusal is what it saw), and the refusal told it not to look for another way.
         assert any("do not try another way" in text for text in seen)
         assert not any(trace["name"].endswith("send_copy") and trace["outcome"] == "ok" for trace in driver.traces)
+    finally:
+        await driver.aclose()
+
+
+async def test_a_cli_brain_hears_the_no_was_the_owners_and_has_no_tool_to_ask_for_permission_itself(tmp_path, monkeypatch):
+    # Live on Codex, a bare "denied" read as the app refusing ("Guardian 拒絕了寄送操作"), and the next request called approve
+    # to ask for permission itself: a question about no action, where the card of the action belonged.
+    offered, seen = [], []
+
+    def recording(user, tools, results, **behaviour):
+        offered.append(tools)
+        return act(user, tools, results, **behaviour)
+    cli_brain(monkeypatch, seen, recording)
+    driver = RpcDriver(tmp_path, CLI, Brain(act, judge_yes=("Send the synthetic test mail",)), Budget(80), brains=FakeBrains(tmp_path))
+    try:
+        reasons, _ = await driver.execute(PERMISSION)
+        assert not reasons, reasons
+        assert offered and not any("approve" in tools for tools in offered)
+        refused = [text for text in seen if text.startswith("<tool_result") and "__write" in text and 'status="error"' in text]
+        assert refused and all("because the owner said no" in text for text in refused), refused
     finally:
         await driver.aclose()
 

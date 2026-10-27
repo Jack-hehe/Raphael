@@ -107,7 +107,10 @@ class CliLoop:
                 "Never output a JSON reply envelope."
             )
         )
-        self.user, self.tools = user, list(tools) + [APPROVE]
+        # Only Claude Code asks through `approve` (its --permission-prompt-tool); Codex and Antigravity ask natively. Live,
+        # a Codex model offered it called it itself to ask for permission: a question about no action at all.
+        self.user = user
+        self.tools = list(tools) + ([APPROVE] if (brain_ref(model) or ("",))[0] == "claude" else [])
         self.images = [attachment for attachment in attachments if attachment.is_image]
         self.progress, self.thinking, self.event, self.execute = progress, thinking, event, execute
         self.seen, self.batch_calls = [], []

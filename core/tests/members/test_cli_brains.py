@@ -424,6 +424,15 @@ async def test_claude_permission_prompt_tool_round_trip(setup, tmp_path, approve
     assert (await rig.call("agent.confirm", {"id": pending["confirm"]["id"], "approved": bool(approved), "always": approved == "always"}))["text"] == "Finished."
 
 
+@pytest.mark.parametrize("model, offered", [("cli:claude", True), ("cli:codex", False), ("cli:gemini", False)])
+def test_only_claude_code_is_offered_the_permission_prompt_tool(model, offered):
+    from raphael_core.agent.cli.loop import CliLoop
+    loop = CliLoop(brains=None, sessions=None, member_id=0, model=model, ledger=None, language="zh-TW", plain=False,
+                   system="persona", user="hello", tools=[], progress=lambda _: None, thinking=lambda _: None,
+                   event=lambda _: None, execute=None)
+    assert ("approve" in [tool["function"]["name"] for tool in loop.tools]) is offered
+
+
 @pytest.mark.parametrize("remember", [True, False])
 async def test_mcp_memory_write_requires_owner_request_and_is_scoped(setup, tmp_path, remember):
     rig, team = setup

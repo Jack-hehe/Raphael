@@ -528,11 +528,12 @@ _WHY = {
     "sign_in": "a sign-in", "password": "a password", "payment": "a payment",
     "captcha": "a check only a person can pass", "other": "a step that was theirs",
 }
-# What the model is told when it tries to do after the owner's no what that no was about, by another way.
+# What the model is told of the owner's no, and when it tries to do what that no was about by another way. Live, a
+# bare "denied" read as the app refusing ("Guardian 拒絕了寄送操作"), and the next request asked for permission itself.
 DECLINED_NOTE = (
     "The owner said no to an action in this request. It was not done, and nothing else that needs their yes is "
     "done now: do not try another way or another tool to get the same thing done. Say in one short sentence that "
-    "it was not done."
+    "it was not done because the owner said no; never say that an app or a service refused it."
 )
 # What the model is told when it calls a tool that sends mail and it writes drafts first (the owner sends them).
 DRAFT_FIRST_NOTE = (
@@ -3028,7 +3029,8 @@ class AgentService:
         steps: list[Step] = []
         if isinstance(followup.loop, CliLoop) and approval is None:
             self._gate.record_unrun(call.tool.key, outcome="denied")
-            result = ToolResult(call.tool.key, False, None, "denied")
+            result = ToolResult(call.tool.key, False, None, "denied",
+                                instruction=DECLINED_NOTE if followup.ask.declined else None)
             steps.append(self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "denied"))
         else:
             result = await self._make_call(
