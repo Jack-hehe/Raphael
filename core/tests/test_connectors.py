@@ -13,7 +13,7 @@ import pytest
 
 from raphael_core.connectors.composio import ComposioClient, trusted_url
 from raphael_core.connectors.google import GoogleClient, scopes_for
-from raphael_core.connectors.store import ConnectorStore
+from raphael_core.connectors.store import Connector, ConnectorStore
 from raphael_core.connectors.http import ConnectorFailure
 from raphael_core.integrations.vault import MemoryVault
 from raphael_core.integrations.service import IntegrationsService
@@ -99,6 +99,7 @@ class Platform:
         self.requests = []
         self.statuses = list(statuses or ["INITIALIZING", "INITIATED", "ACTIVE"])
         self.version = 1
+        self.config = {}
 
     def __call__(self, request):
         self.requests.append(request)
@@ -115,12 +116,17 @@ class Platform:
                 {"slug": "GMAIL_SEND_EMAIL", "tags": ["createHint"]},
                 {"slug": "GMAIL_DELETE_MESSAGE", "tags": ["destructiveHint"]}]})
         if path == "/tool_router/session" or (path == "/tool_router/session/trs_test" and method == "GET"):
+            if method == "POST":
+                self.config = {k: v for k, v in json.loads(request.content).items() if k != "user_id"}
             return httpx.Response(201 if method == "POST" else 200, json={"session_id": "trs_test", "config_version": self.version,
                 "mcp": {"url": "https://app.composio.dev/mcp"}})
         if path == "/tool_router/session/trs_test" and method == "PATCH":
             self.version += 1
+            self.config.update({k: v for k, v in json.loads(request.content).items() if k != "expected_config_version"})
             return httpx.Response(200, json={"config_version": self.version})
         if path.endswith("/link"):
+            if json.loads(request.content)["toolkit"] not in self.config.get("toolkits", {}).get("enable", []):
+                return httpx.Response(400, json={"error": {"slug": "ToolRouterV2_ToolkitNotAllowed", "message": "private-provider-message"}})
             return httpx.Response(201, json={"connected_account_id": "ca_test", "redirect_url": "https://connect.composio.dev/link/lt_private"})
         if path == "/connected_accounts/ca_test":
             if method == "DELETE":
@@ -302,6 +308,81 @@ async def connected(tmp_path, conn, fake=None, **options):
     await router.call("connectors.set_key", {"key": "ak_private"})
     assert (await router.call("connectors.connect", {"toolkit": "gmail"}))["connected"]
     return router, service, hub, vault, fake
+
+
+async def test_link_requires_toolkit_permission_and_connect_patches_before_requesting_it(tmp_path, conn):
+    fake = Platform(["ACTIVE"])
+    router, service, hub, vault = setup_service(tmp_path, conn, fake, open_browser=no_wait)
+    vault.set("connectors:composio:key", "private")
+    await service._session()
+    with pytest.raises(ConnectorFailure, match="toolkit_not_allowed"):
+        await service.composio.request("POST", "/tool_router/session/trs_test/link", json={"toolkit": "gmail"})
+    result = await router.call("connectors.connect", {"toolkit": "gmail"})
+    assert result["connected"]
+    assert fake.config["toolkits"]["enable"] == ["gmail"]
+    link = max(i for i, request in enumerate(fake.requests) if request.url.path.endswith("/link"))
+    assert any(request.method == "PATCH" for request in fake.requests[1:link])
+    assert service.store.connectors["composio:gmail"].status == "ACTIVE"
+
+
+@pytest.mark.parametrize("outcome", ["FAILED", "INACTIVE", "EXPIRED", "cancel", "browser-error", "refused", "timeout"])
+async def test_failed_sign_in_restores_prior_session_permissions(tmp_path, conn, outcome):
+    fake = Platform(["INITIATED" if outcome in ("cancel", "timeout") else outcome])
+    entered, clock = asyncio.Event(), [0]
+    async def browser(url):
+        if outcome == "cancel":
+            entered.set()
+            await asyncio.Event().wait()
+        if outcome == "browser-error":
+            raise RuntimeError("private-browser-message")
+    async def wait(seconds):
+        clock[0] += seconds
+    def response(request):
+        if outcome == "refused" and request.url.path.endswith("/link"):
+            assert "gmail" in fake.config["toolkits"]["enable"]
+            return httpx.Response(400, json={"error": {"slug": "ToolRouterV2_ToolkitNotAllowed", "message": "private-provider-message"}})
+        return fake(request)
+    router, service, hub, vault = setup_service(tmp_path, conn, response, open_browser=browser,
+        sleep=wait, now=lambda: clock[0], poll_timeout=4)
+    vault.set("connectors:composio:key", "private")
+    other = Connector("composio:slack", "composio")
+    other.status, other.disabled_tools = "ACTIVE", ["SLACK_WRITE"]
+    service.store.connectors[other.id] = other
+    await service._session()
+    before = json.loads(json.dumps(fake.config))
+    task = asyncio.create_task(router.call("connectors.connect", {"toolkit": "gmail"}))
+    if outcome == "cancel":
+        await asyncio.wait_for(entered.wait(), 2)
+        assert "gmail" in fake.config["toolkits"]["enable"]
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    elif outcome == "browser-error":
+        with pytest.raises(RpcError, match="Connector operation failed"):
+            await task
+    else:
+        result = await task
+        assert result.get("connected") is not True
+        assert result["error"] == ("toolkit_not_allowed" if outcome == "refused" else outcome.lower())
+        assert "private" not in json.dumps(result)
+    assert fake.config == before
+    assert fake.config["tools"] == {"slack": {"disable": ["SLACK_WRITE"]}}
+    assert service.store.connectors[other.id].disabled_tools == ["SLACK_WRITE"]
+    assert not service.tool_available("connectors_composio", "GMAIL_SEND_EMAIL")
+
+
+@pytest.mark.parametrize("status, payload, expected", [
+    (400, {"error": {"slug": "ToolRouterV2_ToolkitNotAllowed", "message": "private"}}, "toolkit_not_allowed"),
+    (400, {"error": {"code": "ToolRouterV2_ToolkitNotAllowed", "message": "private"}}, "toolkit_not_allowed"),
+    (400, {"error": {"slug": "OtherError", "message": "private"}}, "http_error"),
+    (403, {"error": {"slug": "ToolRouterV2_ToolkitNotAllowed", "message": "private"}}, "auth"),
+])
+async def test_toolkit_refusal_has_a_value_free_dedicated_failure(status, payload, expected):
+    client = ComposioClient(lambda: "private", transport=httpx.MockTransport(lambda request: httpx.Response(status, json=payload)))
+    with pytest.raises(ConnectorFailure) as exc:
+        await client.request("POST", "/tool_router/session/test/link", json={"toolkit": "gmail"})
+    assert exc.value.kind == expected and exc.value.status == status
+    assert str(exc.value) == expected
 
 
 async def test_timeout_uses_ten_minute_deadline_and_never_enables(tmp_path, conn):
@@ -641,15 +722,78 @@ async def test_catalog_projection_cache_and_missing_managed_oauth(tmp_path, conn
 
     router, service, hub, vault = setup_service(tmp_path, conn, response)
     await router.call("connectors.set_key", {"key": "ak_private"})
-    catalog = await router.call("connectors.catalog", {"search": "mail", "category": "productivity", "limit": 50})
+    catalog = await router.call("connectors.catalog")
     assert catalog["stores_tool_payloads"] is True
     assert catalog["items"][0]["can_connect"] is True
     assert catalog["items"][0]["auth_schemes"] == ["oauth2"]
     before = len(fake.requests)
-    assert await router.call("connectors.catalog", {"search": "mail", "category": "productivity", "limit": 50}) == catalog
+    assert await router.call("connectors.catalog") == catalog
     assert len(fake.requests) == before
     assert (await router.call("connectors.categories"))["items"][0]["id"] == "productivity"
     assert (await router.call("connectors.connect", {"toolkit": "xero"}))["error"] == "needs_own_oauth_app"
+
+
+async def test_store_catalog_pages_cache_expiry_and_failed_refresh_are_atomic(tmp_path, conn):
+    clock, mode, requests = [0], ["good"], []
+    def response(request):
+        requests.append(request)
+        if request.url.path.endswith("/categories"):
+            return httpx.Response(200, json={"items": [{"id": "docs", "name": "Documents"}]})
+        assert "search" not in request.url.params and "category" not in request.url.params
+        cursor = request.url.params.get("cursor")
+        if mode[0] == "protocol":
+            return httpx.Response(200, json={"items": [{"slug": "bad", "meta": {"categories": "invalid"}}]})
+        if cursor and mode[0] == "failed":
+            return httpx.Response(503)
+        slug = "second" if cursor else "first"
+        return httpx.Response(200, json={"items": [{"slug": slug, "meta": {"categories": ["docs"]}},
+            {"slug": "first", "meta": {}}], "next_cursor": None if cursor else "page-2"})
+    router, service, hub, vault = setup_service(tmp_path, conn, response, now=lambda: clock[0])
+    vault.set("connectors:composio:key", "private")
+    first, concurrent = await asyncio.gather(router.call("connectors.catalog"), router.call("connectors.catalog"))
+    assert first == concurrent
+    assert [item["slug"] for item in first["items"]] == ["first", "second"]
+    assert first["categories"] == [{"id": "docs", "name": "Documents"}]
+    assert first["next_cursor"] is None and not first["truncated"] and not first["stale"]
+    assert len(requests) == 3
+    clock[0] = 3599
+    assert await router.call("connectors.catalog") == first
+    assert len(requests) == 3
+    clock[0], mode[0] = 3600, "failed"
+    stale = await router.call("connectors.catalog")
+    assert stale == {**first, "stale": True}
+    assert len(requests) == 5  # No partial page is cached; no category fetch after a failed page.
+    mode[0] = "protocol"
+    assert await router.call("connectors.catalog") == {**first, "stale": True}
+    mode[0] = "good"
+    assert await router.call("connectors.catalog") == first
+    assert len(requests) == 9
+    await router.call("connectors.set_key", {"key": ""})
+    assert service._store_catalog is None
+    assert (await router.call("connectors.catalog"))["error"] == "missing_key"
+
+
+@pytest.mark.parametrize("mode", ["cap", "repeated", "categories"])
+async def test_store_catalog_bounds_and_first_load_failure(tmp_path, conn, mode):
+    requests = []
+    def response(request):
+        requests.append(request)
+        if request.url.path.endswith("/categories"):
+            return httpx.Response(503 if mode == "categories" else 200, json={"items": []})
+        cursor = int(request.url.params.get("cursor", "0"))
+        items = [{"slug": f"app-{cursor}-{i}"} for i in range(500)]
+        return httpx.Response(200, json={"items": items,
+            "next_cursor": "1" if mode == "repeated" else str(cursor + 1) if mode == "cap" else None})
+    router, service, hub, vault = setup_service(tmp_path, conn, response)
+    vault.set("connectors:composio:key", "private")
+    result = await router.call("connectors.catalog")
+    if mode == "cap":
+        assert len(result["items"]) == 3000 and result["truncated"]
+        assert len(requests) == 7 and result["next_cursor"] is None
+    else:
+        assert result["ok"] is False
+        assert service._store_catalog is None
+        assert len(requests) == 2
 
 
 async def test_pagination_stalls_fail_instead_of_returning_partial_catalog():

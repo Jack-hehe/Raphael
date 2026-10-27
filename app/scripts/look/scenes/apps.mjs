@@ -59,16 +59,27 @@ export default [
   scene("connected-apps-unreadable", "A core that cannot list the apps: the sidebar and the tab say 「—」 and give no number, and the apps stay one list", [
     ...open, wait('[data-k="cs-open:composio:notion"]'), check("apps-unreadable"),
   ], { inventoryUnreadable: true, managedConnectors: [notion(), google], servers: base.servers.slice(0, 1), skills }),
-  scene("connections-app-switch", "One switch per app (owner, 10/27): GitHub with 18 of its 46 tools off is mixed; a press turns every tool on, the next turns the app off, the next all on again", [
-    ...open, appSwitch("mixed"), click('[data-conn="enable"][data-id="github"]'), appSwitch("true"),
-    click('[data-conn="enable"][data-id="github"]'), appSwitch("false"), click('[data-conn="enable"][data-id="github"]'), appSwitch("true"), check("app-switch-all"),
+  scene("connections-app-switch", "The app switch has two states and preserves all 18 tool exclusions when disabled and enabled", [
+    ...open, check("connections-binary"), appSwitch("true"), click('[data-conn="enable"][data-id="github"]'), appSwitch("false"),
+    check("connections-binary"), click('[data-conn="enable"][data-id="github"]'), appSwitch("true"), check("app-switch-all"), check("connections-binary"),
   ], { servers: [github, ...base.servers] }),
-  scene("connector-many-tools", "An app of many tools: its dialog has the one switch and one folded line for its 46 tools, not a switch for each", [
-    ...open, click('[data-conn="open"][data-id="github"]'), wait('[data-conn="tool-list"][aria-expanded="false"]'), check("connector-folded"),
+  scene("connector-many-tools", "Bulk write and read permissions stay reachable above the folded 46-tool list", [
+    ...open, click('[data-conn="open"][data-id="github"]'), wait('[data-conn="tool-list"][aria-expanded="false"]'), check("connections-binary"),
+    click('.cs-dialog [data-conn="kind"][data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="true"]'),
+    click('.cs-dialog [data-conn="kind"][data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="true"]'),
+    click('.cs-dialog [data-conn="kind"][data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="false"]'),
+    check("connector-folded"), check("connections-binary"),
   ], { servers: [github, ...base.servers] }),
-  scene("connector-account-tools", "An app's detail: its accounts, how many of its tools are on (9/9), unfolded into a switch for each tool, sign in again and uninstall", [
-    ...open, click('[data-conn="open"][data-id="composio:notion"]'), click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"),
+  scene("connector-account-tools", "A managed app's read and write switches update whole kinds and keep the per-tool list available", [
+    ...open, click('[data-conn="open"][data-id="composio:notion"]'), wait('.cs-dialog [data-conn="kind"]'),
+    click('.cs-dialog [data-conn="relogin"]'), wait('.toast'), check("connector-link-refused"),
+    click('.cs-dialog [data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="false"]'), check("connections-binary"),
+    click('.cs-dialog [data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="true"]'),
+    click('.cs-dialog [data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="false"]'),
+    click('.cs-dialog [data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="true"]'),
+    click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"), check("connections-binary"),
   ], {
+    connectorLinkRefused: true,
     managedConnectors: [notion({ accounts: [{ id: "ca_work", status: "ACTIVE" }, { id: "ca_old", status: "EXPIRED" }] }), google],
     pluginTools: { ...base.pluginTools, "composio:notion": notionTools },
   }),

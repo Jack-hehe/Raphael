@@ -66,7 +66,10 @@
 .cs-plugin-tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); }
 .cs-plugin-tools h3 { margin: 0 0 var(--sp-1); }
 .cs-plugin-tools .cs-tool-list { padding: 0; }
-/* 會改動 and 只讀取: two rows on one rounded card, each opening its tools */
+/* Bulk permissions stay above the folded per-tool list. */
+.cs-kind-list > .row { min-height: 42px; padding: var(--sp-2) var(--sp-3); }
+.cs-kind-list > .row + .row { border-top: 1px solid var(--line); }
+.cs-kind-list .t { font-size: var(--fs-xs); }
 .cs-grp { border: 0; border-radius: 0; overflow: hidden; }
 .cs-grp > .btn.gr { width: 100%; justify-content: space-between; min-height: 44px; padding: var(--sp-2) var(--sp-3); border: 0; border-radius: 0; background: transparent; font-size: var(--fs-xs); text-align: left; }
 .cs-grp > .btn.gr + .btn.gr { border-top: 1px solid var(--line); }
@@ -152,6 +155,8 @@
 .cs-composio-mark { color: var(--text-2); }
 .cs-composio-mark svg { width: 20px; height: 20px; }
 .cs-store-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.cs-composio-category { margin-top: var(--sp-4); }
+.cs-composio-category h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-xs); color: var(--text-2); font-weight: 600; }
 .cs-store-heading h2 { margin-bottom: 0; }
 .cs-store-heading .sel { max-width: 180px; }
 .cs-key-form label { font-size: var(--fs-sm); font-weight: 600; }

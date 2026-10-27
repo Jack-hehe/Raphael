@@ -291,7 +291,7 @@ async function connectorCall<T>(method: string, params: object = {}): Promise<T>
   return result as T;
 }
 export const connectorsStatus = (): Promise<import("./plugins-data").ConnectorStatus> => connectorCall("connectors.status", { refresh: false });
-export const connectorsCatalog = (params: { search?: string; category?: string; cursor?: string }): Promise<{ items: import("./plugins-data").Toolkit[]; next_cursor?: string | null }> => connectorCall("connectors.catalog", { ...params, limit: 50 });
+export const connectorsCatalog = (): Promise<{ items: import("./plugins-data").Toolkit[]; categories: Array<{ id: string; name: string }> }> => connectorCall("connectors.catalog");
 export const connectorsCategories = (): Promise<{ items: Array<{ id: string; name: string }> }> => connectorCall("connectors.categories");
 export const connectorsTools = (id: string): Promise<{ items: import("./plugins-data").ConnectorTool[] }> => connectorCall("connectors.tools", { id });
 export const connectorsSetTools = (id: string, changes: { disabled_tools?: string[]; enabled?: boolean }): Promise<unknown> => connectorCall("connectors.set_tools", { id, ...changes });

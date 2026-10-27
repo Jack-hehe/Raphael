@@ -25,6 +25,13 @@ app-wide changes. Add `verify -- --core` or `verify -- --rust` only when those
 boundaries change; documentation-only work needs diff/link review. Judge reviews the
 same selected look run. State the selection and any incomplete evidence in the handoff.
 
+A click or type step may carry `measure: { name: "interaction-paint", budgetMs: 250 }`.
+The shared driver records the event through the next painted frame (two animation
+frames), excluding automation transport time, and emits the duration as an assertion
+in `report.json`. The Store's configured scenes use 360 extra synthetic apps from
+`pluginCatalogLoad` with the `pluginsMany` variant, then measure opening and searching
+the complete grouped list. This is offline browser timing, not provider/native timing.
+
 Look needs an installed Edge/Chrome and the pinned **puppeteer-core@25.13.0** devDependency.
 It never downloads a browser or installs packages. Preserve the package/lockfile pin.
 `LOOK_BROWSER` optionally selects an executable. Node 22 or later is required.

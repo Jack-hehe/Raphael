@@ -73,7 +73,7 @@ export function storePlugin(item: Toolkit, connectors: ManagedConnector[]): Stor
   const summary = { "zh-TW": item.description, en: item.description, ja: item.description };
   return {
     id: item.slug, source: "composio", name: item.name, logo: item.logo, icon: null,
-    publisher: "Composio", url: "", category: "", popular: false, can_connect: item.can_connect,
+    publisher: "Composio", url: "", category: typeof item.categories[0] === "string" ? item.categories[0] : item.categories[0]?.id || item.categories[0]?.slug || item.categories[0]?.name || "", popular: false, can_connect: item.can_connect,
     auth: item.no_auth ? "none" : "oauth", summary, about: summary,
     examples: { "zh-TW": [], en: [], ja: [] },
     server_id: connectors.find(c => c.id === `composio:${item.slug}` && c.status === "ACTIVE")?.id ?? null,

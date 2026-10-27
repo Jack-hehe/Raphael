@@ -6,6 +6,17 @@ import { scenes } from "./scenes/index.mjs";
 import { LATIN_NAMES } from "./runner.mjs";
 
 describe("rendered look checks", () => {
+  it("rejects a mixed connection switch while allowing binary permissions", () => {
+    const win = new Window(), previous = { window: globalThis.window, document: globalThis.document };
+    try {
+      globalThis.window = win; globalThis.document = win.document;
+      win.document.body.innerHTML = '<div class="cs"><button role="switch" aria-checked="mixed"></button></div>';
+      expect(() => checkRendered("connections-binary")).toThrow("never have a mixed");
+      win.document.querySelector('button').setAttribute('aria-checked', 'false');
+      expect(checkRendered("connections-binary")).toEqual({ check: "connections-binary", switches: 1 });
+    } finally { globalThis.window = previous.window; globalThis.document = previous.document; win.happyDOM.abort(); }
+  });
+
   it("rejects known English interface labels while preserving user content and brands", () => {
     const window = new Window();
     window.document.body.innerHTML = '<button>Save</button><button>Raphael</button><p class="message-text">Save</p><button hidden>Cancel</button>';

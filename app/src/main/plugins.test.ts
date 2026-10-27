@@ -18,7 +18,7 @@ import { connectionsHTML, createConnections, emptyConnectionsView } from "./conn
 import { closeMenu, toaster } from "./ui";
 
 let connectors: ManagedConnector[];
-const toolkit: Toolkit = { slug: "notion", name: "Notion", description: "Workspace notes", logo: "https://logos.composio.dev/notion.svg", categories: [], can_connect: true, no_auth: false };
+const toolkit: Toolkit = { slug: "notion", name: "Notion", description: "Workspace notes", logo: "https://logos.composio.dev/notion.svg", categories: ["docs", "other"], can_connect: true, no_auth: false };
 const tools = [
   { slug: "NOTION_SEARCH", name: "Search", description: "Find notes", kind: "read", enabled: true },
   { slug: "NOTION_CREATE", name: "Create", description: "Add a note", kind: "write", enabled: true },
@@ -39,7 +39,7 @@ beforeEach(() => {
   api.membersList.mockResolvedValue({ members: [], groups: [] });
   api.membersSkillsList.mockResolvedValue({ skills: [] });
   api.connectorsStatus.mockImplementation(async () => ({ connectors: structuredClone(connectors), composio_configured: true, google_configured: true }));
-  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "github", name: "GitHub" }], next_cursor: null });
+  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "github", name: "GitHub" }], categories: [{ id: "docs", name: "Documents" }, { id: "other", name: "Other" }] });
   api.connectorsCategories.mockResolvedValue({ items: [{ id: "docs", name: "Documents" }] });
   api.connectorsTools.mockImplementation(async id => ({ items: tools.map(t => ({ ...t, enabled: !connectors.find(c => c.id === id)!.disabled_tools.includes(t.slug) })) }));
   api.connectorsSetTools.mockImplementation(async (id, changes) => { Object.assign(connectors.find(c => c.id === id)!, changes); return {}; });
@@ -100,13 +100,39 @@ test("individual tool toggles preserve all other exclusions and refresh immediat
   expect(root.querySelector('[data-tool="NOTION_SEARCH"]')?.getAttribute("aria-checked")).toBe("false"); c.reset();
 });
 
-test("the service switch turns every tool on while some are off, then the service off with its tools kept", async () => {
-  const { c, click } = setup(); await c.load(); click("enable", "composio:notion"); await settle();
-  expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { enabled: true, disabled_tools: [] });
-  expect(connectors[0]!.disabled_tools).toEqual([]);
+test("managed app switches preserve exclusions when disabling and enabling the app", async () => {
+  const { c, root, click } = setup(); await c.load();
+  expect(root.querySelector('[data-conn="enable"][data-id="composio:notion"]')?.getAttribute("aria-checked")).toBe("true");
   click("enable", "composio:notion"); await settle();
   expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { enabled: false });
-  expect(connectors[0]!.disabled_tools).toEqual([]);
+  click("enable", "composio:notion"); await settle();
+  expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { enabled: true });
+  expect(connectors[0]!.disabled_tools).toEqual(["NOTION_DELETE"]); c.reset();
+});
+
+test("managed kind switches preserve other and unknown exclusions, leave the app off, and turn a partial kind fully on", async () => {
+  connectors[0]!.disabled_tools = ["NOTION_SEARCH", "NOTION_DELETE", "UNLISTED_TOOL"];
+  connectors[0]!.enabled = false;
+  const { c, root, click } = setup(); await c.load(); click("open", "composio:notion"); await settle();
+  const press = async (kind: string) => { c.click(root.querySelector(`[data-conn="kind"][data-kind="${kind}"]`)!); await settle(); };
+  await press("write");
+  expect(api.connectorsSetTools).toHaveBeenLastCalledWith("composio:notion", { disabled_tools: ["NOTION_SEARCH", "UNLISTED_TOOL"] });
+  await press("write");
+  expect(new Set(connectors[0]!.disabled_tools)).toEqual(new Set(["NOTION_SEARCH", "UNLISTED_TOOL", "NOTION_CREATE", "NOTION_DELETE"]));
+  await press("read");
+  expect(connectors[0]!.disabled_tools).not.toContain("NOTION_SEARCH");
+  expect(connectors[0]!.disabled_tools).toContain("NOTION_CREATE");
+  expect(connectors[0]!.enabled).toBe(false);
+  expect(root.querySelector('[aria-checked="mixed"]')).toBeNull(); c.reset();
+});
+
+test.each(["zh-TW", "en", "ja"] as const)("toolkit refusal has its own localized value-free login error in %s", async locale => {
+  setLocale(locale);
+  api.connectorsConnect.mockRejectedValue(new Error("toolkit_not_allowed"));
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle(); click("open-store", "github"); click("join", "github"); await settle();
+  const error = root.querySelector('[role="alert"]')?.textContent;
+  expect(error).toBe({ "zh-TW": "Composio 尚未允許這個應用程式登入，請重試連結。", en: "Composio has not allowed this app to sign in. Try connecting again.", ja: "Composio がこのアプリのログインを許可していません。もう一度接続してください。" }[locale]);
+  expect(root.innerHTML).not.toContain("ToolRouterV2_ToolkitNotAllowed"); c.reset();
 });
 
 test("failed tool reads remain visible and can be retried", async () => {
@@ -117,32 +143,51 @@ test("failed tool reads remain visible and can be retried", async () => {
   expect(root.querySelectorAll('[data-conn="tool"]')).toHaveLength(3); c.reset();
 });
 
-test("store uses shared categories, sends search to the catalog, and paginates", async () => {
+test("the whole store groups in provider order, deduplicates, and searches and filters locally", async () => {
+  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, toolkit,
+    { ...toolkit, slug: "github", name: "GitHub", categories: [{ id: "other", name: "Other" }, "docs"] },
+    { ...toolkit, slug: "uncategorized", name: "Uncategorized", categories: [] }],
+    categories: [{ id: "other", name: "Other" }, { id: "docs", name: "Documents" }] });
   const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
-  expect(root.querySelector('[data-k="conn-category"]')?.classList.contains("sel")).toBe(true);
-  expect(root.querySelector("select")).toBeNull();
-  expect(root.textContent).toContain("Installed");
-  c.menuFor("conn-category")!.pick("docs"); await settle();
-  expect(api.connectorsCatalog).toHaveBeenLastCalledWith({ search: "", category: "docs", cursor: undefined });
-  c.input({ id: "conn-search", value: "issue" } as HTMLInputElement);
-  await new Promise(resolve => setTimeout(resolve, 280));
-  expect(api.connectorsCatalog).toHaveBeenLastCalledWith({ search: "issue", category: "docs", cursor: undefined });
-  api.connectorsCatalog.mockResolvedValueOnce({ items: [toolkit], next_cursor: "next" });
-  c.menuFor("conn-category")!.pick(""); await settle();
-  api.connectorsCatalog.mockResolvedValueOnce({ items: [{ ...toolkit, slug: "linear" }], next_cursor: null });
-  click("load-more"); await settle();
-  expect(api.connectorsCatalog).toHaveBeenLastCalledWith({ search: "issue", category: "", cursor: "next" });
-  expect(c.view().composioCatalog).toHaveLength(2); c.reset();
+  expect([...root.querySelectorAll(".cs-composio-category h3")].map(e => e.textContent)).toEqual(["Other", "Documents", "Other"]);
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(3);
+  expect(root.querySelector('[data-category="docs"] [data-id="notion"]')).not.toBeNull();
+  expect(root.querySelector('[data-category="other"] [data-id="notion"]')).toBeNull();
+  expect(root.querySelector('[data-conn="load-more"]')).toBeNull();
+  const requests = api.connectorsCatalog.mock.calls.length;
+  c.menuFor("conn-category")!.pick("other");
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(1);
+  expect(root.querySelector('[data-id="github"]')).not.toBeNull();
+  c.input({ id: "conn-search", value: "GitHub" } as HTMLInputElement);
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(1);
+  c.menuFor("conn-category")!.pick("");
+  c.input({ id: "conn-search", value: "Workspace" } as HTMLInputElement);
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(3);
+  expect(api.connectorsCatalog).toHaveBeenCalledTimes(requests);
+  expect(api.connectorsCategories).not.toHaveBeenCalled(); c.reset();
 });
 
-test("new search results win over an older in-flight catalog request", async () => {
-  const { c } = setup(); await c.load();
+test("local filters apply to an in-flight full catalog, and reset ignores a late reply", async () => {
   let finish!: (value: unknown) => void;
   api.connectorsCatalog.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
-  c.menuFor("conn-category")!.pick("docs");
-  c.menuFor("conn-category")!.pick("other"); await settle();
-  finish({ items: [], next_cursor: null }); await settle();
-  expect(c.view().composioCatalog).toHaveLength(2); c.reset();
+  const { c, root, click } = setup(); const loaded = c.load(); await settle(); click("tab", "store");
+  // Starting a newer full read supersedes the first; neither filter needs a request.
+  await settle(); c.menuFor("conn-category")!.pick("other");
+  c.input({ id: "conn-search", value: "GitHub" } as HTMLInputElement);
+  finish({ items: [], categories: [] }); await loaded;
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(0);
+  expect(c.view().composioCatalog).toHaveLength(2);
+  let late!: (value: unknown) => void;
+  api.connectorsCatalog.mockReturnValueOnce(new Promise(resolve => { late = resolve; }));
+  click("retry-store"); c.reset(); late({ items: [], categories: [] }); await settle();
+  expect(c.view().composioCatalog).toHaveLength(2);
+});
+
+test("a failed refresh preserves the last full store list", async () => {
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
+  api.connectorsCatalog.mockRejectedValueOnce(new Error("offline"));
+  click("retry-store"); await settle();
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(2); c.reset();
 });
 
 test("missing key offers an optional dialog without requesting managed apps", async () => {
@@ -259,13 +304,12 @@ test("built-in services work without a key, search locally, and use their existi
 
 test("own services win across slugs and names, and Composio categories leave them visible", async () => {
   api.integrationsCatalog.mockResolvedValue({ services: [{ ...storePlugin(toolkit, []), source: undefined, popular: true }] });
-  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "notion-alt" }, { ...toolkit, slug: "github", name: "GitHub" }], next_cursor: null });
+  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "notion-alt" }, { ...toolkit, slug: "github", name: "GitHub" }], categories: [{ id: "docs", name: "Documents" }, { id: "other", name: "Other" }] });
   const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
   expect(root.querySelectorAll(".cs-card")).toHaveLength(2);
   expect(root.querySelectorAll('[data-conn="join"][data-id="notion"]')).toHaveLength(1);
   expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("2");
-  api.connectorsCatalog.mockResolvedValueOnce({ items: [], next_cursor: null });
-  c.menuFor("conn-category")!.pick("docs"); await settle();
+  c.menuFor("conn-category")!.pick("other"); await settle();
   expect(root.querySelectorAll(".cs-card")).toHaveLength(1);
   expect(root.querySelector('[data-conn="join"][data-id="notion"]')).not.toBeNull();
   expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("1"); c.reset();

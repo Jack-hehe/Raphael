@@ -88,6 +88,7 @@ class ConnectorsService:
         self.poll_timeout = poll_timeout
         self._lock = asyncio.Lock()
         self._tool_catalog: dict[str, list[dict]] = {}
+        self._store_catalog: tuple[float, dict] | None = None
         self._important: dict[str, set[str]] = {}
         self._notify = lambda: None
         self._transport = transport
@@ -144,26 +145,56 @@ class ConnectorsService:
                 "draft_only_enforced_by": "raphael"}
 
     async def catalog(self, params):
-        query = {}
-        for name in ("search", "category", "cursor"):
-            if name in params:
-                query[name] = _text(params, name, optional=True)
-        limit = params.get("limit", 500)
-        if type(limit) is not int or not 1 <= limit <= 1000:
-            raise invalid_params("limit must be between 1 and 1000")
-        data = await self.composio.page("/toolkits", {**query, "limit": limit, "sort_by": "usage"}, cache=True)
-        # Explicit projection: connected account state and auth configuration never reach the UI.
-        items = []
-        for item in data["items"]:
-            meta = item.get("meta") or {}
-            items.append({"slug": item["slug"], "name": item.get("name", item["slug"]),
-                "description": meta.get("description", ""), "logo": meta.get("logo", ""),
-                "categories": meta.get("categories", []), "tools_count": meta.get("tools_count", 0),
-                "can_connect": bool(item.get("no_auth") or item.get("composio_managed_auth_schemes")),
-                "no_auth": bool(item.get("no_auth")),
-                "auth_schemes": [str(x).lower() for x in item.get("auth_schemes", [])]})
-        return {"items": items, "next_cursor": data.get("next_cursor"), "total_items": data.get("total_items"),
-                "stores_tool_payloads": True, "payload_retention_days": 365}
+        # Publish only a complete snapshot; a failed refresh must not replace the last good list.
+        if not self.vault.get(KEY):
+            raise ConnectorFailure("missing_key")
+        before = self._store_catalog
+        if before and self.now() - before[0] < 3600:
+            return before[1]
+        try:
+            items, slugs, cursors = [], set(), set()
+            cursor, count, truncated = None, 0, False
+            for _ in range(100):
+                data = await self.composio.page("/toolkits", {"limit": 500, "sort_by": "usage", "cursor": cursor})
+                remaining = 3000 - count
+                for item in data["items"][:remaining]:
+                    count += 1
+                    if not isinstance(item, dict) or not isinstance(item.get("slug"), str):
+                        raise ConnectorFailure("protocol")
+                    if item["slug"] in slugs:
+                        continue
+                    slugs.add(item["slug"])
+                    meta = item.get("meta") or {}
+                    if (not isinstance(meta, dict) or not isinstance(meta.get("categories", []), list)
+                            or not isinstance(item.get("auth_schemes", []), list)):
+                        raise ConnectorFailure("protocol")
+                    # Account state and auth configuration never reach the UI.
+                    items.append({"slug": item["slug"], "name": item.get("name", item["slug"]),
+                        "description": meta.get("description", ""), "logo": meta.get("logo", ""),
+                        "categories": meta.get("categories", []), "tools_count": meta.get("tools_count", 0),
+                        "can_connect": bool(item.get("no_auth") or item.get("composio_managed_auth_schemes")),
+                        "no_auth": bool(item.get("no_auth")),
+                        "auth_schemes": [str(x).lower() for x in item.get("auth_schemes", [])]})
+                next_cursor = data.get("next_cursor")
+                if count >= 3000 or not next_cursor:
+                    truncated = bool(next_cursor or len(data["items"]) > remaining)
+                    break
+                if not isinstance(next_cursor, str) or next_cursor in cursors:
+                    raise ConnectorFailure("pagination")
+                cursors.add(next_cursor)
+                cursor = next_cursor
+            else:
+                raise ConnectorFailure("pagination")
+            categories = await self.composio.pages("/toolkits/categories")
+            result = {"items": items, "categories": categories, "next_cursor": None,
+                      "total_items": len(items), "truncated": truncated, "stale": False,
+                      "stores_tool_payloads": True, "payload_retention_days": 365}
+            self._store_catalog = (self.now(), result)
+            return result
+        except ConnectorFailure:
+            if before:
+                return {**before[1], "stale": True}
+            raise
 
     async def categories(self, params):
         return await self.composio.page("/toolkits/categories", cache=True)
@@ -192,6 +223,7 @@ class ConnectorsService:
             else:
                 self.vault.delete(KEY)
             self.composio._cache.clear()
+            self._store_catalog = None
             self._tool_catalog.clear()
             self._important.clear()
         self._save()
@@ -225,15 +257,16 @@ class ConnectorsService:
         await self._install_composio(url, refresh=False)
         return data
 
-    async def _patch(self):
+    async def _patch(self, config=None, *, refresh=True):
         if not self.store.session_id:
             await self._session()
-        data = await self.composio.patch(self.store.session_id,
-            {**self._config(), "search": {"enable": True}, "execute": {"enable_multi_execute": True}}, self.store.config_version)
+        config = ({**self._config(), "search": {"enable": True}, "execute": {"enable_multi_execute": True}}
+                  if config is None else config)
+        data = await self.composio.patch(self.store.session_id, config, self.store.config_version)
         self.store.config_version = data.get("config_version", self.store.config_version)
         self._save()
         server = self.hub._config.get(COMPOSIO_SERVER)
-        if server:
+        if server and refresh:
             await self._install_composio(server.url)
 
     async def _install_composio(self, url, *, refresh=True):
@@ -262,53 +295,64 @@ class ConnectorsService:
         details = await self.composio.request("GET", "/toolkits/" + segment(slug))
         if not (details.get("no_auth") or details.get("composio_managed_auth_schemes")):
             raise ConnectorFailure("needs_own_oauth_app")
-        await self._session()
         body = {"toolkit": slug}
         if "alias" in params:
             body["alias"] = _text(params, "alias")
-        link = await self.composio.request("POST", "/tool_router/session/" + segment(self.store.session_id) + "/link", json=body)
-        url = trusted_url(link.get("redirect_url", ""))
-        account_id = link.get("connected_account_id")
-        if not isinstance(account_id, str) or not account_id:
-            raise ConnectorFailure("protocol")
-        ident = "composio:" + slug
-        entry = self.store.connectors.setdefault(ident, Connector(ident, "composio"))
-        entry.name = details.get("name", slug)
-        entry.description = (details.get("meta") or {}).get("description", "")
-        entry.logo = (details.get("meta") or {}).get("logo", "")
-        prior_active = entry.status == "ACTIVE"
-        entry.status = "INITIALIZING"
-        entry.accounts = [a for a in entry.accounts if a["id"] != account_id] + [{"id": account_id, "status": "INITIALIZING"}]
-        self._save()
+        await self._session()
+        before = self._config()
+        pending = {**before, "toolkits": {"enable": sorted(set(before["toolkits"]["enable"]) | {slug})}}
+        connected = False
         try:
-            await self.open_browser(url)
-            deadline = self.now() + self.poll_timeout
-            while self.now() < deadline:
-                account = await self.composio.request("GET", "/connected_accounts/" + segment(account_id))
-                status = account.get("status")
-                if status not in STATUSES:
-                    raise ConnectorFailure("protocol")
-                if account.get("id") != account_id:
-                    raise ConnectorFailure("account_mismatch")
-                if account.get("toolkit", {}).get("slug", slug) != slug:
-                    raise ConnectorFailure("account_mismatch")
-                entry.accounts = [a for a in entry.accounts if a["id"] != account_id] + [{"id": account_id, "status": status}]
-                entry.status = "ACTIVE" if prior_active else status
+            # The toolkit must be permitted before the provider can issue a login link.
+            await self._patch(pending, refresh=False)
+            link = await self.composio.request("POST", "/tool_router/session/" + segment(self.store.session_id) + "/link", json=body)
+            url = trusted_url(link.get("redirect_url", ""))
+            account_id = link.get("connected_account_id")
+            if not isinstance(account_id, str) or not account_id:
+                raise ConnectorFailure("protocol")
+            ident = "composio:" + slug
+            entry = self.store.connectors.setdefault(ident, Connector(ident, "composio"))
+            entry.name = details.get("name", slug)
+            entry.description = (details.get("meta") or {}).get("description", "")
+            entry.logo = (details.get("meta") or {}).get("logo", "")
+            prior_active = entry.status == "ACTIVE"
+            entry.status = "INITIALIZING"
+            entry.accounts = [a for a in entry.accounts if a["id"] != account_id] + [{"id": account_id, "status": "INITIALIZING"}]
+            self._save()
+            try:
+                await self.open_browser(url)
+                deadline = self.now() + self.poll_timeout
+                while self.now() < deadline:
+                    account = await self.composio.request("GET", "/connected_accounts/" + segment(account_id))
+                    status = account.get("status")
+                    if status not in STATUSES:
+                        raise ConnectorFailure("protocol")
+                    if account.get("id") != account_id:
+                        raise ConnectorFailure("account_mismatch")
+                    if account.get("toolkit", {}).get("slug", slug) != slug:
+                        raise ConnectorFailure("account_mismatch")
+                    entry.accounts = [a for a in entry.accounts if a["id"] != account_id] + [{"id": account_id, "status": status}]
+                    entry.status = "ACTIVE" if prior_active else status
+                    self._save()
+                    if status == "ACTIVE":
+                        await self._load_tools(entry)
+                        await self._patch()
+                        connected = True
+                        return {"connected": True, "connector": self._view(entry)}
+                    if status not in ("INITIALIZING", "INITIATED"):
+                        return {"connected": False, "error": status.lower(), "connector": self._view(entry)}
+                    await self.sleep(2)
+                entry.status = "ACTIVE" if prior_active else "EXPIRED"
                 self._save()
-                if status == "ACTIVE":
-                    await self._load_tools(entry)
-                    await self._patch()
-                    return {"connected": True, "connector": self._view(entry)}
-                if status not in ("INITIALIZING", "INITIATED"):
-                    return {"connected": False, "error": status.lower(), "connector": self._view(entry)}
-                await self.sleep(2)
-            entry.status = "ACTIVE" if prior_active else "EXPIRED"
-            self._save()
-            return {"connected": False, "error": "timeout", "connector": self._view(entry)}
-        except BaseException:
-            entry.status = "ACTIVE" if prior_active else "INACTIVE"
-            self._save()
-            raise
+                return {"connected": False, "error": "timeout", "connector": self._view(entry)}
+            except BaseException:
+                entry.status = "ACTIVE" if prior_active else "INACTIVE"
+                self._save()
+                raise
+        finally:
+            if not connected:
+                # Restore the prior toolkit permissions on refusal, timeout or cancellation.
+                await self._patch(before, refresh=False)
 
     async def _load_tools(self, entry):
         slug = entry.id.split(":", 1)[1]

@@ -3,6 +3,15 @@ export function installMock(fixture, config = {}, target = window) {
   const data = structuredClone(fixture);
   const variant = config.fixture ?? {};
   for (const [key, value] of Object.entries(variant)) if (key in data) data[key] = structuredClone(value);
+  if (variant.pluginsMany) {
+    const base = [...data.pluginCatalog];
+    for (let i = 0; i < data.pluginCatalogLoad.count; i++) {
+      const item = base[i % base.length], category = data.pluginCategories[i % data.pluginCategories.length].id;
+      data.pluginCatalog.push({ ...item, slug: `${item.slug}-${i}`, name: `${item.name} ${String(i + 1).padStart(3, "0")}`,
+        categories: [category, data.pluginCategories[(i + 1) % data.pluginCategories.length].id] });
+    }
+    data.pluginCatalog.push(data.pluginCatalog[6]);
+  }
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
   if (variant.liveScenarioOwnerView) data.turns = structuredClone(data.liveScenarioOwnerTurns);
@@ -376,7 +385,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "connectors.status": return { connectors: data.managedConnectors, composio_configured: data.composioConfigured, google_configured: true };
       case "connectors.catalog": {
         if (!data.composioConfigured) return { ok: false, error: "missing_key" };
-        return { items: data.pluginCatalog.filter(s => (!p.search || `${s.name} ${s.description}`.toLowerCase().includes(p.search.toLowerCase())) && (!p.category || s.categories.includes(p.category))), next_cursor: null };
+        return { items: data.pluginCatalog, categories: data.pluginCategories, next_cursor: null };
       }
       case "connectors.categories": return { items: data.pluginCategories };
       case "connectors.tools": return { items: data.pluginTools[p.id] ?? [] };
@@ -396,6 +405,7 @@ export function installMock(fixture, config = {}, target = window) {
         state.emit({ type: "ConnectionsChanged" }); return { connector };
       }
       case "connectors.connect": {
+        if (variant.connectorLinkRefused) return { ok: false, error: "toolkit_not_allowed" };
         if (variant.pluginsConnecting) return new Promise(() => {});
         const entry = data.pluginCatalog.find(s => s.slug === p.toolkit);
         data.managedConnectors.push({ id: `composio:${entry.slug}`, kind: "composio", name: entry.name, description: entry.description, status: "ACTIVE", enabled: true, enabled_tools: [], disabled_tools: [] });

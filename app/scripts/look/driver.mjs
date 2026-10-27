@@ -39,6 +39,17 @@ export async function perform(page, step) {
     if (await compact()) { await click(".mb-pick"); await click('#app-popover [data-action="1"]'); }
     else { await click("[data-room-new]"); await page.keyboard.press("Escape"); }
   };
+  // Measure the real event through its next painted frame, excluding automation transport time.
+  if (step.measure) await page.evaluate(({ selector, action }) => {
+    window.__look.paint = new Promise(resolve => {
+      document.addEventListener(action === "type" ? "input" : "click", function capture(event) {
+        if (!event.target.closest(selector)) return;
+        document.removeEventListener(action === "type" ? "input" : "click", capture, true);
+        const start = performance.now();
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - start)));
+      }, true);
+    });
+  }, step);
   switch (step.action) {
     case "window-control": {
       const selector = `[data-window-action="${step.control}"]`;
@@ -297,4 +308,9 @@ export async function perform(page, step) {
   }
   // Let event handlers, microtasks and popover positioning finish between declarative actions.
   await new Promise(resolve => setTimeout(resolve, 100));
+  if (step.measure) {
+    const durationMs = await page.evaluate(() => window.__look.paint);
+    if (durationMs > step.measure.budgetMs) throw new Error(`${step.measure.name}: ${durationMs.toFixed(1)}ms exceeds ${step.measure.budgetMs}ms event-to-paint budget`);
+    return { check: step.measure.name, durationMs, budgetMs: step.measure.budgetMs };
+  }
 }

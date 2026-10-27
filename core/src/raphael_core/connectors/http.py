@@ -45,8 +45,14 @@ class PrivateHttp:
             kind = {401: "auth", 403: "auth", 404: "gone", 409: "conflict", 429: "rate_limit"}.get(
                 response.status_code, "http_error")
             try:
-                if response.json().get("error") == "invalid_grant":
+                data = response.json()
+                error = data.get("error")
+                if error == "invalid_grant":
                     kind = "reconnect"
+                detail = error if isinstance(error, dict) else data
+                if response.status_code == 400 and (detail.get("slug") == "ToolRouterV2_ToolkitNotAllowed"
+                        or detail.get("code") == "ToolRouterV2_ToolkitNotAllowed"):
+                    kind = "toolkit_not_allowed"
             except (ValueError, AttributeError):
                 pass
             raise ConnectorFailure(kind, response.status_code)

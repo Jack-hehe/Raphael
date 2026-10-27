@@ -85,7 +85,6 @@ export interface ConnectionsView {
   configured: boolean | null;
   categories: Choice[];
   category: string;
-  nextCursor: string | null;
   keyOpen: boolean;
   keyBusy: boolean;
   keyError: "" | "openrouter_key" | "consumer_key" | "auth" | "unreachable" | "unknown";
@@ -124,7 +123,7 @@ export interface ConnectionsView {
 }
 
 export const emptyConnectionsView = (): ConnectionsView => ({
-  configured: null, categories: [], category: "", nextCursor: null, keyOpen: false, keyBusy: false, keyError: "",
+  configured: null, categories: [], category: "", keyOpen: false, keyBusy: false, keyError: "",
   groups: "loading",
   catalog: "loading",
   composioCatalog: "loading",
@@ -176,6 +175,7 @@ const FAILURES: Record<string, MessageKey> = {
   missing_secret: "conn.err.missing_secret",
   gone: "conn.err.gone",
   denied: "conn.err.denied",
+  toolkit_not_allowed: "conn.err.toolkit_not_allowed",
   error: "conn.err.error",
 };
 
@@ -183,6 +183,7 @@ const failureText = (kind: string | null): string => tr(FAILURES[kind ?? ""] ?? 
 
 /** What to tell the user about a login that did not work out, in a line. */
 function loginFailure(kind: string): string {
+  if (kind === "toolkit_not_allowed") return failureText(kind);
   if (kind === "denied") return t("conn.loginFail.denied");
   if (kind === "timeout") return t("conn.loginFail.timeout");
   return t("conn.loginFail.other", { p0: failureText(kind) });
@@ -273,17 +274,9 @@ function barHTML(v: ConnectionsView): string {
 
 // ---------- 已安裝: one list, a row for each service ----------
 
-/** Whether a service that is on has tools turned off (a managed service may not have listed its tools yet). */
-const someToolsOff = (g: ConnectionGroup): boolean => g.tools.some((tool) => !tool.enabled) || (!!g.source && (g.disabled_tools?.length ?? 0) > 0);
-
-/**
- * A service's one switch, in its row and its dialog: on is the service and every tool of it on, off is the service
- * off; on with some tools off is mixed, and a press turns them all on. A checkbox role, not a switch: only that one
- * has a mixed state.
- */
+/** The app switch reflects only the app's enabled flag; tool exclusions stay independent. */
 function serviceSwitch(g: ConnectionGroup, attrs: string): string {
-  const state = !g.enabled ? "false" : someToolsOff(g) ? "mixed" : "true";
-  return `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t("conn.switch", { p0: g.name }))}"${attrs}></button>`;
+  return tg(g.enabled, t("conn.switch", { p0: g.name }), attrs);
 }
 
 /**
@@ -456,12 +449,17 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
       ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.error", { p0: failureText(g.error) }))}</span></div>`
       : "";
   const kinds = (["write", "read"] as const).filter((kind) => g.tools.some((tool) => tool.kind === kind));
-  // How many of its tools can be called, of all it has: one folded line; the service's switch turns them all on or off.
+  // Kind switches change tool permissions; the app switch never rewrites them.
   const on = g.tools.filter((tool) => tool.enabled).length;
   const tools = g.tools_state === "loading" ? `<p role="status">${esc(t("conn.loading"))}</p>`
     : g.tools_state === "failed" ? `<div class="note" role="alert">${esc(t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="refresh"${id}`)}</div>`
     : g.tools.length
-    ? `<div class="cs-grp cs-tools">` +
+    ? `<div class="cs-grp cs-tools"><div class="cs-kind-list">${(["write", "read"] as const).map(kind => {
+        const list = g.tools.filter(tool => tool.kind === kind), enabled = list.filter(tool => tool.enabled).length;
+        return row(`${esc(kindName(kind))}<em class="num">${enabled}/${list.length}</em>`, "",
+          tg(list.length > 0 && enabled === list.length, t("conn.groupSwitch", { p0: kindName(kind) }),
+            ` data-conn="kind"${id} data-kind="${kind}" data-k="cs-kind:${kind}"${busy || loggingIn || !list.length ? " disabled" : ""}`), { cls: "cs-kind" });
+      }).join("")}</div>` +
       btn(`<span class="gt">${esc(t("conn.tools.enabled", { p0: on, p1: g.tools.length, p2: g.write_count, p3: g.read_count }))}</span>${ico(v.toolsOpen ? "down" : "right")}`,
         "gr", ` data-conn="tool-list" aria-expanded="${v.toolsOpen}" data-k="cs-count"`) +
       (v.toolsOpen ? `<div class="cs-plugin-tools">${kinds.map(kind => `<section><h3>${esc(kindName(kind))}</h3><div class="cs-tool-list">${g.tools.filter(tool => tool.kind === kind).map(tool => toolRow(g, tool, busy)).join("")}</div></section>`).join("")}</div>` : "") +
@@ -542,7 +540,7 @@ function uniqueComposio(v: ConnectionsView): StoreService[] {
 }
 
 function storeEntries(v: ConnectionsView): StoreService[] {
-  return [...(Array.isArray(v.catalog) ? v.catalog : []), ...uniqueComposio(v)]
+  return [...(Array.isArray(v.catalog) ? v.catalog : []), ...uniqueComposio(v).filter(s => !v.category || s.category === v.category)]
     .filter(s => matches(v.search, s.name, s.publisher, words(s.summary)));
 }
 
@@ -568,11 +566,18 @@ function storeHTML(v: ConnectionsView): string {
   let html = v.catalog === "loading" ? loading : v.catalog === "failed" ? retry("retry-builtin-store")
     : section("hot", t("conn.hot"), popular) + section("all", t("conn.all"), rest);
   if (v.configured) {
-    const managed = uniqueComposio(v).filter(s => matches(v.search, s.name, s.publisher, words(s.summary)));
+    const managed = uniqueComposio(v).filter(s => (!v.category || s.category === v.category) && matches(v.search, s.name, s.publisher, words(s.summary)));
+    // Provider order is preserved; each app belongs to its first category only.
+    const grouped = new Map<string, StoreService[]>(v.categories.map(c => [c.value, []]));
+    for (const item of managed) {
+      if (!grouped.has(item.category)) grouped.set(item.category, []);
+      grouped.get(item.category)!.push(item);
+    }
+    const groups = [...grouped].filter(([, list]) => list.length).map(([key, list]) =>
+      `<section class="cs-composio-category" data-category="${esc(key)}"><h3>${esc(v.categories.find(c => c.value === key)?.label || key || t("plugins.uncategorized"))}</h3><div class="cs-grid">${list.map(s => cardHTML(s, v)).join("")}</div></section>`).join("");
     html += `<section class="cs-sec cs-composio-section"><div class="cs-store-heading"><h2>Composio</h2>${sel([{ value: "", label: t("plugins.allCategories") }, ...v.categories], v.category, t("plugins.category"), ' data-k="conn-category"')}</div>` +
       (v.composioCatalog === "loading" ? loading : v.composioCatalog === "failed" ? retry("retry-store")
-        : managed.length ? `<div class="cs-grid" data-stagger="plugins-store">${managed.map(s => cardHTML(s, v)).join("")}</div>` : `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`) +
-      (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "") + `</section>`;
+        : managed.length ? groups : `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`) + `</section>`;
   } else if (v.configured === false) {
     html += `<div class="cs-composio-setup">${composioMark()}<span>${esc(t("plugins.moreApps"))}</span>${btn(esc(t("plugins.configure")), "sm", ' data-conn="configure-composio"')}</div>`;
   }
@@ -743,14 +748,12 @@ export function createConnections(host: ConnectionsHost): Connections {
   let configured: boolean | null = null;
   let categories: Choice[] = [];
   let category = "";
-  let nextCursor: string | null = null;
   let keyOpen = false;
   let keySaves = 0;
   let keyBusy = false;
   let keyError: ConnectionsView["keyError"] = "";
   let managed: ManagedConnector[] = [];
   let catalogLoads = 0;
-  let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let groups: ConnectionsView["groups"] = "loading";
   let catalog: ConnectionsView["catalog"] = "loading";
   let composioCatalog: ConnectionsView["composioCatalog"] = "loading";
@@ -796,7 +799,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   };
 
   const view = (): ConnectionsView => ({
-    configured, categories, category, nextCursor, keyOpen, keyBusy, keyError,
+    configured, categories, category, keyOpen, keyBusy, keyError,
     groups, catalog, composioCatalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
@@ -860,26 +863,21 @@ export function createConnections(host: ConnectionsHost): Connections {
     redraw();
   }
 
-  async function loadCatalog(append = false): Promise<void> {
+  async function loadCatalog(): Promise<void> {
     if (!configured) return;
     const mine = ++catalogLoads;
-    const before = Array.isArray(composioCatalog) ? composioCatalog : [];
-    const cursor = append ? nextCursor ?? undefined : undefined;
-    composioCatalog = "loading";
+    const before = Array.isArray(composioCatalog) ? composioCatalog : null;
+    if (!before) composioCatalog = "loading";
     repaintBody();
     try {
-      const result = await api.connectorsCatalog({ search, category, cursor });
+      const result = await api.connectorsCatalog();
       if (mine !== catalogLoads) return;
-      const entries = result.items.map(s => storePlugin(s, managed));
-      composioCatalog = append ? [...before, ...entries.filter(s => !before.some(b => b.id === s.id))] : entries;
-      nextCursor = result.next_cursor && result.next_cursor !== cursor ? result.next_cursor : null;
-      const resultCategories = await api.connectorsCategories();
-      if (mine !== catalogLoads) return;
-      categories = resultCategories.items.map(c => ({ value: c.id, label: c.name }));
+      composioCatalog = result.items.map(s => storePlugin(s, managed));
+      categories = result.categories.map(c => ({ value: c.id, label: c.name }));
     } catch (error) {
       if (mine !== catalogLoads) return;
       if (error instanceof Error && error.message === "missing_key") { configured = false; composioCatalog = []; }
-      else composioCatalog = "failed";
+      else composioCatalog = before ?? "failed";
     }
     redraw();
   }
@@ -1100,8 +1098,8 @@ export function createConnections(host: ConnectionsHost): Connections {
         : "id" in target && groupById(target.id)?.source === "google"
         ? await api.connectorsGoogleConnect()
         : await api.connectorsConnect(key.replace(/^composio:/, ""));
-    } catch {
-      result = { connected: false, error: "error" };
+    } catch (error) {
+      result = { connected: false, error: error instanceof Error && error.message === "toolkit_not_allowed" ? "toolkit_not_allowed" : "error" };
     }
     login = null;
     device = null;
@@ -1113,7 +1111,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       }
     } else if (result.error !== "cancelled") {
       loginError = { target: key, kind: result.error ?? "error" };
-      toaster.info(t("plugins.connectFailed"));
+      toaster.info(result.error === "toolkit_not_allowed" ? failureText(result.error) : t("plugins.connectFailed"));
     }
     await load(false);
   }
@@ -1288,15 +1286,23 @@ export function createConnections(host: ConnectionsHost): Connections {
         redraw();
         break;
       case "enable": {
-        // all on turns the service off; off or mixed turns it and every tool of it on
         const group = groupById(id);
-        const on = !!group && !(group.enabled && !someToolsOff(group));
         if (group) void act(id, async () => {
-          if (group.source) await api.connectorsSetTools(id, on ? { enabled: true, disabled_tools: [] } : { enabled: false });
-          else {
-            if (on && group.tools.some((tool) => !tool.enabled)) await api.integrationsSetToolsEnabled(id, group.tools.map((tool) => tool.name), true);
-            if (group.enabled !== on) await api.integrationsSetEnabled(id, on);
-          }
+          if (group.source) await api.connectorsSetTools(id, { enabled: !group.enabled });
+          else await api.integrationsSetEnabled(id, !group.enabled);
+        });
+        break;
+      }
+      case "kind": {
+        const group = groupById(id), kind = button.dataset.kind;
+        const tools = group?.tools.filter(tool => tool.kind === kind) ?? [];
+        if (group && (kind === "write" || kind === "read") && tools.length && group.tools_state !== "loading" && group.tools_state !== "failed") void act(id, async () => {
+          const on = !tools.every(tool => tool.enabled);
+          if (group.source) {
+            const disabled = new Set(group.disabled_tools ?? []);
+            for (const tool of tools) { if (on) disabled.delete(tool.name); else disabled.add(tool.name); }
+            await api.connectorsSetTools(id, { disabled_tools: [...disabled] });
+          } else await api.integrationsSetToolsEnabled(id, tools.map(tool => tool.name), on);
         });
         break;
       }
@@ -1362,7 +1368,6 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "retry-connections": void load(); break;
       case "retry-builtin-store": void load(false); break;
       case "retry-store": void (configured ? loadCatalog() : load()); break;
-      case "load-more": void loadCatalog(true); break;
       default:
         return false;
     }
@@ -1372,11 +1377,6 @@ export function createConnections(host: ConnectionsHost): Connections {
   function input(el: HTMLInputElement): boolean {
     if (el.id === "conn-search") {
       search = el.value;
-      if (tab === "store" && configured) {
-        clearTimeout(searchTimer);
-        catalogLoads++;
-        searchTimer = setTimeout(() => void loadCatalog(), 250);
-      }
       repaintBody();
       return true;
     }
@@ -1433,7 +1433,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     switch (k) {
       case "conn-category": return {
         choices: [{ value: "", label: t("plugins.allCategories") }, ...categories], current: category,
-        pick: value => { category = value; void loadCatalog(); },
+        pick: value => { category = value; repaintBody(); },
       };
       case "conn-add":
         return {
@@ -1469,7 +1469,6 @@ export function createConnections(host: ConnectionsHost): Connections {
   }
 
   function reset(): void {
-    clearTimeout(searchTimer);
     catalogLoads++;
     category = "";
     keyError = ""; keyOpen = false; keySaves++; keyBusy = false;

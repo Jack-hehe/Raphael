@@ -1,4 +1,4 @@
-﻿// Browser assertions run against the real app after the scene's user interactions.
+// Browser assertions run against the real app after the scene's user interactions.
 export function checkRendered(name) {
   const visible = element => element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0;
   const require = (condition, message) => { if (!condition) throw new Error(`${name}: ${message}`); };
@@ -869,22 +869,39 @@ export function checkRendered(name) {
       return { check: name, state: roster.inventory_state };
     });
   }
+  if (name === "connections-binary") {
+    const controls = [...document.querySelectorAll('.cs [aria-checked], .cs-scrim [aria-checked]')];
+    require(controls.length > 0, "connections has switches");
+    require(controls.every(node => ['true', 'false'].includes(node.getAttribute('aria-checked'))), "connections switches never have a mixed or middle state");
+    return { check: name, switches: controls.length };
+  }
+  if (name === "connector-link-refused") {
+    require([...document.querySelectorAll('.toast')].some(node => node.textContent.includes('Composio 尚未允許這個應用程式登入，請重試連結。')), "a toolkit refusal has dedicated actionable copy");
+    require(window.__look.calls.some(call => call.method === 'connectors.connect' && call.params.toolkit === 'notion'), "the real managed sign-in boundary was used");
+    require(!document.body.textContent.includes('ToolRouterV2_ToolkitNotAllowed'), "provider error slugs never reach the interface");
+    return { check: name };
+  }
   if (name === "app-switch-all") {
-    const calls = window.__look.calls.filter(call => call.method?.startsWith("integrations.set_") && call.params?.id === "github").map(call => call.params);
+    const calls = window.__look.calls.filter(call => call.method?.startsWith("integrations.set_") && call.params?.id === "github");
     const server = window.__look.data.servers.find(item => item.id === "github");
-    require(calls[0]?.tools?.length === 46 && calls[0].enabled === true, "the first press turns all 46 tools on at once");
-    require(calls.some(call => call.enabled === false && !call.tools), "a press on an app that is all on turns the app off");
-    require(server.enabled && server.tools.every(tool => tool.enabled), "the last press leaves the app and every tool on");
-    require(!window.__look.calls.some(call => call.method === "integrations.set_tool_enabled"), "no tool was switched one by one");
+    require(calls.length === 2 && calls.every(call => call.method === 'integrations.set_enabled'), "app switches only enable and disable the app");
+    require(calls[0].params.enabled === false && calls[1].params.enabled === true, "app turns off then on");
+    require(server.enabled && server.tools.filter(tool => !tool.enabled).length === 18, "app changes preserve the 18 tool exclusions");
     return { check: name, calls: calls.length };
   }
   if (name === "connector-folded") {
     const dialog = document.querySelector(".modal-scrim .cs-dialog");
     require(visible(dialog) && dialog.querySelectorAll('[data-conn="enable"]').length === 1, "the app's dialog has its one switch");
-    require(dialog.querySelector('[data-conn="enable"]').getAttribute("aria-checked") === "mixed", "its switch says some tools are off");
-    require(!dialog.querySelector('[data-conn="tool"]'), "no switch for each tool until the line is unfolded");
-    require(dialog.querySelector('[data-k="cs-count"]')?.textContent.includes("28/46"), "one line says how many of its tools are on");
-    require(dialog.scrollHeight <= dialog.clientHeight + 1, "the dialog fits without scrolling");
+    require(dialog.querySelector('[data-conn="enable"]').getAttribute("aria-checked") === "true", "the app stays enabled independently of tools");
+    const kinds = [...dialog.querySelectorAll('[data-conn="kind"]')];
+    require(kinds.length === 2 && kinds[0].dataset.kind === 'write' && kinds[1].dataset.kind === 'read', "both kinds are reachable above the folded list");
+    require(kinds[0].getAttribute('aria-checked') === 'false' && kinds[1].getAttribute('aria-checked') === 'true', "kind switches reflect their own tools only");
+    require(!dialog.querySelector('[data-conn="tool"]'), "individual switches remain folded");
+    require(dialog.querySelector('[data-k="cs-count"]')?.textContent.includes("30/46"), "one line says how many tools are on");
+    const calls = window.__look.calls.filter(call => call.method === 'integrations.set_tools_enabled' && call.params.id === 'github');
+    require(calls.length === 3 && calls[0].params.tools.length === 16 && calls[0].params.enabled && calls[1].params.tools.length === 30 && calls[1].params.enabled && !calls[2].params.enabled, "each kind changes in a single bulk RPC");
+    require(!window.__look.calls.some(call => call.method === 'integrations.set_tool_enabled' || call.method === 'integrations.set_enabled'), "kind switches never rewrite the app or loop through per-tool RPCs");
+    require(dialog.scrollHeight <= dialog.clientHeight + 1, "the folded dialog fits without scrolling");
     return { check: name };
   }
   if (name === "connector-tools") {
@@ -896,6 +913,9 @@ export function checkRendered(name) {
     require(count.includes(`${on}/${switches.length}`), `the page says "${count}" while ${on} of ${switches.length} tools are on`);
     const acts = dialog.querySelector(".action-row.is-sticky"), box = acts.getBoundingClientRect(), frame = dialog.getBoundingClientRect();
     require(acts.contains(document.elementFromPoint(box.left + box.width / 2, frame.bottom - 3)), "no tool shows through under the actions");
+    const calls = window.__look.calls.filter(call => call.method === 'connectors.set_tools' && call.params.id === 'composio:notion');
+    require(calls.length === 4 && calls.every(call => !('enabled' in call.params)), "managed kind switches only update disabled_tools");
+    require(calls[0].params.disabled_tools.length === 3 && calls[1].params.disabled_tools.length === 0 && calls[2].params.disabled_tools.length === 6 && calls[3].params.disabled_tools.length === 0, "write and read permissions change independently and return on");
     return { check: name, on, tools: switches.length };
   }
   if (name === "skill-page") {
@@ -1121,6 +1141,29 @@ export function checkRendered(name) {
     require(document.querySelector('[data-run-act="show-allowance"]'), "subscription exclusion links to allowances");
     return { check: name, bill: bill.textContent, sidebar: sidebar.textContent };
   }
+  if (["plugins-store-groups", "plugins-store-search", "plugins-store-category"].includes(name)) {
+    const groups = [...document.querySelectorAll('.cs-composio-category')];
+    const rows = [...document.querySelectorAll('.cs-composio-section .cs-card')];
+    const ids = rows.map(row => row.querySelector('[data-conn="open-store"]').dataset.id);
+    require(new Set(ids).size === rows.length, "each managed app appears once");
+    require(!document.querySelector('[data-conn="load-more"]'), "there is no pagination control");
+    require(window.__look.calls.filter(c => c.method === 'connectors.catalog').every(c => !c.params?.search && !c.params?.category && !c.params?.cursor), "search and category never fetch filtered pages");
+    require(!window.__look.calls.some(c => c.method === 'connectors.categories'), "categories arrive with the full catalog");
+    const catalog = window.__look.data.pluginCatalog;
+    for (const row of rows) {
+      const id = row.querySelector('[data-conn="open-store"]').dataset.id;
+      const item = catalog.find(item => item.slug === id);
+      require(row.closest('[data-category]').dataset.category === item.categories[0], "an app belongs to its first category only");
+    }
+    if (name === "plugins-store-groups") {
+      require(rows.length === 363, "all 360 load-fixture apps plus three unique base apps are present");
+      require(groups.map(g => g.dataset.category).join(',') === window.__look.data.pluginCategories.map(c => c.id).join(','), "headings follow provider order");
+    } else if (name === "plugins-store-search") {
+      require(rows.length === 1 && rows[0].textContent.includes('360'), "search reaches the last app across categories");
+    } else require(groups.length === 1 && groups[0].dataset.category === 'productivity' && rows.length === 121, "the shared dropdown narrows to one group");
+    require(document.querySelector('[data-k="conn-tab:store"] .n').textContent === String(document.querySelectorAll('.cs-card').length), "count follows the local filter");
+    return { check: name, rows: rows.length, categories: groups.map(g => g.dataset.category) };
+  }
   if (name === "plugins-store-rows") {
     const rows = [...document.querySelectorAll('.cs-card')];
     require(rows.length > 0, "the store has app rows");
@@ -1141,7 +1184,7 @@ export function checkRendered(name) {
   }
   if (name === "plugins-store") {
     const cards = [...document.querySelectorAll('.cs-card')];
-    const ids = cards.map(card => card.querySelector('[data-conn="join"], [data-conn="manage"]')?.dataset.id);
+    const ids = cards.map(card => card.querySelector('[data-conn="open-store"]')?.dataset.id);
     require(cards.length === Number(document.querySelector('[data-k="conn-tab:store"] .n').textContent), "tab count equals rendered cards");
     require(document.querySelector('[data-stagger="store:hot"] .cs-card') && document.querySelector('[data-stagger="store:all"] .cs-card'), "popular and all built-in sections remain available");
     require(window.__look.calls.some(c => c.method === 'integrations.catalog'), "built-in catalog uses the real IPC boundary");

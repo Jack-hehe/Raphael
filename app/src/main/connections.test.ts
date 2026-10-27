@@ -153,7 +153,7 @@ describe("已安裝", () => {
     expect(notion).toContain('<span class="nm">Notion</span>');
     expect(notion).toContain('<span class="ds">Notion的一句話</span>');
     expect(notion).toContain('class="logo"');
-    expect(notion).toMatch(/class="tg" role="checkbox" aria-checked="mixed" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
+    expect(notion).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
     // the chevron is a picture of where the row goes, not a second button
     expect(notion).toMatch(/<span class="chev" aria-hidden="true"><svg/);
     expect(notion.match(/<button/g)).toHaveLength(2);
@@ -166,14 +166,14 @@ describe("已安裝", () => {
     expect(remote).toContain('class="ds">https://example.com/mcp</span>');
   });
 
-  test("the switch is the whole service's: off when it is off, on when every tool is on, mixed when some are off", () => {
+  test("the app switch is on exactly when the app is enabled, independently of tool exclusions", () => {
     expect(connectionsHTML(view({ groups: [{ ...notes, enabled: false, status: "disabled" }] }))).toMatch(/aria-checked="false" aria-label="開啟 Notion"/);
-    expect(connectionsHTML(view({ groups: [notes] }))).toMatch(/aria-checked="mixed" aria-label="開啟 Notion"/);
+    expect(connectionsHTML(view({ groups: [notes] }))).toMatch(/aria-checked="true" aria-label="開啟 Notion"/);
     const allOn: ConnectionGroup = { ...notes, tools: notes.tools.map((x) => ({ ...x, enabled: true })) };
     expect(connectionsHTML(view({ groups: [allOn] }))).toMatch(/aria-checked="true" aria-label="開啟 Notion"/);
-    // a managed service that has not listed its tools is mixed by what it keeps off
+    // Tool exclusions never create a middle state, even before a managed tool list is read.
     const managed: ConnectionGroup = { ...allOn, source: "composio", tools: [], disabled_tools: ["NOTION_DELETE"] };
-    expect(connectionsHTML(view({ groups: [managed] }))).toMatch(/aria-checked="mixed" aria-label="開啟 Notion"/);
+    expect(connectionsHTML(view({ groups: [managed] }))).toMatch(/aria-checked="true" aria-label="開啟 Notion"/);
   });
 
   test("says what is wrong with a service in its line; the way to sign in again is in its dialog", () => {
@@ -356,11 +356,25 @@ describe("the dialog of a connected service", () => {
   test("has the mark, the switch, a close button, the name, what it is and the count of its tools", () => {
     const d = dialog(installedPage("ab12"));
     expect(d).toMatch(/class="mono xl logo-mono"/);
-    expect(d).toMatch(/role="checkbox" aria-checked="mixed" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
+    expect(d).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
     expect(d).toMatch(/<button type="button" class="btn icon" aria-label="關閉" title="關閉" data-conn="close"/);
     expect(d).toContain("Notion的說明");
     // how many of its tools are on, of all it has: Delete page is off
     expect(d).toContain("已開啟 2/3 個工具（2 個會改動、1 個只讀取）");
+  });
+
+  test("kind permissions are always reachable above the folded tools, with binary switches and counts", () => {
+    const d = dialog(installedPage("ab12"));
+    expect(d).toContain('會改動<em class="num">1/2</em>');
+    expect(d).toContain('只讀取<em class="num">1/1</em>');
+    expect(d).toMatch(/aria-checked="false"[^>]*data-conn="kind"[^>]*data-kind="write"/);
+    expect(d).toMatch(/aria-checked="true"[^>]*data-conn="kind"[^>]*data-kind="read"/);
+    expect(d.indexOf('data-conn="kind"')).toBeLessThan(d.indexOf('data-conn="tool-list"'));
+    const onlyRead = dialog(installedPage("cu1"));
+    expect(onlyRead).toMatch(/aria-checked="false"[^>]*data-kind="write"[^>]*disabled/);
+    for (const state of [view(), view({ open: { tab: "installed", id: "ab12" } }), view({ tab: "store" }), view({ skills: SKILLS })]) {
+      expect(connectionsHTML(state)).not.toContain('aria-checked="mixed"');
+    }
   });
 
   test("its tools are one folded line, which unfolds into them under write and read headings, a switch each", () => {
@@ -712,7 +726,7 @@ describe("what the tab does", () => {
     vi.mocked(toaster.info).mockReset();
     api.toolsetsList.mockResolvedValue({ groups: GROUPS });
     api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: true, google_configured: false });
-    api.connectorsCatalog.mockResolvedValue({ items: CATALOG.map(s => ({ slug: s.id, name: s.name, description: s.summary["zh-TW"], logo: "", categories: [], can_connect: true, no_auth: false })) });
+    api.connectorsCatalog.mockResolvedValue({ categories: [], items: CATALOG.map(s => ({ slug: s.id, name: s.name, description: s.summary["zh-TW"], logo: "", categories: [], can_connect: true, no_auth: false })) });
     api.connectorsCategories.mockResolvedValue({ items: [] });
     api.integrationsCatalog.mockResolvedValue({ services: CATALOG });
     api.integrationsAudit.mockResolvedValue({ entries: AUDIT });
@@ -848,21 +862,28 @@ describe("what the tab does", () => {
     expect(c.view().tab).toBe("installed");
   });
 
-  test("a service's one switch: mixed or off turns it and every tool of it on, all on turns it off", async () => {
+  test("the app switch changes only the enabled flag and leaves all tool permissions intact", async () => {
+    const c = createConnections(host); await c.load();
+    c.click(button("enable", { id: "ab12" })); await settle();
+    expect(api.integrationsSetEnabled).toHaveBeenLastCalledWith("ab12", false);
+    api.toolsetsList.mockResolvedValueOnce({ groups: [{ ...notes, enabled: false }] }); await c.load();
+    c.click(button("enable", { id: "ab12" })); await settle();
+    expect(api.integrationsSetEnabled).toHaveBeenLastCalledWith("ab12", true);
+    expect(api.integrationsSetToolsEnabled).not.toHaveBeenCalled();
+    expect(api.integrationsSetToolEnabled).not.toHaveBeenCalled(); c.reset();
+  });
+
+  test("server kind switches use one bulk call, preserve the other kind, and never enable the app", async () => {
     api.integrationsSetToolsEnabled.mockResolvedValue({});
-    const c = createConnections(host);
-    await c.load();
-    // Notion is on with Delete page off: every tool goes on, and the service stays on
-    c.click(button("enable", { id: "ab12" }));
-    await settle();
-    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["search", "create_page", "delete_page"], true);
-    expect(api.integrationsSetEnabled).not.toHaveBeenCalled();
-    // Files is on with its only tool on: the service goes off, its tools as they were
-    c.click(button("enable", { id: "cu1" }));
-    await settle();
-    expect(api.integrationsSetEnabled).toHaveBeenLastCalledWith("cu1", false);
-    expect(api.integrationsSetToolsEnabled).toHaveBeenCalledTimes(1);
+    const c = createConnections(host); await c.load();
+    c.click(button("kind", { id: "ab12", kind: "write" })); await settle();
+    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["create_page", "delete_page"], true);
+    c.click(button("kind", { id: "ab12", kind: "read" })); await settle();
+    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["search"], false);
+    c.click(button("kind", { id: "ab12", kind: "unknown" })); await settle();
+    expect(api.integrationsSetToolsEnabled).toHaveBeenCalledTimes(2);
     expect(api.integrationsSetToolEnabled).not.toHaveBeenCalled();
+    expect(api.integrationsSetEnabled).not.toHaveBeenCalled(); c.reset();
   });
 
   test("the dialog unfolds its list of tools and folds it again, and unfolds the latest actions", async () => {

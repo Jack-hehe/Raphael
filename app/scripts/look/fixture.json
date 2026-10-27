@@ -661,6 +661,7 @@
     { "id": "composio:notion", "kind": "composio", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "status": "ACTIVE", "enabled": true, "enabled_tools": ["NOTION_SEARCH", "NOTION_CREATE_PAGE", "NOTION_UPDATE_PAGE"], "disabled_tools": [] },
     { "id": "google", "kind": "google", "status": "ACTIVE", "enabled": true, "enabled_tools": ["gmail_list_messages", "calendar_list_events"], "disabled_tools": [] }
   ],
+  "pluginCatalogLoad": { "count": 360 },
   "pluginCategories": [
     { "id": "productivity", "name": "生產力" },
     { "id": "development", "name": "開發工具" },

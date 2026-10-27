@@ -4,7 +4,7 @@ const connections = settings("connections");
 const add = [...connections, click('[data-k="conn-add"]')];
 const custom = [...add, click('.menu [data-value="custom"]')];
 const serverDetail = [...connections, click('[data-conn="open"][data-id="notes"]')];
-const store = [...connections, click('[data-conn="tab"][data-id="store"]'), wait('.cs-card')];
+const store = [...connections, { ...click('[data-conn="tab"][data-id="store"]'), measure: { name: "store-render-paint", budgetMs: 250 } }, wait('.cs-card')];
 const usage = [...settings("models"), click('[data-models-tab="usage"]'), wait(".run-tile"), wait(".run-bill-total"), check("usage-summary")];
 const cliMenu = [...settings("models"), scroll(".cli-accounts"), click('[data-cli-menu="codex"]')];
 const cliDisconnected = [...cliMenu, click('#app-popover [data-pick="disconnect"]'), wait('[data-cli="codex"]')];
@@ -34,8 +34,13 @@ export default [
   ...["default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"].map(skin => scene(`skin-${skin}`, `${skin} appearance previews`, [...settings("appearance"), click(`[data-skin-choice="${skin}"]`)])),
   scene("plugins-installed", "Unified managed, private Google and custom MCP plugins", [...connections, wait('[data-conn="open"][data-id="composio:notion"]')]),
   scene("plugins-detail", "Managed tools grouped by write and read", [...connections, click('[data-conn="open"][data-id="composio:notion"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]')]),
-  scene("plugins-store", "Built-in services followed by deduplicated Composio apps", [...store, wait('.cs-composio-section .cs-card'), check("plugins-store"), check("plugins-store-rows"), scroll('.cs-composio-section')]),
-  scene("plugins-store-category", "Plugin category dropdown", [...store, wait('.cs-composio-section .cs-card'), click('[data-k="conn-category"]'), wait('#app-popover [data-value="productivity"]'), check("plugins-store-rows")]),
+  scene("plugins-store", "Built-in services followed by deduplicated Composio apps", [...store, wait('.cs-composio-section .cs-card'), check("plugins-store"), check("plugins-store-rows"), check("plugins-store-groups")], { pluginsMany: true }),
+  scene("plugins-store-category", "Filter the complete grouped catalog locally, then open its category menu", [
+    ...store, wait('.cs-composio-section .cs-card'), check("plugins-store-groups"),
+    { ...type('#conn-search', '360'), measure: { name: "store-search-paint", budgetMs: 250 } }, check("plugins-store-search"),
+    type('#conn-search', ''), click('[data-k="conn-category"]'), click('#app-popover [data-value="productivity"]'), check("plugins-store-category"),
+    check("plugins-store-rows"), click('[data-k="conn-category"]'), wait('#app-popover [data-value="productivity"]'),
+  ], { pluginsMany: true }),
   scene("plugins-store-key", "Built-in services with optional Composio setup", [...store, wait('[data-conn="configure-composio"]'), check("plugins-store"), check("plugins-store-rows"), scroll('.cs-composio-setup')], { composioConfigured: false }),
   scene("plugins-store-key-openrouter", "An OpenRouter key gets an actionable, value-free Composio error", [
     ...connections, click('[data-conn="tab"][data-id="store"]'), wait('[data-conn="configure-composio"]'), click('[data-conn="configure-composio"]'), wait('#conn-key'),

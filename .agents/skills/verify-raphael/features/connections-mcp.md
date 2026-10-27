@@ -28,12 +28,15 @@ until members can share across users (P13).
 The Store always reads Raphael's built-in services from integrations.catalog, with
 popular/all sections, local search and the existing integrations.connect join flow.
 Composio is optional. Without a key, a final row opens the small connection-style
-password dialog; it never replaces the service list. With a key, connectors.catalog
-and connectors.categories supply a separate Composio section below the built-ins.
-Its category selector filters only that section. Matching normalized slugs or names
-appear once, as Raphael's built-in service. Search covers both sources; the Store
+password dialog; it never replaces the service list. With a key, one connectors.catalog call supplies the complete Composio
+list and its categories. Core follows cursors up to 3,000 raw entries and caches an atomic snapshot
+in memory for one hour; a failed refresh returns the last good snapshot. Changing or
+removing the project key invalidates it. No Load more control remains. Category
+headings follow Composio's category order; each app belongs to its first category,
+with unlisted categories appended and uncategorized entries under localized Other.
+Search and the category dropdown filter locally; the dropdown affects only Composio. Matching normalized slugs or names appear once, as Raphael's built-in service. Search covers both sources; the Store
 badge counts the currently rendered unique service cards (not the setup row or
-unloaded pages). Failure/loading of Composio leaves the built-in catalog available.
+hidden filtered apps). Failure/loading of Composio leaves the built-in catalog available.
 Both catalogs render through the same compact row component: a bare mark, a name,
 one summary line, a right-aligned outlined Add button and a bottom divider. Added,
 connecting and unavailable states use the same row/action slots, with no managed
@@ -84,29 +87,59 @@ grid styling. Unit tests compare the sources in all four service states.
 checks built-ins plus the optional setup row without issuing connectors.catalog.
 Both error scenes open the small password dialog. `plugins-connecting` joins the
 built-in GitHub entry without a Composio key and checks integrations.connect.
-The fixture has four representative built-ins from the repository catalog, not
-all 37 entries or live provider accounts. Tests also cover local search/count,
-source failures, category isolation, pagination and late key replies after close.
+The fixture has four representative built-ins from the repository catalog. The two
+configured Store scenes add 360 synthetic entries across three categories (with
+multiple-category memberships and a duplicate), yielding 363 unique managed rows
+and 367 total rows. They check complete grouping, provider category order, local
+search for the last entry and the category dropdown. The shared driver's optional
+measure field records real click/input-to-next-painted-frame durations, with a
+250 ms budget for opening and searching the large list; it excludes automation
+transport time. Rendering builds one string and replaces the body once, with no
+per-row layout reads. These measurements concern this offline browser fixture;
+they do not establish live provider or native timing. Unit tests cover source
+failures, local search/count, category isolation and late replies after reset.
+Core tests cover cursor paging, concurrent cache reads, one-hour expiry, atomic
+failure fallback, key invalidation, repeated cursors and the 3,000-entry cap.
 
 The last command in the broader list above is the apps and skills set (`scenes/apps.mjs`). Each scene enters
 through the sidebar's 連結應用程式; `apps-count` compares the badge, the tab's
-number, the rows and the roster, `apps-unreadable` checks that a core that cannot
-list the apps leaves 「—」 and no number in all of them. An app has one switch, in
-its row and its dialog (owner, 2026-10-27: 「一次全部開啟或一次關掉」, never tool by
-tool): on is the app and every tool on, mixed is on with some tools off, and a press
-on mixed or off turns every tool on, a press on all-on turns the app off.
-`app-switch-all` drives GitHub with 18 of 46 tools off through mixed → all on → off →
-all on and fails if any tool was switched one by one. `connector-folded` checks that a
-dialog shows one folded N/M line, no switch per tool and no scroll; `connector-tools`
-unfolds it and checks N/M against the switches and that the actions sit flush at the
-dialog's edge, and
+number, the rows and the roster, and `apps-unreadable` checks that an unreadable
+inventory shows no count.
+
+All switches in Connections are binary (owner, 2026-10-28). The app switch reflects
+only its enabled flag; turning it off or on preserves every tool exclusion. A
+loaded app dialog exposes two permission rows, Write and Read, each with its own
+enabled/total count and switch, above the folded per-tool list. A kind switch is
+on only when every tool in that kind is on; a partly enabled kind is off. Pressing
+off enables the whole kind; pressing on disables the whole kind. An empty kind
+is off and disabled. Managed apps send one connectors.set_tools disabled_tools
+update, retaining exclusions in the other kind and unlisted tools. Custom servers
+send one integrations.set_tools_enabled call. Neither kind switch enables the app.
+The optional expanded list still has per-tool switches.
+
+The selected acceptance matrix for these permission and sign-in changes is:
+
+```powershell
+npm run look -- connections-app-switch connector-many-tools connector-account-tools --theme both --width 1120,720,1920x1080
+```
+
+`connections-binary` rejects any mixed/middle state in the connection list or its
+dialogs and runs throughout all three journeys. Its regression test rejects a mixed
+switch. `app-switch-all` now checks disable/enable without changing the 18 excluded
+GitHub tools. `connector-folded` exercises bulk Write/Read updates for 46 tools,
+checks independent states/counts and keeps the individual list folded. The managed
+`connector-tools` journey switches both kinds off/on, validates disabled_tools-only
+RPCs and then expands the individual list. Its sign-in failure step checks the
+dedicated toolkit-not-allowed words. All scenes retain the shared real entry and
+synthetic IPC boundary.
+
 `skill-page` checks the action order and that the document is whole and starts at its first line. Also run `home` (the sidebar entry on the wide
 and compact layouts) and the `plugins-*` scenes above for regressions.
 
 Inspect every contact sheet and detail/store/key/menu full-size image, especially
 720px scrolling, ellipsized descriptions and overflow confirmation. Browser scenes
 exercise the real entry and IPC doubles. Vitest covers asynchronous connection,
-catalog races/pagination, key privacy and managed tool decisions. Core tests cover
+catalog races/local filters, key privacy and managed tool decisions. Core tests cover
 default-on new tools, persisted service switches, provider failures and the shared
 API/CLI MCP definitions for Raphael and members without a restart.
 
@@ -118,6 +151,15 @@ is stored. A chat's connector card (see [Conversation](conversation.md)) signs i
 refresh:false to avoid account refresh/notification loops. tools reads can notify;
 the controller keeps the in-flight tool state when reloading the list. A whole
 service switch preserves individual exclusions via connectors.set_tools.enabled.
+Before requesting a Composio login link, connect temporarily patches the session's
+toolkit allowlist to include the requested slug, preserving existing tools and
+restrictions. Success publishes the connected configuration through the usual patch
+path. Refusal, timeout, browser errors and cancellation restore the prior toolkit
+configuration. Temporary patches do not refresh MCP or change search/execute flags.
+HTTP 400 with the exact provider error slug/code ToolRouterV2_ToolkitNotAllowed maps
+to toolkit_not_allowed and dedicated localized copy; provider messages never reach
+the UI. The fake transport rejects links until the toolkit is allowed and tests
+successful ordering and rollback, including actual task cancellation.
 Google consent scopes and existing execution gates still apply independently.
 
 Fixture server notes supplies custom edit/test flows. All credentials, tools and
