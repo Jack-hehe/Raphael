@@ -42,16 +42,21 @@ export function installMock(fixture, config = {}, target = window) {
     adminTurn.text = "";
   }
   if (variant.running || variant.quickRunning) {
-    const conversation = data.conversations.find(item => item.member_id === 0 && (variant.quickRunning ? item.kind === "quick" : item.is_default));
-    const runningTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === conversation?.id);
+    const conversation = data.conversations.find(item => item.member_id === (variant.runningMember ?? 0) && (variant.quickRunning ? item.kind === "quick" : item.is_default));
+    const runningTurn = data.turns.find(turn => turn.member_id === conversation?.member_id && turn.conversation_id === conversation?.id);
     runningTurn.status = "running";
     // "fresh": the reply has only just started, before any step or progress line.
     runningTurn.messages = variant.running === "fresh" ? [] : runningTurn.messages.filter(message => message.kind !== "reply");
     if (variant.running === "fresh") runningTurn.steps = [];
     runningTurn.text = "";
+    if (variant.stopBackground) {
+      runningTurn.status = "done";
+      runningTurn.task = { id: 71, state: "running", started_at_ms: data.now - 5000, finished_at_ms: null };
+    }
   }
   // Turns the core writes later and then announces (agent.turn), such as an Alt+Space answer.
   const arrivals = new Map((variant.arrivals ?? []).map(turn => [turn.id, structuredClone(turn)]));
+  const pendingReplies = new Map();
   if (variant.p04Blocked) {
     data.roomHandoffs=[{...data.roomHandoff,state:"failed",reason:"missing_artifact",result:"",evidence:[]}];
     data.messages.at(-1).text="尚未取得檔案，目前沒有可驗收結果。";
@@ -331,12 +336,19 @@ export function installMock(fixture, config = {}, target = window) {
       case "agent.history.search": case "messages.search": return { turns: byMember(data.turns, p).filter(turn => `${turn.question} ${turn.text} ${turn.messages.map(message => message.text).join(" ")}`.includes(p.query)).map(turn => ({ ...turn, conversation_title: data.conversations.find(c => c.id === turn.conversation_id)?.title })) };
       case "agent.history.delete": data.turns = data.turns.filter(item => item.id !== p.id); notify("AgentTurn", { turn_id: p.id, member_id: p.member_id ?? 0 }); return { deleted: true };
       case "agent.history.stop": {
+        pendingReplies.get(p.session_id)?.();
+        pendingReplies.delete(p.session_id);
         // As the core settles a stopped request: denied, with no answer, keeping its public steps.
         for (const turn of data.turns.filter(item => item.session_id === p.session_id && item.member_id === (p.member_id ?? 0) && ["running", "confirm"].includes(item.status))) {
           Object.assign(turn, { status: "denied", prefix: "了", text: "已取消。", messages: turn.messages.filter(message => message.kind !== "reply") });
           notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
         }
         return { stopped: true };
+      }
+      case "worker.cancel": {
+        for (const turn of data.turns.filter(item => item.task?.id === p.task_id)) turn.task.state = "cancelled";
+        notify("WorkerChanged");
+        return { cancelled: true };
       }
       case "agent.speech.status": return data.speech;
       case "agent.question.open": return null;
@@ -588,8 +600,13 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "overlay_log") return;
       if (command === "main_events") { state.channel = args.channel; return; }
       // Escape reaches the native worker even when no capture is active.
-      if (command === "window_hotkey" && args.kind === "cancel") return;
+      if (command === "window_hotkey" && args.kind === "cancel") {
+        if (variant.stopVoice) notify("Dictation", { phase: "cancelled", agent: true, member_id: variant.stopVoiceMember ?? 0 });
+        return;
+      }
       if (command === "agent_ask_text") {
+        // The native call stays pending until the reply ends, including before the first agent.turn.
+        if (variant.stopPending) return new Promise(resolve => pendingReplies.set(args.requestId, resolve));
         if (variant.firstBot) {
           const profile = variant.firstBot;
           if (![profile.name, profile.personality, profile.instructions].every(text => args.text.includes(text))) throw new Error("First Bot answers were lost at the native boundary");

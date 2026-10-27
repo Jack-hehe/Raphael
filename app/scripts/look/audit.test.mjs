@@ -17,6 +17,21 @@ describe("rendered look checks", () => {
     } finally { globalThis.window = previous.window; globalThis.document = previous.document; win.happyDOM.abort(); }
   });
 
+  it("rejects an emblem masquerading as Stop after a roster repaint", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<div class="page-agent"><form class="composer" data-task-state="running"><button class="cmp-voice" aria-label="停止"><span class="av"></span></button><button class="cmp-send"></button></form></div>';
+    const voice = window.document.querySelector('.cmp-voice');
+    voice.getBoundingClientRect = () => ({ width: 32, height: 32 });
+    vi.stubGlobal('document', window.document);
+    try {
+      expect(() => checkRendered('composer-stop-slot')).toThrow(/Stop is drawn/);
+      voice.innerHTML = '<svg></svg>';
+      voice.querySelector('svg').getBoundingClientRect = () => ({ width: 20, height: 20 });
+      expect(checkRendered('composer-stop-slot').state).toBe('running');
+      voice.classList.add('vm-away');
+      expect(() => checkRendered('composer-stop-slot')).toThrow(/animation/);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("rejects known English interface labels while preserving user content and brands", () => {
     const window = new Window();
     window.document.body.innerHTML = '<button>Save</button><button>Raphael</button><p class="message-text">Save</p><button hidden>Cancel</button>';

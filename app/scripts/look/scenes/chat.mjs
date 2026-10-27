@@ -25,7 +25,23 @@ const quickAnswer = { id: 91, session_id: "look-quick-umbrella", member_id: 0, c
   question: "明天早上要帶傘嗎？", route: "answer", source: "voice", prefix: "答", text: "明天早上降雨機率七成，出門記得帶傘。",
   detail: null, status: "done", cost_usd: 0.0008, model: "openai/gpt-6-luna", steps: [], attachments: [],
   messages: [{ seq: 1, kind: "progress", text: "《告。正在查看明天早上的天氣。》", at_ms: 1792807161000 }] };
+const rosterRefresh = { action: "main-event", event: { type: "MembersChanged" } };
+const stopSlot = [wait('.composer[data-task-state]:not([data-task-state="idle"]) .cmp-voice svg'), check("composer-stop-slot")];
+const pendingReply = [type('.cmp-input', "請整理這週的研究重點。"), key("Enter"), rosterRefresh, ...stopSlot];
+// The key starts in a formal conversation; only quick owns the processing placeholder.
+const voiceReply = [{ action: "main-event", event: { type: "Dictation", phase: "listening", agent: true, member_id: 0 } },
+  { action: "main-event", event: { type: "Dictation", phase: "processing", agent: true, member_id: 0 } }, ...quickOpen, rosterRefresh, ...stopSlot];
 export default [
+  scene("composer-stop-roster", "Roster refresh cannot repaint a restored running reply's Stop as an emblem", [rosterRefresh, ...stopSlot], { running: true }),
+  scene("composer-stop-pending", "A typed CLI request shows Stop before its first turn", pendingReply, { stopPending: true }),
+  scene("composer-stop-pending-result", "Stop cancels the pending request once without starting voice", [...pendingReply, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-pending-result")], { stopPending: true }),
+  scene("composer-stop-voice", "Alt+Space processing remains stoppable after opening quick with older history", voiceReply, { stopVoice: true }),
+  scene("composer-stop-voice-result", "Stop ends native voice processing before a turn exists", [...voiceReply, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-voice-result")], { stopVoice: true }),
+  scene("composer-stop-member", "A member voice reply shows Stop before the turn announcement", [member(1),
+    { action: "main-event", event: { type: "Dictation", phase: "processing", agent: true, member_id: 1 } }, rosterRefresh, ...stopSlot], { stopVoice: true, stopVoiceMember: 1 }),
+  scene("composer-stop-navigation", "A running member reply keeps Stop after visiting another thread", [member(1), member(0), member(1), rosterRefresh, ...stopSlot], { running: true, runningMember: 1 }),
+  scene("composer-stop-background", "A completed turn's live background task keeps Stop after roster refresh", [rosterRefresh, ...stopSlot], { running: true, stopBackground: true }),
+  scene("composer-stop-background-result", "The slot cancels its background worker and returns to voice", [rosterRefresh, ...stopSlot, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-background-result")], { running: true, stopBackground: true }),
   scene("admin-description-draft", "Describe a new member from the conversation creation picker", [{ action: "member-column", collapsed: false }, click('[data-col="add"]'), click('[data-pick="conversation"]'), wait('.mb-chat-picker'), type('[data-chat-search]', "整理未讀信並準備回覆"), click('[data-dlg="describe"]'), check("admin-description-draft")]),
   scene("admin-cli-draft-edit", "The common draft edits and removes sequential CLI proposals", adminDraftEdits, { adminApproval: "draft" }),
   scene("admin-draft-cancel", "Cancel discards every proposal without changing the roster", [wait('.draft-panel:not([hidden])'), click('[data-draft-act="cancel"]'), wait('.composer:not([hidden])'), check("admin-draft-cancel")], { adminApproval: "draft" }),

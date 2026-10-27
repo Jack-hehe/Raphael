@@ -23,6 +23,30 @@ export function checkRendered(name) {
     for (const text of words) require(!wrapped.test(text.textContent) && !/》\s*$/.test(text.textContent.replace(/《[^《》]*》/g, "")), `R-UI-42: Raphael's words read plainly: ${text.textContent.slice(0, 40)}`);
     return words.length;
   };
+  if (name.startsWith("composer-stop-")) {
+    const form = document.querySelector('.page-agent .composer'), button = form?.querySelector('.cmp-voice');
+    require(visible(button), "the shared slot is visible");
+    if (name === "composer-stop-slot") {
+      require(["ack", "running", "waiting"].includes(form.dataset.taskState), "this thread has a cancellable reply");
+      require(button.getAttribute("aria-label") === "停止" && visible(button.querySelector('svg')) && !button.querySelector('.av'), "Stop is drawn, never an emblem with a Stop label");
+      require(!visible(form.querySelector('.cmp-send')) && !button.classList.contains('vm-away'), "Stop alone occupies the slot and voice animation cannot hide it");
+    } else {
+      require(form.dataset.taskState === "idle" && visible(button.querySelector('.av')), "the stopped reply releases the slot");
+      const calls = window.__look.calls;
+      require(!calls.some(call => call.command === "window_hotkey" && ["agent_down", "agent_up"].includes(call.kind)), "Stop starts no voice recording");
+      if (name === "composer-stop-pending-result") {
+        const send = calls.find(call => call.command === "agent_ask_text"), stops = calls.filter(call => call.method === "agent.history.stop");
+        require(stops.length === 1 && stops[0].params.session_id === send.requestId && stops[0].params.member_id === 0, "exactly the pending request stops");
+      } else if (name === "composer-stop-voice-result") {
+        require(calls.filter(call => call.command === "window_hotkey" && call.kind === "cancel").length === 1, "the controller cancels processing once");
+        require(!calls.some(call => call.method === "agent.history.stop"), "no session is guessed before the turn exists");
+      } else {
+        const stops = calls.filter(call => call.method === "worker.cancel");
+        require(stops.length === 1 && stops[0].params.task_id === 71, "only the displayed background task stops");
+      }
+    }
+    return { check: name, state: form.dataset.taskState };
+  }
   if(name.startsWith("p04-")) {
     const messages=[...document.querySelectorAll('.au-room-thread .message-text')];
     if(name==='p04-blocked'){require(document.querySelector('[data-handoff]').textContent.includes('缺少驗收所需的檔案'),'missing artifact reason is actionable');require(!document.querySelector('[data-handoff] .message-quote'),"the request is only ever the delegating member's own message");}
@@ -34,6 +58,7 @@ export function checkRendered(name) {
       const form=document.querySelector('.composer[data-task-state="running"]');
       require(visible(form.querySelector('.cmp-voice'))&&!visible(form.querySelector('.cmp-send')),'only Stop occupies the slot');
       require(form.querySelector('.cmp-voice').getAttribute('aria-label')==='停止','Stop is accessible');
+      require(visible(form.querySelector('.cmp-voice svg'))&&!form.querySelector('.cmp-voice .av'),'Stop is drawn, not an emblem with a Stop label');
     }
     return {check:name,matched:true};
   }

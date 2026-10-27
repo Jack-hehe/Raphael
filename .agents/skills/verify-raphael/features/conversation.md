@@ -60,6 +60,31 @@ localized notice clear of the composer, and the unchanged single gold-emblem / b
 Only dictation seeds learning; ordinary typing and clipboard paste do not. Native microphone,
 external-editor correction tracking and persistence still require isolated native acceptance.
 
+## Stopping a private reply (2026-10-28)
+
+The one composer slot is Stop while a typed request awaits its first turn, a persisted turn is
+running/confirming, its background task is queued/running/waiting, or the native voice controller
+is processing before any turn exists. Roster/avatar redraws retain the actual Stop glyph and
+accessible label. The same target chooses the glyph and cancellation: an outgoing request first,
+then the newest active turn/task, then pre-turn voice. A repeated Stop is disabled until its call
+settles; it never sends a voice key. Request/worker cancellation preserves history.
+
+Voice processing belongs to Raphael's quick conversation or a member's main conversation,
+including navigation into that thread after Alt+Space. Older voice history cannot settle a new
+question whose own history boundary was not on screen. Running turns read on a fresh page do not
+need a new send event to show Stop. The happy-dom `pages/agent-stop.test.ts` replays native phases,
+running/final turn announcements, roster changes, navigation and delayed ask RPC completion.
+
+```powershell
+npm run look -- composer-stop-roster composer-stop-pending composer-stop-pending-result composer-stop-voice composer-stop-voice-result composer-stop-member composer-stop-navigation composer-stop-background composer-stop-background-result running running-motion composer-task-stop quick-stop chat empty member-composer-empty member-text --theme both --width 1120,720,1920x1080
+```
+
+`composer-stop-slot` requires the visible Stop SVG, no emblem or hidden voice-animation class,
+and no second send control. Result scenes press Stop and assert the exact session/task or native
+controller boundary and the returned idle emblem. These fixtures prove the real frontend's
+boundary calls; native microphone/hotkey/transport cancellation still needs isolated native
+acceptance. Judge and live calls require an authorized network environment.
+
 ## Gotchas
 
 Typed requests run independently per request id, including different conversations of
