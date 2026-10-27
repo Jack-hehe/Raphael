@@ -125,6 +125,49 @@ def confirm_by_name(name: str) -> bool:
     return _names(name, _CONFIRM_WORDS, _CONFIRM_CJK)
 
 
+# The part of the hand-off words that is about paying: the reason a hand-over gives for a card field
+# or a payment button, where the rest of the words are about signing in. Only words of the lists above.
+_PAYMENT_EN = (
+    "card number", "credit card", "debit card", "cvv", "cvc", "security code", "expiry",
+    "expiration", "pay", "pay now", "payment", "checkout", "check out",
+)  # fmt: skip
+_PAYMENT_CJK = (
+    "卡號", "信用卡", "金融卡", "安全碼", "有效期限", "カード番号", "セキュリティコード", "有効期限",
+    "付款", "支付", "結帳", "结账", "支払", "決済", "お支払い",
+)  # fmt: skip
+_PAYMENT_WORDS = _english(_PAYMENT_EN)
+
+
+def handoff_reason(element: object | None, focused: object | None = None) -> str:
+    """Why a step is the owner's, as the hand-over names it (`tools.HAND_OVER_REASONS`): "password"
+    for a password field, "payment" for a field or a button of a payment form, else "sign_in". The
+    element is the one the step names, else the one with the focus, which keys and typing reach."""
+    target = element if element is not None else focused
+    if target is None:
+        return "sign_in"
+    if getattr(target, "password", False):
+        return "password"
+    return "payment" if _names(getattr(target, "name", ""), _PAYMENT_WORDS, _PAYMENT_CJK) else "sign_in"
+
+
+# What a window that is done with a sign-in or a payment no longer shows: the roles of the elements the
+# owner types into or presses.
+_FORM_ROLES = frozenset({"Edit", "ComboBox", "Button", "Hyperlink", "Link"})
+
+
+def blocks(elements: Iterable[object]) -> bool:
+    """Whether a look still shows what only the owner may do: a password field, or a field or a button
+    of a sign-in or a payment form (a card number, a security code, a code, a Sign in or Pay button)
+    that can be used. A window that shows none is one the owner got through."""
+    for element in elements:
+        if getattr(element, "password", False):
+            return True
+        if (getattr(element, "role", "") in _FORM_ROLES and getattr(element, "enabled", True)
+                and handoff_by_name(getattr(element, "name", ""))):
+            return True
+    return False
+
+
 def closes_by_name(name: str) -> bool:
     """Whether an element called `name` closes a window, a tab or the app."""
     return _names(name, _CLOSE_WORDS, _CLOSE_CJK)

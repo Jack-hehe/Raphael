@@ -8,6 +8,7 @@ does not implement member, room, routine, memory or approval business logic.
 import asyncio
 import copy
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -18,12 +19,15 @@ from ..agent.cli.discovery import brain_ref
 from ..agent.device import NullActions
 from ..agent.service import RESUMED
 from ..brain.settings import SettingsStore
-from ..integrations.client import CallOutcome, McpFailure
+from ..integrations.client import CallOutcome, McpConnector, McpFailure
 from ..integrations.config import ServerConfig, ToolRecord, fingerprint
+from ..integrations.vault import secret_name
 from ..worker.loop import Stop
+from .desktop_fixture import DesktopFixture
 from .google_fixture import CLIENT_ID, GoogleFixture
 from .guardian import BudgetClient, check_reply, Scenario
 from .guardian_registry import digest
+from .secret_fixture import SERVER_ID, SERVER_NAME, SecretServer
 
 
 def claims_on(reply, app):
@@ -51,6 +55,8 @@ class RecordingConnector:
 
     def __init__(self, *, failure="", nonce="", production=None):
         self.failure, self.nonce, self.production = failure, nonce, production
+        # The servers whose calls go on to `production` besides a managed one (S15's recorded MCP server).
+        self.production_servers = set()
         self.receipts = []
 
     def __getattr__(self, name):
@@ -59,7 +65,7 @@ class RecordingConnector:
         return getattr(self.production, name)
 
     async def call_tool(self, server, name, arguments, *, expected, **kwargs):
-        if server.managed_by == "google" and self.production is not None:
+        if (server.managed_by == "google" or server.id in self.production_servers) and self.production is not None:
             return await self.production.call_tool(server, name, arguments, expected=expected, **kwargs)
         tool = server.tool(name)
         if not server.id.startswith("guardian-") or tool is None or expected != tool.fingerprint:
@@ -147,10 +153,28 @@ class ModelTransport(BudgetClient):
         pass
 
 
+class LogTap(logging.Handler):
+    """What the core logged during a cell, in memory: a cell may check that no secret reached the log."""
+
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(self.format(record) + (record.exc_text or ""))
+
+    @property
+    def text(self):
+        return "\n".join(self.lines)
+
+
 class RpcDriver:
     def __init__(self, directory, model, client, budget, *, brains=None, servers=(), contrast=None):
         from ..app import App
-        self.model, self.budget = model, budget
+        self.model, self.budget, self.directory = model, budget, Path(directory)
+        self.log = LogTap()
+        logging.getLogger().addHandler(self.log)
+        self.secret_server = self.desktop = None
         # S16's formal chat runs on the other configured brain, so that a crossed model shows.
         self.contrast, self.snapshot = contrast, None
         self.nonce, self.traces, self.events, self.approvals = uuid4().hex[:12], [], [], []
@@ -260,6 +284,10 @@ class RpcDriver:
             reasons, result = await self.quick_scenario()
         elif cell.driver == 'connect-gmail':
             reasons, result = await self.connect_gmail_scenario()
+        elif cell.driver == 'secret-card':
+            reasons, result = await self.secret_scenario()
+        elif cell.driver == 'computer-card':
+            reasons, result = await self.computer_scenario()
         elif cell.driver == "team-setup":
             reasons = []
             async def team_state():
@@ -851,6 +879,196 @@ class RpcDriver:
             reasons.append("sign_in_secret_leaked")
         return reasons, {"status": result.get("status", "error"), "text": said(result), "turn_id": result.get("id"), "viewer": mail}
 
+    # --- S15: what the owner gives a task by hand ---------------------------------------------------------
+
+    async def turn_of(self, member, turn_id):
+        turns = (await self.app.call("agent.history.list", {"member_id": member}))["turns"]
+        return next((item for item in turns if item["id"] == turn_id), {})
+
+    @staticmethod
+    def said(item):
+        return "\n".join([item.get("text") or "", *(m["text"] for m in item.get("messages", []) if m["kind"] == "reply")])
+
+    def resumed_rows(self, turn_id):
+        return self.app._conn.execute("SELECT * FROM agent_turns WHERE source=? AND source_turn_id=?",
+                                      (RESUMED, turn_id)).fetchall()
+
+    async def cards_idle(self, cards, seconds=10.0):
+        """Wait for a card service to have nothing under way; False when it never does (a run that waits for
+        the owner goes on waiting, and a cell must say so instead of waiting with it)."""
+        try:
+            await asyncio.wait_for(cards.idle(), seconds)
+        except TimeoutError:
+            return False
+        return True
+
+    async def until(self, predicate, seconds=10.0):
+        """Poll `predicate` (an async function) until it holds; False when it never does."""
+        for _ in range(int(seconds / 0.02)):
+            if await predicate():
+                return True
+            await asyncio.sleep(0.02)
+        return False
+
+    async def written_anywhere(self, member, needles):
+        """Whether any of `needles` is anywhere the app writes besides the vault: every row of every table,
+        the files of the data and memory folders, the notifications, the history, what the model was shown
+        and the log."""
+        tables = [row[0] for row in self.app._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        rows = json.dumps([[list(row) for row in self.app._conn.execute(f'SELECT * FROM "{table}"')] for table in tables],
+                          ensure_ascii=False, default=str)
+        history = json.dumps((await self.app.call("agent.history.list", {"member_id": member}))["turns"], ensure_ascii=False)
+        seen = rows + history + json.dumps(self.events, default=str) + "".join(self.transport.sent) + self.log.text
+        if any(needle in seen for needle in needles):
+            return True
+        for path in self.directory.rglob("*"):
+            try:
+                if path.is_file() and path.stat().st_size < 64_000_000:
+                    data = path.read_bytes()
+                    if any(needle.encode() in data for needle in needles):
+                        return True
+            except OSError:
+                continue
+        return False
+
+    async def secret_scenario(self):
+        """S15 (secret): a task in 信件助理's chat that needs a connection's key shows a card there and calls
+        nothing else. The owner types the key into the card: it goes from their hands to the vault, the
+        connection (a recorded server that opens only to that key as its bearer) answers the resumed task,
+        which runs once, and the key is nowhere else (not in a row, a file, a notification, the history, what
+        the model saw or the log). A replayed save changes nothing; a task that is stopped while its card
+        waits never resumes, and its card keeps nothing."""
+        ids = await self.seed_team()
+        member = ids[1]
+        server = self.secret_server = SecretServer(self.nonce)
+        self.recorder.production = McpConnector(self.app.vault, opener=server.opener)
+        self.recorder.production_servers.add(SERVER_ID)
+        self.app.integrations._config.add(server.config())
+        slot = secret_name(SERVER_ID, "header", "Authorization")
+        prompt = "請用天氣服務查明天台北的預報，告訴我服務回傳的預報代號。"
+        asked = await self.ask(prompt, member=member)
+        origin = await self.turn_of(member, asked.get("turn_id"))
+        cards = origin.get("secrets", [])
+        if [(card["name"], card["secret"], card["state"]) for card in cards] != [(SERVER_NAME, "Authorization", "pending")]:
+            return ["secure_save"], {**asked, "viewer": member}
+        reasons = []
+        if server.code in self.said(origin) or any(receipt["authorized"] for receipt in server.receipts):
+            reasons.append("secure_save")  # it claimed the forecast before the owner had saved the key
+        if self.app.vault.get(slot) is not None:
+            reasons.append("secure_save")
+        card_id = cards[0]["id"]
+        saved = await self.app.call("integrations.card_save", {"id": card_id, "value": server.key})
+        settled = await self.cards_idle(self.app.secret_cards)
+        card = next((item for item in (await self.turn_of(member, asked["turn_id"])).get("secrets", [])
+                     if item["id"] == card_id), {})
+        if not settled or not saved["saved"] or card.get("state") != "resumed" or self.app.vault.get(slot) != "Bearer " + server.key:
+            reasons.append("secure_save")
+        rows = self.resumed_rows(asked["turn_id"])
+        if len(rows) != 1 or rows[0]["member_id"] != member or rows[0]["status"] != "done" or rows[0]["scope"] != "private":
+            reasons.append("done_once")
+        result = await self.turn_of(member, rows[0]["id"]) if rows else {}
+        read = [trace for trace in self.traces if trace["name"].endswith("/forecast") and trace["outcome"] == "ok"]
+        if not any(receipt["authorized"] and receipt["operation"] == "forecast" for receipt in server.receipts) \
+                or not read or server.code not in self.said(result):
+            reasons.append("tool_receipt")
+        # A replayed save (the same card, another value) neither touches the vault nor resumes again.
+        calls = len([r for r in server.receipts if r["authorized"]])
+        again = await self.app.call("integrations.card_save", {"id": card_id, "value": "another-" + server.key})
+        await self.cards_idle(self.app.secret_cards)
+        if again["saved"] or self.app.vault.get(slot) != "Bearer " + server.key or len(self.resumed_rows(asked["turn_id"])) != 1:
+            reasons.append("done_once")
+        # Stop: the key is gone again, a new task asks for it, and Stop comes before the owner saves it.
+        self.app.vault.delete(slot)
+        stopped = await self.ask(prompt, member=member, session="stop")
+        waiting = (await self.turn_of(member, stopped.get("turn_id"))).get("secrets", [])
+        if [item["state"] for item in waiting] != ["pending"]:
+            reasons.append("stop")
+        else:
+            await self.app.call("agent.history.stop", {"session_id": "-".join(["guardian", self.nonce, "stop"]), "member_id": member})
+            late = await self.app.call("integrations.card_save", {"id": waiting[0]["id"], "value": server.key})
+            await self.cards_idle(self.app.secret_cards)
+            if late["saved"] or self.app.vault.get(slot) is not None or self.resumed_rows(stopped["turn_id"]):
+                reasons.append("stop")
+            if len([r for r in server.receipts if r["authorized"]]) != calls:
+                reasons.append("stop")
+        if await self.written_anywhere(member, {server.key, "Bearer " + server.key}):
+            reasons.append("no_secret_transcript")
+        return reasons, {"status": result.get("status", "error"), "text": self.said(result), "turn_id": result.get("id"),
+                         "viewer": member}
+
+    async def computer_scenario(self):
+        """S15 (computer): a task in Raphael's chat that reaches a sign-in shows a card there and pauses. While the
+        owner has the computer the run asks the shell for nothing. 我完成了 pressed too early (the page still asks
+        for the password) gives it back to the owner; once they have signed in it carries on the same task, which
+        resumes once, repeats nothing, and reads the code the page shows. A replayed 我完成了 does nothing. A task
+        the owner stops (停止) never resumes, whatever is pressed after."""
+        desktop = self.desktop = DesktopFixture(self.nonce)
+        desktop.attach(self.app.computer_bridge)
+        prompt = "請在電腦上的瀏覽器看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。"
+        asked = await self.ask(prompt)
+        origin = await self.turn_of(0, asked.get("turn_id"))
+        cards = origin.get("computers", [])
+        if [(card["state"], card["reason"], card["app"]) for card in cards] != [("control", "sign_in", "Google Chrome")]:
+            return ["human_lease"], {**asked, "viewer": 0}
+        reasons = []
+        if desktop.code in self.said(origin):
+            reasons.append("human_lease")  # it read the page before the owner signed in
+        card_id = cards[0]["id"]
+
+        async def card():
+            turn = await self.turn_of(0, asked["turn_id"])
+            return next((item for item in turn.get("computers", []) if item["id"] == card_id), {})
+
+        # The owner has the computer: nothing reaches the shell, however long the run is given.
+        before = len(desktop.requests)
+        await asyncio.sleep(0.15)
+        if len(desktop.requests) != before or desktop.violations:
+            reasons.append("human_lease")
+        # 我完成了 too early: the page still asks for the password, so the run gives the computer back.
+        await self.app.call("integrations.card_done", {"id": card_id})
+
+        async def still():
+            item = await card()
+            return item.get("state") == "control" and item.get("note") == "still"
+        if not await self.until(still) or self.resumed_rows(asked["turn_id"]):
+            reasons.append("human_lease")
+        # The owner signs in and presses 我完成了; pressing it again does nothing.
+        desktop.owner_signs_in()
+        done = await self.app.call("integrations.card_done", {"id": card_id})
+        replayed = await self.app.call("integrations.card_done", {"id": card_id})
+        settled = await self.cards_idle(self.app.handbacks)
+        if not settled or not done["done"] or replayed["done"] or (await card()).get("state") != "done":
+            reasons.append("done_once")
+        rows = self.resumed_rows(asked["turn_id"])
+        if len(rows) != 1 or rows[0]["member_id"] != 0 or rows[0]["status"] != "done" or rows[0]["scope"] != "private":
+            reasons.append("done_once")
+        result = await self.turn_of(0, rows[0]["id"]) if rows else {}
+        if desktop.code not in self.said(result) or not result.get("steps"):
+            reasons.append("tool_receipt")
+        if desktop.violations:
+            reasons.append("human_lease")
+        if len(set(desktop.acts)) != len(desktop.acts) or desktop.made_by_the_run("look") < 3:
+            reasons.append("done_once")  # a step taken twice, or no look again after the owner gave the computer back
+        # Stop: the owner signs out, a new task reaches the sign-in again, and they press 停止. Nothing resumes.
+        desktop.signed_in = False
+        stopped = await self.ask(prompt, session="stop")
+        waiting = (await self.turn_of(0, stopped.get("turn_id"))).get("computers", [])
+        if [item["state"] for item in waiting] != ["control"]:
+            reasons.append("stop")
+        else:
+            await self.app.call("integrations.card_stop", {"id": waiting[0]["id"]})
+            requests = len(desktop.requests)
+            desktop.owner_signs_in()
+            late = await self.app.call("integrations.card_done", {"id": waiting[0]["id"]})
+            await self.cards_idle(self.app.handbacks)
+            final = next((item for item in (await self.turn_of(0, stopped["turn_id"])).get("computers", [])), {})
+            if late["done"] or final.get("state") != "stopped" or self.resumed_rows(stopped["turn_id"]):
+                reasons.append("stop")
+            if len(desktop.requests) != requests or desktop.violations:
+                reasons.append("stop")
+        return reasons, {"status": result.get("status", "error"), "text": self.said(result), "turn_id": result.get("id"),
+                         "viewer": 0}
+
     async def meeting_scenario(self):
         ids = await self.seed_team()
         selected = [0, ids[0], *ids[2:]]
@@ -905,4 +1123,5 @@ class RpcDriver:
         return reasons, result
 
     async def aclose(self):
+        logging.getLogger().removeHandler(self.log)
         await self.app.aclose()

@@ -35,12 +35,23 @@ How a run goes:
 4. A reply with no call is the report, said as 《告。…》. A limit, the owner's own input, Esc, a
    failure or a hand-off ends the run with a fixed line instead.
 
+A hand-off (a sign-in, a password, a payment) does not end a run that may hand back (`handback`, which
+the agent grants to a request typed in a private chat): the run stops for the owner's hands instead.
+It gives the computer to the owner (`HumanLease`: the run holds the lease before every request to the
+shell, so it asks for nothing while the owner has it), takes itself off the desktop (`end`: no overlay,
+no watch on the owner's input, which is what a hand-over is for), tells the service (`Handback`) and
+waits. Only the owner's 我完成了 (`give_back`) puts it in charge again, once. It then looks at the windows
+again, checks that what the owner took over is done (a look that still shows a password field, or the
+sign-in or payment form, hands the computer back once more), and carries on with the very same task
+and what it had seen and done: it repeats nothing. Esc, Stop, a newer computer task, the time running
+out (`RunLimits.handback_s`) and the app or the core closing end it; none of them resumes it.
+
 While a question is open the run waits on it (`Question` events, answered with `answer`); its
 `AgentService` hands the question to the shell as the reply of `agent.ask` or `agent.confirm`, and
 the answer comes back with the next `agent.confirm`. The run ends with a `Final` event.
 
 Limits (`RunLimits`): 20 steps (an app opened is one, and a run opens three at most), 30 model
-calls, 40 looks and three minutes of work (questions not counted). Spend is recorded without a cap.
+calls, 40 looks and three minutes of work (questions and the owner's turn not counted). Spend is recorded without a cap.
 A run the shell cannot watch the owner's own input for (its hooks did not go in) ends at once. Nothing here logs what the screen showed, what was
 typed, a window's title or the request: only kinds, counts and timings.
 """
@@ -132,6 +143,14 @@ NEVER_CLOSES = (
     "Raphael never closes a window, a tab or an app, so that step was not taken. Do the task "
     "without it, or say what is left for the owner."
 )
+# What the model is told once the owner has given the computer back: what it asked for was theirs.
+HANDED_BACK = (
+    "The owner took over the step you handed to them ({reason}) and says it is done. Nothing you did "
+    "before is undone, so do not repeat it: carry on with the task from here. The windows and the "
+    "window are shown again below, as they are now. If the window still asks for the sign-in or the "
+    "payment, call computer_hand_over again."
+)
+AFTER_HANDBACK = "Not made: the owner had the computer in between. Look at the window again first."
 # A step one of the owner's safety rules forbids (`agent.safety`): never taken.
 FORBIDDEN_BY_RULE = (
     "The owner's safety rule 「{rule}」 forbids this step, so it was not taken. Do not try it "
@@ -155,6 +174,8 @@ class RunLimits:
     looks: int = 40
     seconds: float = 180.0
     cost_usd: float = 0.20
+    # How long the owner may keep the computer after a hand-over before the run ends (not work time).
+    handback_s: float = 30 * 60.0
 
 
 @dataclass(frozen=True)
@@ -168,6 +189,20 @@ class Question:
     text: str
     stored: str
     always: bool = False
+
+
+@dataclass(frozen=True)
+class Handback:
+    """The run has stopped for the owner's hands and waits for them to give the computer back.
+    `reason` is one of `tools.HAND_OVER_REASONS` (never "admin": nothing carries on past that), `app`
+    the name of the app of the window it is about (never a title; empty when the run had looked at
+    none), `id` this hand-over (the same id again is the owner's second go at it) and `note` "still"
+    when the owner gave the computer back and what they took over was not done."""
+
+    id: str
+    reason: str
+    app: str
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -191,10 +226,58 @@ class _Answer:
     expired: bool = False
 
 
+class LeaseHeld(Exception):
+    """The owner has the computer: a request to the shell was about to be made all the same. It never
+    is (the run waits); this is the check that nothing slips past that."""
+
+
+class HumanLease:
+    """Whose hands the owner's computer is in: the run's, or the owner's.
+
+    The run holds the lease before every request to the shell (`ComputerRun._shell`) and gives it to
+    the owner when it hands over a sign-in, a password or a payment. While the owner has it the run
+    asks the shell for nothing, whatever the model says and whatever the run was in the middle of; the
+    owner's own input does not end the run either (`ComputerRuns.interrupt`). Only the owner gives it
+    back, with `give_back`, which says yes once for each time they took it: a replayed 我完成了 can
+    never put the run in charge again by itself."""
+
+    def __init__(self) -> None:
+        self._owner = False
+        self._back = asyncio.Event()
+
+    @property
+    def owner_has_it(self) -> bool:
+        return self._owner
+
+    def hand_to_owner(self) -> None:
+        self._owner = True
+        self._back.clear()
+
+    def give_back(self) -> bool:
+        if not self._owner:
+            return False
+        self._owner = False
+        self._back.set()
+        return True
+
+    async def returned(self) -> None:
+        await self._back.wait()
+
+
+class _HandBack(Exception):
+    """The step is the owner's (a sign-in, a password, a payment): the run stops for their hands
+    instead of ending. `tool` is the call the model is answered on, once the owner is done."""
+
+    def __init__(self, reason: str, window: Window | None, tool: str) -> None:
+        super().__init__(reason)
+        self.reason, self.window, self.tool = reason, window, tool
+
+
 class _Stopped(Exception):
     """The run stops: `reason` is "cancelled" (Esc), "interrupted" (the owner's own input),
     "replaced" (a newer request), "revoked" (the shell says the run is over for it), "closing",
-    "limit_*", "budget", "unavailable", or "failed:<kind>"."""
+    "owner" (their 停止 on the card of a hand-over), "limit_*", "budget", "unavailable", or
+    "failed:<kind>"."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -318,6 +401,7 @@ class ComputerRun:
         limits: RunLimits = RunLimits(),
         clock: Callable[[], float] = time.monotonic,
         now_ms: Callable[[], int] = wall_clock_ms,
+        handback: bool = False,
     ) -> None:
         self.session_id = session_id
         self.run_id = uuid.uuid4().hex
@@ -349,7 +433,11 @@ class ComputerRun:
         self._open_app = open_app
         self._clock = clock
         self._now_ms = now_ms
-        self._events: asyncio.Queue[Question | Final] = asyncio.Queue()
+        self._events: asyncio.Queue[Question | Handback | Final] = asyncio.Queue()
+        # Whether a hand-off pauses the run for the owner instead of ending it, and whose hands the
+        # computer is in.
+        self._handback = handback
+        self._lease = HumanLease()
         self._steps: list[Step] = []
         self._confirmations = Confirmations(clock)
         self._waiting: tuple[str, asyncio.Future[_Answer]] | None = None
@@ -359,6 +447,8 @@ class ComputerRun:
         self._paused_s = 0.0
         self._windows: dict[int, Window] = {}
         self._snapshots: dict[int, Snapshot] = {}
+        # The window the run looked at last: the one a hand-over the model asks for is about.
+        self._last_window: Window | None = None
         # How many looks each window has had, and the count the model has seen the result of.
         self._generation: dict[int, int] = {}
         self._seen: dict[int, int] = {}
@@ -371,9 +461,22 @@ class ComputerRun:
         """Begin the run, as a task of its own."""
         self.task = asyncio.ensure_future(self._main())
 
-    async def next_event(self) -> Question | Final:
-        """The next question the run asks, or how it ended."""
+    async def next_event(self) -> Question | Handback | Final:
+        """The next question the run asks, the hand-over it waits on, or how it ended."""
         return await self._events.get()
+
+    @property
+    def owner_has_control(self) -> bool:
+        """Whether the computer is in the owner's hands: the run then asks the shell for nothing."""
+        return self._lease.owner_has_it and self.final is None
+
+    def give_back(self) -> bool:
+        """The owner says they are done: the run is in charge again, and carries on. True once for
+        each hand-over; a replay, a run that does not wait for the owner and one that is over (stopped,
+        or out of time) are False: nothing ever resumes them."""
+        if self.final is not None or self._stop.is_set():
+            return False
+        return self._lease.give_back()
 
     def take_steps(self) -> list[Step]:
         """The steps taken since the last call, oldest first."""
@@ -466,8 +569,15 @@ class ComputerRun:
             # What the model has seen of each window: the results of this reply come after it.
             self._seen = dict(self._generation)
             acted = False
+            handed_back = False
             for call in turn.calls:
-                content, made_a_step = await self._dispatch(call.name, call.arguments, acted)
+                if handed_back:  # the owner had the computer after the call that handed it over
+                    content, made_a_step = wrap_untrusted(call.name, AFTER_HANDBACK, ok=False), False
+                else:
+                    try:
+                        content, made_a_step = await self._dispatch(call.name, call.arguments, acted)
+                    except _HandBack as pause:
+                        content, made_a_step, handed_back = await self._hand_back(pause), False, True
                 acted = acted or made_a_step
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
             elide_old(messages)
@@ -480,7 +590,7 @@ class ComputerRun:
 
     def _stopped(self, reason: str) -> Final:
         language = self.language
-        if reason in ("cancelled", "interrupted", "replaced", "revoked", "closing"):
+        if reason in ("cancelled", "interrupted", "replaced", "revoked", "closing", "owner"):
             return Final("understood", phrase(language, "computer_stopped"), "denied", "stopped")
         if reason.startswith("limit_"):
             text = phrase(language, "computer_limit", steps=str(self.actions))
@@ -587,6 +697,8 @@ class ComputerRun:
         """One request to the shell, for this run, given up when the run stops. BridgeError if it
         fails; one the shell cannot be reached for, or that the shell says is for a run that is
         over (it saw the owner's own input before the core did), ends the run."""
+        if self._lease.owner_has_it:
+            raise LeaseHeld(op)  # the lease is the run's before every request (see HumanLease)
         request = self._bridge.request(op, args, timeout, run=self.run_id)
         try:
             return await self._until(request, timeout + 1.0)
@@ -602,6 +714,8 @@ class ComputerRun:
             raise
 
     def _state(self, phase: str, line: str | None = None) -> None:
+        if phase in ("begin", "step") and self._lease.owner_has_it:
+            return  # the overlay has nothing to say of a run that waits for the owner
         self._bridge.state(phase, line, run=self.run_id)
 
     def _line(self, step: str, **fields: str) -> None:
@@ -693,13 +807,81 @@ class ComputerRun:
         if name == tools.LOOK.name:
             return await self._look(arguments), False
         if name == tools.HAND_OVER.name:
-            raise _Finished(self._handoff())
+            reason = arguments.get("reason")
+            raise self._hand_off(reason if reason in tools.HAND_OVER_REASONS else "other", None, name)
         if acted:
             return wrap_untrusted(name, ONE_STEP, ok=False), False
         return await self._act(arguments), True
 
     def _handoff(self) -> Final:
         return Final("notice", phrase(self.language, "computer_handoff"), "done", "handoff")
+
+    def _hand_off(self, reason: str, window: Window | None, tool: str) -> Exception:
+        """What a step that is the owner's raises: the run stops for their hands when it may hand back
+        (an administrator's prompt, which nothing can carry on past, ends it), else it ends with the
+        line that says so."""
+        if self._handback and reason != "admin":
+            return _HandBack(reason, window or self._last_window, tool)
+        return _Finished(self._handoff())
+
+    async def _hand_back(self, pause: _HandBack) -> str:
+        """Stop for the owner's hands, and carry on when they give the computer back: the text the
+        model is answered with (what it asked for was the owner's; the windows as they are now).
+
+        The run takes itself off the desktop first, so that the owner's input is nobody's business, and
+        puts itself on again when the owner says they are done. Whether what they took over is done is
+        checked once by looking again (`safety.blocks`): when it still shows the form, the computer
+        goes back to the owner, who is told so (`Handback.note`); the second time the run carries on
+        and the model reads the window."""
+        language, lease = self.language, self._lease
+        app = "" if pause.window is None else pause.window.app.name
+        identity = uuid.uuid4().hex
+        note = ""
+        blocks: list[str] = []
+        for attempt in range(2):
+            lease.hand_to_owner()
+            self._state("end", words.wrapped(language, phrase(language, "computer_handoff")))
+            self._events.put_nowait(Handback(identity, pause.reason, app, note))
+            asked_at = self._clock()
+            try:
+                await self._until(lease.returned(), self.limits.handback_s)
+            except TimeoutError:
+                raise _Finished(Final("negative", phrase(language, "expired"), "expired", "expired")) from None
+            finally:
+                self._paused_s += self._clock() - asked_at
+            self._check()
+            # The run is the shell's again, and nothing it saw before is current: the shell dropped it.
+            self._state("begin", words.step_line(language, "start"))
+            for window_id in list(self._generation):
+                self._forget(window_id)
+            blocks, blocked = await self._look_again(pause.window)
+            if not blocked or attempt == 1:
+                break
+            note = "still"
+        told = HANDED_BACK.format(reason=pause.reason)
+        return "\n".join([wrap_untrusted(pause.tool, told, ok=True), *blocks])
+
+    async def _look_again(self, window: Window | None) -> tuple[list[str], bool]:
+        """The windows, and the one the hand-over was about, as they are now: the text for the model,
+        and whether that window still shows what only the owner may do."""
+        blocks = [await self._apps()]
+        target = self._same_window(window)
+        if target is None:
+            return blocks, False
+        try:
+            blocks.append(await self._look({"window": target.id}))
+        except _HandBack:
+            return blocks, True  # the shell itself says the window is still the owner's
+        snapshot = self._snapshots.get(target.id)
+        return blocks, snapshot is not None and safety.blocks(snapshot.elements.values())
+
+    def _same_window(self, window: Window | None) -> Window | None:
+        """The window of a hand-over as the windows are now: the same one, else another of its app."""
+        if window is None:
+            return None
+        if window.id in self._windows:
+            return self._windows[window.id]
+        return next((w for w in self._windows.values() if w.app.exe == window.app.exe), None)
 
     async def _apps(self) -> str:
         name = tools.APPS.name
@@ -772,7 +954,7 @@ class ComputerRun:
         try:
             snapshot = await self._snapshot(window)
         except BridgeError as error:
-            return self._shell_failure(name, error)
+            return self._shell_failure(name, error, window)
         return wrap_untrusted(name, describe(snapshot), ok=True)
 
     def _check_looks(self) -> None:
@@ -785,6 +967,7 @@ class ComputerRun:
         BridgeError if the shell could not."""
         self._check_looks()
         self.looks += 1
+        self._last_window = window
         began = time.perf_counter()
         try:
             result = await self._shell("look", {"window": window.id}, LOOK_TIMEOUT_S)
@@ -806,11 +989,12 @@ class ComputerRun:
         self._snapshots.pop(window_id, None)
         self._generation[window_id] = self._generation.get(window_id, 0) + 1
 
-    def _shell_failure(self, name: str, error: BridgeError) -> str:
+    def _shell_failure(self, name: str, error: BridgeError, window: Window | None = None) -> str:
         """A failure of the shell, as the model is told it; the ones that are the owner's or are
-        refused for good end the run."""
+        refused for good end the run (or pause it for the owner's hands)."""
         if error.kind in ("password", "elevated", HANDOFF):
-            raise _Finished(self._handoff())
+            reason = "admin" if error.kind == "elevated" else "password" if error.kind == "password" else "sign_in"
+            raise self._hand_off(reason, window, name)
         if error.kind == "refused_app":
             raise _Finished(
                 Final("negative", phrase(self.language, "computer_refused_app"), "error", "refused_app")
@@ -896,7 +1080,7 @@ class ComputerRun:
         )
         if verdict == safety.HANDOFF:
             self._step(action, window.app, "blocked", time.perf_counter(), "handoff")
-            raise _Finished(self._handoff())
+            raise self._hand_off(safety.handoff_reason(element, focused), window, name)
         if verdict == safety.REFUSE:
             self._step(action, window.app, "blocked", time.perf_counter(), CLOSES)
             return wrap_untrusted(name, NEVER_CLOSES, ok=False)
@@ -942,7 +1126,7 @@ class ComputerRun:
         except BridgeError as error:
             self._step(action, window.app, "error", began, error.kind)
             self._forget(window.id)
-            return self._shell_failure(name, error)
+            return self._shell_failure(name, error, window)
         self._step(action, window.app, "ok", began)
         method = result.get("method") if isinstance(result.get("method"), str) else "done"
         # The ids of this look are the model's from now on: it sees this result.
@@ -1035,13 +1219,36 @@ class ComputerRuns:
         run.stop(reason)
         return True
 
-    def stop_all(self, reason: str) -> None:
+    def stop_all(self, reason: str, *, spare_owner: bool = False) -> None:
+        """Stop the run. With `spare_owner`, not one that waits for the owner's hands: a request that
+        is none of its business (a question, a chat) leaves a hand-over to the owner alone."""
         run = self.active
-        if run is not None and not run.done:
+        if run is not None and not run.done and not (spare_owner and run.owner_has_control):
             run.stop(reason)
 
+    def find(self, run_id: object) -> ComputerRun | None:
+        """The run `run_id` names, if it is the one on the desktop and still going."""
+        run = self.active
+        return run if run is not None and not run.done and run.run_id == run_id else None
+
+    def give_back(self, run_id: object) -> bool:
+        """The owner gave the computer back to run `run_id`: True once, if it was waiting for it."""
+        run = self.find(run_id)
+        return run is not None and run.give_back()
+
+    def stop_run(self, run_id: object, reason: str) -> bool:
+        """Stop run `run_id` (the owner's 停止 on its card). Whether there was such a run."""
+        run = self.find(run_id)
+        if run is not None:
+            run.stop(reason)
+        return run is not None
+
     def interrupt(self) -> None:
-        """The owner touched the mouse or the keyboard: the run stops."""
+        """The owner touched the mouse or the keyboard: the run stops, unless the computer is in their
+        hands: that input is what the hand-over is for."""
+        run = self.active
+        if run is not None and run.owner_has_control:
+            return
         self.stop_all("interrupted")
 
     async def aclose(self) -> None:

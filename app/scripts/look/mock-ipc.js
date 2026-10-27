@@ -71,6 +71,12 @@ export function installMock(fixture, config = {}, target = window) {
   // A task that waits for an app shows its connector card; `cardSignIn` "approve" finishes the sign-in the
   // way the core reports it (authorizing, then connected) and adds the turn that resumes the task.
   if (variant.connectorCard) data.turns.push(structuredClone(data.connectorTurns[variant.connectorCard]));
+  // A task that waits for a key shows its secret card, and one paused for the owner's hands its computer card. The
+  // fixture reports their states as the core does and keeps only the states: the key typed into a card is
+  // received by `integrations.card_save` and forgotten (`resumeFails`: the task does not continue; `signedIn`:
+  // the page no longer asks for the sign-in when the owner presses 我完成了).
+  if (variant.secretCard) data.turns.push(structuredClone(data.secretTurns[variant.secretCard]));
+  if (variant.computerCard) data.turns.push(structuredClone(data.computerTurns[variant.computerCard]));
   if (variant.colleagues) {
     // 小森 asked 小晴 from its own chat; 小晴's main chat shows each question where it came.
     data.conversations.push(data.colleagueConversation);
@@ -296,6 +302,59 @@ export function installMock(fixture, config = {}, target = window) {
           }, 0);
         }
         return { card: copy(card), started: true };
+      }
+      case "integrations.card_save": {
+        const turn = data.turns.find(item => item.secrets?.some(card => card.id === p.id));
+        const card = turn?.secrets.find(item => item.id === p.id);
+        if (!card) throw new Error(`Fixture card not found: ${p.id}`);
+        if (typeof p.value !== "string" || !p.value.trim()) throw new Error("Fixture: a key is needed");
+        if (!["pending", "failed"].includes(card.state)) return { card: copy(card), saved: false };
+        Object.assign(card, { state: "saved", error: null });
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        setTimeout(() => {
+          if (variant.resumeFails) Object.assign(card, { state: "saved", error: "resume_failed" });
+          else {
+            Object.assign(card, { state: "resumed", resumed: true });
+            data.turns.push(structuredClone(data.secretResume));
+          }
+          state.emit({ type: "AgentTurn", turn_id: turn.id, member_id: turn.member_id });
+        }, 0);
+        return { card: copy(card), saved: true };
+      }
+      case "integrations.card_resume": {
+        const turn = data.turns.find(item => item.secrets?.some(card => card.id === p.id));
+        const card = turn?.secrets.find(item => item.id === p.id);
+        if (!card) throw new Error(`Fixture card not found: ${p.id}`);
+        if (card.state !== "saved" || !card.error) return { card: copy(card), resumed: false };
+        Object.assign(card, { state: "resumed", error: null, resumed: true });
+        data.turns.push(structuredClone(data.secretResume));
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        return { card: copy(card), resumed: true };
+      }
+      case "integrations.card_done": {
+        const turn = data.turns.find(item => item.computers?.some(card => card.id === p.id));
+        const card = turn?.computers.find(item => item.id === p.id);
+        if (!card) throw new Error(`Fixture card not found: ${p.id}`);
+        if (card.state !== "control") return { card: copy(card), done: false };
+        Object.assign(card, { state: "returning", note: null });
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        setTimeout(() => {
+          if (variant.signedIn) {
+            Object.assign(card, { state: "done" });
+            data.turns.push(structuredClone(data.computerResume));
+          } else Object.assign(card, { state: "control", note: "still" });
+          state.emit({ type: "AgentTurn", turn_id: turn.id, member_id: turn.member_id });
+        }, 0);
+        return { card: copy(card), done: true };
+      }
+      case "integrations.card_stop": {
+        const turn = data.turns.find(item => item.computers?.some(card => card.id === p.id));
+        const card = turn?.computers.find(item => item.id === p.id);
+        if (!card) throw new Error(`Fixture card not found: ${p.id}`);
+        if (!["control", "returning"].includes(card.state)) return { card: copy(card), stopped: false };
+        Object.assign(card, { state: "stopped", note: null });
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        return { card: copy(card), stopped: true };
       }
       case "integrations.card_cancel": {
         const turn = data.turns.find(item => item.connectors?.some(card => card.id === p.id));

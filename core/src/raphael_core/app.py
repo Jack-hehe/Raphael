@@ -74,6 +74,7 @@ from .background.tasks import FINAL_STATES
 from .members.service import MembersService
 from .members.rooms import RoomsService
 from .computer.bridge import ShellBridge
+from .computer.handback import HandbackCards
 from .computer.run import ComputerRuns
 from .brain import textnorm
 from .brain.db import connect
@@ -96,6 +97,7 @@ from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
 from .connectors.cards import ConnectorCards
+from .connectors.secret_cards import SecretCards
 from .connectors.service import ConnectorsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
 from .messaging.config import MessagingStore
@@ -809,6 +811,10 @@ class App(Router):
         # The card a chat shows for an app its task needs, and that task's one resume once connected.
         self.cards = ConnectorCards(self._conn, self, self.connectors, notify=self._agent_notice)
         self.cards.register(self)
+        # The card for a key a connection declares and the vault holds none of: the value goes from the
+        # window to the vault, and that task's one resume follows.
+        self.secret_cards = SecretCards(self._conn, self.integrations, notify=self._agent_notice)
+        self.secret_cards.register(self)
         # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
         # changes something, with their judge (Jev).
         self.safety_rules = SafetyRules(self._conn)
@@ -835,6 +841,10 @@ class App(Router):
         self.computer_bridge = ShellBridge(self.notify)
         self.computer_bridge.register(self)
         self.computer = ComputerRuns(self.computer_bridge)
+        # The card of the owner's turn at the computer (a sign-in, a password, a payment), which follows the
+        # run that waits for it and resumes that task once.
+        self.handbacks = HandbackCards(self._conn, self.computer, notify=self._agent_notice)
+        self.handbacks.register(self)
         # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
         memory_root = paths.memory_dir(data_dir) if memory_dir is None else memory_dir
         self.memory = MemoryService(self._conn, memory_root, self.client, self.keys, notify=self.notify)
@@ -877,6 +887,8 @@ class App(Router):
             tool_observer=agent_tool_observer,
             model_observer=agent_model_observer,
             cards=self.cards,
+            secret_cards=self.secret_cards,
+            handbacks=self.handbacks,
         )
         self.agent.register(self)
         self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))
@@ -1084,6 +1096,8 @@ class App(Router):
             ("stop the routines' scheduler", self.members.aclose),
             ("end the background tasks", self.background.aclose),
             ("end the connector cards' sign-ins", self.cards.aclose),
+            ("end the secret cards' resumes", self.secret_cards.aclose),
+            ("end the computer cards' runs", self.handbacks.aclose),
             ("end the assistant's requests", self.agent.aclose),
             ("end Raphael's voice", self.speaker.aclose),
             ("end the memory's background pass", self.memory.aclose),

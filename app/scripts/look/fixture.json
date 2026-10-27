@@ -1,4 +1,208 @@
 {
+  "secretTurns": {
+    "notion": {
+      "id": 130,
+      "session_id": "look-secret-notion",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我看一下 Notion 上「產品路線圖」頁的標題。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "需要先儲存 Notion 的金鑰，儲存後我就接著查。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "Notion",
+          "outcome": "error",
+          "at_ms": 1792807185500,
+          "ms": 310,
+          "reason": "missing_secret"
+        }
+      ],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。需要先儲存 Notion 的金鑰，儲存後我就接著查。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "secrets": [
+        {
+          "id": "card-notion",
+          "name": "Notion",
+          "secret": "NOTION_TOKEN",
+          "state": "pending",
+          "error": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    }
+  },
+  "secretResume": {
+    "id": 131,
+    "session_id": "connect-130",
+    "member_id": 0,
+    "conversation_id": 1,
+    "created_at_ms": 1792807195000,
+    "question": "幫我看一下 Notion 上「產品路線圖」頁的標題。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "答",
+    "text": "「產品路線圖」頁的標題是「2027 路線圖」。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_secrets": [
+      "Notion"
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "search",
+        "server": "Notion",
+        "outcome": "ok",
+        "at_ms": 1792807196000,
+        "ms": 640,
+        "reason": null
+      },
+      {
+        "kind": "tool",
+        "tool": "fetch",
+        "server": "Notion",
+        "outcome": "ok",
+        "at_ms": 1792807197000,
+        "ms": 520,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "《答。「產品路線圖」頁的標題是「2027 路線圖」。》",
+        "at_ms": 1792807198000
+      }
+    ]
+  },
+  "computerTurns": {
+    "signin": {
+      "id": 140,
+      "session_id": "look-computer-signin",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "請在電腦上看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "",
+      "text": "請在瀏覽器登入，完成後在這裡按「我完成了」。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0008,
+      "model": "openai/gpt-6-sol",
+      "steps": [
+        {
+          "kind": "computer",
+          "tool": "apps",
+          "server": null,
+          "outcome": "ok",
+          "at_ms": 1792807185500,
+          "ms": 120,
+          "reason": null
+        },
+        {
+          "kind": "computer",
+          "tool": "look",
+          "server": "Google Chrome",
+          "outcome": "ok",
+          "at_ms": 1792807185800,
+          "ms": 240,
+          "reason": null
+        }
+      ],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "請在瀏覽器登入，完成後在這裡按「我完成了」。",
+          "at_ms": 1792807186000
+        }
+      ],
+      "computers": [
+        {
+          "id": "card-pc",
+          "seq": 1,
+          "reason": "sign_in",
+          "app": "Google Chrome",
+          "state": "control",
+          "error": null,
+          "note": null,
+          "expires_at_ms": 1792808985000
+        }
+      ]
+    }
+  },
+  "computerResume": {
+    "id": 141,
+    "session_id": "connect-140",
+    "member_id": 1,
+    "conversation_id": 11,
+    "created_at_ms": 1792807205000,
+    "question": "請在電腦上看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "",
+    "text": "頁面上的確認碼是 YT-4F2A。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_computers": [
+      "Google Chrome"
+    ],
+    "steps": [
+      {
+        "kind": "computer",
+        "tool": "apps",
+        "server": null,
+        "outcome": "ok",
+        "at_ms": 1792807206000,
+        "ms": 110,
+        "reason": null
+      },
+      {
+        "kind": "computer",
+        "tool": "look",
+        "server": "Google Chrome",
+        "outcome": "ok",
+        "at_ms": 1792807207000,
+        "ms": 230,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "頁面上的確認碼是 YT-4F2A。",
+        "at_ms": 1792807208000
+      }
+    ]
+  },
   "connectorTurns": {
     "gmail": {
       "id": 120,

@@ -141,7 +141,7 @@ jobs:
           if (-not $lookRun) { throw 'No look run available for judge.' }
           $refs = Get-Content .look/references/paths.json -Raw | ConvertFrom-Json
           $env:RAPHAEL_JUDGE_REFERENCES = ConvertTo-Json -InputObject @($refs) -Compress
-          npm run judge -- $lookRun.FullName --max-cost-usd 15 --request-ceiling 0.10 --max-requests 1482
+          npm run judge -- $lookRun.FullName --max-cost-usd 15 --request-ceiling 0.10 --max-requests 1512
 
       - name: Preserve valid cached reviews even when later images fail
         if: always() && steps.judge.outputs.enabled == 'true'

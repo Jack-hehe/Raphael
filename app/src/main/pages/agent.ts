@@ -55,6 +55,7 @@ import { createDraftPanel, hasDrafts } from "../member-draft";
 import { mountBackgroundQuestions } from "../background-mount";
 import { TYPED, VOICE, exchangeTurn, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { exchangeLineHTML } from "../exchange-line";
+import { carryTyped } from "../secret-card";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
 import {
@@ -777,7 +778,12 @@ export function createAgent(app: AppContext): Page {
         // A turn that came after the newest one drawn, or a question just sent, comes in from below.
         const arrives = drewOnce && !node && (line.turnId === undefined ? !line.key.startsWith("day:") : line.turnId > newestDrawn && !droppedPending);
         if (arrives) made.classList.add("is-new");
-        if (node) node.replaceWith(made);
+        if (node) {
+          // A key being typed into a secret card goes to the same card in the new line.
+          const restore = carryTyped(node, made);
+          node.replaceWith(made);
+          restore();
+        }
         node = made;
       }
       keep.add(node);
@@ -1722,6 +1728,55 @@ export function createAgent(app: AppContext): Page {
     }
   }
 
+  /**
+   * Save the key typed into a secret card. It is read from the field here, the field is emptied before the
+   * call, and the key goes to the core's vault through `integrations.card_save` and to nothing else. The
+   * card's new states come back as `AgentTurn`.
+   */
+  async function secretSave(act: HTMLElement): Promise<void> {
+    const field = act.closest<HTMLElement>(".secret-card")?.querySelector<HTMLInputElement>("input[data-secret-input]");
+    if (!field || !field.value.trim()) return;
+    const value = field.value;
+    field.value = "";
+    field.disabled = true;
+    (act as HTMLButtonElement).disabled = true;
+    try {
+      await api.cardSave(act.dataset.card ?? "", value);
+    } catch (err) {
+      toaster.info(describeError(err));
+    } finally {
+      field.disabled = false;
+    }
+  }
+
+  /** Try again, 我完成了 or 停止 on a card: the core answers at once and tells each new state (`AgentTurn`). */
+  async function taskCardAction(act: HTMLElement): Promise<void> {
+    const id = act.dataset.card ?? "";
+    const buttons = [...(act.closest(".connector-card")?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+    for (const button of buttons) button.disabled = true;
+    try {
+      if (act.dataset.act === "card-resume") await api.cardResume(id);
+      else if (act.dataset.act === "card-done") await api.cardDone(id);
+      else await api.cardStop(id);
+    } catch (err) {
+      toaster.info(describeError(err));
+      for (const button of buttons) button.disabled = false;
+    }
+  }
+
+  thread.addEventListener("input", (e) => {
+    const field = (e.target as Element).closest<HTMLInputElement>("input[data-secret-input]");
+    const save = field?.closest(".secret-card")?.querySelector<HTMLButtonElement>('[data-act="card-save"]');
+    if (field && save) save.disabled = field.value.trim() === "";
+  });
+  thread.addEventListener("keydown", (e) => {
+    const field = (e.target as Element).closest<HTMLInputElement>("input[data-secret-input]");
+    if (!field || e.key !== "Enter" || e.isComposing) return;
+    e.preventDefault();
+    const save = field.closest(".secret-card")?.querySelector<HTMLButtonElement>('[data-act="card-save"]');
+    if (save && !save.disabled) save.click();
+  });
+
   el.addEventListener("auxclick", (e) => {
     const link = (e.target as Element).closest<HTMLElement>('[data-act="open-url"]');
     if (!link || e.button !== 1) return;
@@ -1838,6 +1893,14 @@ export function createAgent(app: AppContext): Page {
         break;
       case "card-settings":
         app.go("settings", "connections");
+        break;
+      case "card-save":
+        void secretSave(act);
+        break;
+      case "card-resume":
+      case "card-done":
+      case "card-stop":
+        void taskCardAction(act);
         break;
       case "no":
         void answer(false);

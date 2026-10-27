@@ -41,6 +41,14 @@
         "connector_card"
       ]
     },
+    "raphael/core/request_secret": {
+      "scenario_ids": [
+        "S15.secret"
+      ],
+      "expected_assertions": [
+        "secure_save"
+      ]
+    },
     "raphael/core/computer_act": {
       "scenario_ids": [
         "S21.computer.act"

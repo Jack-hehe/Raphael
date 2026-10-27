@@ -53,6 +53,10 @@ catalog entries in browser evidence are synthetic. Browser network is blocked ou
 the owned Vite origin. These scenes cannot prove OAuth, OS credential persistence,
 remote logo hosting, provider schemas, account expiry/revocation or actual tools.
 
+A chat's secret card (see [Conversation](conversation.md)) fills a secret a connection already declares: it writes the same
+vault slot `integrations.add` and `integrations.update` do (`<server>:header:<name>` or `<server>:env:<name>`), never any
+other name, so Composio's project key, Google's client and the model keys are out of its reach.
+
 ## Native acceptance owned by the maintainer
 
 Run the full look matrix, judge with external ChatGPT/Codex reference images and

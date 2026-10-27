@@ -308,6 +308,18 @@ export const cardConnect = (id: string): Promise<{ card: import("./types").Conne
   core("integrations.card_connect", { id });
 /** Ends a card's sign-in that is under way. */
 export const cardCancel = (id: string): Promise<{ cancelled: boolean }> => core("integrations.card_cancel", { id });
+/** The key typed into a secret card goes to the core's vault and nowhere else: not to `agent.ask`, a history or a log. */
+export const cardSave = (id: string, value: string): Promise<{ card: import("./types").SecretCard; saved: boolean }> =>
+  core("integrations.card_save", { id, value });
+/** Carries a saved card's task on again after a resume that failed, without asking for the key again. */
+export const cardResume = (id: string): Promise<{ card: import("./types").SecretCard; resumed: boolean }> =>
+  core("integrations.card_resume", { id });
+/** 我完成了: the owner gives the computer back to the task that handed it over. */
+export const cardDone = (id: string): Promise<{ card: import("./types").ComputerCard; done: boolean }> =>
+  core("integrations.card_done", { id });
+/** 停止 on the card of the owner's turn at the computer: the task ends and never resumes. */
+export const cardStop = (id: string): Promise<{ card: import("./types").ComputerCard; stopped: boolean }> =>
+  core("integrations.card_stop", { id });
 /** Connects a server of the user's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
 export const integrationsUpdate = (id: string, server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.update", { ...server, id });
