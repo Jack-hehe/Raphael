@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import { afterEach, expect, test, vi } from "vitest";
 import { mountModelPicker, modelPickerHTML, type ModelPicker, type PickerRole } from "./model-picker";
-import type { CliBrain } from "./types";
+import type { CatalogModel, CliBrain } from "./types";
+import { t } from "./i18n";
 const clis: CliBrain[] = [
   { id: "claude", name: "Claude Code", disconnected: false, installed: true, logged_in: true, available: true, login_command: "claude auth login", models: [
     { id: "cli:claude:sonnet", name: "Claude Sonnet 5.5", is_default: true, reasoning_efforts: ["low", "high"], default_effort: "high" },
@@ -116,4 +117,61 @@ test("an open chooser drops disconnected models and offers reconnect despite a v
   expect(document.querySelector<HTMLButtonElement>('[data-dlg="use"]')!.disabled).toBe(true);
   click('[data-dlg="login"]'); expect(login).toHaveBeenCalledWith("claude");
   expect(choose).not.toHaveBeenCalled();
+});
+
+
+const apiModel: CatalogModel = {
+  id: "openai/test", name: "Test", provider: "OpenAI", input_per_mtok: 1, output_per_mtok: 2,
+  per_minute: null, free: false, variable_price: false, context_length: 128000, created_at_ms: null,
+  capabilities: { structured_output: true, reasoning: true, max_tokens: true },
+  roles: { answer: { usable: true, reason: null }, cleanup: { usable: true, reason: null } },
+  reasoning_efforts: ["max", "future-b", "xhigh", "high", "medium", "future-a", "low", "minimal", "none"],
+  default_effort: "high",
+};
+function mountApi(role: PickerRole, current: string) {
+  const slot = document.createElement("div"); document.body.append(slot);
+  const choose = vi.fn();
+  picker = mountModelPicker(slot, { role, current, label: "Model", onChoose: choose,
+    catalog: { llm: [apiModel], stt: [], source: "cached", fetched_at_ms: null, replaced: [] } });
+  picker.open(); return choose;
+}
+const displayedEfforts = () => [...document.querySelectorAll<HTMLElement>(".mc-effort [data-effort]")].map(button => button.dataset.effort);
+
+test("a high-first API catalog displays shallow-to-deep efforts and keeps unknown order and the chosen depth", () => {
+  const before = [...apiModel.reasoning_efforts!];
+  const choose = mountApi("answer", "openai/test?effort=xhigh");
+  expect(displayedEfforts()).toEqual(["none", "minimal", "low", "medium", "high", "xhigh", "max", "future-b", "future-a"]);
+  expect(document.querySelector('[data-effort="xhigh"]')?.getAttribute("aria-pressed")).toBe("true");
+  expect(apiModel.reasoning_efforts).toEqual(before);
+  click('[data-effort="minimal"]'); click('[data-dlg="use"]');
+  expect(choose).toHaveBeenCalledWith("openai/test?effort=minimal");
+});
+
+test("display order does not replace a model's default effort", () => {
+  mountApi("answer", "openai/test");
+  expect(document.querySelector('[data-effort="high"]')?.getAttribute("aria-pressed")).toBe("true");
+});
+
+test("a high-first subscription catalog uses the same display order and keeps its effort model mapping", () => {
+  const slot = document.createElement("div"); document.body.append(slot);
+  const choose = vi.fn();
+  picker = mountModelPicker(slot, { role: "answer", catalog: null, label: "Answer", current: "cli:gemini:test-high", onChoose: choose,
+    clis: [{ ...clis[2], installed: true, logged_in: true, available: true, models: [
+      { id: "cli:gemini:test", name: "Test", reasoning_efforts: ["high", "minimal", "low"],
+        effort_models: { high: "cli:gemini:test-high", minimal: "cli:gemini:test-minimal", low: "cli:gemini:test-low" } },
+    ] }] });
+  picker.open(); expect(displayedEfforts()).toEqual(["minimal", "low", "high"]);
+  expect(document.querySelector('[data-effort="high"]')?.getAttribute("aria-pressed")).toBe("true");
+  click('[data-effort="low"]'); click('[data-dlg="use"]');
+  expect(choose).toHaveBeenCalledWith("cli:gemini:test-low");
+});
+
+test.each(["openai/old", "openai/test?effort=high"])("cleanup omits effort controls and saves a bare model from %s", current => {
+  const choose = mountApi("cleanup", current);
+  click('[data-model="openai/test"]');
+  expect(displayedEfforts()).toEqual([]);
+  expect(document.querySelector(".mc-effort")?.textContent).toBe("");
+  expect(document.querySelector(".mc-selection")?.textContent).not.toContain(t("chooser.effort"));
+  click('[data-dlg="use"]');
+  expect(choose).toHaveBeenCalledWith("openai/test");
 });

@@ -310,6 +310,20 @@ export function checkRendered(name) {
     require(document.getElementById('progress')?.textContent === "《告。正在查看今天下午的行程。》", "the latest shared turn narration is the subtitle");
     return { check: name, text: document.getElementById('progress').textContent };
   }
+  if (name === "cleanup-no-effort") {
+    const row = document.querySelector('.model-chooser .mc-effort');
+    require(row && !visible(row) && !row.querySelector('[data-effort]'), "cleanup has no unused effort row");
+    return { check: name };
+  }
+  if (name === "model-effort-order") {
+    const buttons = [...document.querySelectorAll('.model-chooser .mc-effort [data-effort]')];
+    const order = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+    require(buttons.length > 1, "the fixture exercises several effort choices");
+    const values = buttons.map(button => button.dataset.effort);
+    require(values.every((value, index) => index === 0 || order.indexOf(values[index - 1]) < order.indexOf(value)), "efforts run from shallow to deep regardless of catalog order");
+    require(buttons.every(visible), "every effort choice is visible");
+    return { check: name, efforts: values };
+  }
   if (name.startsWith("model-choice-")) {
     const dialog = document.querySelector('.model-chooser');
     const scroller = dialog?.querySelector('.mc-scroll');

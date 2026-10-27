@@ -45,7 +45,7 @@ test("快速提問 picks its effort inside the model list, as the answer model d
   api.settingsGet.mockResolvedValue({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low" } });
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low", [key]: value } }));
   api.brainsCli.mockResolvedValue({ clis: [{ id: "codex", name: "Codex", available: true, installed: true, logged_in: true,
-    models: [{ id: "cli:codex:fast", name: "Fast", is_default: true, reasoning_efforts: ["low", "medium"] }] }] });
+    models: [{ id: "cli:codex:fast", name: "Fast", is_default: true, reasoning_efforts: ["medium", "low"] }] }] });
   await mount();
   expect(page.el.querySelector('[data-row="quick-model"]')!.textContent).toContain("Quick questions");
   expect(page.el.querySelector('[data-row="quick-model"] .models-purpose-note')!.textContent).toContain("Alt+Space");

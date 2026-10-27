@@ -1776,6 +1776,8 @@
         "variable_price": false,
         "context_length": 128000,
         "created_at_ms": null,
+        "reasoning_efforts": ["max", "xhigh", "high", "medium", "low", "minimal", "none"],
+        "default_effort": "high",
         "capabilities": {
           "reasoning": true,
           "structured_output": true,
@@ -1807,6 +1809,8 @@
         "variable_price": false,
         "context_length": 128000,
         "created_at_ms": null,
+        "reasoning_efforts": ["max", "xhigh", "high", "medium", "low", "minimal", "none"],
+        "default_effort": "high",
         "capabilities": {
           "reasoning": true,
           "structured_output": true,

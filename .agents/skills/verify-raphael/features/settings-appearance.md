@@ -7,7 +7,11 @@ model. Quick effort is chosen inside the chooser, in the same effort row as the 
 model's (owner, 2026-10-27: never a separate control beside the card); a newly chosen
 model starts at low, and under 「與回答相同」 the row is the answer model's. The core
 still saves the quick model and its effort apart (`quick_model`, `quick_effort`).
-API effort metadata and CLI effort mappings follow their existing catalogs.
+API effort metadata and CLI effort mappings follow their existing catalogs. Every effort
+list displays none, minimal, low, medium, high, xhigh, max, followed by unknown efforts
+in their catalog order; chosen and default efforts keep their existing meaning.
+Cleanup does not consume a chosen effort: its chooser has no effort row or footer effort,
+and saves the bare model reference without ?effort=. The core's catalog policy decides it.
 
 ```powershell
 npm run look -- quick-model-menu quick-effort-menu quick-model-selection --theme both --width 1120,720,1920x1080

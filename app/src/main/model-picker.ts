@@ -542,6 +542,16 @@ export function mountModelPicker(container: HTMLElement, options: ModelPickerOpt
   return new MountedPicker(container, options);
 }
 
+const effortOrder: readonly string[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+/** Display known efforts from shallow to deep, retaining unknown efforts in catalog order. */
+const orderedEfforts = (efforts: readonly string[]): string[] => {
+  const rank = (effort: string): number => {
+    const index = effortOrder.indexOf(effort);
+    return index < 0 ? effortOrder.length : index;
+  };
+  return [...efforts].sort((a, b) => rank(a) - rank(b));
+};
+
 const effortText = (effort: string): string => {
   const keys = { none: "chooser.none", minimal: "chooser.minimal", low: "chooser.low", medium: "chooser.medium", high: "chooser.high", xhigh: "chooser.xhigh", max: "chooser.max" } as const;
   return effort in keys ? t(keys[effort as keyof typeof keys]) : effort;
@@ -722,7 +732,7 @@ class MountedPicker implements ModelPicker {
     }
     const model = this.effortModel();
     const supported = model?.reasoning_efforts ?? [];
-    const levels = this.inherits() || source.models.some((m) => m.id === model?.id) ? supported : [];
+    const levels = this.inherits() || source.models.some((m) => m.id === model?.id) ? orderedEfforts(supported) : [];
     if (!supported.includes(this.effort)) this.effort = (this.o.defaultEffort && supported.includes(this.o.defaultEffort) ? this.o.defaultEffort : model?.default_effort) ?? supported[0] ?? "";
     const efforts = this.dialog!.el.querySelector(".mc-effort")!;
     efforts.innerHTML = levels.length ? `<span>${esc(t("chooser.effort"))}</span><div class="mc-segments" role="group" aria-label="${esc(t("chooser.effort"))}">${levels.map((level) => `<button type="button" class="btn sm" data-effort="${esc(level)}" aria-pressed="${this.effort === level}">${esc(effortText(level))}</button>`).join("")}</div>` : "";
@@ -799,6 +809,8 @@ class MountedPicker implements ModelPicker {
   private inherits(): boolean { return !!this.o.inheritFrom && this.draft === this.o.lead?.id; }
   /** The model whose effort row the list shows: the one chosen, or the one the chosen lead stands for. */
   private effortModel(): CatalogModel | undefined {
+    // Cleanup uses the catalog policy in complete_json, never a chosen effort or ref suffix.
+    if (this.o.role === "cleanup") return undefined;
     const id = this.inherits() ? concreteCurrent({ ...this.o, current: this.o.inheritFrom! }) : this.draft;
     return pickerModels(this.o).find((m) => m.id === id);
   }
