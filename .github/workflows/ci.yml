@@ -163,6 +163,8 @@ jobs:
             app/.look/judge-*/summary.txt
             app/.look/verify-*/*
           if-no-files-found: error
+          # The look and verify folders start with a dot, which the action leaves out unless told.
+          include-hidden-files: true
           retention-days: 14
 
   python:

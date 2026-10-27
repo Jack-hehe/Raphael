@@ -58,3 +58,5 @@ jobs:
           name: guardian-live-${{ github.run_id }}
           path: core/.live/run-*/report.json
           if-no-files-found: error
+          # The live folder starts with a dot, which the action leaves out unless told.
+          include-hidden-files: true
