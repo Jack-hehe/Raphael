@@ -172,7 +172,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 :root[data-rail="true"] .brand .app-icon { width: 32px; height: 32px; }
 :root[data-rail="true"] .side .nav { justify-content: center; width: 40px; min-height: 40px; padding: 0; }
 :root[data-rail="true"] .side .nav-dot { top: 6px; right: 6px; margin-top: 0; }
-:root[data-rail="true"] .side .nav-count { position: absolute; top: 1px; right: 1px; margin: 0; min-width: 16px; padding: 0 2px; line-height: 16px; box-shadow: 0 0 0 2px var(--side); }
+:root[data-rail="true"] .side .nav-count { position: absolute; top: 1px; right: 1px; left: auto; margin: 0; min-width: 16px; padding: 0 2px; line-height: 16px; box-shadow: 0 0 0 2px var(--side); }
 :root[data-rail="true"] .usage-box { display: none; }
 :root[data-rail="true"] .side-foot { width: 40px; }
 /* the members' column runs up under the window controls: their bar takes its colours, not the content's */
@@ -186,6 +186,8 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 .lede { margin: var(--sp-2) 0 0; color: var(--text-2); font-size: var(--fs-sm); max-width: 64ch; text-wrap: pretty; }
 @media (max-width: 880px) {
   :root { --sidebar-width: 176px; }
+  /* In the narrower sidebar 連結應用程式 and its number do not fit on one line: the number is a badge on its icon, as in the rail. */
+  .side .nav-count { position: absolute; top: -1px; left: 22px; margin: 0; min-width: 14px; padding: 0 2px; line-height: 14px; box-shadow: 0 0 0 2px var(--side); }
   .page { padding: calc(var(--window-controls-height) + 8px) 24px 48px; }
 }
 .group { margin-top: var(--sp-5); }

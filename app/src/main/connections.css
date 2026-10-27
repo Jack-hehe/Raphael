@@ -106,7 +106,8 @@
 .cs-dialog.wide { width: min(640px, 100%); }
 .cs-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
 .cs-field > .flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
-.cs-skill-text { width: 100%; min-height: 260px; padding: var(--sp-3); resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; }
+/* The document is a textarea with the field's look; the field's own padding and height (one line) yield to these, hence the longer selector. */
+.cs-field > .cs-skill-text { display: block; width: 100%; height: auto; min-height: 320px; padding: var(--sp-3); resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; }
 
 /* A notice that something waits for the user */
 .ca-alert { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: var(--fs-sm); }
