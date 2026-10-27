@@ -83,4 +83,25 @@ describe("real app entry with the shared look fixture", () => {
     undo.click();
     expect(document.querySelector(`.wrow[data-id="${id}"]`)).not.toBeNull();
   });
+  it("opens a dictionary word's overflow menu on a right click anywhere on it, at the pointer, and keeps no browser menu elsewhere", async () => {
+    const word = document.querySelector('.wrow');
+    word.querySelector('[data-act="word-menu"]').click();
+    const items = () => [...document.querySelectorAll('#app-popover [data-pick]')].map(item => item.dataset.pick);
+    const viaMore = items();
+    expect(viaMore).toEqual(["delete"]);
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(document.querySelector('#app-popover')).toBeNull());
+    word.querySelector('.word').dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2, clientX: 210, clientY: 150 }));
+    const right = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 210, clientY: 150 });
+    word.querySelector('.word').dispatchEvent(right);
+    expect(right.defaultPrevented).toBe(true);
+    expect(items()).toEqual(viaMore);
+    expect(document.querySelector('#app-popover').style.left).toBe("210px");
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+    const plain = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    document.querySelector('.page-dictation, #main').dispatchEvent(plain);
+    expect(plain.defaultPrevented).toBe(true);
+    expect(document.querySelector('#app-popover')).toBeNull();
+    expect(state.errors).toEqual([]);
+  });
 });

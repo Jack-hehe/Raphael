@@ -1,7 +1,7 @@
 // The member column keeps Raphael pinned first, followed by member groups and ungrouped members.
 // Raphael keeps his original large emblem; the other rows retain their message previews.
 //
-// A right click on a row, or its borderless 「more」 that shows under the pointer, gives 「設為主要」 (the
+// A row's borderless 「more」 that shows under the pointer, or a right click on the row (context-menu.ts), gives 「設為主要」 (the
 // primary contact, marked by a star on its face), 「移到分組 ▸」 and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
 // (members-shell.ts): the column only draws and says what was asked.
 //
@@ -308,16 +308,6 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
     }
     const row = target.closest<HTMLElement>("[data-member]");
     if (row) host.select(Number(row.dataset.member));
-  });
-
-  el.addEventListener("contextmenu", (e) => {
-    const item = (e.target as Element).closest<HTMLElement>("[data-member-item]");
-    const head = (e.target as Element).closest<HTMLElement>(".mb-ghead");
-    const button = item?.querySelector<HTMLElement>("[data-member-more]") ?? head?.querySelector<HTMLElement>("[data-group-more]");
-    if (!button) return;
-    e.preventDefault();
-    if (button.dataset.memberMore !== undefined) memberMenu(Number(button.dataset.memberMore), button);
-    else groupMenu(Number(button.dataset.groupMore), button);
   });
 
   findInput.addEventListener("input", () => {
