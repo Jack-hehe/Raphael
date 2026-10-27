@@ -62,6 +62,9 @@ class Speaker:
     blurb: str = ""
     reply_style: str = "full"
     ask_before_members: bool = False
+    # Whether this speaker writes mail as a draft for the owner to edit and send (`agent.drafts`) rather
+    # than sending it: on unless the owner turned it off. It never takes the owner's rules away.
+    draft_first: bool = True
 
     @property
     def is_raphael(self) -> bool:

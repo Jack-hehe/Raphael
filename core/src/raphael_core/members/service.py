@@ -549,7 +549,7 @@ class MembersService:
         last = latest.get(0)
         view: dict[str, Any] = {
             "blurb": "", "reply_style": "full", "voice": "", "read_aloud": False,
-            "notify": False, "ask_before_members": False, "pinned": False, "hidden": False,
+            "notify": False, "ask_before_members": False, "pinned": False, "hidden": False, "draft_first": True,
             "id": 0,
             "name": RAPHAEL_NAMES[language],
             "role": "",

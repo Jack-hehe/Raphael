@@ -176,8 +176,9 @@ from .conversations import QUICK, Conversations
 from .quota import Quotas
 from .quotes import quote_from_wire
 from .ledger import Ledger
+from .drafts import DraftError, clean_field, is_mail_sender
 from .harness_tools import (
-    CONNECT_APP, DEFINITIONS as HARNESS_TOOLS, REQUEST_SECRET, ROUTINE_TOOLS, HarnessToolError,
+    CONNECT_APP, DEFINITIONS as HARNESS_TOOLS, EMAIL_DRAFT, REQUEST_SECRET, ROUTINE_TOOLS, HarnessToolError,
     routine_event, tool as harness_tool,
 )
 from .team_admin import DEFINITIONS as ADMIN_TOOLS, CONFIRM_TOOLS, LEADERSHIP, BATCH_TOOLS
@@ -533,6 +534,19 @@ DECLINED_NOTE = (
     "done now: do not try another way or another tool to get the same thing done. Say in one short sentence that "
     "it was not done."
 )
+# What the model is told when it calls a tool that sends mail and it writes drafts first (the owner sends them).
+DRAFT_FIRST_NOTE = (
+    "Do not send this mail yourself. Write it with email_draft: the owner reviews it in this chat, edits it and sends it "
+    "from the card. Then end your turn with one short sentence, and never say it was sent."
+)
+# What the model is told when one of Raphael's own tools refuses it, by the kind of the refusal.
+_HARNESS_NOTES = {
+    "private_chat_only": (
+        "This is not for this conversation: a card or a draft belongs to the owner's private chat typed at this computer. "
+        "Do not put the mail's text, or anything private, here; say in one short sentence that you will write it in your "
+        "private chat with the owner."
+    ),
+}
 # What a turn that showed a card is told when it calls anything else, by the kind of card it waits for.
 _WAITING_NOTES = {
     "apps": ("A card to connect an app is waiting for the owner, and this request resumes after it. "
@@ -670,6 +684,11 @@ class AgentService:
         # writes there for the owner to edit and send (`agent.drafts`).
         self._permissions = permissions
         self._drafts = drafts
+        if drafts is not None:
+            drafts.approve = self._approve_by_click
+            drafts.ledger = lambda: Ledger(self._spend)
+            drafts.names = self._member_name
+            drafts.colleague = self._colleague_id
         self._conn = conn
         self._keys = keys
         # Raphael's voice (`services.speaker`): says the answers of the owner's own requests to
@@ -2169,10 +2188,29 @@ class AgentService:
         """Make the picked calls that need no yes, together, and add their results to `results`.
         If a call needs a yes the answer waits for it: that is the question to return instead, for
         the first such call; any others are not made (one question to a turn)."""
+        if self._drafts is not None and ask.speaker.draft_first:
+            # This speaker writes mail as a draft for the owner to send (`email_draft`); a call of a tool that
+            # sends it is not made, whatever the owner's rules say of sending (they still have the last word
+            # over the speakers that may send).
+            sends = [call for call in calls if call.tool.key.startswith(PLUGIN_PREFIX) and is_mail_sender(call.tool)]
+            if sends:
+                for call in sends:
+                    ask.steps.append(self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "draft_required"))
+                    results.append(ToolResult(_label(call), False, None, "draft_required", instruction=DRAFT_FIRST_NOTE))
+                kept = [index for index, call in enumerate(calls) if call not in sends]
+                calls = [calls[index] for index in kept]
+                if screenings is not None:
+                    screenings = [screenings[index] for index in kept]
+                if not calls:
+                    return results
         if ask.declined:
             # The owner said no to something in this request: the tool they refused is not tried again,
-            # whatever the arguments, and (below) nothing else that needs their yes is asked.
-            refused = [index for index, call in enumerate(calls) if call.tool.key in {key for key, _ in ask.declined}]
+            # whatever the arguments, no other tool of a connection that changes something is tried in its place
+            # (a synonym is no way round a no), and (below) nothing else that needs their yes is asked.
+            refused_keys = {key for key, _ in ask.declined}
+            refused = [index for index, call in enumerate(calls)
+                       if call.tool.key in refused_keys
+                       or (call.tool.key.startswith(PLUGIN_PREFIX) and not self._gate.reads_only(call.tool.server, call.tool.name))]
             for index in refused:
                 results.append(self._declined(ask, calls[index]))
             if refused:
@@ -2245,7 +2283,7 @@ class AgentService:
         tool = call.tool
         if tool.key in HARNESS_TOOLS:
             # A card only shows a card: the owner's own sign-in, or the key they type, is the consent.
-            if tool.key in ("routine_list", "team_overview", "show", "computer", CONNECT_APP, REQUEST_SECRET):
+            if tool.key in ("routine_list", "team_overview", "show", "computer", CONNECT_APP, REQUEST_SECRET, EMAIL_DRAFT):
                 return PASS
             return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments), narrow_scope(tool.key)), language=ask.language, ledger=ledger)
         if tool.key in TEAM_TOOLS:
@@ -2359,6 +2397,8 @@ class AgentService:
                 data = self._show_card(ask, args)
             elif name == REQUEST_SECRET:
                 data = self._show_secret(ask, args)
+            elif name == EMAIL_DRAFT:
+                data = self._show_draft(ask, args)
             elif name in COMMANDS:
                 if ask.source not in _AT_THIS_COMPUTER or ask.nested:
                     raise HarnessToolError("presence_required")
@@ -2386,7 +2426,7 @@ class AgentService:
                 raise HarnessToolError("unknown_tool")
             result = ToolResult(name, True, data)
         except HarnessToolError as error:
-            result = ToolResult(name, False, None, str(error))
+            result = ToolResult(name, False, None, str(error), instruction=_HARNESS_NOTES.get(str(error)))
         except RpcError as error:
             result = ToolResult(name, False, {"field": (error.data or {}).get("kind", "")}, "bad_arguments")
         except (ValueError, NotApproved, UnknownTool):
@@ -2448,6 +2488,61 @@ class AgentService:
             f"A card to save {names} for {cards[0].name} is shown to the owner in this chat. End this turn now with one short "
             "sentence. The key goes straight to the secure vault and you never see it; this request resumes by itself, once, "
             "after the owner saves it; never claim the connection's data now.")}
+
+    def _show_draft(self, ask: _Ask, args: Mapping[str, Any]) -> dict:
+        """`email_draft`: the mail a member wrote for the owner, as an editable card in this private chat. The
+        member cannot send it: the owner edits it and presses 傳送, and only that sends it (`agent.drafts`). A
+        draft offered to a colleague (`hand_to`) also asks the owner whether that colleague may send it. Never in
+        a room, an exchange between members, a quick question or a spoken or phone request."""
+        if self._drafts is None or not ask.turn_id:
+            raise HarnessToolError("unavailable")
+        if ask.nested or ask.quick or ask.scope != "private" or ask.source not in (TYPED, RESUMED):
+            raise HarnessToolError("private_chat_only")
+        try:
+            fields = {name: clean_field(name, args.get(name) or "") for name in ("to", "cc", "subject", "body")}
+        except RpcError:
+            raise ValueError("bad draft") from None
+        if not fields["to"] or not fields["subject"] or not fields["body"]:
+            raise ValueError("bad draft")
+
+        def text(name: str) -> str | None:
+            value = args.get(name)
+            return value.strip() if isinstance(value, str) and value.strip() else None
+        try:
+            draft, offered = self._drafts.write(
+                author_id=ask.speaker.id, turn_id=ask.turn_id, conversation_id=ask.conversation_id, language=ask.language,
+                via=text("via"), hand_to=text("hand_to"), revise=args.get("revise") is True, **fields)
+        except DraftError:
+            raise HarnessToolError("unknown_member") from None
+        self._turn_changed(ask.turn_id, ask.speaker.id)
+        note = ("The draft is shown to the owner in this chat as an editable card. The owner edits it and sends it from the "
+                "card; you cannot send it. End this turn now with one short sentence, and never say the mail was sent.")
+        if offered:
+            note += f" A choice card also asks the owner whether {offered} may send it; handing it over never sends it."
+        return {"draft": "shown", "version": draft.version, "note": note}
+
+    def _approve_by_click(self, action: Action, turn_id: int, language: str) -> Approval:
+        """The yes of the gate for an action the owner decided with a click on a card that shows exactly that
+        action (the 傳送 of a draft's version): the question is opened and answered here, in the one place that
+        makes an approval, and the approval is for that action's digest."""
+        try:
+            tier = max(Tier.T2, self._gate.tier(action.tool))
+        except UnknownTool:
+            tier = Tier.T2
+        pending = self._confirmations.open(f"card-{turn_id}", turn_id, action, tier, language)
+        resolution = self._confirmations.resolve(pending.id, True, pending.digest)
+        assert resolution.approval is not None
+        return resolution.approval
+
+    def _member_name(self, member_id: int) -> str:
+        """The name a member goes by in the window's language (Raphael's for 0)."""
+        speaker = self._speaker(member_id)
+        return (speaker.name if speaker is not None else "") or RAPHAEL_NAMES[self._last_language]
+
+    def _colleague_id(self, name: str) -> int | None:
+        """The member a name stands for (Raphael's included), or None when it names nobody."""
+        found = self._team.find(name) if self._team is not None else None
+        return None if found is None else found.id
 
     async def resume_turn(self, turn_id: int, attempt: int = 1, *, report: "ComputerReport | None" = None) -> Resumed:
         """Carry on, once, the request of `turn_id` now that every card it showed is done (the apps
@@ -3181,7 +3276,8 @@ class AgentService:
             "no": phrase(language, "no"),
             "timeout_ms": CONFIRM_TIMEOUT_MS,
         }
-        if (card is not None and self._permissions is not None and turn_id
+        # A call that cannot be undone (T3) keeps the gold card that is held to confirm: a click is not enough for it.
+        if (card is not None and self._permissions is not None and turn_id and tier < Tier.T3
                 and permission_cards_for(source=ask.source, quick=ask.quick, nested=ask.nested, scope=ask.scope)):
             self._permissions.show(
                 card_id=pending.id, turn_id=turn_id, member_id=ask.speaker.id, conversation_id=ask.conversation_id,
@@ -3677,6 +3773,7 @@ class AgentService:
         keys = self._secret_cards.views([*ids, *resumed]) if self._secret_cards is not None else {}
         hands = self._handbacks.views([*ids, *resumed]) if self._handbacks is not None else {}
         permitted = self._permissions.views(ids) if self._permissions is not None else {}
+        drafted = self._drafts.views(ids) if self._drafts is not None else {}
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
@@ -3723,6 +3820,7 @@ class AgentService:
                     **({"computers": asked_hands} if asked_hands else {}),
                     **({"resumed_computers": list(dict.fromkeys(card["app"] for card in given_back))} if given_back else {}),
                     **({"permissions": permitted[turn.id or 0]} if permitted.get(turn.id or 0) else {}),
+                    **({"drafts": drafted[turn.id or 0]} if drafted.get(turn.id or 0) else {}),
                     "messages": messages.get(turn.id or 0, []),
                 }
             )
