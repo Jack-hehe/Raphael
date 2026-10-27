@@ -4,6 +4,10 @@ const details = [member(1), { action: "open-details" }, check("member-details")]
 const composer = [click(".cmp-attach"), wait("#app-popover")];
 const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
 const firstBot = { name: "晨星", personality: "沉穩、精準", instructions: "規劃每週工作" };
+// A key made up for the scenes: it is typed into a secret card and must reach nothing but `integrations.card_save`.
+const lookKey = "sk-look-4c9f2b7e81d3";
+const secretField = '[data-secret-card="card-notion"] input[type="password"]';
+const pcCard = '[data-computer-card="card-pc"]';
 const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
   click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
 const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
@@ -49,6 +53,17 @@ export default [
     [wait('[data-connector="card-gmail"]'), click('[data-connector="card-gmail"] [data-act="card-connect"]'),
       wait('[data-connector="card-gmail"][data-card-state="connected"]'), wait('[data-resumed="121"]'), check("connector-reconnected")],
     { connectorCard: "expired", cardSignIn: "approve" }),
+  scene("chat-secret-masked", "A task that needs a connection's key shows its secret card; the key typed into the masked field draws no characters",
+    [wait('[data-secret-card="card-notion"]'), type(secretField, lookKey), check("secret-masked")], { secretCard: "notion" }),
+  scene("chat-secret-saved-not-resumed", "The key is saved and its task did not continue: the card says both and offers Try again without asking for the key again",
+    [wait('[data-secret-card="card-notion"]'), type(secretField, lookKey), click('[data-secret-card="card-notion"] [data-act="card-save"]'),
+      wait('[data-secret-card="card-notion"][data-card-error="resume_failed"]'), check("secret-saved-not-resumed")], { secretCard: "notion", resumeFails: true }),
+  scene("chat-computer-takeover", "A computer task that reaches a sign-in pauses: the card names the window to use and gives the computer to the owner",
+    [member(1), wait(pcCard), check("pc-takeover")], { computerCard: "signin" }),
+  scene("chat-human-control", "我完成了 pressed before the sign-in is done: the form is still there, so the computer stays the owner's and the card says so",
+    [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait(`${pcCard}[data-card-note="still"]`), check("pc-human-control")], { computerCard: "signin" }),
+  scene("chat-handback", "我完成了 after the sign-in: the computer goes back, the same task carries on once and its answer follows the card",
+    [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait('[data-resumed="141"]'), check("pc-handback")], { computerCard: "signin", signedIn: true }),
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
     { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
     type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),

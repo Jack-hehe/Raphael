@@ -886,5 +886,86 @@ export function checkRendered(name) {
     }
     return { check: name, app, state: card.dataset.cardState, words: said };
   }
+  if (name.startsWith("secret-") || name.startsWith("pc-")) {
+    // The cards of a key (secret-card.ts) and of the owner's turn at the computer (computer-card.ts) are connector cards with a
+    // second row: all inside the reply column, below the reply that asked, with real framed buttons inside the card.
+    const secret = name.startsWith("secret-"), key = "sk-look-4c9f2b7e81d3";
+    const cards = [...document.querySelectorAll(secret ? '.secret-card' : '.computer-card')].filter(visible);
+    require(cards.length === 1, `one card is visible, found ${cards.length}`);
+    const [card] = cards, box = card.getBoundingClientRect(), column = card.closest('.ra-body').getBoundingClientRect();
+    require(box.left >= column.left - 1 && box.right <= column.right + 1, "R-UI-29: the card fits the reply column");
+    require(box.width >= Math.min(300, column.width) - 1, `the card keeps a card's width, not a chip's (${Math.round(box.width)}px)`);
+    const mark = card.querySelector('.mono'), markStyle = getComputedStyle(mark);
+    require(visible(mark) && mark.querySelector('svg'), "the card has its mark");
+    require(markStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(markStyle.borderTopWidth) === 0, "R-UI-34: the mark is bare, on no tile");
+    if (secret) require(mark.querySelector('svg.logo path'), "R-UI-34: the connection's own drawn mark, not a letter");
+    const reply = [...card.closest('.tn').querySelectorAll('.chat-message[data-expandable]')].filter(visible).at(-1);
+    require(reply && reply.getBoundingClientRect().bottom <= box.top + 1, "the card sits below the reply that asked for it");
+    const buttons = [...card.querySelectorAll('button')].filter(visible);
+    for (const button of buttons) {
+      const inside = button.getBoundingClientRect();
+      require(inside.left >= box.left && inside.right <= box.right && inside.bottom <= box.bottom + 1, "R-UI-25: the action is inside its card");
+      require(button.classList.contains('btn') && parseFloat(getComputedStyle(button).borderTopWidth) > 0, "R-UI-17/18: a text action is a framed button");
+    }
+    const state = card.querySelector('.cc-state').textContent.trim(), calls = window.__look.calls;
+    const carrying = call => JSON.stringify(call.params ?? {}).includes(key);
+    require(!document.documentElement.outerHTML.includes("開啟電腦") && !document.body.innerText.includes("開啟電腦"), "there is no 開啟電腦 step on the owner's own computer");
+    if (name === "secret-masked") {
+      const field = card.querySelector('input'), save = buttons[0];
+      require(card.dataset.cardState === "pending" && state === "NOTION_TOKEN", `the card names the secret it fills (${state})`);
+      require(field.type === "password" && field.autocomplete === "off" && visible(field) && field.getBoundingClientRect().width >= 100, "the field is a masked field a key fits in");
+      require(field.value === key && !field.hasAttribute('value'), "the characters live in the field only, never in its markup");
+      require(!document.body.innerText.includes(key) && !document.documentElement.outerHTML.includes(key), "no characters of the key are drawn or in the page");
+      require(buttons.length === 1 && save.textContent.trim() === "安全儲存" && save.classList.contains('pri') && !save.disabled, "one primary 安全儲存, ready");
+      require(visible(card.querySelector('.field svg')), "the field carries its lock");
+      require(!calls.some(carrying), "nothing was sent before the owner saved it");
+    }
+    if (name === "secret-saved-not-resumed") {
+      require(card.dataset.cardState === "saved" && card.dataset.cardError === "resume_failed", `saved, and the task did not continue (${card.dataset.cardState}/${card.dataset.cardError})`);
+      require(state === "金鑰已儲存，這項工作沒有繼續", `the card says both things: "${state}"`);
+      require(!card.querySelector('input') && buttons.length === 1 && buttons[0].textContent.trim() === "再試一次" && buttons[0].classList.contains('pri'), "no field is asked again: one primary 再試一次");
+      require(visible(card.querySelector('.cc-name')) && !card.querySelector('.cc-done'), "the check is the resumed task's, not the saved key's");
+      const sent = calls.filter(carrying);
+      require(sent.length === 1 && sent[0].method === "integrations.card_save", "the key crossed one call, integrations.card_save, and no other");
+      require(calls.filter(call => call.method === "agent.ask").length === 0 && !calls.some(call => String(call.method ?? "").startsWith("agent.") && carrying(call)), "never through the assistant");
+      require(![...document.querySelectorAll('input, textarea')].some(field => field.value.includes(key)), "no field of the page still holds it");
+      require(!document.body.innerText.includes(key) && !document.documentElement.outerHTML.includes(key), "the key is nowhere in the page");
+      plainWords();
+    }
+    if (name.startsWith("pc-")) {
+      const live = card.querySelector('.cc-live');
+      if (name !== "pc-handback") {
+        require(card.dataset.cardState === "control", `the owner has the computer (${card.dataset.cardState})`);
+        require(visible(live) && live.textContent.trim() === "你正在控制" && visible(live.querySelector('.dot')), "it says the owner is in control, with a dot and a word");
+        require(buttons.map(button => button.textContent.trim()).join("|") === "停止|我完成了" && buttons[1].classList.contains('pri') && !buttons[0].classList.contains('pri'),
+          "停止 then the primary 我完成了, the primary last");
+        require(state.startsWith("請在「Google Chrome」登入你的帳號，完成後交還控制"), `it names the window to use: "${state}"`);
+        require(card.querySelector('.mono svg.i') && card.querySelector('.cc-name span').textContent === "電腦", "the card is the computer's, with its icon");
+      }
+      if (name === "pc-takeover") {
+        require(!card.dataset.cardNote && !card.querySelector('.cc-hint'), "a first hand-over has no hint");
+        require(!calls.some(call => String(call.method ?? "").startsWith("integrations.card_")), "nothing was pressed");
+      }
+      if (name === "pc-human-control") {
+        require(card.dataset.cardNote === "still" && card.querySelector('.cc-hint')?.textContent === "看起來還沒完成，請再試一次", "the card says the sign-in does not look done");
+        require(calls.filter(call => call.method === "integrations.card_done").length === 1 && !calls.some(call => call.method === "integrations.card_stop"), "我完成了 was pressed once, 停止 never");
+        require(!document.querySelector('[data-resumed]'), "the task did not resume");
+      }
+      if (name === "pc-handback") {
+        require(card.dataset.cardState === "done" && state === "已交還控制 · 工作已繼續" && visible(card.querySelector('.cc-done')), `the card says control went back and the task continued: "${state}"`);
+        require(buttons.length === 0 && !live, "no action is left, and the owner no longer controls");
+        const [line] = eventLines(1), resumed = document.querySelector('.tn[data-id="141"]');
+        require(line.textContent === "電腦 已交還控制，繼續原本的工作", `the resumed task opens with one line: ${line.textContent}`);
+        const markBox = line.querySelector('svg.i').getBoundingClientRect();
+        require(markBox.width <= 20 && markBox.height <= 20, `the line's icon is no larger than the other lines' (${markBox.width}x${markBox.height})`);
+        require(line.getBoundingClientRect().top >= box.bottom, "the resumed task comes after the card");
+        require(!resumed.querySelector('.owner-message'), "the owner's request is not repeated as a new bubble");
+        require([...resumed.querySelectorAll('.message-text')].some(text => visible(text) && text.textContent.includes("YT-4F2A")), "the resumed task's answer is shown");
+        require(calls.filter(call => call.method === "integrations.card_done").length === 1, "我完成了 was pressed once");
+        plainWords();
+      }
+    }
+    return { check: name, state: card.dataset.cardState, words: state };
+  }
   throw new Error(`Unknown rendered check: ${name}`);
 }

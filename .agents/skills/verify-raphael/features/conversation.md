@@ -4,7 +4,8 @@
 
 Named conversations per member; new/rename/delete; public work/event chips; answers,
 attachments, reply quoting, message actions, search and composer menus; connector cards for an app a
-task needs, and the one resume of that task (see Connecting an app from the chat below).
+task needs, and the one resume of that task (see Connecting an app from the chat below); a secret card for a key a
+connection needs and a computer card for the owner's turn at a sign-in (see Handing a key or the computer to the owner below).
 A member's main conversation lists what colleagues asked or handed it where each came, as one closed
 centred line; previews, search, unread state, other conversations and every model read exclude those
 exchanges, and room turns. Room answers stay in their room/thread and have no shortcut into private history.
@@ -183,6 +184,51 @@ The scenes press the real card buttons; the IPC fixture reports the card's state
 prove a sign-in. Core tests (`core/tests/test_connect_cards.py`) and Guardian `S14.gmail` run the core's own
 loopback sign-in against an automatic Google fixture on both brain paths. A real Google account stays an
 owner-approved smoke, and Instagram (P08d) keeps the parent S14 open.
+
+## Handing a key or the computer to the owner from the chat (P08b)
+
+Two more cards pause the task that asked for them, in a private chat typed at this computer (Raphael's or a member's),
+and resume it once. A room, an exchange between members, a quick question, a spoken request and a message from a phone
+never get either, and never carry their payload.
+
+**The secret card.** A connection of the owner's own declares a secret (a header or an environment variable) that the
+vault holds no value for: a call of its tool fails with `missing_secret` and the roster shows it as `needs_secret`.
+The brain calls `request_secret` with the connection (its id or name from the roster) and, if it declares several,
+the secret's name; it never names a place in the vault. The turn shows the connection's card below its reply and calls
+nothing else: the connection's own mark, the secret's name, a masked field and 安全儲存. The key goes from the field
+to `integrations.card_save`, straight into that slot of the vault (an Authorization header given as a bare token is
+kept as a bearer); the field is emptied before the call, and the key is in no row, notification, reply, exception,
+history, room, file or log, and the model learns only that a card is shown. Saved and resumed are two states: the card
+reads 已儲存 and then 工作已繼續; when the resume failed it reads 金鑰已儲存，這項工作沒有繼續 with 再試一次
+(`integrations.card_resume`), which carries the task on without asking for the key again and without repeating what
+the failed attempt did. A replayed save does not touch the vault and resumes nothing; Stop, expiry (24 hours) and a
+cancelled card never resume; a resume cut off by a restart is saved with `interrupted`.
+
+**The computer card.** A computer task (`computer`) that reaches a password field, a sign-in or a payment does not end
+with the hand-off line: it pauses and the turn shows 電腦 · 你正在控制 with 請在「Google Chrome」登入你的帳號，完成後交還控制,
+停止 and the primary 我完成了. The computer is the owner's own PC, so the card names the window to use and there is no
+開啟電腦 step. While the owner has it the run holds a human lease: it takes itself off the desktop (the overlay and the
+watch on the owner's input are down) and asks the shell for no look, step or key, and the owner's own input ends
+nothing. 我完成了 (`integrations.card_done`) answers at once and gives the computer back, once: the run looks at the
+windows again, checks that the form is gone (once; when it is still there the card says 看起來還沒完成，請再試一次 and the
+computer stays the owner's), and carries on with the same task, repeating nothing. When the run ends the task
+resumes once in its thread, opening with 電腦 已交還控制，繼續原本的工作. 停止 (`integrations.card_stop`), Stop, a newer
+computer task, the time (30 minutes) and closing end the run; a replayed 我完成了, the app closing or the core
+restarting (the card is 連線中斷) never resume it or give control back by themselves. Spoken, quick and room runs keep
+the hand-off line. A step that needs a yes after the owner gave the computer back is not taken (an approval in the chat
+is P08c).
+
+```powershell
+npm run look -- chat-secret-masked chat-secret-saved-not-resumed chat-computer-takeover chat-human-control chat-handback --theme both --width 1120,720,1920x1080
+```
+
+The scenes press the real card buttons and type a made-up key into the real masked field; the IPC fixture reports the
+cards' states as the core does and receives the key in `integrations.card_save` only (the rendered checks scan the page
+and every call for it). They cannot prove the vault, a sign-in or a desktop. Core tests (`core/tests/test_secret_cards.py`,
+`core/tests/computer/test_handback*.py`) and Guardian `S15.secret` and `S15.computer` run the production cards, a recorded
+MCP server that opens only to the saved key and a fake desktop whose page asks for a sign-in, on both brain paths.
+`S15.permission` (P08c) has no driver yet, so S15 stays open. A real key and a real sign-in stay owner-approved native
+smokes: type a test key into the card, read the connection's result, and sign in on an isolated test account.
 
 ## P04 task lifecycle
 
