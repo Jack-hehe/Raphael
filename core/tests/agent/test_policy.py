@@ -7,6 +7,8 @@ import pytest
 from raphael_core.agent.policy import (
     CONFIRM_TIMEOUT_MS,
     CONFIRM_TIMEOUT_S,
+    UNATTENDED_WAIT_MS,
+    UNATTENDED_WAIT_S,
     Action,
     Approval,
     Confirmations,
@@ -15,6 +17,7 @@ from raphael_core.agent.policy import (
     Tier,
     ToolRegistry,
     UnknownTool,
+    action_digest,
 )
 
 
@@ -279,3 +282,72 @@ def test_one_yes_lets_an_action_run_once(registry, confirmations):
     registry.check(pending.action, approval)
     with pytest.raises(NotApproved):
         registry.check(pending.action, approval)  # not a second time
+
+
+# --- a yes is for one digest (P08c) --------------------------------------------------------------
+
+
+def test_the_digest_is_of_the_tool_and_exactly_what_it_is_given():
+    one = Action("write", {"to": "a@b.c", "subject": "hi"})
+    assert one.digest == action_digest("write", {"subject": "hi", "to": "a@b.c"})  # the order does not matter
+    assert one.digest != Action("write", {"to": "a@b.c", "subject": "ho"}).digest
+    assert one.digest != Action("burn", {"to": "a@b.c", "subject": "hi"}).digest
+    assert len(one.digest) == 64 and int(one.digest, 16) >= 0
+
+
+def test_a_confirmation_keeps_the_digest_of_its_action_when_it_was_asked(confirmations):
+    pending = open_one(confirmations)
+    assert pending.digest == pending.action.digest
+    assert confirmations.resolve(pending.id, True).approval.digest == pending.digest
+
+
+def test_inputs_changed_after_the_question_never_use_the_yes(registry, confirmations):
+    args = {"text": "x"}
+    action = Action("write", args)
+    pending = confirmations.open("s1", 1, action, Tier.T2, "en")
+    approval = confirmations.resolve(pending.id, True).approval
+    args["text"] = "something else"  # the inputs change between the question and the call
+    with pytest.raises(NotApproved):
+        registry.check(action, approval)
+    assert approval.spent is False  # refused, not used up
+    args["text"] = "x"  # put back, it is what was said yes to
+    registry.check(action, approval)
+
+
+def test_an_answer_of_another_digest_changes_nothing_and_the_question_still_waits(confirmations):
+    pending = open_one(confirmations)
+    stale = confirmations.resolve(pending.id, True, "0" * 64)
+    assert stale.outcome is Outcome.CHANGED and stale.approval is None
+    assert confirmations.waiting == 1
+    assert confirmations.resolve(pending.id, False, "0" * 64).outcome is Outcome.CHANGED
+    assert confirmations.resolve(pending.id, True, pending.digest).outcome is Outcome.APPROVED
+
+
+def test_a_replayed_yes_finds_nothing(confirmations, registry):
+    pending = open_one(confirmations)
+    first = confirmations.resolve(pending.id, True, pending.digest)
+    registry.check(pending.action, first.approval)
+    again = confirmations.resolve(pending.id, True, pending.digest)
+    assert again.outcome is Outcome.UNKNOWN and again.approval is None
+
+
+def test_a_core_that_started_again_has_no_questions_so_an_old_yes_finds_nothing(clock):
+    before = Confirmations(clock)
+    pending = open_one(before)
+    after = Confirmations(clock)  # the questions live in memory only
+    assert after.resolve(pending.id, True, pending.digest).outcome is Outcome.UNKNOWN
+
+
+def test_a_question_nobody_sits_at_waits_ten_minutes_not_thirty_seconds(confirmations, clock):
+    assert UNATTENDED_WAIT_S == 600.0 and UNATTENDED_WAIT_MS == 600_000
+    attended = open_one(confirmations, turn=1)
+    unattended = confirmations.open("s1", 2, Action("write", {"text": "x"}), Tier.T2, "en", wait_s=UNATTENDED_WAIT_S)
+    clock.now += CONFIRM_TIMEOUT_S + 1
+    assert confirmations.sweep() == [attended]
+    clock.now += UNATTENDED_WAIT_S - CONFIRM_TIMEOUT_S - 2
+    result = confirmations.resolve(unattended.id, True, unattended.digest)
+    assert result.outcome is Outcome.APPROVED  # 599 s: still in time
+    late = confirmations.open("s1", 3, Action("write", {"text": "y"}), Tier.T2, "en", wait_s=UNATTENDED_WAIT_S)
+    clock.now += UNATTENDED_WAIT_S
+    expired = confirmations.resolve(late.id, True, late.digest)
+    assert expired.outcome is Outcome.EXPIRED and expired.approval is None

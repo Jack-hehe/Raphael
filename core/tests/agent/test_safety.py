@@ -27,6 +27,7 @@ from raphael_core.agent.safety import (
     Screening,
     asked_with,
     combine,
+    narrow_scope,
     needs_yes,
     summarize,
 )
@@ -319,3 +320,135 @@ def test_the_summary_of_the_arguments_is_short():
     assert summarize({}) == "" and summarize(None) == ""
     long = summarize({"text": "字" * 2000})
     assert len(long) == 400 and long.endswith("…")
+
+
+# --- the narrow rule of Always (P08c) -------------------------------------------------------------
+
+SEND = "mcp:mail/send"
+POST = "mcp:mail/post"
+
+
+def test_always_makes_a_narrow_rule_once_in_the_owners_words_and_after_the_seeds(rules):
+    first = rules.always(narrow_scope(SEND), "寄信服務：send", "zh-TW")
+    assert (first.verdict, first.scope, first.action) == (ALLOW, "tool:mcp:mail/send", "寄信服務：send")
+    assert [r.action for r in rules.rules()] == [*SEEDS["zh-TW"], "寄信服務：send"]  # the first run's three came first
+    assert rules.always(narrow_scope(SEND), "another words", "zh-TW") == first  # the one that is there
+    assert len(rules.rules()) == 4
+    assert rules.always_allows(narrow_scope(SEND)) and not rules.always_allows(narrow_scope(POST))
+    assert not rules.always_allows("")
+
+
+async def test_a_narrow_rule_is_listed_like_any_other_without_its_scope(rpc, rules):
+    rules.always(narrow_scope(SEND), "Mail：send", "en")
+    listed = (await rpc.call("safety.rules.list", {"ui_language": "en"}))["rules"]
+    assert listed[-1] == {"id": 4, "action": "Mail：send", "verdict": "allow", "position": 4}
+    # ... and changed like any other: its words, its verdict, and deleted.
+    changed = (await rpc.call("safety.rules.update", {"id": 4, "verdict": "ask"}))["rule"]
+    assert changed["verdict"] == "ask"
+    assert rules.scoped(narrow_scope(SEND))[0].verdict == ASK
+    assert await rpc.call("safety.rules.delete", {"id": 4}) == {"deleted": True}
+    assert rules.scoped(narrow_scope(SEND)) == []
+
+
+def test_two_tools_that_go_by_the_same_words_get_two_rules(rules):
+    one = rules.always(narrow_scope(SEND), "Mail：send", "en")
+    other = rules.always(narrow_scope(POST), "Mail：send", "en")
+    assert one.action == "Mail：send" and other.action == "Mail：send (2)" and one.scope != other.scope
+
+
+def test_there_are_at_most_so_many_rules_for_always_as_for_any(rules):
+    rules.ensure_seeded("en")
+    for n in range(MAX_RULES - 3):
+        rules.create(f"rule {n}", ASK)
+    with pytest.raises(RpcError) as error:
+        rules.always(narrow_scope(SEND), "Mail：send", "en")
+    assert error.value.data == {"kind": "too_many"}
+
+
+def test_the_owner_can_turn_a_narrow_rule_into_ask_first_or_never_in_settings(rules):
+    rule = rules.always(narrow_scope(SEND), "Mail：send", "en")
+    assert rules.always_allows(narrow_scope(SEND))
+    rules.update(rule.id, verdict=ASK)
+    assert not rules.always_allows(narrow_scope(SEND))  # Ask first: no Always any more
+    assert rules.scoped(narrow_scope(SEND))[0].verdict == ASK
+    rules.update(rule.id, verdict=DENY)
+    assert rules.scoped(narrow_scope(SEND))[0].scope == narrow_scope(SEND)  # it stays that tool's
+
+
+async def test_a_narrow_rule_is_matched_by_its_tool_with_no_call_to_the_judge(rules, ledger):
+    client = FakeOpenRouter()
+    rules.ensure_seeded("en")
+    for rule in rules.rules():
+        rules.delete(rule.id)
+    rules.always(narrow_scope(SEND), "Mail：send", "en")
+    guard = SafetyGuard(rules, SafetyJudge(client))
+    sending = await guard.screen(Proposed("Mail / send", scope=narrow_scope(SEND)), language="en", ledger=ledger)
+    assert sending == Screening(RUN, "Mail：send", allowed=True, narrow=True)
+    other = await guard.screen(Proposed("Mail / post", scope=narrow_scope(POST)), language="en", ledger=ledger)
+    assert other == PASS  # a narrow rule covers one tool and nothing else
+    assert client.decide_calls == []  # nothing in the owner's words to judge
+
+
+async def test_a_narrow_never_refuses_without_a_call(rules, ledger):
+    client = FakeOpenRouter()
+    rule = rules.always(narrow_scope(SEND), "Mail：send", "en")
+    rules.update(rule.id, verdict=DENY)
+    guard = SafetyGuard(rules, SafetyJudge(client))
+    screening = await guard.screen(Proposed("Mail / send", scope=narrow_scope(SEND)), language="en", ledger=ledger)
+    assert screening == Screening(DENY, "Mail：send")
+    assert client.decide_calls == []
+
+
+async def test_ask_first_in_the_owners_words_wins_over_a_narrow_always(rules, ledger):
+    client = FakeOpenRouter()
+    rules.ensure_seeded("en")
+    rules.always(narrow_scope(SEND), "Mail：send", "en")
+    client.decisions.append(judged(3, rule_1=0.0, rule_2=0.0))  # the seeded 「send an email...」 matches
+    guard = SafetyGuard(rules, SafetyJudge(client))
+    screening = await guard.screen(Proposed("Mail / send", scope=narrow_scope(SEND)), language="en", ledger=ledger)
+    assert screening.verdict == ASK and screening.rule == SEEDS["en"][2] and not screening.narrow
+    # The judge was asked about the owner's words only, never about the narrow rule.
+    assert sorted(client.decide_calls[0]["questions"]) == ["rule_1", "rule_2", "rule_3"]
+
+
+async def test_a_judge_that_fails_asks_even_when_a_narrow_always_matches(rules, ledger):
+    client = FakeOpenRouter()
+    rules.ensure_seeded("en")
+    rules.always(narrow_scope(SEND), "Mail：send", "en")
+    client.decisions.append(OpenRouterError(500, "server", "down"))
+    guard = SafetyGuard(rules, SafetyJudge(client))
+    screening = await guard.screen(Proposed("Mail / send", scope=narrow_scope(SEND)), language="en", ledger=ledger)
+    assert screening == Screening(ASK, None, unchecked=True)  # an Ask first the judge could not read may be there
+
+
+async def test_never_ask_and_always_against_an_ask_first_of_the_owner(rules, ledger):
+    """The matrix of the rules: every verdict of one rule against an Ask first that also matches."""
+    expected = {DENY: DENY, ASK: ASK, ALLOW: ASK}  # Never wins over Ask first; Ask first wins over Always
+    for verdict, outcome in expected.items():
+        client = FakeOpenRouter()
+        rules.ensure_seeded("en")
+        for rule in rules.rules():
+            rules.delete(rule.id)
+        asking = rules.create("send mail", ASK)
+        other = rules.create("any message", verdict)
+        client.decisions.append(judged(asking.id, other.id))
+        guard = SafetyGuard(rules, SafetyJudge(client))
+        screening = await guard.screen(Proposed("Mail / send"), language="en", ledger=ledger)
+        assert screening.verdict == outcome, (verdict, screening)
+        rules.delete(asking.id)
+        rules.delete(other.id)
+
+
+def test_a_narrow_always_waives_the_questions_of_the_tier_and_nothing_firm():
+    narrow = Screening(RUN, "Mail：send", allowed=True, narrow=True)
+    assert needs_yes(True, narrow) is False  # a T2 tool, or the global switch's question
+    assert needs_yes(True, narrow, firm=True) is True  # T3, a step that sends, a hand-over
+    assert needs_yes(False, narrow) is False
+    assert needs_yes(True, Screening(RUN, "寄信", allowed=True)) is True  # the owner's words waive no built-in question
+    assert needs_yes(False, Screening(ASK, "寄信")) is True and needs_yes(True, Screening(ASK, "寄信")) is True
+
+
+def test_the_narrow_always_wins_over_a_worded_always_in_the_combination():
+    rules_ = [Rule(1, "寄信", ALLOW, 1), Rule(2, "Mail：send", ALLOW, 2, scope=narrow_scope(SEND))]
+    assert combine(rules_, frozenset({1, 2})) == Screening(RUN, "Mail：send", allowed=True, narrow=True)
+    assert combine(rules_, frozenset({1})) == Screening(RUN, "寄信", allowed=True)

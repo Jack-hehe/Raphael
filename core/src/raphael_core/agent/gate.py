@@ -21,8 +21,10 @@ is unknown and cannot run; and it holds the door to the plugins' tools (`plugins
   `safety`). Its verdict adds to the tiers and never
   takes from them:
   a rule may refuse an action or have it asked about, and a rule that allows an action waives only
-  the questions of the rules (`safety.needs_yes`). Without rules (or without a guard, as in most
-  tests) every action passes it, with no call.
+  the questions of the rules (`safety.needs_yes`), but for the narrow rule the owner's own click on
+  「一律允許」 made for one tool (`always_allow`, `waived`): that tool no longer asks for the tier T2 or
+  for the global 先詢問 switch, and a rule that asks (Ask first) or forbids (Never) still wins over it.
+  Without rules (or without a guard, as in most tests) every action passes it, with no call.
 
 The memory's tools are Raphael's own too: reading a note (`memory_read`) and searching the past
 turns (`history_search`) only read, so they are T0; writing and deleting a note (`memory_write`,
@@ -43,13 +45,14 @@ from typing import TYPE_CHECKING, Any
 from ..clock import wall_clock_ms
 from ..computer.tools import GATE_TIERS as COMPUTER_TIERS
 from ..integrations.audit import AuditLog
+from ..protocol import RpcError
 from .commands import COMMANDS
 from .harness_tools import TIERS as HARNESS_TIERS
 from .plugins import PluginHub, PluginResult
 from .ledger import Ledger
 from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
 from .team import TEAM_TIER, TEAM_TOOLS
-from .safety import PASS, Proposed, SafetyGuard, Screening
+from .safety import ALLOW, PASS, Proposed, SafetyGuard, Screening, narrow_scope
 
 if TYPE_CHECKING:
     from ..integrations.pool import McpPool
@@ -137,13 +140,53 @@ class ToolGate:
 
     def check(self, action: Action, approval: Approval | None, *, worker: bool = False) -> None:
         """Let `action` through: UnknownTool if it has no tier, NotApproved if it is at T2 or above
-        without a yes for this very action that has not been used, and NotApproved for a command
+        without a yes for this very action that has not been used (or with a yes whose digest is no
+        longer the action's), and NotApproved for a command
         for this computer (opening anything, the volume, the lock...) or a step of a run on the
         desktop when `worker` is true: those are for the user at the keyboard, never for a task
-        that runs while they are away."""
+        that runs while they are away. A tool the owner said Always to (`waived`) needs no yes."""
         if worker and (action.tool in COMMANDS or action.tool in COMPUTER_TIERS):
             raise NotApproved(action.tool)
-        self._registry.check(action, approval)
+        self._door(action, approval)
+
+    def _door(self, action: Action, approval: Approval | None) -> str:
+        """The registry's check, and who said yes to the action: "user" for a yes of this very
+        action or the owner's standing Always for its tool, "auto" for an action that needs none."""
+        try:
+            self._registry.check(action, approval)
+        except NotApproved:
+            if approval is None and self.waived(action):
+                return "user"
+            raise
+        return "auto" if approval is None else "user"
+
+    def waived(self, action: Action) -> bool:
+        """Whether the owner said Always to this very tool (a narrow rule, `always_allow`) and it can be
+        undone: its questions of the tier T2 and of the global 先詢問 switch are waived. The rules that ask
+        and forbid are the screening's (`screen`), which every path asks before it makes a call that
+        changes something."""
+        tier = self.tier_now(action.tool)
+        if self._safety is None or tier is None or tier >= Tier.T3:
+            return False
+        try:
+            return self._safety.rules.always_allows(narrow_scope(action.tool))
+        except sqlite3.Error:
+            return False
+
+    def always_allow(self, key: str, server: str, tool: str, language: str) -> bool:
+        """The owner's 「一律允許」 on a card about the tool `key` (`tool` of `server` as they know them): a
+        narrow rule of Always for that tool and no other. False when none could be made (no rules, too
+        many of them, a rule that is not an Always is there already); never raises."""
+        if self._safety is None:
+            return False
+        try:
+            rule = self._safety.rules.always(narrow_scope(key), f"{server}：{tool}", language)
+        except RpcError:
+            return False
+        except sqlite3.Error as exc:
+            logger.warning("Could not keep an Always: %s", type(exc).__name__)
+            return False
+        return rule.verdict == ALLOW
 
     def check_admin_batch(self, action: Action, approval: Approval | None) -> None:
         """One single-use approval covers exactly the listed reversible admin operations."""
@@ -166,9 +209,13 @@ class ToolGate:
         """What the owner's safety rules say of `proposed`, an action that changes something: PASS
         when there is no guard or no rule. Never raises but for a cancellation."""
         result = PASS if self._safety is None else await self._safety.screen(proposed, language=language, ledger=ledger)
-        # Explicit denials win; a stored allow can never waive the owner's global quick switch.
+        # Explicit denials win; a stored allow can never waive the owner's global quick switch, but for
+        # the narrow rule the owner's own click made for this very tool (a rule that asks has won already).
         if self.ask_first and result.verdict != "deny":
-            return Screening("ask", result.rule, unchecked=result.unchecked)
+            if result.narrow:
+                return result
+            asked = result.verdict == "ask"
+            return Screening("ask", result.rule if asked else None, unchecked=result.unchecked, switch=not asked)
         return result
 
     def reads_only(self, server: str, tool: str) -> bool:
@@ -205,8 +252,7 @@ class ToolGate:
             return PluginResult(False, "blocked")
         action = action or Action(key, arguments)
         try:
-            self._registry.check(action, approval)
-            approver = "auto" if approval is None else "user"
+            approver = self._door(action, approval)
         except (UnknownTool, NotApproved):
             approver = "none"
         kept = {} if pool is None else {"pool": pool}  # a hub of a test may not know it
