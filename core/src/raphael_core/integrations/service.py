@@ -659,7 +659,7 @@ class IntegrationsService:
 
     def _managed_entry(self, entry: Any) -> dict[str, Any]:
         """A Composio toolkit or the owner's own Google, by what the gate would let through now."""
-        name = entry.name or entry.id
+        name = entry.name or ("Google" if entry.kind == "google" else entry.id)
         try:
             ready = self.managed.ready_tools_of(entry) if entry.enabled and entry.status == "ACTIVE" else []
             services = self.managed.services_of(entry, ready)

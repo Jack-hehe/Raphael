@@ -202,6 +202,16 @@ async def test_a_grant_without_a_product_leaves_the_other_way_to_it_counted(hub,
     assert result["count"] == 2
 
 
+async def test_the_owners_own_google_is_named_google_on_the_page_and_in_the_roster(hub, rpc, managed, vault):
+    # The store keeps no name for it (it is not a toolkit), and an id is not what a person reads.
+    await private_google(managed)
+    toolkit(managed, hub, vault, "notion")
+    _, result = await listed(rpc)
+    names = {app["id"]: app["name"] for app in result["apps"]}
+    assert names == {"google": "Google", "composio:notion": "Notion"}
+    assert {app["id"]: app["name"] for app in snapshot(Team(hub), 0, "en").apps} == names
+
+
 async def test_two_accounts_of_one_app_are_one_app(hub, rpc, managed, vault):
     toolkit(managed, hub, vault, "gmail", accounts=[{"id": "ca_work", "status": "ACTIVE"}, {"id": "ca_old", "status": "EXPIRED"}])
     states, result = await listed(rpc)

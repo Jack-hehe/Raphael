@@ -195,7 +195,7 @@ export function installMock(fixture, config = {}, target = window) {
         const state = !connector.enabled ? "disabled" : waiting ? "needs_sign_in" : connector.status === "FAILED" ? "error" : ready.length ? "ready" : "no_tools";
         const google = connector.kind === "google";
         const services = google ? [["gmail", "gmail_"], ["googlecalendar", "calendar_"]].filter(([, prefix]) => ready.some(tool => tool.startsWith(prefix))).map(([id]) => id) : [connector.id.replace("composio:", "")];
-        return { id: connector.id, name: connector.name || connector.id, enabled: connector.enabled, state, tools: ready.length, services, rank: google ? 0 : 1 };
+        return { id: connector.id, name: connector.name || (google ? "Google" : connector.id), enabled: connector.enabled, state, tools: ready.length, services, rank: google ? 0 : 1 };
       }),
     ];
     const claimed = new Set();
