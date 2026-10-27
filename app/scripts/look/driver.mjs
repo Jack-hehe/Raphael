@@ -118,6 +118,10 @@ export async function perform(page, step) {
       }
       break;
     }
+    case "freeze-motion":
+      // Every animation held `at` ms in, also on elements drawn again later, so a moving frame is the same each run.
+      await page.addStyleTag({ content: `*, *::before, *::after { animation-delay: -${Number(step.at)}ms !important; animation-play-state: paused !important; }` });
+      break;
     case "advance-time":
       // Advance the shared fixed clock, then let production timers observe it.
       await page.evaluate(ms => { window.__look.now = Date.now() + ms; }, step.ms);

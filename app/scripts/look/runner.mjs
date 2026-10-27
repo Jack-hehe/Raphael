@@ -75,7 +75,8 @@ export async function run(options) {
       try {
         await page.setViewport({ width, height: options.heights[width] ?? 900, deviceScaleFactor: 1 });
         await page.emulateTimezone("Asia/Taipei");
-        await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }, { name: "prefers-color-scheme", value: theme }]);
+        // Still frames by default; a scene about something that moves turns motion on and holds it with `freeze-motion`.
+        await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: scene.motion ? "no-preference" : "reduce" }, { name: "prefers-color-scheme", value: theme }]);
         await page.setRequestInterception(true);
         page.on("request", request => {
           const url = request.url();

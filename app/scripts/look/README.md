@@ -62,7 +62,9 @@ member/room selection and drag/drop. Use real UI selectors and wait for the resu
 state; do not replace app modules or inject a separate preview page. Fixture overrides
 can replace collections; `running`, `problem`, `onlyRaphael`, `usageEmpty`
 and `onboarding` select boundary variants; `permissionCard`, `memberDraftFirst`, `mailDraft` and `mailOffer` seed the permission and email cards of a chat (the Conversation feature map, P08c). `overlayEvents` replays the native overlay
-channel contract; `advance-time` advances the shared fixed clock for production timers. All scenarios appear in `--list`.
+channel contract; `advance-time` advances the shared fixed clock for production timers. Scenes run with reduced motion,
+so nothing moves in a still frame; a scene about something that moves sets `motion: true` and holds every animation at
+one time with `freeze-motion` (`at` in ms), the same frame each run. All scenarios appear in `--list`.
 
 Use `check(name)` for browser assertions that need rendered geometry. The shared
 `checks.mjs` guards title/panel state, conversation-list overflow, the single composer
@@ -77,7 +79,7 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 268 current scenes (1608 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen. Model-choice scenes cover cloud/local row spacing, themed borders, readable metadata, scroll access and keyboard selection without downloading.
+scenes. There are 269 current scenes (1614 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen. Model-choice scenes cover cloud/local row spacing, themed borders, readable metadata, scroll access and keyboard selection without downloading.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
 The primary-contact scenes (`primary-contact-menu`, `primary-contact-picker`, `primary-contact-set`, `primary-contact-strip`, `primary-room-chief`) choose the owner's primary contact through the real member menu and
@@ -108,6 +110,6 @@ Its rules, feature context, external reference paths, budgets and cache are
 documented in the verify-raphael skill and `GUARDIAN-NOTES.md`. The verify alias is
 `npm run verify -- --judge <look run>`; set `RAPHAEL_JUDGE_REFERENCES` to a JSON array
 of external image paths. Live matrix and judge opt into paid network requests;
-ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1608 (the full matrix has 1608 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
+ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1614 (the full matrix has 1614 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
 the repo's contracts and full look matrix in CI. Missing hosted secrets produce
 an explicit SKIP notice, never live/design acceptance.

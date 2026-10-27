@@ -137,6 +137,22 @@ export function checkRendered(name) {
     require(last.bottom <= answer.top, "events stand between the owner's words and Raphael's answer");
     return { check: name, lines };
   }
+  if (name === "work-dots") {
+    const dots = [...document.querySelectorAll('.work-section.is-live .work-toggle .think i')].filter(visible);
+    require(dots.length === 3, "the live work row shows its three dots");
+    require(dots.some(dot => getComputedStyle(dot).animationPlayState === "paused" && getComputedStyle(dot).transform !== "none"), "the dots are held mid-bounce");
+    for (const dot of dots) {
+      const box = dot.getBoundingClientRect();
+      for (let parent = dot.parentElement; parent && !parent.matches('.work-section'); parent = parent.parentElement) {
+        if (getComputedStyle(parent).overflow === "visible") continue;
+        const edge = parent.getBoundingClientRect();
+        require(box.top >= edge.top - 0.5 && box.bottom <= edge.bottom + 0.5, "a moving dot is never cut off by the row around it");
+      }
+    }
+    const row = document.querySelector('.work-section.is-live .work-toggle')?.textContent ?? "";
+    require(row.includes("思考中") && !row.includes("處理中"), "a reply that has just started says once what is happening");
+    return { check: name, row };
+  }
   if (name === "conversation-running") {
     const calls = window.__look.calls.filter(call => call.method === "agent.history.list");
     require(calls.some(call => (call.params?.member_id ?? 0) === 0 && (call.params?.conversation_id ?? 1) === 1), "R-UI-32: running turn belongs to the open formal conversation");

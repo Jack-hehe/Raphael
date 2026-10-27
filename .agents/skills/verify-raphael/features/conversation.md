@@ -29,7 +29,7 @@ the compact picker's search action, for messages.
 ## Driving it with look
 
 ```powershell
-npm run look -- composer-task-stop chat running empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
+npm run look -- composer-task-stop chat running running-motion empty details raphael-details details-closed conversation-filter new-conversation row-menu rename delete --theme both --width 1120,720,1920x1080
 npm run look -- quick-conversation-list quick-conversation quick-question-result quick-formal-isolation quick-stop --theme both --width 1120,720,1920x1080
 npm run look -- live-scenario-owner-view --theme both --width 1120,720,1920x1080
 npm run look -- work composer mode actions reply search search-target tooltip slash-commands --theme both --width 1120,720,1920x1080
@@ -46,7 +46,9 @@ messages use the skin accent/on-accent colors; assistant messages use a raised s
 (R-UI-42): the core stores Raphael's replies and progress as his 《prefix。…》 line, split over messages when long,
 and the window shows, copies and quotes them without it; his in-app questions are plain too, while the overlay keeps
 the persona. `chat`, `running` and `plain-bot-chat` reject a visible prefix or stray closing mark. Work is one muted
-line above the answer and the day is a plain centred word. `centred-system-events` shows a hand-off, a consultation and
+line above the answer and the day is a plain centred word. `running-motion` runs with motion on and holds the live
+row's three dots at the top of their bounce (`motion: true`, `freeze-motion`): no box around them may cut them, and a
+reply that has just started says 思考中 once, with its seconds, never 處理中 beside it. `centred-system-events` shows a hand-off, a consultation and
 a meeting between the question and the answer, each one centred grey line. A real send needs a native journey: submit an innocuous
 prompt, observe public progress/final reply, navigate away/back, and verify
 conversation persistence. Keep the resulting turn and relevant logs.

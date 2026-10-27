@@ -64,7 +64,7 @@ export const ja = {
   "chat.askFirst": "先に確認する",
   "chat.direct": "そのまま実行",
   "chat.workedFor": "{p0} 秒で処理",
-  "chat.workingFor": "処理中 · {p0} 秒",
+  "chat.workingFor": "· {p0} 秒",
   "chat.quota": "{p0} の上限に到達",
   "chat.quotaReset": "、{p0} にリセット",
   "chat.searchAll": "メンバーとメッセージを検索",

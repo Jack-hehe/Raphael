@@ -115,6 +115,7 @@ export default [
   scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
   scene("composer-task-stop", "Running private task uses the same composer slot", [wait('.composer[data-task-state="running"] .cmp-voice'), check('p04-task-slot')], {running:true}),
   scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),
+  { ...scene("running-motion", "A reply that has just started: its dots move inside their row, held at the top of their bounce, and it says once what is happening", [wait('.work-section.is-live'), { action: "freeze-motion", at: 600 }, check("work-dots")], { running: "fresh" }), motion: true },
   scene("admin-approval", "Raphael's approval survives a concurrent member question", [
     wait('.ask-card:not([hidden])'),
     { action: "main-event", event: { type: "AgentQuestion", id: "concurrent-member", member_id: 1, prefix: "問", text: "要儲存研究摘要嗎？", tier: "T2", timeout_ms: 30_000 } },

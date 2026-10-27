@@ -39,7 +39,8 @@
 .work-toggle[aria-expanded="true"] .work-chevron .i { transform: rotate(90deg); }
 .work-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-toggle .work-time, .work-toggle .think { flex-shrink: 0; }
-.work-toggle .think { display: inline-flex; padding: 0; }
+/* The dots move up and down: the text's clipping rule above must not cut them. */
+.work-toggle .think { display: inline-flex; padding: 0; overflow: visible; }
 .work-body { padding: var(--sp-2) 0 var(--sp-1) var(--sp-3); margin: var(--sp-2) 0 0 var(--sp-1); border-left: 1px solid var(--line); }
 .work-body .chat-message { margin-bottom: var(--sp-2); }
 .work-body .message-actions { display: none; }

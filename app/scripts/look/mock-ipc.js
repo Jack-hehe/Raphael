@@ -29,7 +29,9 @@ export function installMock(fixture, config = {}, target = window) {
     const conversation = data.conversations.find(item => item.member_id === 0 && (variant.quickRunning ? item.kind === "quick" : item.is_default));
     const runningTurn = data.turns.find(turn => turn.member_id === 0 && turn.conversation_id === conversation?.id);
     runningTurn.status = "running";
-    runningTurn.messages = runningTurn.messages.filter(message => message.kind !== "reply");
+    // "fresh": the reply has only just started, before any step or progress line.
+    runningTurn.messages = variant.running === "fresh" ? [] : runningTurn.messages.filter(message => message.kind !== "reply");
+    if (variant.running === "fresh") runningTurn.steps = [];
     runningTurn.text = "";
   }
   // Turns the core writes later and then announces (agent.turn), such as an Alt+Space answer.

@@ -63,7 +63,7 @@ export const zhTW = {
   "chat.askFirst": "先問我",
   "chat.direct": "直接做",
   "chat.workedFor": "已處理 {p0} 秒",
-  "chat.workingFor": "處理中 · {p0} 秒",
+  "chat.workingFor": "· {p0} 秒",
   "chat.quota": "{p0} 額度已滿",
   "chat.quotaReset": "，{p0} 重設",
   "chat.searchAll": "搜尋成員與訊息",
