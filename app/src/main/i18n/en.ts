@@ -1304,6 +1304,7 @@ export const en = {
   "members.sideDuplicate": "Duplicate member",
   "members.sideClear": "Clear conversations",
   "members.sideHide": "Hide member",
+  "members.sideDelete": "Delete member",
   "members.sidePrimary": "Make primary",
   "members.primary": "Primary contact",
   "members.primaryTitle": "Choose the primary member",

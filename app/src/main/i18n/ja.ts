@@ -1304,6 +1304,7 @@ export const ja = {
   "members.sideDuplicate": "メンバーを複製",
   "members.sideClear": "会話をすべて削除",
   "members.sideHide": "メンバーを非表示",
+  "members.sideDelete": "メンバーを削除",
   "members.sidePrimary": "メインにする",
   "members.primary": "メインの窓口",
   "members.primaryTitle": "メインのメンバーを選択",

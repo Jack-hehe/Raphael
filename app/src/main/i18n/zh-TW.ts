@@ -1303,6 +1303,7 @@ export const zhTW = {
   "members.sideDuplicate": "複製成員",
   "members.sideClear": "清除所有對話",
   "members.sideHide": "隱藏成員",
+  "members.sideDelete": "刪除成員",
   "members.sidePrimary": "設為主要",
   "members.primary": "主要聯絡人",
   "members.primaryTitle": "選擇主要成員",
