@@ -1,9 +1,15 @@
-"""One secret-free, content-addressed team inventory for prompts and mention menus."""
+"""One secret-free, content-addressed team inventory for prompts and mention menus.
+
+The apps in it, their states and `connected` (how many of them can be called now) are the owner's
+inventory as `integrations.inventory` lists it for the window: one definition of connected
+(`integrations.inventory`), so a model, the sidebar and the connections page give the same number.
+"""
 
 import hashlib
 import json
 from dataclasses import asdict, dataclass
 
+from ..integrations.inventory import read_inventory
 from .speaker import RAPHAEL_NAMES
 
 
@@ -19,6 +25,8 @@ class TeamContextSnapshot:
     apps: list
     inventory_state: str
     room_member_ids: list | None
+    # The apps whose tools can be called now; None while the inventory is not complete (never a guess).
+    connected: int | None = None
 
     def wire(self):
         return asdict(self)
@@ -29,20 +37,10 @@ def snapshot(team, self_id, language, room_member_ids=None):
                 "role": ({'zh-TW':'核心助手／幕僚長','en':'Core assistant / Chief of staff','ja':'コアアシスタント／参謀長'}[language]
                          if s.id == 0 else s.role), "blurb": s.blurb}
                for s in team.roster()]
-    state = "complete"
-    try:
-        connections = team._connections()
-    except Exception:
-        connections, state = [], "unknown"
-    apps = []
-    for app in connections:
-        # Copy only public metadata, never provider configuration or credentials.
-        status = app.get("status", "unknown")
-        apps.append({"id": app["id"], "name": app["name"], "enabled": bool(app["enabled"]),
-                     "state": ("needs_sign_in" if app.get("error") == "auth"
-                               else "needs_secret" if app.get("error") == "missing_secret" else status),
-                     "tools": app["tools"] if type(app.get("tools")) is int else 0})
-    content = {"members": members, "apps": apps, "inventory_state": state,
-               "primary_id": 0, "chief_id": 0}
+    # Only public metadata of each app is copied, never provider configuration or credentials.
+    inventory = read_inventory(team._connections)
+    content = {"members": members, "apps": inventory.apps, "inventory_state": inventory.state,
+               "connected": inventory.count, "primary_id": 0, "chief_id": 0}
     revision = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-    return TeamContextSnapshot(1, revision, self_id, len(members), 0, 0, members, apps, state, room_member_ids)
+    return TeamContextSnapshot(1, revision, self_id, len(members), 0, 0, members, inventory.apps, inventory.state,
+                               room_member_ids, inventory.count)
