@@ -67,7 +67,7 @@ describe("新增成員", () => {
     $('[data-dlg="create"]').click();
     await flush();
     expect(create).toHaveBeenCalledWith({
-      member: { name: "日文老師", role: "N2 嚴格版", personality: "", instructions: "每天出 10 題", group_id: 2, blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false },
+      member: { name: "日文老師", role: "N2 嚴格版", personality: "", instructions: "每天出 10 題", group_id: 2, blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false, draft_first: true },
       picture: null,
     });
     expect(document.querySelector(".mb-scrim")).toBeNull();

@@ -329,7 +329,76 @@ export interface AgentTurn {
   resumed_secrets?: string[];
   /** For a turn that resumed a task once the owner gave the computer back: the apps they used. */
   resumed_computers?: string[];
+  /** The permission cards of the actions this turn asked the owner to allow (`agent.permissions`). */
+  permissions?: PermissionCard[];
+  /** The email drafts this turn shows: the editable card, or for a draft handed on, its centred line (`agent.drafts`). */
+  drafts?: MailDraft[];
 }
+
+/**
+ * A permission card: one action that needs the owner's yes, said in plain words, with where the question stands. Never
+ * the arguments of the call. An `ask` card is answered through the question the window already holds (the shell keeps
+ * it); a `run` card (a task that went on after the computer was given back) is answered through `integrations.card_*`.
+ */
+export interface PermissionCard {
+  id: string;
+  source: "ask" | "run";
+  /** A connection's tool, the first use of an app on the computer, or a step on the computer that sends, deletes or buys. */
+  kind: "tool" | "app" | "step";
+  /** The connection's name (empty for the computer). */
+  service: string;
+  tool: string;
+  /** The action in plain words, as the question asks it. */
+  summary: string;
+  /** Which of the owner's rules had it asked, in words; null when the switch or the tier asked. */
+  reason: string | null;
+  /** The digest of the action: a yes is for this one only. */
+  digest: string;
+  /** Whether 一律允許 can take effect (never where a rule of the owner's asks first). */
+  always: boolean;
+  state: "pending" | "allowed" | "always" | "denied" | "expired" | "cancelled";
+  expires_at_ms: number;
+}
+
+/** An app that can send an email: its key and the name the owner knows it by. */
+export interface MailSender {
+  key: string;
+  name: string;
+}
+
+/** An email draft as the owner's chat shows it: editable while it is a draft, and sent only by 傳送, once. */
+export interface MailDraftCard {
+  id: string;
+  mode: "card";
+  state: "draft" | "sending" | "sent" | "failed" | "discarded";
+  /** Each edit makes a new version with a new digest; 傳送 sends the version whose digest the card holds. */
+  version: number;
+  digest: string;
+  from: MailSender;
+  senders: MailSender[];
+  to: string;
+  cc: string;
+  subject: string;
+  body: string;
+  /** A colleague the member asked whether they may send it (the choice card), while the owner has not answered. */
+  offer: { member_id: number; name: string } | null;
+  /** Why it was not sent, as the core words it (a kind, never the mail's text). */
+  error: string | null;
+  holder_id: number;
+  /** For a draft handed on: whose draft it is (empty otherwise). */
+  author_name: string;
+}
+
+/** The first chat of a draft that was handed to a colleague keeps one centred line; the card is in theirs. */
+export interface MailDraftHanded {
+  id: string;
+  mode: "handed";
+  state: MailDraftCard["state"];
+  holder_id: number;
+  holder_name: string;
+}
+
+export type MailDraft = MailDraftCard | MailDraftHanded;
 
 /** A connector card: an app a task needs, and where its sign-in stands. Never a URL or a token. */
 export interface ConnectorCard {
@@ -725,6 +794,8 @@ export interface Member {
   read_aloud?: boolean;
   notify?: boolean;
   ask_before_members?: boolean;
+  /** Writes an email as a draft in the owner's chat for them to send, instead of sending it (on unless turned off). */
+  draft_first?: boolean;
   pinned?: boolean;
   hidden?: boolean;
   /** `""`, `"preset:<stem>"` or `"file:<stored name>"`. */
@@ -792,13 +863,14 @@ export interface NewMember {
   read_aloud?: boolean;
   notify?: boolean;
   ask_before_members?: boolean;
+  draft_first?: boolean;
 }
 
 /**
  * What `members.update` may change, beside its `id`: the avatar only as `""` or `"preset:<stem>"`
  * (a picture of the PC goes by `members.set_avatar`).
  */
-export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position" | "blurb" | "reply_style" | "voice" | "read_aloud" | "notify" | "ask_before_members" | "pinned" | "hidden">>;
+export type MemberPatch = Partial<Pick<Member, "name" | "role" | "personality" | "instructions" | "group_id" | "model" | "tools" | "avatar" | "position" | "blurb" | "reply_style" | "voice" | "read_aloud" | "notify" | "ask_before_members" | "draft_first" | "pinned" | "hidden">>;
 
 /** An image of the presets folder (`members.presets`): its avatar value, its file stem, and the picture as a data URL. */
 export interface AvatarPreset {

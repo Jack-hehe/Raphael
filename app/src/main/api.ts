@@ -320,6 +320,26 @@ export const cardDone = (id: string): Promise<{ card: import("./types").Computer
 /** 停止 on the card of the owner's turn at the computer: the task ends and never resumes. */
 export const cardStop = (id: string): Promise<{ card: import("./types").ComputerCard; stopped: boolean }> =>
   core("integrations.card_stop", { id });
+
+/** The owner's answer on the permission card of a task that went on after the computer was given back. Bound to the card's digest. */
+export const permissionAnswer = (answer: "allow" | "always" | "deny", id: string, digest: string): Promise<{ card: import("./types").PermissionCard; answered: boolean }> =>
+  core(`integrations.card_${answer}`, { id, digest });
+
+/** The owner's edit of an email draft: a new version, on top of the version whose digest the card holds. */
+export const mailSave = (id: string, digest: string, fields: { to: string; cc: string; subject: string; body: string; via: string }): Promise<{ draft: import("./types").MailDraftCard | null; saved: boolean }> =>
+  core("integrations.draft_save", { id, digest, ...fields });
+
+/** 傳送: the version whose digest the card holds, once. */
+export const mailSend = (id: string, digest: string): Promise<{ draft: import("./types").MailDraftCard | null; sent: boolean }> =>
+  core("integrations.draft_send", { id, digest });
+
+/** 捨棄: nothing outside changes. */
+export const mailDiscard = (id: string): Promise<{ draft: import("./types").MailDraftCard | null; discarded: boolean }> =>
+  core("integrations.draft_discard", { id });
+
+/** The owner's answer to 「這封回信可以交給…寄嗎？」. Yes moves the same version to the colleague's chat; it never sends. */
+export const mailHandover = (id: string, choice: "yes" | "no"): Promise<{ draft: import("./types").MailDraftCard | null; handed: boolean }> =>
+  core("integrations.draft_handover", { id, choice });
 /** Connects a server of the user's own. The values of its variables and headers go to the vault and never come back. */
 export const integrationsAdd = (server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.add", server);
 export const integrationsUpdate = (id: string, server: NewConnection): Promise<{ server: { id: string } }> => core("integrations.update", { ...server, id });

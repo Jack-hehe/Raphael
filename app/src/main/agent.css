@@ -256,6 +256,39 @@
 .cc-live { flex: none; font-size: var(--pa-sys); font-weight: 400; color: var(--text-2); }
 .cc-hint { color: var(--text-3); }
 
+/* A permission card (permission-card.ts) is a connector card with a second row for its answers: the action in plain words
+   above, and 拒絕, 一律允許 and 允許一次 below it. An answered card keeps the action it was about, quietly. */
+.permission-card { width: min(calc(400px + 100 * var(--pa-u)), 100%); }
+.permission-card > .mono { align-self: start; }
+.permission-card > .cc-actions { grid-column: 2 / -1; gap: var(--sp-2); flex-wrap: wrap; }
+.permission-card .cc-ask > span:last-child { text-wrap: pretty; }
+.permission-card .cc-was > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* An email card (mail-card.ts): who sends it and to whom, the subject and the body, with 捨棄 and 傳送. A draft that is over
+   is a quiet line (a connector card); the choice card of a hand-over is a connector card with the colleague's face. */
+.mail-card { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); justify-self: start; width: min(calc(500px + 140 * var(--pa-u)), 100%); padding: calc(8px + 3 * var(--pa-u)) calc(10px + 4 * var(--pa-u)); border-radius: var(--r-lg); background: var(--panel); }
+.mail-head { display: flex; align-items: center; gap: calc(8px + 2 * var(--pa-u)); min-width: 0; }
+.mail-head > .mono { width: 24px; height: 24px; flex: none; }
+.mail-title { font-size: var(--pa-fs-d); font-weight: 600; line-height: 1.35; color: var(--text); }
+.mail-ver, .mail-by { font-size: var(--pa-sys); color: var(--text-3); }
+.mail-by { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-rows { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-1); }
+.mail-row { display: grid; grid-template-columns: calc(56px + 8 * var(--pa-u)) minmax(0, 1fr); align-items: center; column-gap: var(--sp-2); min-width: 0; margin: 0; }
+.mail-k { font-size: var(--pa-sys); color: var(--text-2); }
+.mail-in, .mail-body { font-size: var(--pa-fs-d); background: var(--content); }
+.mail-in { min-height: 32px; padding: 4px 8px; }
+.mail-body { min-height: calc(120px + 40 * var(--pa-u)); padding: 8px; }
+.mail-row .sel { width: 100%; max-width: 100%; min-height: 32px; justify-content: space-between; font-size: var(--pa-fs-d); }
+.mail-row .sel > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.mail-none { font-size: var(--pa-sys); color: var(--text-3); }
+.mail-note { display: flex; align-items: center; gap: var(--sp-1); font-size: var(--pa-sys); line-height: 1.4; color: var(--text-2); }
+.mail-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); }
+.mail-offer { width: min(calc(500px + 140 * var(--pa-u)), 100%); }
+.mail-face { display: inline-grid; place-items: center; width: 28px; height: 28px; }
+.mail-offer > .cc-actions { gap: var(--sp-2); }
+.mail-offer .mail-ask { white-space: normal; overflow: visible; text-wrap: pretty; }
+.mail-done > .mono { align-self: center; }
+
 /* image lightbox */
 .media-lightbox .lb-card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); width: min(860px, 100%); max-height: 100%; padding: var(--sp-3); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--pop); }
 .media-lightbox .lb-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }

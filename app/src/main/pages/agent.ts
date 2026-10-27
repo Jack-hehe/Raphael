@@ -56,6 +56,9 @@ import { mountBackgroundQuestions } from "../background-mount";
 import { TYPED, VOICE, exchangeTurn, mergeTurns, oldestId, refreshTurns, sourceOf, threadItems, turnMatches } from "../conversation";
 import { exchangeLineHTML } from "../exchange-line";
 import { carryTyped } from "../secret-card";
+import { carryMail } from "../mail-card";
+import { mountMailActions } from "../mail-actions";
+import { permissionFor } from "../permission-card";
 import { describeError } from "../format";
 import { loadingHTML } from "../loading";
 import {
@@ -536,7 +539,9 @@ export function createAgent(app: AppContext): Page {
   const look = (): TurnLook => {
     const latest = turns.filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
     const busy = pacing.active || regenerating.size > 0 || outgoing.some(belongs) || own().some(turn => turn.status === "running" || isLive(turn.task));
-    const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", memberName: members.nameOf, memberFace: (id: number) => members.faceOf(id, 18) };
+    const shared = { regenerateTurnId: busy ? undefined : latest, revealing: (id: number) => pacing.waiting(id), query: searching ? query : "", memberName: members.nameOf, memberFace: (id: number, size = 18) => members.faceOf(id, size),
+      // A permission card in the thread can be answered while the window holds its question and is not answering it.
+      answerable: (cardId: string) => question?.id === cardId && !answering };
     if (inRaphael()) return { ...shared, face: (loop) => avatarHTML({ size: 26, loop }) };
     const member = members.member();
     return { ...shared, face: () => faceHTML(member, 26) };
@@ -715,6 +720,14 @@ export function createAgent(app: AppContext): Page {
       return;
     }
     draftPanel.sync(null);
+    // The question that a permission card in the thread asks is answered there, once: the gold card stays away.
+    if (asking && permissionFor(turns, question!.id)) {
+      askCard.hidden = true;
+      delete askCard.dataset.id;
+      composer.hidden = !firstBot.el.hidden;
+      if (voice.isUp) voice.drop();
+      return;
+    }
     if (askCard.parentElement !== cardHome) cardHome.append(askCard);
     askCard.classList.toggle("is-member", !inRaphael());
     if (asking && !askCard.hidden && askCard.dataset.id === question!.id) return;
@@ -781,8 +794,10 @@ export function createAgent(app: AppContext): Page {
         if (node) {
           // A key being typed into a secret card goes to the same card in the new line.
           const restore = carryTyped(node, made);
+          const restoreMail = carryMail(node, made);
           node.replaceWith(made);
           restore();
+          restoreMail();
         }
         node = made;
       }
@@ -1225,6 +1240,7 @@ export function createAgent(app: AppContext): Page {
     answeringQuestions.add(id);
     answering = true;
     noButton.disabled = alwaysButton.disabled = yesButton.disabled = true;
+    redrawCards();
     try {
       if (hasDrafts(question)) draftPanel.sync(question, true);
       await (editedDrafts !== undefined
@@ -1238,9 +1254,15 @@ export function createAgent(app: AppContext): Page {
         answering = false;
         noButton.disabled = alwaysButton.disabled = yesButton.disabled = false;
         if (hasDrafts(question)) draftPanel.sync(question, false);
+        redrawCards();
       }
       toaster.info(describeError(err));
     }
+  }
+
+  /** The permission cards in the thread are drawn again when the question they wait on comes, goes or is being answered. */
+  function redrawCards(): void {
+    if (visible && turns.some((turn) => turn.permissions?.length)) drawThread();
   }
 
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1764,6 +1786,32 @@ export function createAgent(app: AppContext): Page {
     }
   }
 
+  /**
+   * 拒絕, 一律允許 or 允許一次 on a permission card. The question of an `ask` card is the one the window holds, answered as
+   * the gold card answers it (the shell passes the answer on); a `run` card (a task that went on after the computer was
+   * given back) has its own door in the core, and gives the digest of the action it shows.
+   */
+  async function permissionAnswer(act: HTMLElement): Promise<void> {
+    const id = act.dataset.card ?? "";
+    const choice = act.dataset.act === "perm-deny" ? "deny" : act.dataset.act === "perm-always" ? "always" : "allow";
+    if (act.dataset.source === "run") {
+      const card = act.closest<HTMLElement>(".permission-card");
+      const buttons = [...(card?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
+      for (const button of buttons) button.disabled = true;
+      try {
+        await api.permissionAnswer(choice, id, card?.dataset.digest ?? "");
+      } catch (err) {
+        toaster.info(describeError(err));
+        for (const button of buttons) button.disabled = false;
+      }
+      return;
+    }
+    if (question?.id !== id) return;
+    await answer(choice !== "deny", choice === "always");
+  }
+
+  mountMailActions(thread, (err) => toaster.info(describeError(err)), (words) => toaster.info(words));
+
   thread.addEventListener("input", (e) => {
     const field = (e.target as Element).closest<HTMLInputElement>("input[data-secret-input]");
     const save = field?.closest(".secret-card")?.querySelector<HTMLButtonElement>('[data-act="card-save"]');
@@ -1902,6 +1950,11 @@ export function createAgent(app: AppContext): Page {
       case "card-stop":
         void taskCardAction(act);
         break;
+      case "perm-deny":
+      case "perm-always":
+      case "perm-once":
+        void permissionAnswer(act);
+        break;
       case "no":
         void answer(false);
         break;
@@ -2030,11 +2083,13 @@ export function createAgent(app: AppContext): Page {
     if (event.type === "AgentQuestion") {
       setQuestion(openQuestion(event));
       drawDock();
+      redrawCards();
       if (visible) members.changed();
     } else if (event.type === "AgentQuestionClosed") {
       questions.delete(event.id);
       answeringQuestions.delete(event.id);
       drawDock();
+      redrawCards();
       if (visible) members.changed();
     } else if (event.type === "VoiceLevel") {
       voice.level(event.value);
