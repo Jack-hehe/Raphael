@@ -3,7 +3,8 @@
 ## Sub-features
 
 Remembered member-column collapse, original Raphael emblem, identity/personality, profile editing, avatar selection, memory, routines, skills,
-commands and voice settings. Members have independent conversations.
+commands and voice settings, and the Permissions tab's two switches: ask before contacting colleagues, and write mail as a draft for the owner to send
+(`draft_first`, on by default; see the P08c section of [Conversation](conversation.md)). Members have independent conversations.
 
 ## How to get to it (user POV)
 

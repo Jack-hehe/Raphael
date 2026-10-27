@@ -1,4 +1,164 @@
 {
+  "permissionTurns": {
+    "tool": {
+      "turn": {
+        "id": 150,
+        "session_id": "look-permission-gmail",
+        "member_id": 0,
+        "conversation_id": 1,
+        "created_at_ms": 1792807185000,
+        "question": "幫我寄一封信給小美，說週四下午三點可以開會。",
+        "route": "answer",
+        "source": "app",
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "detail": null,
+        "status": "confirm",
+        "cost_usd": 0.0009,
+        "model": "openai/gpt-6-sol",
+        "steps": [],
+        "attachments": [],
+        "messages": [],
+        "permissions": [
+          {
+            "id": "perm-gmail",
+            "source": "ask",
+            "kind": "tool",
+            "service": "Gmail",
+            "tool": "send_email",
+            "summary": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+            "reason": null,
+            "digest": "2a262f9dfdde08c1ff085e923ddeaf9f470babf04dab7395d7ec6a48effd0f91",
+            "always": true,
+            "state": "pending",
+            "expires_at_ms": 1792807215000
+          }
+        ]
+      },
+      "question": {
+        "id": "perm-gmail",
+        "member_id": 0,
+        "conversation_id": 1,
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "tier": "T2",
+        "timeout_ms": 30000,
+        "yes": "允許一次",
+        "no": "拒絕",
+        "always": "一律允許"
+      },
+      "done": "《答。已用 Gmail 寄出這封信。》",
+      "denied": "《了。已取消，沒有寄出。》"
+    },
+    "ask-first": {
+      "turn": {
+        "id": 151,
+        "session_id": "look-permission-rule",
+        "member_id": 1,
+        "conversation_id": 11,
+        "created_at_ms": 1792807185000,
+        "question": "幫我寄一封信給小美，說週四下午三點可以開會。",
+        "route": "answer",
+        "source": "app",
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "detail": null,
+        "status": "confirm",
+        "cost_usd": 0.0009,
+        "model": "openai/gpt-6-sol",
+        "steps": [],
+        "attachments": [],
+        "messages": [],
+        "permissions": [
+          {
+            "id": "perm-rule",
+            "source": "ask",
+            "kind": "tool",
+            "service": "Gmail",
+            "tool": "send_email",
+            "summary": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+            "reason": "此操作符合安全規則「寄信前先問」。",
+            "digest": "707be4e520c562ddb64611ff1b2ce598e78fe99840b94896cd7cecf97adb6332",
+            "always": false,
+            "state": "pending",
+            "expires_at_ms": 1792807215000
+          }
+        ]
+      },
+      "question": {
+        "id": "perm-rule",
+        "member_id": 1,
+        "conversation_id": 11,
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "tier": "T2",
+        "timeout_ms": 30000,
+        "yes": "是",
+        "no": "否"
+      },
+      "done": "《答。已用 Gmail 寄出這封信。》",
+      "denied": "《了。已取消，沒有寄出。》"
+    }
+  },
+  "mailTurns": {
+    "draft": {
+      "id": 160,
+      "session_id": "look-mail-draft",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "幫我回信給小美，說週四下午三點可以開會。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "草稿放在這裡了，請看一下，需要的話可以直接修改。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。草稿放在這裡了，請看一下，需要的話可以直接修改。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "drafts": [
+        {
+          "id": "mail-1",
+          "mode": "card",
+          "state": "draft",
+          "version": 1,
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "from": {
+            "key": "mcp:gmail/send_email",
+            "name": "Gmail"
+          },
+          "senders": [
+            {
+              "key": "mcp:gmail/send_email",
+              "name": "Gmail"
+            },
+            {
+              "key": "mcp:work/send",
+              "name": "Outlook"
+            }
+          ],
+          "to": "mei@example.com",
+          "cc": "",
+          "subject": "回覆：週四下午三點的會議",
+          "body": "小美，您好：\n\n週四下午三點可以開會，我會提前十分鐘到會議室。\n\n謝謝你的邀請。",
+          "offer": null,
+          "error": null,
+          "holder_id": 1,
+          "author_name": ""
+        }
+      ]
+    }
+  },
   "secretTurns": {
     "notion": {
       "id": 130,

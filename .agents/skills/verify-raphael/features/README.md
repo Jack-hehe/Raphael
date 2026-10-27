@@ -5,7 +5,7 @@ request both themes; local UI handoffs select affected scenes at 720/1120/1920x1
 Reserve the full scene matrix for integration/release acceptance, CI, explicit
 requests or genuinely app-wide changes. Shared components select representative
 affected consumers rather than unrelated features. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 252 scenes, 1512 combinations across both themes and
+are the executable source: 257 scenes, 1542 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.
@@ -13,7 +13,7 @@ behavior the fixture cannot prove.
 | Feature | User-facing scope |
 | --- | --- |
 | [Home](home.md) | Startup overview, pending work, reports, calendar, usage and dictation totals |
-| [Conversation](conversation.md) | Threads, details panel, replies, progress status, search, composer and the cards a task pauses on (an app, a key, the owner's turn at the computer) |
+| [Conversation](conversation.md) | Threads, details panel, replies, progress status, search, composer and the cards a task pauses on (an app, a key, the owner's turn at the computer, the owner's yes) and an email draft they edit and send |
 | [Members](members.md) | Identity, resources, voice and Raphael's approved team administration |
 | [Automations](automations.md) | Home-owned day/week calendar, schedules, advanced options and deletion |
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |

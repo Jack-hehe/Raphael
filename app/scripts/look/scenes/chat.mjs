@@ -8,6 +8,10 @@ const firstBot = { name: "晨星", personality: "沉穩、精準", instructions:
 const lookKey = "sk-look-4c9f2b7e81d3";
 const secretField = '[data-secret-card="card-notion"] input[type="password"]';
 const pcCard = '[data-computer-card="card-pc"]';
+// The permission card of a step that needs the owner's yes, and the email card a member wrote for them (小晴's draft).
+const permCard = id => `[data-permission-card="${id}"]`;
+const mailCard = '[data-mail-card="mail-1"]';
+const mailField = field => `${mailCard} [data-mail-field="${field}"]`;
 const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
   click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
 const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
@@ -64,6 +68,20 @@ export default [
     [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait(`${pcCard}[data-card-note="still"]`), check("pc-human-control")], { computerCard: "signin" }),
   scene("chat-handback", "我完成了 after the sign-in: the computer goes back, the same task carries on once and its answer follows the card",
     [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait('[data-resumed="141"]'), check("pc-handback")], { computerCard: "signin", signedIn: true }),
+  scene("local-permission-card", "A step that needs the owner's yes shows a permission card in the chat: the exact action, 拒絕, 一律允許 and 允許一次, and the gold card stays away",
+    [wait(permCard("perm-gmail")), check("local-permission-card")], { permissionCard: "tool" }),
+  scene("draft-preference-ask-first", "A member set to send mail itself still asks when the owner's rule says to ask first: the card names the rule and has no 一律允許",
+    [member(1), { action: "open-details" }, click('[data-det="edit"]'), wait(".mb-dialog"), click("#mp-tab-permissions"), wait('.mb-dialog [data-dlg="draft"]'), check("member-draft-switch"),
+      click('.mb-dialog [data-dlg="cancel"]'), click('.mb-det [data-det="close"]'), wait('.conversation-trigger[aria-expanded="false"]'),
+      wait(permCard("perm-rule")), check("draft-preference-ask-first")], { permissionCard: "ask-first", memberDraftFirst: false }),
+  scene("email-draft-edit", "The owner edits the copy and the subject of a member's email draft: each edit is a new version, the card holds the newest digest and nothing is sent",
+    [member(1), wait(mailCard), type(mailField("cc"), "boss@example.com"), type(mailField("subject"), "回覆：週四下午三點的會議（改期確認）"),
+      wait(`${mailCard}[data-version="3"]`), check("email-draft-edit")], { mailDraft: "draft" }),
+  scene("email-draft-discard", "捨棄 drops the draft: one quiet line, and nothing is saved or sent",
+    [member(1), wait(mailCard), click(`${mailCard} [data-act="mail-discard"]`), wait(`${mailCard}[data-mail-state="discarded"]`), check("email-draft-discard")], { mailDraft: "draft" }),
+  scene("email-draft-handed-off", "The owner lets 小森 send the reply: one centred line in 小晴's chat, and the same version editable in 小森's chat; nothing is sent",
+    [member(1), wait('[data-mail-offer="mail-1"]'), click('[data-mail-offer="mail-1"] [data-act="mail-handover-yes"]'), wait('[data-mail-handed="mail-1"]'), check("mail-handed-first"),
+      member(2), wait(mailCard), check("email-draft-handed-off")], { mailDraft: "draft", mailOffer: true }),
   scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
     { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
     type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),

@@ -77,6 +77,25 @@ export function installMock(fixture, config = {}, target = window) {
   // the page no longer asks for the sign-in when the owner presses 我完成了).
   if (variant.secretCard) data.turns.push(structuredClone(data.secretTurns[variant.secretCard]));
   if (variant.computerCard) data.turns.push(structuredClone(data.computerTurns[variant.computerCard]));
+  // A step that needs the owner's yes shows its permission card, and the question it follows is the one the window holds
+  // (`agent_question_open`), answered with `agent_question_answer`; the card follows the answer as the core reports it.
+  // `memberDraftFirst` sets whether 小晴 writes mail as a draft first.
+  let permission = null;
+  if (variant.permissionCard) {
+    const made = structuredClone(data.permissionTurns[variant.permissionCard]);
+    data.turns.push(made.turn);
+    permission = { ...made, card: made.turn.permissions[0] };
+  }
+  if (variant.memberDraftFirst !== undefined) data.members.find(member => member.id === 1).draft_first = variant.memberDraftFirst;
+  // A member's email draft is a card in its chat. The fixture keeps the states and the digests only: what the owner types
+  // is received by `integrations.draft_save` as a new version, and nothing is ever sent (`sent` lists what 傳送 would send).
+  // `mailOffer` has the member ask whether 小森 may send it.
+  if (variant.mailDraft) {
+    const mail = structuredClone(data.mailTurns[variant.mailDraft]);
+    if (variant.mailOffer) mail.drafts[0].offer = { member_id: 2, name: data.members.find(member => member.id === 2).name };
+    data.turns.push(mail);
+    if (!data.conversations.some(item => item.id === data.colleagueConversation.id)) data.conversations.push(structuredClone(data.colleagueConversation));
+  }
   if (variant.colleagues) {
     // 小森 asked 小晴 from its own chat; 小晴's main chat shows each question where it came.
     data.conversations.push(data.colleagueConversation);
@@ -141,7 +160,7 @@ export function installMock(fixture, config = {}, target = window) {
   }
   // Sidebar and overview use the same ledger rows, including floating-point totals.
   if (!variant.homeEmpty) data.status.spend.month_usd = usageBill("month").cost_usd;
-  const state = { data, calls: [], errors: [], urls: [], exported: null, channel: null, emit(event) {
+  const state = { data, calls: [], errors: [], urls: [], sent: [], exported: null, channel: null, emit(event) {
     if (event.type === "AgentTurn" && arrivals.has(event.turn_id)) { data.turns.push(arrivals.get(event.turn_id)); arrivals.delete(event.turn_id); }
     state.channel?.onmessage(event);
   } };
@@ -364,6 +383,53 @@ export function installMock(fixture, config = {}, target = window) {
         notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
         return { cancelled: true };
       }
+      case "integrations.draft_save": case "integrations.draft_send": case "integrations.draft_discard": case "integrations.draft_handover": {
+        let turn, draft;
+        for (const item of data.turns) {
+          draft = item.drafts?.find(each => each.id === p.id && each.mode === "card");
+          if (draft) { turn = item; break; }
+        }
+        if (!draft) throw new Error(`Fixture draft not found: ${p.id}`);
+        const changed = () => { notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id }); return turn; };
+        const open = ["draft", "failed"].includes(draft.state);
+        if (method === "integrations.draft_save") {
+          if (p.digest !== draft.digest || !open) return { draft: copy(draft), saved: false };
+          const fields = { to: p.to ?? draft.to, cc: p.cc ?? draft.cc, subject: p.subject ?? draft.subject, body: p.body ?? draft.body };
+          const from = draft.senders.find(sender => sender.key === p.via) ?? draft.from;
+          if (from.key === draft.from.key && Object.keys(fields).every(key => fields[key] === draft[key])) return { draft: copy(draft), saved: false };
+          // A new version with a new digest, as the core makes one.
+          const version = draft.version + 1;
+          Object.assign(draft, fields, { from, version, digest: String(version).padStart(64, "b"), error: null, state: "draft" });
+          changed();
+          return { draft: copy(draft), saved: true };
+        }
+        if (method === "integrations.draft_send") {
+          if (p.digest !== draft.digest || draft.state !== "draft") return { draft: copy(draft), sent: false };
+          state.sent.push({ id: draft.id, digest: p.digest, via: draft.from.key, to: draft.to, cc: draft.cc, subject: draft.subject, body: draft.body });
+          draft.state = "sent";
+          changed();
+          return { draft: copy(draft), sent: true };
+        }
+        if (method === "integrations.draft_discard") {
+          const discarded = open;
+          if (discarded) { draft.state = "discarded"; changed(); }
+          return { draft: copy(draft), discarded };
+        }
+        // The owner's answer to 「這封回信可以交給…寄嗎？」: yes moves the same version to the colleague's chat, as a card
+        // on a turn of that chat, and leaves one centred line in this one. It never sends.
+        if (!draft.offer || draft.state !== "draft") return { draft: copy(draft), handed: false };
+        if (p.choice === "no") { draft.offer = null; changed(); return { draft: copy(draft), handed: false, declined: true }; }
+        const author = data.members.find(member => member.id === turn.member_id).name;
+        const carrier = { id: nextId(data.turns), session_id: `draft-${draft.id}-${draft.version}`, member_id: draft.offer.member_id,
+          conversation_id: data.colleagueConversation.id, created_at_ms: data.now, question: "", route: "draft", source: "draft", prefix: "",
+          text: `${author}把一封郵件草稿「${draft.subject}」交給你，等主人編輯後寄出。`, detail: null, status: "done", cost_usd: 0, model: null,
+          steps: [], attachments: [], messages: [], drafts: [{ ...structuredClone(draft), offer: null, holder_id: draft.offer.member_id, author_name: author }] };
+        turn.drafts = turn.drafts.map(each => each === draft ? { id: draft.id, mode: "handed", state: draft.state, holder_id: draft.offer.member_id, holder_name: draft.offer.name } : each);
+        data.turns.push(carrier);
+        notify("AgentTurn", { turn_id: carrier.id, member_id: carrier.member_id });
+        changed();
+        return { draft: copy(carrier.drafts[0]), handed: true };
+      }
       case "toolsets.list": return { groups: data.servers };
       case "integrations.catalog": return { services: data.services };
       case "integrations.audit": return { entries: [] };
@@ -430,7 +496,19 @@ export function installMock(fixture, config = {}, target = window) {
       if (command === "device_settings_get") return copy(data.device);
       if (command === "device_settings_set") { Object.assign(data.device, args.patch); notify("DeviceSettings", { settings: copy(data.device) }); return copy(data.device); }
       if (command === "avatar_get") return copy(data.avatar);
-      if (command === "agent_question_open") return copy(adminQuestion);
+      if (command === "agent_question_open") return copy(adminQuestion ?? permission?.question ?? null);
+      if (command === "agent_question_answer" && permission) {
+        if (args.id !== permission.question.id) throw new Error("Unknown permission question");
+        // The core settles the card once, and the turn with what Raphael says of it.
+        const { turn, card } = permission;
+        card.state = !args.approved ? "denied" : args.always ? "always" : "allowed";
+        const text = args.approved ? permission.done : permission.denied;
+        Object.assign(turn, { status: args.approved ? "done" : "denied", prefix: args.approved ? "答" : "了", text, messages: [{ seq: 1, kind: "reply", text, at_ms: data.now }] });
+        notify("AgentQuestionClosed", { id: card.id });
+        notify("AgentTurn", { turn_id: turn.id, member_id: turn.member_id });
+        permission = null;
+        return;
+      }
       if (command === "agent_question_answer" && adminQuestion) {
         if (args.id !== adminQuestion.id) throw new Error("Unknown approval question");
         if (variant.firstBot) {
