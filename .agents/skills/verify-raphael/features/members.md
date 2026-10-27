@@ -110,11 +110,11 @@ Raphael's row has no menu, so he is chosen again from another member's menu. Rap
 the primary is: nothing about rooms, tasks, exchanges or conversations changes when the primary does.
 
 ```powershell
-npm run look -- primary-contact-picker primary-contact-set --theme both --width 1120,720,1920x1080
+npm run look -- primary-contact-menu primary-contact-picker primary-contact-set --theme both --width 1120,720,1920x1080
 npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded details raphael-details --theme both --width 1120,720,1920x1080
 ```
 
-`primary-contact-picker` opens the window from 小森's menu while 小晴 is the primary (fixture key `primaryMember`) and checks the title, that
+`primary-contact-menu` opens 小森's menu and checks that 設為主要, with the star icon, is one item right after 移到分組. `primary-contact-picker` opens the window from it while 小晴 is the primary (fixture key `primaryMember`) and checks the title, that
 the members are buttons of one radio group with no native control, that 小晴 is not offered and Raphael is, one choice with its check, 取消 just left
 of the primary 設為主要, and that nothing was set yet. `primary-contact-set` chooses 小晴 and presses 設為主要: one `members.set_primary` call, the star on
 her row (and no longer on Raphael's) and on the face in her details, and no room, routine, task or conversation call. The scenes of the

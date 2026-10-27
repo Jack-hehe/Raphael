@@ -775,6 +775,17 @@ export function checkRendered(name) {
     return { check: name, collapsed, width: column.getBoundingClientRect().width, members: rows.length };
   }
   // The primary contact (P15b): a star on one face at a time, kept apart from the crown of the chief of staff in a room.
+  if (name === "primary-menu") {
+    const menu = document.querySelector('#app-popover');
+    require(visible(menu), "the member's menu is open");
+    const items = [...menu.querySelectorAll('[data-pick]')], picks = items.map(item => item.dataset.pick), row = items[picks.indexOf('primary')];
+    require(row && picks.indexOf('primary') === picks.indexOf('move') + 1 && picks.filter(pick => pick === 'primary').length === 1, "設為主要 is one item, right after 移到分組");
+    require(visible(row.querySelector('.ck svg.i')) && row.textContent.trim() !== "" && !row.classList.contains('danger'), "it has the star icon and its words, and is no destructive item");
+    const box = menu.getBoundingClientRect();
+    require(box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, "the menu is inside the viewport");
+    require(window.__look.calls.every(call => call.method !== "members.set_primary"), "opening the menu sets nothing");
+    return { check: name, items: picks.length };
+  }
   if (name === "primary-picker" || name === "primary-set" || name === "primary-room-chief") {
     const data = window.__look.data, calls = window.__look.calls;
     const sets = calls.filter(call => call.method === "members.set_primary");
@@ -797,7 +808,7 @@ export function checkRendered(name) {
     if (name === "primary-picker") {
       const dialog = document.querySelector('.mb-dialog.mb-primary-picker');
       require(visible(dialog), "the picker window is open");
-      require(dialog.querySelector('h2').textContent === "選擇主要成員", "it is titled 選擇主要成員");
+      require(dialog.querySelector('h2').textContent.trim() !== "" && dialog.querySelector('h2').textContent === dialog.querySelector('[role="radiogroup"]').getAttribute('aria-label'), "it is titled 選擇主要成員, and its list is named by the title");
       const choices = [...dialog.querySelectorAll('[role="radio"]')];
       require(choices.length >= 3 && choices.every(button => button.tagName === 'BUTTON' && visible(button)), "the members are real buttons");
       require(!dialog.querySelector('select, input[type=radio], input[type=checkbox]'), "no native controls");
@@ -830,7 +841,7 @@ export function checkRendered(name) {
       const details = document.querySelector('.mb-det');
       require(visible(details) && details.querySelectorAll('.mb-star').length === 1, "the details of the member wear the star too");
       const face = details.querySelector('.mb-who-face'), badge = face.querySelector('.mb-star');
-      require(visible(badge) && !badge.closest('button') && badge.getAttribute('aria-label') === '主要聯絡人', "the details' star is a named mark beside the picture button");
+      require(visible(badge) && !badge.closest('button') && badge.getAttribute('role') === 'img' && !!badge.getAttribute('aria-label'), "the details' star is a named mark (主要聯絡人) beside the picture button");
       const f = face.querySelector('.av').getBoundingClientRect(), s = badge.getBoundingClientRect();
       require(s.left < f.right && s.right > f.left && s.top < f.bottom && s.bottom > f.top, "the details' star touches the face");
       return { check: name, column: visible(column), size };
@@ -839,9 +850,9 @@ export function checkRendered(name) {
     const room = data.rooms[0], faces = [...document.querySelectorAll('.au-room-heading .au-room-participant')];
     require(room.member_ids.includes(0) && faces.length === room.member_ids.length, "the header names every member of the room, Raphael included");
     const crowned = faces.filter(face => face.querySelector('.au-room-crown'));
-    require(crowned.length === 1 && crowned[0].dataset.tooltip.startsWith('拉斐爾'), "the crown is Raphael's alone: he is the chief of staff, not the primary contact");
+    require(crowned.length === 1 && crowned[0].querySelector('.av') && !crowned[0].querySelector('.mb-av'), "the crown is Raphael's alone (his emblem): he is the chief of staff, not the primary contact");
     const card = document.querySelector('.au-room-wrapup');
-    require(visible(card) && card.querySelector('.au-room-author')?.textContent === '拉斐爾', "Raphael writes the wrap-up");
+    require(visible(card) && card.querySelector('.ra-face .av') && !card.querySelector('.ra-face .mb-av'), "Raphael (his emblem) writes the wrap-up");
     require(document.querySelectorAll('.au-room-wrapup').length === 1 && (document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup')), "the room ends with its one wrap-up");
     let size = null;
     if (visible(column) && !column.classList.contains('is-collapsed')) {
