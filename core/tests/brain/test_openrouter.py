@@ -55,10 +55,10 @@ async def client_with():
     """
     opened: list[httpx.AsyncClient] = []
 
-    def make(handler, key=KEY):
+    def make(handler, key=KEY, **kwargs):
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         opened.append(http)
-        return OpenRouterClient(key if callable(key) else (lambda: key), http=http)
+        return OpenRouterClient(key if callable(key) else (lambda: key), http=http, **kwargs)
 
     yield make
     for http in opened:
@@ -1041,3 +1041,43 @@ def test_the_cleanup_model_is_the_default_and_the_fallbacks_are_the_other_two():
     assert CLEANUP_FALLBACKS == ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
     # No list of models to offer is kept here: the settings page takes them from OpenRouter.
     assert not hasattr(openrouter, "CLEANUP_MODEL_CHOICES")
+
+
+@pytest.mark.parametrize(("capabilities", "efforts", "expected"), [
+    ({"reasoning", "reasoning_off"}, ("high", "none"), "none"),
+    (set(), None, None),
+    ({"reasoning"}, ("high", "low", "minimal"), "minimal"),
+    ({"reasoning"}, ("high", "low"), "low"),
+    ({"reasoning"}, ("medium", "high"), "medium"),
+    ({"reasoning"}, None, "low"),
+])
+async def test_json_reasoning_follows_the_current_cached_entry(client_with, capabilities, efforts, expected):
+    from dataclasses import replace
+    from raphael_core.brain.pricing import builtin_catalog
+
+    seen = []
+    entry = replace(builtin_catalog()[0], id="test/model", capabilities=frozenset(capabilities), reasoning_efforts=efforts)
+    entries = [entry]
+    client = client_with(answering(lambda: ok_reply({"text": "x"}), seen), model_catalog=lambda: entries)
+    await complete(client, model=entry.id, fallbacks=[])
+    body = json.loads(seen[-1].content)
+    assert body.get("reasoning") == (None if expected is None else {"effort": expected})
+    assert ("reasoning" in body) == (expected is not None)
+    assert body["provider"] == {"require_parameters": True, "sort": "latency", "data_collection": "deny"}
+    assert set(body) == {"model", "messages", "response_format", "provider", "max_tokens"} | ({"reasoning"} if expected is not None else set())
+    # A later catalog snapshot is read on the next call, with no model-list request.
+    entries[:] = [replace(entry, capabilities=frozenset())]
+    await complete(client, model=entry.id, fallbacks=[])
+    assert "reasoning" not in json.loads(seen[-1].content)
+    assert all(r.url.path.endswith("/chat/completions") for r in seen)
+
+
+async def test_an_explicit_answer_effort_is_unchanged(client_with):
+    from dataclasses import replace
+    from raphael_core.brain.pricing import builtin_catalog
+
+    seen = []
+    entry = replace(builtin_catalog()[0], id="test/answer", capabilities=frozenset({"reasoning"}), reasoning_efforts=("minimal", "high"))
+    client = client_with(answering(lambda: ok_reply({"answer": "x"}), seen), model_catalog=lambda: [entry])
+    await complete(client, model=entry.id, reasoning_effort="high", fallbacks=[])
+    assert json.loads(seen[0].content)["reasoning"] == {"effort": "high"}

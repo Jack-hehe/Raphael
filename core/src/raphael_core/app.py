@@ -771,7 +771,7 @@ class App(Router):
                 service_keys = memory_keys()
             else:
                 self.keys = CredentialKeyStore()
-                self.client = OpenRouterClient(self.keys.get)
+                self.client = OpenRouterClient(self.keys.get, model_catalog=lambda: self.brain.known_models())
                 self.vault = CredentialVault()
                 service_keys = credential_keys()
             provider_keys: dict[str, MemoryKeyStore] = {}

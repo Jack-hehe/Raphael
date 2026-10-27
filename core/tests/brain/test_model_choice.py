@@ -122,8 +122,9 @@ async def test_any_model_the_catalog_lists_for_the_role_can_be_chosen(router, cl
 
 async def test_a_listed_model_the_role_cannot_use_is_refused(router):
     await router.call("models.catalog", {})
-    message = await refused(router, "cleanup_model", "google/gemini-3.8-flash")
-    assert "reasoning_required" in message
+    assert "no_structured_output" in await refused(
+        router, "cleanup_model", "moondream/moondream3-preview"
+    )
     assert "no_structured_output" in await refused(
         router, "agent_model", "moondream/moondream3-preview"
     )
@@ -220,7 +221,7 @@ async def test_a_stale_catalog_kept_from_before_a_restart_is_what_a_choice_is_ch
     rpc = Router()
     Brain(conn, client, MemoryKeyStore(), now_ms=clock).register(rpc)
     assert await choose(rpc, "stt_cloud_model", "deepgram/nova-3") == "deepgram/nova-3"
-    await refused(rpc, "cleanup_model", "google/gemini-3.8-flash")
+    assert await choose(rpc, "cleanup_model", "google/gemini-3.8-flash") == "google/gemini-3.8-flash"
     assert client.calls == 1
 
 
@@ -296,12 +297,13 @@ async def test_a_listed_model_that_a_role_can_no_longer_use_is_left_to_the_user(
 ):
     await router.call("models.catalog", {})
     await choose(router, "agent_model", "tencent/hunyuan-a13b-instruct")
-    client.reply = edited("tencent/hunyuan-a13b-instruct", reasoning={"mandatory": True})
+    parameters = next(m["supported_parameters"] for m in RECORDED if m["id"] == "tencent/hunyuan-a13b-instruct")
+    client.reply = edited("tencent/hunyuan-a13b-instruct", supported_parameters=[p for p in parameters if p != "max_tokens"])
     clock.now_ms += PRICING_TTL_MS
     view = await router.call("models.catalog", {})
     assert view["replaced"] == []
     hunyuan = by_id(view["llm"])["tencent/hunyuan-a13b-instruct"]
-    assert hunyuan["roles"]["answer"] == {"usable": False, "reason": "reasoning_required"}
+    assert hunyuan["roles"]["answer"] == {"usable": False, "reason": "no_max_tokens"}
     settings = (await router.call("settings.get", {}))["settings"]
     assert settings["agent_model"] == "tencent/hunyuan-a13b-instruct"
 
@@ -318,3 +320,15 @@ async def test_the_lists_models_and_prices_are_not_logged(router, client, clock,
     for model in RECORDED:
         assert model["id"] not in caplog.text  # ...but no model
     assert "0.1" not in caplog.text and "$" not in caplog.text
+
+
+@pytest.mark.parametrize(("model", "source"), [
+    ("openai/gpt-4o-mini", "openai/gpt-4.1-mini"),
+    ("anthropic/claude-sonnet-5.5", "google/gemini-3.8-flash"),
+])
+async def test_cleanup_accepts_non_reasoning_and_mandatory_reasoning_models(router, client, model, source):
+    original = next(m for m in RECORDED if m["id"] == source)
+    client.reply = [*RECORDED, {**original, "id": model}]
+    await router.call("models.catalog", {})
+    assert await choose(router, "cleanup_model", model) == model
+    assert client.calls == 1

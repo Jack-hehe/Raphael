@@ -242,6 +242,15 @@ describe("the maker", () => {
   });
 });
 
+test.each([
+  ["openai/gpt-4o-mini", false, false],
+  ["anthropic/claude-sonnet-5.5", true, false],
+] as const)("cleanup chooses %s when the core marks it usable", (id, reasoning, reasoningOff) => {
+  const model = llm(id, { capabilities: { structured_output: true, max_tokens: true, reasoning, reasoning_off: reasoningOff } });
+  const list = new PickerList("cleanup", [model], id);
+  expect(list.chosen()).toBe(id);
+});
+
 describe("the rows a role cannot use", () => {
 
   test("can be highlighted, so that their reason is read out, but never chosen", () => {

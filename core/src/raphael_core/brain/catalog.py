@@ -21,11 +21,13 @@ The roles (`ROLES`), and what each needs of a model, from the calls it makes:
 - `cleanup` (the `cleanup_model` setting) and `answer` (`agent_model`: Raphael's answers, his
   routing when Jev fails or is unsure, the app he picks to open, and his web search) call
   `complete_json`. It asks for JSON that fits a schema (`response_format` with a strict
-  `json_schema`), with no reasoning (`reasoning.effort: "none"`) and a `max_tokens`, under
-  `provider.require_parameters`, which leaves out every provider that does not take all of those.
-  So the model must list `response_format`, `structured_outputs`, `reasoning` and `max_tokens`
-  among its supported parameters, and must be able to answer without reasoning first: not
-  `reasoning.mandatory`, and "none" among its efforts when it lists them. Tool calling is not
+  `json_schema`) and a `max_tokens`, under `provider.require_parameters`, which leaves out every
+  provider that does not take exactly the parameters sent. The cached catalog decides reasoning:
+  `effort: "none"` when it can be turned off, no reasoning field without a reasoning setting,
+  or the lowest listed effort when it is required (minimal, then low, then the first listed;
+  low when no efforts are listed). An explicitly chosen answer effort is kept.
+  So the model must list `response_format`, `structured_outputs` and `max_tokens` among its
+  supported parameters. Tool calling is not
   needed: Raphael runs his tools himself and hands the model their results, and the web search
   (`chat_text` with OpenRouter's `web` plugin, which requires no parameter) takes any text model.
   The one thing that wants it is the call that picks a plugin's tools (agent/plugins.py), which
@@ -121,8 +123,6 @@ class Role:
 # What `complete_json` needs (see the module's docstring).
 _JSON_WITHOUT_REASONING = (
     ("structured_output", "no_structured_output"),
-    ("reasoning_off", "reasoning_required"),
-    ("reasoning", "no_reasoning_setting"),
     ("max_tokens", "no_max_tokens"),
 )
 ROLES = (

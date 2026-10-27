@@ -19,7 +19,10 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .catalog import CatalogEntry
 
 import httpx
 
@@ -653,9 +656,11 @@ class OpenRouterClient:
     """
 
     def __init__(
-        self, key_provider: Callable[[], str | None], http: httpx.AsyncClient | None = None
+        self, key_provider: Callable[[], str | None], http: httpx.AsyncClient | None = None,
+        *, model_catalog: Callable[[], Sequence["CatalogEntry"] | None] | None = None,
     ) -> None:
         self._key_provider = key_provider
+        self._model_catalog = model_catalog
         self._http = http
         self._own_http: httpx.AsyncClient | None = None
         self._own_http_lock = threading.Lock()  # warm_up runs on another thread than the requests
@@ -679,8 +684,10 @@ class OpenRouterClient:
         Only the parameters OpenRouter documents for structured output are sent. In particular
         there is no temperature or top_p: with require_parameters, a model that cannot take one
         (gpt-6-luna has no temperature; claude-haiku-5.5 rejects any value but its default) would
-        be left out. Reasoning is off unless `reasoning_effort` asks for some, and every caller
-        keeps it off (agent/answers.py has what thinking first cost an answer, measured live).
+        be left out. Unless an answer effort is explicitly chosen, the cached catalog decides:
+        turn reasoning off where supported, omit it where absent, or use the lowest listed effort
+        where required (minimal, then low, then the first listed; low if no efforts are listed).
+        An unknown model retains the existing "none" default. Reading the catalog never fetches it.
         `data_collection: "deny"` keeps the dictated text away from providers that may store or
         train on what they are sent, as it does for the audio of a transcription
         (`transcription_body`). `timeout_s` applies to each stage of the request (connect, send,
@@ -697,9 +704,19 @@ class OpenRouterClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
             "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
-            "reasoning": {"effort": reasoning_effort},
             "max_tokens": max_tokens,
         }
+        effort = reasoning_effort
+        if effort == "none" and self._model_catalog is not None:
+            entry = next((e for e in self._model_catalog() or () if e.id == model), None)
+            if entry is not None:
+                if "reasoning" not in entry.capabilities:
+                    effort = None
+                elif "reasoning_off" not in entry.capabilities:
+                    efforts = entry.reasoning_efforts or ("low",)
+                    effort = next((e for e in ("minimal", "low") if e in efforts), efforts[0])
+        if effort is not None:
+            body["reasoning"] = {"effort": effort}
         # The chosen model is tried first, so listing it again would only repeat a failed attempt.
         models = [m for m in fallbacks if m != model]
         if models:

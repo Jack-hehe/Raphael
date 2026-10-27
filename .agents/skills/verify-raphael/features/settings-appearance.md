@@ -22,6 +22,11 @@ inside Raphael, removes its models, and leaves a framed Connect action. Reconnec
 an existing CLI login. Caption icon controls keep transparent hover/pressed surfaces (R-UI-16). Close uses
 the error foreground; glyph contrast and keyboard focus are checked.
 
+Cleanup and answer JSON calls accept models with reasoning off, no reasoning setting or
+mandatory reasoning. Calls read the cached catalog: off, omitted or minimal/low/first listed
+effort respectively (low if unlisted). Explicit answer efforts stay. The picker uses core
+role usability; structured output and max_tokens remain required.
+
 Model choosers for answers, cleanup, speech and vision share separated selection rows.
 Local speech models show languages, size, notes and download state; choosing a row only
 previews it until the fixed footer's action is used. Rows keep an 8 px gap, subtle

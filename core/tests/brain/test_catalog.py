@@ -363,13 +363,13 @@ def test_the_answer_says_whether_a_model_takes_tools():
 @pytest.mark.parametrize(
     ("model_id", "reason"),
     [
-        ("google/gemini-3.8-flash", "reasoning_required"),
-        ("openai/gpt-4.1-mini", "no_reasoning_setting"),
+        ("google/gemini-3.8-flash", None),
+        ("openai/gpt-4.1-mini", None),
         ("moondream/moondream3-preview", "no_structured_output"),
-        ("mistralai/mistral-large-2407", "no_reasoning_setting"),
+        ("mistralai/mistral-large-2407", None),
     ],
 )
-def test_a_model_without_what_the_json_calls_need_says_why(model_id, reason):
+def test_json_role_usability_depends_on_structured_output_and_tokens(model_id, reason):
     assert usable(model_id, "cleanup_model") == reason
     assert usable(model_id, "agent_model") == reason
 
@@ -384,7 +384,7 @@ def test_a_model_without_a_token_limit_cannot_answer_in_json():
 def test_efforts_without_none_mean_that_the_model_always_reasons():
     reasoning = {"mandatory": False, "supported_efforts": ["high", "low"]}
     models = edited("openai/gpt-6-luna", reasoning=reasoning)
-    assert usable("openai/gpt-6-luna", "agent_model", models) == "reasoning_required"
+    assert usable("openai/gpt-6-luna", "agent_model", models) is None
 
 
 def test_a_router_and_a_free_model_and_an_alias_can_answer():
@@ -460,7 +460,7 @@ def test_an_entry_has_what_the_picker_shows():
     assert scribe["input_modalities"] == ["audio"]
     assert scribe["roles"] == {"stt": {"usable": True, "reason": None}}
     flash = by_id(view["llm"])["google/gemini-3.8-flash"]
-    assert flash["roles"]["cleanup"] == {"usable": False, "reason": "reasoning_required"}
+    assert flash["roles"]["cleanup"] == {"usable": True, "reason": None}
 
 
 def test_no_model_is_marked_as_recommended():
@@ -590,7 +590,7 @@ def test_a_choice_is_checked_against_the_catalog_the_page_shows():
     # With the list, any model it lists that the role can use.
     assert choice_problem(cleanup, "tencent/hunyuan-a13b-instruct", entries, "x") is None
     assert choice_problem(stt, "openai/gpt-transcribe", entries, "x") is None
-    assert choice_problem(cleanup, "google/gemini-3.8-flash", entries, "x") == "reasoning_required"
+    assert choice_problem(cleanup, "google/gemini-3.8-flash", entries, "x") is None
     assert choice_problem(cleanup, "nobody/model", entries, "x") == "not_listed"
     assert choice_problem(stt, "openai/gpt-6-luna", entries, "x") == "not_listed"
     assert choice_problem(stt, "deepgram/nova-3", entries, "x") is None
@@ -603,3 +603,15 @@ def test_the_model_chosen_now_and_the_default_may_always_be_chosen():
     assert choice_problem(cleanup, "nobody/model", None, "nobody/model") is None
     assert choice_problem(cleanup, "openai/gpt-6-luna", [], "x") is None
     assert choice_problem(stt, "elevenlabs/scribe-v2", None, "x") is None
+
+
+@pytest.mark.parametrize("kind", ["off", "absent", "mandatory"])
+@pytest.mark.parametrize(("without", "reason"), [
+    ("structured_outputs", "no_structured_output"), ("max_tokens", "no_max_tokens"),
+])
+def test_all_reasoning_kinds_still_require_json_and_token_support(kind, without, reason):
+    original = next(m for m in RECORDED if m["id"] == "openai/gpt-6-luna")
+    parameters = [p for p in original["supported_parameters"] if p != without and (kind != "absent" or p != "reasoning")]
+    models = edited(original["id"], supported_parameters=parameters, reasoning={"mandatory": kind == "mandatory"})
+    for role in ("cleanup_model", "agent_model"):
+        assert usable(original["id"], role, models) == reason
