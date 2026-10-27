@@ -31,6 +31,7 @@ def brain(request, setup, client, tmp_path, monkeypatch):
                     assert not result["isError"]
                     assert "pending_approval" in str(result)
                     assert await rig.call("members.list", {}) == before
+            yield Event("session", "codex-thread-1")
             yield Event("final", "草稿已準備好，等待確認。")
 
         monkeypatch.setattr(Driver, "run", run)
@@ -39,6 +40,7 @@ def brain(request, setup, client, tmp_path, monkeypatch):
         operations[:] = calls
         if request.param == "api":
             client.chats = [chat("Preparing proposals.", *calls), live_said("草稿已準備好，等待確認。")]
+    prepare.cli = request.param == "cli"
     return prepare
 
 
@@ -80,6 +82,20 @@ async def test_cancel_expiry_and_resend_never_revive_a_proposal(setup, brain, en
     await rig.confirm(old, True)
     assert (await rig.call("members.list", {}))["members"][1:] == []
     assert (await rig.call("members.list", {}))["groups"] == []
+
+
+@pytest.mark.parametrize("approved", [False, True])
+async def test_once_the_owner_answers_a_proposal_a_cli_brain_starts_a_new_thread(setup, brain, approved):
+    # Live on Codex, the owner cancelled five member drafts; asked the same again, the brain's own thread still ended
+    # at "the drafts are ready", so it said so and showed none. The next request starts from the history instead.
+    rig, team = setup
+    brain(("member_create", {"name": "Research", "role": "Research"}))
+    asked = await typed(rig, "Create Research", 0)
+    main = rig.service.conversations.main(0)
+    if brain.cli:
+        assert rig.service._cli_sessions.get(0, "cli:codex:test", main) == "codex-thread-1"
+    await rig.confirm(asked["confirm"]["id"], approved)
+    assert rig.service._cli_sessions.get(0, "cli:codex:test", main) is None
 
 
 async def test_first_bot_profile_uses_the_same_draft_and_survives_service_restart(setup, brain, tmp_path):

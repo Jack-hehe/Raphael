@@ -3492,6 +3492,11 @@ class AgentService:
             self._write(lambda: self._history.add_message(
                 pending.turn_id, "reply", compose(prefix, text, None)
             ))
+        if turn is not None:
+            # Raphael, not the brain, says how this turn ended, so a CLI brain's own thread still ends where the brain
+            # left it. Live, after the owner cancelled five member drafts, Codex resumed at "the drafts are ready" and
+            # showed none: the next request starts a new thread from the history instead, as after a deleted turn.
+            self._write(lambda: self._forget_cli_thread(turn.conversation_id))
         # The owner's own "no", and a question nobody answered, are not said back.
         silent = status in _UNSPOKEN
         # An answer that will be said is announced to the app when the voice is ready (`_said`).
@@ -3501,6 +3506,11 @@ class AgentService:
         )
         result = {"status": "done", "turn_id": pending.turn_id, "prefix": prefix, "text": text}
         return _Silent(result) if silent else result
+
+    def _forget_cli_thread(self, conversation_id: int | None) -> None:
+        """Drop a CLI brain's own thread of a conversation: its next request starts a new one from the history."""
+        with self._conn:
+            self._conn.execute("DELETE FROM agent_conversation_cli_sessions WHERE conversation_id = ?", (conversation_id,))
 
     def _deny(self, pendings: list[Pending]) -> None:
         for pending in pendings:
