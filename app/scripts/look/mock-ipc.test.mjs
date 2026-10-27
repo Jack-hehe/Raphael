@@ -203,7 +203,7 @@ describe("the apps and the private skills at the IPC boundary", () => {
     installMock(fixture, {}, target);
     const inventory = await ask(target, "integrations.inventory");
     const { team_context } = await ask(target, "members.list");
-    expect([team_context.connected, team_context.apps]).toEqual([inventory.count, inventory.apps]);
+    expect([team_context.inventory_state, team_context.connected, team_context.apps]).toEqual(["complete", inventory.count, inventory.apps]);
     // and it moves as the core moves it: an uninstall, a tool switched off, an app switched off
     await ask(target, "connectors.disconnect", { id: "composio:notion" });
     expect((await ask(target, "integrations.inventory")).count).toBe(inventory.count - 1);
@@ -217,7 +217,8 @@ describe("the apps and the private skills at the IPC boundary", () => {
     const target = {};
     installMock(fixture, { fixture: { inventoryUnreadable: true } }, target);
     expect(await ask(target, "integrations.inventory")).toEqual({ state: "unknown", count: null, apps: [] });
-    expect((await ask(target, "members.list")).team_context.connected).toBeNull();
+    const { team_context } = await ask(target, "members.list");
+    expect([team_context.inventory_state, team_context.connected]).toEqual(["unknown", null]);
   });
 
   it("reads, edits, switches and deletes a skill of a member as the core does, and refuses a document it cannot keep", async () => {

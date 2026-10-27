@@ -47,6 +47,9 @@ export default [
     servers: base.servers.slice(0, 1),
     skills,
   }),
+  scene("connected-apps-unreadable", "A core that cannot list the apps: the sidebar and the tab say 「—」 and give no number, and the apps stay one list", [
+    ...open, wait('[data-k="cs-open:composio:notion"]'), check("apps-unreadable"),
+  ], { inventoryUnreadable: true, managedConnectors: [notion(), google], servers: base.servers.slice(0, 1), skills }),
   scene("connector-account-tools", "An app's detail: its accounts, how many of its tools are on (9/9), a switch for each tool, sign in again and uninstall", [
     ...open, click('[data-conn="open"][data-id="composio:notion"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"),
   ], {

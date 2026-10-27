@@ -14,7 +14,7 @@ The rows sit under three headings: 應用程式 (their tools can be called now),
 (waiting for sign-in, failed, a duplicate of another connection, all tools off or
 unreadable, each with its reason) and 私人技能. An app is connected only when its tools
 can be called now, and the core defines that once (`integrations/inventory.py`); the
-sidebar's 連結應用程式 entry (a badge on the compact rail), the tab's number, the rows
+sidebar's 連結應用程式 entry (a badge on its icon in the rail and the narrow sidebar), the tab's number, the rows
 under 應用程式 and the roster every model is given (`TeamContextSnapshot.connected`)
 all show that one count. An unreadable inventory shows 「—」 instead of a number (the
 entry's accessible name says it cannot be read), and an app whose state cannot be read
@@ -35,7 +35,7 @@ and does not prove remote image availability.
 ## How to get to it (user POV)
 
 Press 連結應用程式 at the bottom of the sidebar (the plug with a count at the bottom
-of the compact rail), or open Settings > Connections. Use 已連結 to open a service
+of the rail), or open Settings > Connections. Use 已連結 to open a service
 detail or a private skill, change their switches or open an overflow. Add offers custom command/URL, pasted JSON and import.
 Use Store to save a Composio project key, filter the catalog and Add a service;
 complete its login in the browser, then return to 已連結.
@@ -46,14 +46,15 @@ complete its login in the browser, then return to 已連結.
 npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-connecting --theme both --width 1120,720,1920x1080
 npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
 npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
-npm run look -- connect-apps-categories connected-apps-skills connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
+npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
 ```
 
 The last command is the apps and skills set (`scenes/apps.mjs`). Each scene enters
 through the sidebar's 連結應用程式; `apps-count` compares the badge, the tab's
-number, the rows and the roster, `connector-tools` checks N/M against the switches and
-that the actions sit flush at the dialog's edge, and `skill-page` checks the action
-order and that the document is whole. Also run `home` (the sidebar entry on the wide
+number, the rows and the roster, `apps-unreadable` checks that a core that cannot
+list the apps leaves 「—」 and no number in all of them, `connector-tools` checks N/M
+against the switches and that the actions sit flush at the dialog's edge, and
+`skill-page` checks the action order and that the document is whole and starts at its first line. Also run `home` (the sidebar entry on the wide
 and compact layouts) and the `plugins-*` scenes above for regressions.
 
 Inspect every contact sheet and detail/store/key/menu full-size image, especially

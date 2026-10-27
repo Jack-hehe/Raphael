@@ -464,6 +464,9 @@ export function checkRendered(name) {
     require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "Home is the selected rail destination");
     require(document.querySelector('#nav .nav')?.dataset.go === "home", "Home is first in the rail");
     for (const chart of home.querySelectorAll('.ho-bars')) require(chart.getAttribute('aria-label'), "charts have an accessible description");
+    // Each page is named on one line in the sidebar, at every width: 連結應用程式 and its number must fit the narrow sidebar too.
+    for (const label of document.querySelectorAll('#nav .nav .nav-t')) if (visible(label))
+      require(label.getBoundingClientRect().height < (parseFloat(getComputedStyle(label).lineHeight) || 20) * 1.5, `"${label.textContent}" does not fit on one line in the sidebar`);
     return { check: name, items: home.querySelectorAll('[data-home-item]').length, width: home.clientWidth };
   }
   if (name === "home-report") {
@@ -661,6 +664,17 @@ export function checkRendered(name) {
       return { check: name, count: roster.connected, apps: roster.apps.length };
     });
   }
+  if (name === "apps-unreadable") {
+    // What cannot be known is 「—」 wherever the number would be, never a guess: the sidebar, the tab, and the roster every model is given.
+    const entry = document.querySelector("#nav .nav-apps"), badge = entry?.querySelector(".nav-count"), tab = document.querySelector('.modal-scrim [data-conn="tab"][data-id="installed"] .n');
+    require(visible(badge) && visible(tab), "the sidebar's badge and the tab's number are visible");
+    require(badge.textContent.trim() === "—" && tab.textContent.trim() === "—", `the sidebar says "${badge.textContent}" and the tab "${tab.textContent}"`);
+    require(badge.hasAttribute("data-unknown") && !/\d/.test(entry.getAttribute("aria-label")), "the entry is drawn and named as one whose number is not known");
+    return window.__TAURI_INTERNALS__.invoke("core_call", { method: "members.list", params: {} }).then(({ team_context: roster }) => {
+      require(roster.connected === null && roster.inventory_state !== "complete", "the roster states no number either");
+      return { check: name, state: roster.inventory_state };
+    });
+  }
   if (name === "connector-tools") {
     // An app's page: the account it is signed in with, N of its M tools on with a switch for each, and its actions flush with the dialog's edge.
     const dialog = document.querySelector(".modal-scrim .cs-dialog"), switches = [...(dialog?.querySelectorAll('[data-conn="tool"]') ?? [])];
@@ -682,7 +696,8 @@ export function checkRendered(name) {
     const box = text.getBoundingClientRect(), frame = dialog.getBoundingClientRect();
     require(box.left >= frame.left && box.right <= frame.right, "the document sits inside its dialog");
     require(text.scrollWidth <= text.clientWidth + 1, "the document does not scroll sideways");
-    return { check: name, rows: text.rows, chars: text.value.length };
+    require(text.scrollTop === 0, `the document starts at its first line, not ${text.scrollTop}px down (${text.clientHeight}px box, ${text.scrollHeight}px of text)`);
+    return { check: name, rows: text.rows, chars: text.value.length, box: text.clientHeight, text: text.scrollHeight };
   }
   if (name === "settings-shell") {
     const modal = document.querySelector(".modal"), close = modal?.querySelector(".modal-x");

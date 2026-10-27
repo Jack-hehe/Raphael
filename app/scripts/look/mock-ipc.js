@@ -242,13 +242,16 @@ export function installMock(fixture, config = {}, target = window) {
         return { learned };
       }
       case "dictionary.delete": data.dictionary = data.dictionary.filter(item => item.id !== p.id); return { deleted: true };
-      case "members.list": return { members: data.members, groups: data.groups, team_context: {
-        schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: 0, chief_id: 0,
-        inventory_state: "complete", room_member_ids: null,
-        members: data.members.map(m => ({ id: m.id, name: m.name, role: m.role, blurb: m.blurb ?? "" })),
+      case "members.list": {
         // the roster of every model carries the same inventory and the same count as the sidebar and the connections page
-        apps: inventory().apps, connected: inventory().count,
-      } };
+        const counted = inventory();
+        return { members: data.members, groups: data.groups, team_context: {
+          schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: 0, chief_id: 0,
+          inventory_state: counted.state, room_member_ids: null,
+          members: data.members.map(m => ({ id: m.id, name: m.name, role: m.role, blurb: m.blurb ?? "" })),
+          apps: counted.apps, connected: counted.count,
+        } };
+      }
       case "members.presets": return { presets: data.presets };
       case "members.viewing": case "members.read": return {};
       case "members.tool_choices": return { tools: [], connections: data.servers };
