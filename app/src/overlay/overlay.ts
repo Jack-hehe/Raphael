@@ -11,6 +11,7 @@
 
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { replyLine } from "../shared/anime";
+import { captionLines } from "./caption";
 import { Emblem, canvasSize, loadGlyphTexture, pictureStyle, type Mode, type Phase, type PictureCrop } from "./emblem";
 import { noticeDurationMs } from "./notice";
 import type { ProgressReport, Stage } from "./progress";
@@ -285,6 +286,8 @@ export class OverlayController {
         this.operate(words(event.line));
         break;
       case "release":
+        // The voice ended before the last page of its answer came: the pages left are timed instead.
+        for (const queued of this.queue) queued.hold = undefined;
         if (!this.heldSay) break;
         clearTimeout(this.timer);
         this.timer = undefined;
@@ -598,10 +601,13 @@ export class OverlayController {
     this.stopWaiting();
     if (this.progress.active) this.stopProgress();
     if (this.ask) this.cancelNotices();
+    // Told in pages without addresses (`captionLines`); a voiced answer holds only its last page.
+    const lines = captionLines(notice.text, this.language);
+    const pages = lines.map((text, i) => ({ ...notice, text, hold: i === lines.length - 1 ? notice.hold : undefined }));
     // Before the learned words that wait, but behind the lines of Raphael's that came earlier.
     const at = first ? this.queue.findIndex((queued) => queued.kind === "learned") : -1;
-    if (at >= 0) this.queue.splice(at, 0, notice);
-    else this.queue.push(notice);
+    if (at >= 0) this.queue.splice(at, 0, ...pages);
+    else this.queue.push(...pages);
     if (!this.busy) this.next();
   }
 

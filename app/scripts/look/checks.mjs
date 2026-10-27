@@ -295,6 +295,17 @@ export function checkRendered(name) {
     require(row.querySelector('[data-price="quick-model"]')?.textContent.trim() === "訂閱", "a subscription model shows it is billed by subscription");
     return { check: name, saved: sets.filter(set => set.key.startsWith("quick_")) };
   }
+  if (name === "overlay-pages") {
+    const line = document.querySelector(".subs.on .sub-line"), text = line?.textContent ?? "";
+    require(text.startsWith("《答。1. 建立帳號") && !text.endsWith("》"), "the first page of the answer is on screen, the rest to come");
+    require(!/https?:|www\.|\]\(|composio\.dev/.test(text), "the corner writes no address or link");
+    const box = line.getBoundingClientRect(), height = parseFloat(getComputedStyle(line).lineHeight);
+    require(box.height <= 2 * height + 1, `a page is two lines at most (${Math.round(box.height / height)})`);
+    // The real window is the emblem's canvas and 40 px over it (overlay.rs `place`); the page must stay inside it.
+    const canvas = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--c"));
+    require(innerHeight - box.top <= canvas + 40, "the page stays inside the overlay window");
+    return { check: name, text };
+  }
   if (name === "overlay-step") {
     require(document.getElementById('progress')?.textContent === "《告。正在查看今天下午的行程。》", "the latest shared turn narration is the subtitle");
     return { check: name, text: document.getElementById('progress').textContent };

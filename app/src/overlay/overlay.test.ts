@@ -550,6 +550,36 @@ test("three notices are shown one after the other, in order", () => {
   expect(emblem.log.filter((l) => l === "vanish")).toHaveLength(1);
 });
 
+// The answer the owner saw run out of the top of the window on 2026-10-27, with an address in it.
+const LONG = "1. 建立帳號並登入控制台。 2. 若設定只要求金鑰，前往「Settings → Project Settings → API Keys」取得。" +
+  "[官方說明](https://docs.composio.dev/reference/authenticating-to-composio) 3. 將金鑰填入設定頁，再回到 Gmail 連結卡完成 Google 授權。" +
+  "金鑰請只填入專用欄位，不要貼到聊天中。";
+
+test("a long voiced answer is told page by page without its address, and its last page waits for the voice", () => {
+  send({ type: "say", prefix: "答", text: LONG, hold: true });
+  vi.advanceTimersByTime(60_000);
+  const pages = lines().map((line) => line.slice("line:".length));
+  expect(pages.length).toBeGreaterThan(2);
+  expect(pages[0]!.startsWith("《答。1. ")).toBe(true);
+  expect(pages.at(-1)!.endsWith("》")).toBe(true);
+  expect(pages.join("")).not.toMatch(/https?:|\]\(/);
+  expect(emblem.log).not.toContain("vanish"); // the last page stays while the voice speaks
+  send({ type: "release" });
+  expect(view.last).toBe("clear");
+  expect(emblem.last).toBe("vanish");
+});
+
+test("a voice that ends before the last page lets the pages that are left run on their own time", () => {
+  send({ type: "say", prefix: "答", text: LONG, hold: true });
+  vi.advanceTimersByTime(833);
+  expect(lines()).toHaveLength(1);
+  send({ type: "release" });
+  vi.advanceTimersByTime(120_000);
+  expect(lines().length).toBeGreaterThan(2);
+  expect(lines().at(-1)!.endsWith("》")).toBe(true);
+  expect(emblem.last).toBe("vanish");
+});
+
 test("hide during a notice cancels it and the notices that wait", () => {
   send({ type: "notice", text: ZH });
   send({ type: "notice", text: "《了。》" });
@@ -643,12 +673,16 @@ test("say writes 《prefix。text》 after the appear animation, for as long as 
   expect(emblem.last).toBe("vanish");
 });
 
-test("a long answer stays 12 s and no longer", () => {
-  const text = "字".repeat(80);
-  send({ type: "say", prefix: "答", text });
+test("a long answer is told in pages of about two lines, each on screen for its own time", () => {
+  const first = `《答。${"字".repeat(51)}`, second = `${"字".repeat(29)}》`;
+  send({ type: "say", prefix: "答", text: "字".repeat(80) });
   vi.advanceTimersByTime(833);
-  expect(lines()).toEqual([`line:《答。${text}》`]);
-  vi.advanceTimersByTime(11_999);
+  expect(lines()).toEqual([`line:${first}`]);
+  vi.advanceTimersByTime(noticeDurationMs(first));
+  expect(view.last).toBe("clear");
+  vi.advanceTimersByTime(1);
+  expect(lines()).toEqual([`line:${first}`, `line:${second}`]);
+  vi.advanceTimersByTime(noticeDurationMs(second) - 1);
   expect(emblem.log).not.toContain("vanish");
   vi.advanceTimersByTime(1);
   expect(emblem.last).toBe("vanish");

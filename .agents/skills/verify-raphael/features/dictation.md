@@ -9,8 +9,18 @@ Native acceptance must check stale-session rejection, foreground suppression,
 hotkey/transcript timing and actual first audio.
 
 ```powershell
-npm run look -- overlay-step --theme both --width 1120,720,1920x1080
+npm run look -- overlay-step overlay-long-answer --theme both --width 1120,720,1920x1080
 ```
+
+The corner never writes an address and never more than about two lines at a time (owner,
+2026-10-27: 「右下角的時候並不需要有 URL」, 「要記得要做一些切分」). `overlay/caption.ts` takes
+addresses and link syntax out and cuts a long line into pages at sentence ends and before
+each item of a numbered list; a voiced answer holds only its last page, and pages still
+waiting when the voice ends run on their own time. `overlay-long-answer` replays the answer
+the owner saw run out of the window and checks that the first page is up to two lines, has
+no address and stays inside the real window (the canvas and 40 px, `overlay.rs` `place`).
+The voice is apart: it reads the Japanese rendering, already without addresses
+(`speaker.speakable`).
 
 Offline latency plumbing: `uv run python -m raphael_core.tools.quick_latency --fake --count 9` from core/.
 Fake timings do not establish live speed. The owner runs without `--fake` for model
