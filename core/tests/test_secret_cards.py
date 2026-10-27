@@ -395,3 +395,16 @@ async def test_the_cards_of_a_deleted_turn_go_with_it(tmp_path, conn):
     assert [row[0] for row in conn.execute("SELECT turn_id FROM secret_cards")] == [kept]
     rig.history.clear()
     assert conn.execute("SELECT COUNT(*) FROM secret_cards").fetchone()[0] == 0
+
+
+def test_a_failed_call_shows_the_model_its_kind_not_null():
+    # A CLI brain is shown a call's content when there is any: a failure with no data must not read "null",
+    # or the brain never learns that a connection's tool failed with missing_secret and cannot ask for the key.
+    from raphael_core.agent.service import AgentService
+    from raphael_core.agent.tools import ToolResult
+
+    failed = AgentService._loop_result(ToolResult("weather__forecast", False, None, error="missing_secret"))
+    assert (failed.ok, failed.kind, failed.content) == (False, "missing_secret", "")
+    # A call that succeeded with no data, and one that failed with some, read as they always did.
+    assert AgentService._loop_result(ToolResult("weather__forecast", True, None)).content == "null"
+    assert json.loads(AgentService._loop_result(ToolResult("weather__forecast", False, {"why": "x"}, error="tool_error")).content) == {"why": "x"}
