@@ -223,16 +223,17 @@ def resolve_calls(offer: Offer, requested: list[tuple[str, Any]]) -> list[Planne
     return planned
 
 
-def preview(arguments: Mapping[str, Any]) -> str:
+def preview(arguments: Mapping[str, Any], limit: int = PREVIEW_CHARS) -> str:
     """The arguments of a call as a short line for the question that asks whether to run it: the
-    values, one line, cut. It goes on the overlay and nowhere else."""
+    values, one line, cut (to `limit` characters). It goes on the overlay and in the card of the
+    chat that was asked, and nowhere else."""
     parts = []
     for name, value in arguments.items():
         shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
         parts.append(f"{name}: {shown}")
     line = " ".join(" ".join(parts).split())
     line = "".join(char for char in line if char.isprintable())
-    return line if len(line) <= PREVIEW_CHARS else line[: PREVIEW_CHARS - 1] + "…"
+    return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
 # --- the call that picks the tools ---------------------------------------------------------------

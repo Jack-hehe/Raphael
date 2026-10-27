@@ -77,6 +77,7 @@ from ..agent.persona import fit_text, phrase
 from ..agent import safety as rules
 from ..agent.policy import (
     CONFIRM_TIMEOUT_S,
+    UNATTENDED_WAIT_S,
     Action,
     Approval,
     Confirmations,
@@ -116,8 +117,9 @@ APPS_TIMEOUT_S = 6.0
 LOOK_TIMEOUT_S = 10.0
 ACT_TIMEOUT_S = 10.0
 ALLOW_TIMEOUT_S = 5.0
-# A question waits as long as the overlay's, and a little more: the shell's NO comes first.
-QUESTION_WAIT_S = CONFIRM_TIMEOUT_S + 10.0
+# A question waits as long as the overlay's (or, for a card nobody sits at, as long as an unattended
+# question), and a little more: the shell's NO, or its own expiry, comes first.
+QUESTION_GRACE_S = 10.0
 
 USE_APP = tools.USE_APP
 ACT_FINAL = tools.ACT_FINAL
@@ -182,13 +184,18 @@ class RunLimits:
 class Question:
     """The run waits for the owner's yes or no. `text` is what the overlay asks; `stored` is what
     the history keeps of it (no name of the screen's in it); `always` makes it the question about
-    an app, with its third answer."""
+    an app, with its third answer; `digest` is that of the action asked about (`policy.action_digest`),
+    which an answer through a card names, and `unattended` says the owner is not at the question the
+    run came from (the run carries on after they gave the computer back): it waits `UNATTENDED_WAIT_S`
+    and is shown as a card in the chat."""
 
     id: str
     tier: Tier
     text: str
     stored: str
     always: bool = False
+    digest: str = ""
+    unattended: bool = False
 
 
 @dataclass(frozen=True)
@@ -438,6 +445,10 @@ class ComputerRun:
         # computer is in.
         self._handback = handback
         self._lease = HumanLease()
+        # Whether the turn that began the run is over (the owner took the computer, and the run carries on
+        # after they gave it back): its questions are then cards in the chat, which wait for the owner
+        # as long as an unattended question does.
+        self.unattended = False
         self._steps: list[Step] = []
         self._confirmations = Confirmations(clock)
         self._waiting: tuple[str, asyncio.Future[_Answer]] | None = None
@@ -492,13 +503,16 @@ class ComputerRun:
     def done(self) -> bool:
         return self.task is not None and self.task.done()
 
-    def answer(self, confirm_id: str, approved: bool, always: bool = False) -> bool:
+    def answer(self, confirm_id: str, approved: bool, always: bool = False, digest: str | None = None) -> bool:
         """The owner's answer to the run's question `confirm_id`. False if the run does not wait on
-        that question (it is another's, or over)."""
+        that question (it is another's, or over), or the answer is for the digest of another action
+        (a card that is no longer the question: nothing is answered and the question still waits)."""
         waiting = self._waiting
         if waiting is None or waiting[0] != confirm_id:
             return False
-        resolution = self._confirmations.resolve(confirm_id, approved)
+        resolution = self._confirmations.resolve(confirm_id, approved, digest)
+        if resolution.outcome is Outcome.CHANGED:
+            return False
         if resolution.outcome is Outcome.APPROVED:
             answer = _Answer(True, resolution.approval, always)
         elif resolution.outcome is Outcome.DENIED:
@@ -748,14 +762,17 @@ class ComputerRun:
 
     async def _ask(self, action: Action, text: str, stored: str, *, always: bool = False) -> tuple[_Answer, Action]:
         """Ask the owner, and wait. The time it waits is not the run's."""
-        pending = self._confirmations.open(self.session_id, 0, action, Tier.T2, self.language)
+        unattended = self.unattended
+        wait = UNATTENDED_WAIT_S if unattended else CONFIRM_TIMEOUT_S
+        pending = self._confirmations.open(self.session_id, 0, action, Tier.T2, self.language, wait_s=wait)
         future: asyncio.Future[_Answer] = asyncio.get_running_loop().create_future()
         self._waiting = (pending.id, future)
         self._state("pause")
         asked_at = self._clock()
-        self._events.put_nowait(Question(pending.id, Tier.T2, text, stored, always))
+        self._events.put_nowait(Question(pending.id, Tier.T2, text, stored, always, pending.digest, unattended))
         try:
-            answer = await self._until(asyncio.shield(future), QUESTION_WAIT_S)
+            # A little more than the question lives: its own expiry comes first, and says so.
+            answer = await self._until(asyncio.shield(future), wait + QUESTION_GRACE_S)
         except TimeoutError:
             answer = _Answer(False, expired=True)
         finally:
@@ -838,6 +855,9 @@ class ComputerRun:
         identity = uuid.uuid4().hex
         note = ""
         blocks: list[str] = []
+        # The turn that began the run is over once the owner has the computer: what the run asks from
+        # now on is asked of a card in the chat, of someone who is not at the question.
+        self.unattended = True
         for attempt in range(2):
             lease.hand_to_owner()
             self._state("end", words.wrapped(language, phrase(language, "computer_handoff")))
@@ -1097,7 +1117,7 @@ class ComputerRun:
             self._step(action, window.app, "blocked", time.perf_counter(), "forbidden")
             told = FORBIDDEN_BY_RULE.format(rule=screening.rule or "")
             return wrap_untrusted(name, told, ok=False)
-        if rules.needs_yes(verdict == safety.CONFIRM, screening):
+        if rules.needs_yes(verdict == safety.CONFIRM, screening, firm=True):  # a step that sends, deletes or buys never waives
             builtin = verdict == safety.CONFIRM
             asked = Action(ACT_FINAL if builtin else name, dict(request))
             question = self._confirm_text(action, element, chord)

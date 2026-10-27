@@ -197,15 +197,22 @@ def needs_yes(builtin_ask: bool, screening: Screening, *, firm: bool = False) ->
     return builtin_ask
 
 
+def rule_lead(language: str, screening: Screening) -> str:
+    """The sentence that says why a rule had a question asked: the rule's words (`rule_matched`), or
+    that the rules could not be checked (`rule_unchecked`); "" for a question no rule asked."""
+    if screening.unchecked:
+        return phrase(language, "rule_unchecked")
+    if screening.verdict == ASK and screening.rule:
+        return phrase(language, "rule_matched", rule=screening.rule)
+    return ""
+
+
 def asked_with(language: str, screening: Screening, question: str) -> str:
     """`question` as Raphael asks it when a safety rule had it asked: after the sentence that names
     the rule (`rule_matched`), or says the rules could not be checked (`rule_unchecked`); as it is
     for a question that is asked anyway. English puts a space between the two sentences."""
-    if screening.unchecked:
-        lead = phrase(language, "rule_unchecked")
-    elif screening.verdict == ASK and screening.rule:
-        lead = phrase(language, "rule_matched", rule=screening.rule)
-    else:
+    lead = rule_lead(language, screening)
+    if not lead:
         return question
     return f"{lead} {question}" if language == "en" else f"{lead}{question}"
 

@@ -50,7 +50,7 @@ from .commands import COMMANDS
 from .harness_tools import TIERS as HARNESS_TIERS
 from .plugins import PluginHub, PluginResult
 from .ledger import Ledger
-from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool
+from .policy import Action, Approval, NotApproved, Tier, ToolRegistry, UnknownTool, action_digest
 from .team import TEAM_TIER, TEAM_TOOLS
 from .safety import ALLOW, PASS, Proposed, SafetyGuard, Screening, narrow_scope
 
@@ -148,6 +148,14 @@ class ToolGate:
         if worker and (action.tool in COMMANDS or action.tool in COMPUTER_TIERS):
             raise NotApproved(action.tool)
         self._door(action, approval)
+
+    def check_for(self, action: Action, tool: str, arguments: Mapping[str, Any], approval: Approval | None) -> None:
+        """`check`, for the call about to be made: `action` must be that very call, the tool and the
+        inputs it is given now. A yes is for what was asked about, so a call whose inputs are not the
+        action's (they were changed after the question) is not covered by it."""
+        if action.tool != tool or action.digest != action_digest(tool, arguments):
+            raise NotApproved(f"{tool} is not the action that was said yes to")
+        self.check(action, approval)
 
     def _door(self, action: Action, approval: Approval | None) -> str:
         """The registry's check, and who said yes to the action: "user" for a yes of this very
@@ -252,6 +260,8 @@ class ToolGate:
             return PluginResult(False, "blocked")
         action = action or Action(key, arguments)
         try:
+            if action.tool != key or action.digest != action_digest(key, arguments):
+                raise NotApproved(key)  # the call is not the action that was said yes to
             approver = self._door(action, approval)
         except (UnknownTool, NotApproved):
             approver = "none"

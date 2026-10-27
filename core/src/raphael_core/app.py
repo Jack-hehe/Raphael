@@ -74,6 +74,7 @@ from .background.tasks import FINAL_STATES
 from .members.service import MembersService
 from .members.rooms import RoomsService
 from .computer.bridge import ShellBridge
+from .agent.permissions import PermissionCards
 from .computer.handback import HandbackCards
 from .computer.run import ComputerRuns
 from .brain import textnorm
@@ -843,7 +844,11 @@ class App(Router):
         self.computer = ComputerRuns(self.computer_bridge)
         # The card of the owner's turn at the computer (a sign-in, a password, a payment), which follows the
         # run that waits for it and resumes that task once.
-        self.handbacks = HandbackCards(self._conn, self.computer, notify=self._agent_notice)
+        # The owner's yes in a typed private chat: the card of each question the gate has asked, and the door
+        # of the questions of a run that carries on after the owner gave the computer back.
+        self.permissions = PermissionCards(self._conn, self.computer, notify=self._agent_notice)
+        self.permissions.register(self)
+        self.handbacks = HandbackCards(self._conn, self.computer, notify=self._agent_notice, permissions=self.permissions)
         self.handbacks.register(self)
         # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
         memory_root = paths.memory_dir(data_dir) if memory_dir is None else memory_dir
@@ -889,6 +894,7 @@ class App(Router):
             cards=self.cards,
             secret_cards=self.secret_cards,
             handbacks=self.handbacks,
+            permissions=self.permissions,
         )
         self.agent.register(self)
         self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))

@@ -142,7 +142,7 @@ async def test_a_yes_makes_the_call_and_the_task_goes_on_from_where_it_was(make_
     note_then_report(rig, "Noted it.")
     task_id = rig.submit()
     asked = await paused(rig, task_id)
-    clock.now += 3600  # an hour waiting is not the task's time
+    clock.now += QUESTION_WAIT_S - 60  # nine minutes waiting is not the task's time
     answer = {"task_id": task_id, "question_id": asked["question_id"], "approved": True}
     assert await rig.rpc.call("background.answer", answer) == {"status": "approved"}
     [done] = await rig.wait_for_reports()
@@ -178,7 +178,7 @@ async def test_a_no_leaves_the_call_unmade_and_the_task_reports(make_rig, plugin
     assert steps == [("note", "blocked", "denied")]
 
 
-async def test_a_question_nobody_answers_in_a_day_ends_the_task_politely(make_rig, plugins, calls, clock):
+async def test_a_question_nobody_answers_in_ten_minutes_ends_the_task_politely(make_rig, plugins, calls, clock):
     rig = make_rig(clock=clock)
     await plugins.connect(note="T2")
     note_then_report(rig)
@@ -192,7 +192,7 @@ async def test_a_question_nobody_answers_in_a_day_ends_the_task_politely(make_ri
     [ended] = rig.reports()
     assert (ended["state"], ended["text"]) == (
         "cancelled",
-        "No answer came within a day. The task ended without that action.",
+        "No answer came within ten minutes. The task ended without that action.",
     )
     task = rig.task(task_id)
     assert (task.state, task.reason) == ("cancelled", "expired") and calls == []

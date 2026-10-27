@@ -59,7 +59,7 @@ from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult
 from ..agent.steps import reason_of
 from ..agent.policy import Action, Approval, NotApproved, Tier, UnknownTool
-from ..agent.safety import ASK, DENY, PASS, Proposed, Screening, needs_yes, summarize
+from ..agent.safety import ASK, DENY, PASS, Proposed, Screening, narrow_scope, needs_yes, summarize
 from ..agent.team import ASK_MEMBER, CREATE_MEMBER, TEAM_TOOLS
 from ..agent.team import description as team_description
 from ..agent.tools import ToolResult, Tools
@@ -535,7 +535,7 @@ class TaskRun:
             if pool is not None:
                 tool = next((t for t in pool.by_alias.values() if t.key == ref.key), None)
                 description = "" if tool is None else tool.description
-            proposed = Proposed(f"{ref.server} / {ref.name}", description, summarize(arguments))
+            proposed = Proposed(f"{ref.server} / {ref.name}", description, summarize(arguments), narrow_scope(ref.key))
         return await self._guarded(
             self._gate.screen(proposed, language=self.language, ledger=self.ledger)
         )
@@ -555,7 +555,7 @@ class TaskRun:
                 }
                 self._gate.record_unrun(ref.key, outcome="blocked", task_id=self.task_id)
                 return reply, "blocked", now.name, None
-            if needs_yes(now >= Tier.T2, screening):
+            if needs_yes(now >= Tier.T2, screening, firm=now >= Tier.T3):
                 if self.can_wait:
                     # The task pauses here; the service asks the owner (see the module).
                     self.waiting = Waiting(alias or ref.name, ref, dict(arguments), call_id, now, screening)

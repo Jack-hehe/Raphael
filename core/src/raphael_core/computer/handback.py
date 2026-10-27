@@ -24,6 +24,14 @@ When the run ends after the owner gave the computer back, the task that asked re
 thread, told what the run reported (`ComputerReport`); when it ends any other way nothing resumes. A card
 holds the name of the app of the window (never a title), why it was the owner's, and digests of what the
 task did before: nothing that was on the screen or typed.
+
+A run that carries on after the owner gave the computer back may still need a yes (a step that sends,
+deletes or buys, the first use of another app, a rule that asks). Nobody is at that question, because the
+turn that began the run is over: it is shown in the chat of that turn as a permission card
+(`agent.permissions`), which the owner answers there with 允許一次, 一律允許 or 拒絕 and which waits as long
+as an unattended question does (about ten minutes). The run goes on with the approval that answer minted,
+for the digest of that very step, or stops when the answer is no or does not come. Without the cards
+(a core built without them) the step is not taken, as before.
 """
 
 import asyncio
@@ -33,11 +41,15 @@ import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..agent.steps import Step
 from ..clock import wall_clock_ms
 from ..protocol import invalid_params
 from .run import ComputerRun, ComputerRuns, Final, Handback, Question, RunLimits
+
+if TYPE_CHECKING:
+    from ..agent.permissions import PermissionCards
 
 logger = logging.getLogger(__name__)
 
@@ -171,9 +183,11 @@ class HandbackCards:
 
     def __init__(self, conn: sqlite3.Connection, computer: ComputerRuns, *,
                  notify: Callable[[str, dict], None] | None = None, now_ms: Callable[[], int] = wall_clock_ms,
-                 wait_ms: int = HANDBACK_WAIT_MS) -> None:
+                 wait_ms: int = HANDBACK_WAIT_MS, permissions: "PermissionCards | None" = None) -> None:
         self.store = HandbackStore(conn, now_ms, wait_ms)
         self._conn, self._computer, self._notify = conn, computer, notify
+        # The cards for the questions of a run that carries on once the owner gave the computer back.
+        self._permissions = permissions
         self.resume: Callable[[int, ComputerReport], Awaitable[object]] | None = None
         self._tasks: set[asyncio.Task] = set()
 
@@ -256,9 +270,11 @@ class HandbackCards:
                         hand_over = event.id
                     self._changed(card)
                 elif isinstance(event, Question):
-                    # Nobody can be asked while a task carries on (an approval in the chat comes later): the
-                    # step is not taken, and the run ends saying so.
-                    run.answer(event.id, False)
+                    # Nobody sits at this question (the turn that began the run is over), so the chat asks:
+                    # a permission card in the turn that handed the computer over, which the owner answers
+                    # there. Without cards nobody can be asked, and the step is not taken.
+                    if not self._ask_in_chat(run, card, event):
+                        run.answer(event.id, False)
                 else:
                     await self._ended(run, card, event)
                     return
@@ -267,11 +283,28 @@ class HandbackCards:
         except Exception as exc:  # a card must not cost the run its end
             logger.warning("A computer card could not follow its run: %s", type(exc).__name__)
 
+    def _ask_in_chat(self, run: ComputerRun, card: HandbackCard, question: Question) -> bool:
+        """Show the question of the run as a permission card in the chat of the turn that handed the
+        computer over. False when there are no cards to show it with."""
+        if self._permissions is None:
+            return False
+        from ..agent.permissions import RUN_WAIT_MS
+
+        kind = "app" if question.always else "step"
+        self._permissions.show(
+            card_id=question.id, turn_id=card.turn_id, member_id=card.member_id, conversation_id=card.conversation_id,
+            source="run", kind=kind, service=card.app, tool="", summary=question.text, reason="", digest=question.digest,
+            always=question.always, language=card.language, wait_ms=RUN_WAIT_MS)
+        return True
+
     async def _ended(self, run: ComputerRun, card: HandbackCard, final: Final) -> None:
         """The run ended. After the owner's turn the task resumes once with its report; any other end
         (Stop, a newer task, the time, closing) resumes nothing."""
         steps = tuple(run.take_steps())
         card = self.store.get(card.id) or card
+        if self._permissions is not None:
+            # A question the run was waiting on when it ended is not waited on any more.
+            self._permissions.settle(card.turn_id, "expired" if final.kind == "expired" else "cancelled")
         if final.kind == "stopped":
             moved = self.store.move(card.id, "stopped")
         elif final.kind == "expired":

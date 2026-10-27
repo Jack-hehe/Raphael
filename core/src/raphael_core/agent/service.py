@@ -210,6 +210,7 @@ from .plugins import (
 from .toolpick import ToolPicker
 from .policy import (
     CONFIRM_TIMEOUT_MS,
+    PLUGIN_PREFIX,
     Action,
     Approval,
     Confirmations,
@@ -221,7 +222,8 @@ from .policy import (
 )
 from .routing import OpenAnswer, RouteDecision, Router
 from .speaker import RAPHAEL, RAPHAEL_NAMES, Speaker
-from .safety import ASK, DENY, PASS, Proposed, Screening, asked_with, forbidden, needs_yes, summarize
+from .permissions import qualifies as permission_cards_for
+from .safety import ASK, DENY, PASS, Proposed, Screening, asked_with, forbidden, narrow_scope, needs_yes, rule_lead, summarize
 from .steps import Step, reason_of
 from .targets import OpenTargets
 from .team import (
@@ -248,6 +250,8 @@ if TYPE_CHECKING:
     from ..connectors.cards import ConnectorCards
     from ..computer.handback import ComputerReport, HandbackCards
     from ..connectors.secret_cards import SecretCards
+    from .drafts import EmailDrafts
+    from .permissions import PermissionCards
     from ..services.hub import ServiceHub
     from ..services.speaker import Speaking
     from ..memory.reflection import Applied
@@ -287,6 +291,8 @@ PLUGIN_IDLE_S = 120.0
 _DAY_MS = 86_400_000
 # The most addresses of the owner's request that are read before the answer.
 MAX_REQUEST_URLS = 2
+# How much of what a call is given a permission card says, in characters (the overlay's question keeps its short line).
+CARD_PREVIEW_CHARS = 240
 # What a request of only files asks, in the language of the request.
 _LOOK_AT_THIS = {"zh-TW": "看這個", "en": "Look at this", "ja": "これを見て"}
 # The routes that word a reply, which read the pages and the files of the request first.
@@ -459,6 +465,9 @@ class _Ask:
     # The digest of the computer request under way: kept with the card, so that a resume never makes it again.
     computer_digest: str = ""
     resumption: "Resumption | None" = None
+    # What the owner said no to in this request: (tool key, the rule that had it asked). Nothing else that
+    # needs their yes is asked after it, and the tool is not tried again, whichever other tool is tried.
+    declined: list[tuple[str, str | None]] = field(default_factory=list)
 
     @property
     def nested(self) -> bool:
@@ -518,6 +527,12 @@ _WHY = {
     "sign_in": "a sign-in", "password": "a password", "payment": "a payment",
     "captcha": "a check only a person can pass", "other": "a step that was theirs",
 }
+# What the model is told when it tries to do after the owner's no what that no was about, by another way.
+DECLINED_NOTE = (
+    "The owner said no to an action in this request. It was not done, and nothing else that needs their yes is "
+    "done now: do not try another way or another tool to get the same thing done. Say in one short sentence that "
+    "it was not done."
+)
 # What a turn that showed a card is told when it calls anything else, by the kind of card it waits for.
 _WAITING_NOTES = {
     "apps": ("A card to connect an app is waiting for the owner, and this request resumes after it. "
@@ -554,6 +569,21 @@ class _Followup:
     loop: NarratedLoop | CliLoop | None = None
     memory_reply: tuple[str, Reply, Ledger] | None = None
     admin_batch: bool = False
+    # Whether the card offered 一律允許 (a narrow rule can take effect for this call), and the rule that asked.
+    always_ok: bool = False
+    rule: str | None = None
+
+
+@dataclass(frozen=True)
+class _CardSpec:
+    """What a permission card says of the question it follows (`agent.permissions`)."""
+
+    kind: str
+    service: str
+    tool: str
+    summary: str
+    reason: str = ""
+    always: bool = False
 
 
 class AgentService:
@@ -617,6 +647,8 @@ class AgentService:
         cards: "ConnectorCards | None" = None,
         secret_cards: "SecretCards | None" = None,
         handbacks: "HandbackCards | None" = None,
+        permissions: "PermissionCards | None" = None,
+        drafts: "EmailDrafts | None" = None,
     ) -> None:
         self._tool_observer = tool_observer
         self._model_observer = model_observer
@@ -634,6 +666,10 @@ class AgentService:
         self._handbacks = handbacks
         if handbacks is not None:
             handbacks.resume = lambda turn_id, report: self.resume_turn(turn_id, report=report)
+        # The permission cards of a typed private chat (`agent.permissions`), and the email drafts a member
+        # writes there for the owner to edit and send (`agent.drafts`).
+        self._permissions = permissions
+        self._drafts = drafts
         self._conn = conn
         self._keys = keys
         # Raphael's voice (`services.speaker`): says the answers of the owner's own requests to
@@ -1428,6 +1464,15 @@ class AgentService:
         if question.always:
             labels = answer_labels(language)
             confirm.update(yes=labels["once"], no=labels["deny"], always=labels["always"])
+        if (self._permissions is not None and run.turn_id
+                and permission_cards_for(source=ask.source, quick=ask.quick, nested=ask.nested, scope=ask.scope)):
+            # In a private chat typed at this computer the question is also a card in the thread: the app's
+            # (the first use of an app: once, always, or not) or the step's that sends, deletes or buys.
+            self._permissions.show(
+                card_id=question.id, turn_id=run.turn_id, member_id=ask.speaker.id, conversation_id=ask.conversation_id,
+                source="ask", kind="app" if question.always else "step", service="", tool="", summary=question.text,
+                reason="", digest=question.digest, always=question.always, language=language, wait_ms=CONFIRM_TIMEOUT_MS)
+            confirm["digest"] = question.digest
         return {"status": "confirm", "turn_id": run.turn_id, "confirm": confirm}
 
     def _write_final(self, run: ComputerRun, final: Final, steps: list[Step]) -> dict:
@@ -1716,7 +1761,8 @@ class AgentService:
                         if screening.verdict == DENY:
                             loop.response = self._finish(ask, "answer", "negative", forbidden(ask.language, screening), ledger)
                             raise Stop("finished")
-                    if any(needs_yes((self._tier_now(planned) or Tier.T0) >= Tier.T2, screening)
+                    if any(needs_yes((self._tier_now(planned) or Tier.T0) >= Tier.T2, screening,
+                                     firm=(self._tier_now(planned) or Tier.T0) >= Tier.T3)
                            for (_, planned), screening in zip(batch, judged)):
                         loop.response = self.ask_in_background(ask, ledger)
                         raise Stop("finished")
@@ -1724,6 +1770,8 @@ class AgentService:
                     self._gate.check(Action(name, args), None)
                     if ask.source not in _AT_THIS_COMPUTER or ask.nested:
                         return ToolOutcome(False, "presence_required")
+                    if ask.declined:  # the owner said no in this request: not another way to the same end
+                        return ToolOutcome(False, "declined", instruction=DECLINED_NOTE)
                     if self._computer is None or self._tool_support.supports(api_model(self._settings, settings.model)) is False:
                         return ToolOutcome(False, "unavailable")
                     request = args.get("request")
@@ -1898,6 +1946,8 @@ class AgentService:
             return ToolOutcome(False, "bad_arguments")
         if ask.source not in _AT_THIS_COMPUTER or ask.nested:
             return ToolOutcome(False, "presence_required")
+        if ask.declined:  # the owner said no in this request: the CLI's own actions wait for a new one
+            return ToolOutcome(False, "declined", instruction=DECLINED_NOTE)
         screening = await self._gate.screen(Proposed("cli_permission", "CLI native action", summarize(args)), language=ask.language, ledger=ledger)
         if screening.verdict == DENY:
             self._gate.record_unrun("cli_permission", outcome="denied")
@@ -2119,6 +2169,19 @@ class AgentService:
         """Make the picked calls that need no yes, together, and add their results to `results`.
         If a call needs a yes the answer waits for it: that is the question to return instead, for
         the first such call; any others are not made (one question to a turn)."""
+        if ask.declined:
+            # The owner said no to something in this request: the tool they refused is not tried again,
+            # whatever the arguments, and (below) nothing else that needs their yes is asked.
+            refused = [index for index, call in enumerate(calls) if call.tool.key in {key for key, _ in ask.declined}]
+            for index in refused:
+                results.append(self._declined(ask, calls[index]))
+            if refused:
+                kept = [index for index in range(len(calls)) if index not in refused]
+                calls = [calls[index] for index in kept]
+                if screenings is not None:
+                    screenings = [screenings[index] for index in kept]
+                if not calls:
+                    return results
         # The owner's safety rules judge every call that changes something, together, before any is
         # made: one that a rule forbids ends the turn with Raphael saying so, and no call is made.
         if screenings is None:
@@ -2142,10 +2205,16 @@ class AgentService:
                 ask.admin_pending.append(call)
                 ask.admin_screenings.append(screening)
                 continue
-            if tier is not None and needs_yes(tier >= Tier.T2, screening):
+            if tier is not None and needs_yes(tier >= Tier.T2, screening, firm=tier >= Tier.T3):
                 asking.append((call, screening))
             else:
                 automatic.append(call)
+        if asking and ask.declined:
+            # Another way to the same end: the owner already said no in this request, so nothing else that
+            # needs their yes is asked, and the card is not shown again until they ask for it anew.
+            for call, _ in asking:
+                results.append(self._declined(ask, call))
+            asking = []
         if asking and ask.nested:
             # Nobody waits at the overlay for a request one assistant handed another. None of its
             # calls is made here (making the others first would have the task make them again):
@@ -2164,6 +2233,12 @@ class AgentService:
             )
         return self._ask_plugin(ask, first, results, ledger, why)
 
+    def _declined(self, ask: _Ask, call: PlannedCall) -> ToolResult:
+        """The result for a call after the owner said no in this request: it is not made, and the model is
+        told not to look for another way."""
+        ask.steps.append(self._step("tool", call.tool.name, call.tool.server, "blocked", time.perf_counter(), "declined"))
+        return ToolResult(_label(call), False, None, "declined", instruction=DECLINED_NOTE)
+
     async def _screen_call(self, ask: _Ask, call: PlannedCall, ledger: Ledger) -> Screening:
         """What the owner's safety rules say of a call of a plugin's tool or a team tool: PASS for a
         tool its server says only reads. Member contact preferences can require the owner's yes."""
@@ -2172,7 +2247,7 @@ class AgentService:
             # A card only shows a card: the owner's own sign-in, or the key they type, is the consent.
             if tool.key in ("routine_list", "team_overview", "show", "computer", CONNECT_APP, REQUEST_SECRET):
                 return PASS
-            return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments)), language=ask.language, ledger=ledger)
+            return await self._gate.screen(Proposed(tool.key, tool.description, summarize(call.arguments), narrow_scope(tool.key)), language=ask.language, ledger=ledger)
         if tool.key in TEAM_TOOLS:
             # Asking another assistant changes nothing (what the one asked does is judged as it
             # does it); adding a member does, and is judged by its own name.
@@ -2180,11 +2255,11 @@ class AgentService:
                 return Screening(ASK)
             if tool.key != CREATE_MEMBER:
                 return PASS
-            proposed = Proposed(CREATE_MEMBER, tool.description, summarize(call.arguments))
+            proposed = Proposed(CREATE_MEMBER, tool.description, summarize(call.arguments), narrow_scope(CREATE_MEMBER))
         elif self._gate.reads_only(tool.server, tool.name):
             return PASS
         else:
-            proposed = Proposed(f"{tool.server} / {tool.name}", tool.description, summarize(call.arguments))
+            proposed = Proposed(f"{tool.server} / {tool.name}", tool.description, summarize(call.arguments), narrow_scope(tool.key))
         return await self._gate.screen(proposed, language=ask.language, ledger=ledger)
 
     async def _make_call(
@@ -2265,7 +2340,7 @@ class AgentService:
         name, args = call.tool.key, call.arguments
         began = time.perf_counter()
         try:
-            self._gate.check(action or Action(name, args), approval)
+            self._gate.check_for(action or Action(name, args), name, args, approval)
             if name in ADMIN_TOOLS:
                 if not ask.speaker.is_raphael or self._team is None:
                     raise HarnessToolError("unavailable")
@@ -2434,24 +2509,38 @@ class AgentService:
         waits in `_followups`."""
         language = ask.language
         shown = preview(call.arguments)
-        text = asked_with(
+        question = phrase(
             language,
-            screening,
-            phrase(
-                language,
-                "confirm_plugin",
-                server=call.tool.server,
-                tool=call.tool.name,
-                what=parenthesized(language, shown),
-            ),
+            "confirm_plugin",
+            server=call.tool.server,
+            tool=call.tool.name,
+            what=parenthesized(language, shown),
         )
+        text = asked_with(language, screening, question)
         if call.tool.key in CONFIRM_TOOLS and self._team is not None:
             text = asked_with(language, screening,
                               self._team.admin_confirmation(call.tool.key, call.arguments, language))
+        card = None
+        if call.tool.key.startswith(PLUGIN_PREFIX):
+            # What the card of a connection's tool says: the exact action in plain words, the rule that had
+            # it asked, and whether 一律允許 can take effect (not where a rule asks: Ask first wins).
+            exact = phrase(language, "confirm_plugin", server=call.tool.server, tool=call.tool.name,
+                           what=parenthesized(language, preview(call.arguments, CARD_PREVIEW_CHARS)))
+            card = _CardSpec("tool", call.tool.server, call.tool.name, exact, rule_lead(language, screening),
+                             self._always_offered(call, screening))
         action = Action(call.tool.key, dict(call.arguments))
-        reply = self._open_question(ask, action, "answer", text, ledger)
-        self._followups[reply["confirm"]["id"]] = _Followup(ask, call, results)
+        reply = self._open_question(ask, action, "answer", text, ledger, card=card)
+        self._followups[reply["confirm"]["id"]] = _Followup(
+            ask, call, results, always_ok=card is not None and card.always, rule=screening.rule)
         return reply
+
+    def _always_offered(self, call: PlannedCall, screening: Screening) -> bool:
+        """Whether 一律允許 can be offered on the card of `call`: a narrow rule for this tool takes effect
+        only where nothing the owner wrote asks first or could not be read (a rule that asks, a judge that
+        failed) and the tool can be undone."""
+        tier = self._tier_now(call)
+        return (tier is not None and tier < Tier.T3 and call.tool.key.startswith(PLUGIN_PREFIX)
+                and not screening.unchecked and (screening.verdict != ASK or screening.switch))
 
     def ask_in_background(self, ask: _Ask, ledger: Ledger) -> dict:
         """A request one assistant handed another (`answer_for`) with a call that needs the owner's
@@ -2586,7 +2675,7 @@ class AgentService:
         if name in (CREATE_MEMBER, "room_meeting") and (not speaker.is_raphael or speaker.depth):
             return ToolResult(name, False, None, "blocked")
         try:
-            self._gate.check(action or Action(name, dict(arguments)), approval)
+            self._gate.check_for(action or Action(name, dict(arguments)), name, arguments, approval)
         except (UnknownTool, NotApproved):
             return handoff_refused("blocked") if name == "handoff" else ToolResult(name, False, None, "blocked")
         if name == "handoff":
@@ -3071,28 +3160,39 @@ class AgentService:
         return self._open_question(ask, action, "command", text, ledger)
 
     def _open_question(
-        self, ask: _Ask, action: Action, route: str, text: str, ledger: Ledger
+        self, ask: _Ask, action: Action, route: str, text: str, ledger: Ledger, *, card: _CardSpec | None = None
     ) -> dict:
         """Record the turn as waiting for a yes or a no and open the question for `action`, at the
-        tier it has; the reply is the question as the overlay is given it."""
+        tier it has; the reply is the question as the overlay is given it. In a private chat typed at
+        this computer a `card` says it in the thread (`agent.permissions`): the exact action in plain
+        words, the rule that had it asked and the digest, with 允許一次, 拒絕 and, where it can take
+        effect, 一律允許; the answer is still `agent.confirm`."""
         language = ask.language
         tier = max(Tier.T2, self._gate.tier(action.tool))
         prefix = PREFIXES[language].question
         turn_id = self._record(ask, route, prefix, text, "confirm", None, ledger)
         pending = self._confirmations.open(ask.session_id, turn_id, action, tier, language)
-        return {
-            "status": "confirm",
-            "turn_id": turn_id,
-            "confirm": {
-                "id": pending.id,
-                "tier": tier.name,
-                "prefix": prefix,
-                "text": text,
-                "yes": phrase(language, "yes"),
-                "no": phrase(language, "no"),
-                "timeout_ms": CONFIRM_TIMEOUT_MS,
-            },
+        confirm = {
+            "id": pending.id,
+            "tier": tier.name,
+            "prefix": prefix,
+            "text": text,
+            "yes": phrase(language, "yes"),
+            "no": phrase(language, "no"),
+            "timeout_ms": CONFIRM_TIMEOUT_MS,
         }
+        if (card is not None and self._permissions is not None and turn_id
+                and permission_cards_for(source=ask.source, quick=ask.quick, nested=ask.nested, scope=ask.scope)):
+            self._permissions.show(
+                card_id=pending.id, turn_id=turn_id, member_id=ask.speaker.id, conversation_id=ask.conversation_id,
+                source="ask", kind=card.kind, service=card.service, tool=card.tool, summary=card.summary,
+                reason=card.reason, digest=pending.digest, always=card.always, language=language,
+                wait_ms=round(pending.wait_s * 1000))
+            confirm["digest"] = pending.digest
+            if card.always:
+                labels = answer_labels(language)
+                confirm.update(yes=labels["once"], no=labels["deny"], always=labels["always"])
+        return {"status": "confirm", "turn_id": turn_id, "confirm": confirm}
 
     async def _confirm(self, params: dict) -> dict:
         """`agent.confirm`: the answer to a question, said aloud when it is an answer and the
@@ -3128,16 +3228,25 @@ class AgentService:
         groups = params.get("groups")
         if groups is not None and (not isinstance(groups, list) or not all(isinstance(item, dict) for item in groups)):
             raise invalid_params("groups must be a list of objects")
+        digest = params.get("digest")
+        if digest is not None and not isinstance(digest, str):
+            raise invalid_params("digest must be text")
         run = None if self._computer is None else self._computer.for_question(confirm_id)
         if run is not None:
-            # A question of a run on the desktop: the run goes on, and says what comes next.
-            run.answer(confirm_id, approved, always)
+            # A question of a run on the desktop: the run goes on, and says what comes next. An answer for
+            # the digest of another action (a card that is not this question) answers nothing.
+            if not run.answer(confirm_id, approved, always, digest):
+                return self._done(0, self._last_language, "negative", phrase(self._last_language, "expired"), silent=True)
+            self._card_state(confirm_id, "denied" if not approved else "always" if always else "allowed")
             if getattr(run, "narration", None) is not None:
                 return await self._resume_computer(run)
             return await self._next_from_run(run)
         self._expire(self._confirmations.sweep())
-        resolution = self._confirmations.resolve(confirm_id, approved)
+        resolution = self._confirmations.resolve(confirm_id, approved, digest)
         await asyncio.gather(*(loop.aclose() for loop in list(self._cli_loops) if loop.task and loop.task.cancelling()))
+        if resolution.outcome is Outcome.CHANGED:
+            # A card of another action than the one that waits: nothing was answered, the question still waits.
+            return self._done(0, self._last_language, "negative", phrase(self._last_language, "expired"), silent=True)
         pending = resolution.pending
         if resolution.outcome is Outcome.UNKNOWN or pending is None:
             return self._done(
@@ -3145,10 +3254,15 @@ class AgentService:
             )
         language = pending.language
         if resolution.outcome is Outcome.EXPIRED:
+            self._card_state(pending.id, "expired")
             self._drop_followup(pending, "expired")
             return self._outcome(pending, "negative", phrase(language, "expired"), "expired")
         if resolution.outcome is Outcome.DENIED:
             followup = self._followups.get(pending.id)
+            self._card_state(pending.id, "denied")
+            if followup is not None:
+                # The owner said no: nothing else that needs their yes is asked, or made, in this request.
+                followup.ask.declined.append((followup.call.tool.key, followup.rule))
             if followup is not None and isinstance(followup.loop, CliLoop):
                 self._followups.pop(pending.id)
                 followup.loop.permission_always = False
@@ -3157,11 +3271,18 @@ class AgentService:
             return self._outcome(pending, "understood", phrase(language, "denied"), "denied")
         followup = self._followups.pop(pending.id, None)
         if followup is not None:
-            if isinstance(followup.loop, CliLoop):
+            made = False
+            if always and followup.always_ok:
+                # 一律允許: the narrow rule for this tool, which a card offers where it can take effect.
+                tool = followup.call.tool
+                made = self._gate.always_allow(tool.key, tool.server, tool.name, language)
+            self._card_state(pending.id, "always" if made else "allowed")
+            if isinstance(followup.loop, CliLoop) and followup.call.tool.key == "cli_permission":
                 followup.loop.permission_always = bool(approved and always)
             if followup.loop is not None:
                 return await self._resume_narrated(pending, resolution.approval, followup)
             return await self._confirm_plugin(pending, resolution.approval, followup, drafts=drafts, groups=groups)
+        self._card_state(pending.id, "allowed")
         command = COMMANDS.get(pending.action.tool)
         if command is None:
             return self._outcome(pending, "negative", phrase(language, "failed"), "error")
@@ -3285,13 +3406,23 @@ class AgentService:
 
     def _deny(self, pendings: list[Pending]) -> None:
         for pending in pendings:
+            self._card_state(pending.id, "cancelled")
             self._drop_followup(pending, "denied")
             self._outcome(pending, "understood", phrase(pending.language, "denied"), "denied")
 
     def _expire(self, pendings: list[Pending]) -> None:
         for pending in pendings:
+            self._card_state(pending.id, "expired")
             self._drop_followup(pending, "expired")
             self._outcome(pending, "negative", phrase(pending.language, "expired"), "expired")
+
+    def _card_state(self, card_id: str, state: str) -> None:
+        """What became of the question a permission card follows, as the history keeps it (once)."""
+        if self._permissions is not None:
+            try:
+                self._permissions.answered(card_id, state)
+            except sqlite3.Error as exc:
+                logger.warning("Could not write a permission card: %s", type(exc).__name__)
 
     # --- agent.cancel ---------------------------------------------------------------------------
 
@@ -3545,6 +3676,7 @@ class AgentService:
         cards = self._cards.views([*ids, *resumed]) if self._cards is not None else {}
         keys = self._secret_cards.views([*ids, *resumed]) if self._secret_cards is not None else {}
         hands = self._handbacks.views([*ids, *resumed]) if self._handbacks is not None else {}
+        permitted = self._permissions.views(ids) if self._permissions is not None else {}
         views = []
         for turn in turns:
             task, task_steps = tasks.get(turn.id or 0, (None, []))
@@ -3590,6 +3722,7 @@ class AgentService:
                     **({"resumed_secrets": list(dict.fromkeys(card["name"] for card in saved_keys))} if saved_keys else {}),
                     **({"computers": asked_hands} if asked_hands else {}),
                     **({"resumed_computers": list(dict.fromkeys(card["app"] for card in given_back))} if given_back else {}),
+                    **({"permissions": permitted[turn.id or 0]} if permitted.get(turn.id or 0) else {}),
                     "messages": messages.get(turn.id or 0, []),
                 }
             )
