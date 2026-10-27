@@ -96,7 +96,13 @@ describe("the column, drawn", () => {
     expect([...strip.querySelectorAll<HTMLElement>(".mb-star")].map((star) => star.closest<HTMLElement>("[data-member]")!.dataset.member)).toEqual(["4"]);
     const primary = strip.querySelector<HTMLElement>('[data-member="4"]')!;
     expect(primary.querySelector(".mb-dot.is-unread")).not.toBeNull();
-    expect(primary.getAttribute("aria-label")).toBe("行程管家");
+    // alone on the strip, its star is said in its name and tooltip too; the others keep their names
+    expect(primary.getAttribute("aria-label")).toBe("行程管家 · 主要聯絡人");
+    expect(primary.dataset.tooltip).toBe("行程管家 · 主要聯絡人");
+    expect(strip.querySelector<HTMLElement>('[data-member="3"]')!.dataset.tooltip).toBe("日文老師");
+    const raphaelStrip = dom(columnHTML(view({ collapsed: true })));
+    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.dataset.tooltip).toBe("拉斐爾 · 主要聯絡人");
+    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.getAttribute("aria-label")).toBe("拉斐爾 · 主要聯絡人");
   });
 
   test("the groups under their headers in their order, then 未分組", () => {

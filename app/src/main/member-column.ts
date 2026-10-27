@@ -83,12 +83,14 @@ export function columnHTML(v: ColumnView): string {
   const searching = v.query.trim() !== "";
   // The star marks the primary contact, Raphael until the owner chooses another; the strip and the column show it alike.
   const primary = v.list ? primaryIdOf(v.list) : -1;
-  const chief = `<button type="button" class="nav mb-row mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0" aria-label="${esc(raphael.name)}"${v.collapsed ? ` data-tooltip="${esc(raphael.name)}"` : ""}>` +
+  // Where a face stands alone (the strip) or a row is named by its label, the star is said in words too.
+  const named = (name: string, marked: boolean): string => esc(marked ? `${name} · ${t("members.primary")}` : name);
+  const chief = `<button type="button" class="nav mb-row mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0" aria-label="${named(raphael.name, primary === 0)}"${v.collapsed ? ` data-tooltip="${named(raphael.name, primary === 0)}"` : ""}>` +
     faceHTML(raphael, 64) + (primary === 0 ? primaryStarHTML() : "") + `<b>${esc(raphael.name)}</b>` +
     (raphael.waiting || raphael.unread ? `<span class="mb-dot ${raphael.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(raphael.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`;
   if (v.collapsed) {
     const rows = [...pinned, ...sections.flatMap(section => section.members)];
-    return chief + rows.map(m => `<button type="button" class="nav mb-row mb-face" data-member="${m.id}" data-k="member:${m.id}" aria-current="${m.id === v.current}" aria-label="${esc(m.name)}" data-tooltip="${esc(m.name)}">` +
+    return chief + rows.map(m => `<button type="button" class="nav mb-row mb-face" data-member="${m.id}" data-k="member:${m.id}" aria-current="${m.id === v.current}" aria-label="${named(m.name, m.id === primary)}" data-tooltip="${named(m.name, m.id === primary)}">` +
       faceHTML(m, 40) + (m.id === primary ? primaryStarHTML() : "") + (m.waiting || m.unread ? `<span class="mb-dot ${m.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(m.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`).join("");
   }
   const showChief = !searching || memberMatches(raphael, v.query);
