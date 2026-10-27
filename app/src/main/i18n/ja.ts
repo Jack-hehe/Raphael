@@ -1204,6 +1204,8 @@ export const ja = {
   "team.newGroup": "グループを追加",
   "team.composer": "チームにメッセージ",
   "team.everyone": "全員",
+  "team.fit": "チーム全体を表示",
+  "team.resetLayout": "グループの配置をリセット",
   "team.zoomIn": "拡大",
   "team.zoomOut": "縮小",
   "rooms.title": "グループ会話",

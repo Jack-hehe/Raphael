@@ -177,6 +177,52 @@ export async function perform(page, step) {
       if (step.shift) await page.keyboard.down("Shift");
       try { await page.keyboard.press(step.key); } finally { if (step.shift) await page.keyboard.up("Shift"); }
       break;
+    case "wheel": {
+      const element = await visible(step.selector);
+      try {
+        const box = await element.boundingBox(), x = box.x + box.width / 2, y = box.y + box.height / 3;
+        let deltaY = step.deltaY ?? 0;
+        if (step.reveal) {
+          const target = await visible(step.reveal);
+          try { const rect = await target.boundingBox(); deltaY = Math.max(0, rect.y + rect.height + (step.marginBottom ?? 0) - box.y - box.height); }
+          finally { await target.dispose(); }
+        }
+        const point = await page.$eval('.team-board', (board, at) => {
+          const box = board.getBoundingClientRect(), scale = new DOMMatrix(getComputedStyle(board).transform).a;
+          return { x: (at.x - box.x) / scale, y: (at.y - box.y) / scale };
+        }, { x, y });
+        await page.mouse.move(x, y);
+        if (step.ctrl) await page.keyboard.down('Control');
+        try { await page.mouse.wheel({ deltaY, deltaX: step.deltaX ?? 0 }); }
+        finally { if (step.ctrl) await page.keyboard.up('Control'); }
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (step.ctrl) {
+          const after = await page.$eval('.team-board', (board, at) => {
+            const box = board.getBoundingClientRect(), scale = new DOMMatrix(getComputedStyle(board).transform).a;
+            return { x: (at.x - box.x) / scale, y: (at.y - box.y) / scale, scale };
+          }, { x, y });
+          if (Math.abs(after.x - point.x) > 1 || Math.abs(after.y - point.y) > 1 || after.scale <= 1) throw new Error('Ctrl+wheel must zoom at the pointer');
+        }
+      } finally { await element.dispose(); }
+      break;
+    }
+    case "pointer-drag": {
+      const element = await visible(step.selector);
+      try {
+        const box = await element.boundingBox();
+        const x = box.x + box.width * (step.x ?? 0.5), y = box.y + box.height * (step.y ?? 0.5);
+        const before = await element.evaluate(node => node.getBoundingClientRect().toJSON());
+        await page.mouse.move(x, y); await page.mouse.down({ button: step.button ?? "left" });
+        try { await page.mouse.move(x + step.dx, y + step.dy, { steps: 12 }); }
+        finally { await page.mouse.up({ button: step.button ?? "left" }); }
+        if (step.expectMenuClosed && await page.$('#app-popover')) throw new Error('A pointer drag must not open a menu');
+        if (step.expectMoved) {
+          const after = await element.evaluate(node => node.getBoundingClientRect().toJSON());
+          if (Math.abs(after.x - before.x - step.dx) > 1 || Math.abs(after.y - before.y - step.dy) > 1) throw new Error('The group did not follow the pointer');
+        }
+      } finally { await element.dispose(); }
+      break;
+    }
     case "right-click": {
       // A real press of the right button in the middle of the element; the page's own `contextmenu` follows it. Where it was is kept for the check.
       const element = await visible(step.selector);
@@ -226,12 +272,12 @@ export async function perform(page, step) {
       if (await compact()) { await click(".mb-pick"); await click('#app-popover [data-action="0"]'); await fill("#app-popover input", step.text); }
       else { await click('[data-col="search"]'); await fill(".mb-find-input", step.text); }
       break;
-    case "drop": case "drag-start":
+    case "drop": case "drag-start": case "drag-over":
       { const element = await visible(step.selector);
       await element.evaluate((element, options) => {
         const transfer = new DataTransfer();
         transfer.setData("application/x-raphael-member", String(options.memberId ?? element.dataset.teamMember));
-        element.dispatchEvent(new DragEvent(options.action === "drop" ? "drop" : "dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
+        element.dispatchEvent(new DragEvent(options.action === "drop" ? "drop" : options.action === "drag-over" ? "dragover" : "dragstart", { bubbles: true, cancelable: true, dataTransfer: transfer }));
       }, step);
       await element.dispose(); }
       break;

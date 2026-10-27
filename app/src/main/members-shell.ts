@@ -19,22 +19,18 @@ import { conversationChange } from "./conversation-list";
 import { currentRoomId, openNewGroupChat, openRoomsMenu } from "./group-chats";
 import { getLocale, onLocaleChange, t } from "./i18n";
 import { teamMentions } from "./team-mentions";
+import { createMemberActions } from "./member-actions";
 import { createMemberColumn } from "./member-column";
 import { createDetails } from "./member-details";
 import {
   askGroupName,
   confirmDelete,
   editSources,
-  groupChoices,
-  groupFromValue,
-  groupValue,
   offerRoutine,
   openNewMember,
-  openEditMemberDialog,
   openDialog,
 } from "./member-dialogs";
-import { RAPHAEL_ID, faceHTML, memberOf, memberSections, primaryIdOf, raphaelOf } from "./members";
-import { openPrimaryPicker } from "./primary-picker";
+import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
 import type { AppContext, AvatarPreset, MainEvent, Member, MemberGroup, MemberPatch, MembersList, WireAttachment } from "./types";
 import { type Choice, btn, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
@@ -111,6 +107,11 @@ export function createMembers(host: MembersHost): MembersShell {
   const member = (): Member => memberOf(list, current) ?? raphaelOf(list);
 
   // ---------- the parts ----------
+
+  const { editMember, memberAction, moveMember, deleteMember } = createMemberActions({
+    list: () => list, presets: () => presets, current: () => current, select, load, update, setPicture,
+    cleared: id => host.onSelect(id), deleted: id => previews.delete(id),
+  });
 
   const column = createMemberColumn({
     openMessage: (member, conversation, turn) => host.onOpenConversation?.(member, conversation, turn),
@@ -387,62 +388,6 @@ export function createMembers(host: MembersHost): MembersShell {
     });
   }
 
-  function editMember(m: Member): void {
-    openEditMemberDialog({groups: list?.groups ?? [], presets, taken: (list?.members ?? []).filter(other => other.id !== m.id).map(other => other.name), update, setPicture, saved: () => void load()}, m);
-  }
-
-  async function memberAction(id: number, action: string): Promise<void> {
-    const m = memberOf(list, id);
-    if (!m || id === RAPHAEL_ID) return;
-    if (action === "edit") return editMember(m);
-    if (action === "primary") return choosePrimary(id);
-    try {
-      if (action === "pin") await update(id, {pinned: !m.pinned});
-      else if (action === "hide") {
-        await api.membersUpdate(id, {hidden: true});
-        if (current === id) select(RAPHAEL_ID);
-        await load();
-      } else if (action === "unread") {
-        await api.core("members.unread", {id});
-        // Marking the open conversation unread moves away so viewing does not immediately clear it.
-        if (current === id) select(RAPHAEL_ID);
-        await load();
-      } else if (action === "read-all") {
-        await api.core("members.mark_all_read", {}); await load();
-      } else if (action === "duplicate") {
-        const result = await api.core<{member: Member}>("members.duplicate", {id});
-        await load(); select(result.member.id);
-      } else if (action === "clear") {
-        openDialog({title: t("members.sideClearConfirm", {p0: m.name}), body: `<p>${esc(t("members.sideClearHint"))}</p>`, cls: "mb-confirm",
-          actions: {secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), destructive: {label: esc(t("members.sideClear")), attrs: ' data-dlg="clear"'}},
-          onAct(pick, _button, dialog) {
-            if (pick !== "clear") return dialog.close();
-            void api.core("agent.history.clear", {member_id: id}).then(() => { dialog.close(); if (current === id) host.onSelect(id); void load(); }).catch(err => toaster.info(describeError(err)));
-          },
-        });
-      }
-    } catch (err) { toaster.info(describeError(err)); }
-  }
-
-  /**
-   * 設為主要: the window that lists the members to choose from (Raphael too, and not the primary now), with the one the
-   * menu was opened from chosen. The choice moves only the primary contact: the core's roster then says it to every
-   * Bot, and the list is read again so that the star moves. Raphael stays the chief of staff in every room.
-   */
-  async function choosePrimary(from: number): Promise<void> {
-    if (!list) return;
-    const now = primaryIdOf(list);
-    const candidates = [raphaelOf(list), ...memberSections(list).flatMap((section) => section.members)].filter((m) => m.id !== now);
-    const chosen = await openPrimaryPicker({ members: candidates, chosen: from });
-    if (chosen === null || chosen === now) return;
-    try {
-      await api.membersSetPrimary(chosen);
-    } catch (err) {
-      toaster.info(describeError(err));
-    }
-    await load();
-  }
-
   /** A new conversation with `id`, opened: 新對話 always makes one, even when the open one is still empty. */
   async function startConversation(id: number): Promise<void> {
     try {
@@ -490,30 +435,6 @@ export function createMembers(host: MembersHost): MembersShell {
       event.preventDefault(); newMember(null);
     }
   });
-
-  function moveMember(id: number, anchor: HTMLElement): void {
-    const m = list?.members.find((other) => other.id === id);
-    if (!m || !list) return;
-    openMenu(anchor, groupChoices([...list.groups].sort((a, b) => a.position - b.position)), groupValue(m.group_id), (value) => {
-      const groupId = groupFromValue(value);
-      if (groupId !== m.group_id) void update(id, { group_id: groupId });
-    });
-  }
-
-  async function deleteMember(id: number): Promise<void> {
-    const m = list?.members.find((other) => other.id === id);
-    if (!m || !(await confirmDelete(m.name))) return;
-    try {
-      await api.membersDelete(id);
-    } catch (err) {
-      toaster.info(describeError(err));
-      return;
-    }
-    previews.delete(id);
-    if (current === id) select(RAPHAEL_ID);
-    toaster.info(t("members.deleted", { p0: m.name }));
-    await load();
-  }
 
   /** Runs a change of the groups, says why it failed if it did, and reads the list again. */
   async function groupChange(work: () => Promise<unknown>): Promise<void> {
