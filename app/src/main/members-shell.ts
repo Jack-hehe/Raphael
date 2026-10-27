@@ -15,6 +15,7 @@
 
 import * as api from "./api";
 import { describeError } from "./format";
+import { conversationChange } from "./conversation-list";
 import { currentRoomId, openNewGroupChat, openRoomsMenu } from "./group-chats";
 import { getLocale, onLocaleChange, t } from "./i18n";
 import { teamMentions } from "./team-mentions";
@@ -442,6 +443,18 @@ export function createMembers(host: MembersHost): MembersShell {
     await load();
   }
 
+  /** A new conversation with `id`, opened: 新對話 always makes one, even when the open one is still empty. */
+  async function startConversation(id: number): Promise<void> {
+    try {
+      const result = await api.core<{conversation: {id: number}}>("conversations.create", {member_id: id});
+      conversationChange(id);
+      if (host.onOpenConversation) host.onOpenConversation(id, result.conversation.id);
+      else select(id);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+  }
+
   function newConversation(): void {
     const dialog = openDialog({title: t("members.sideNewConversation"), cls: "mb-chat-picker",
       body: `<input class="mb-fin" type="search" data-chat-search placeholder="${esc(t("members.sidePickerHint"))}" aria-label="${esc(t("members.sidePickerHint"))}"><div class="mb-chat-choices"></div>`,
@@ -456,7 +469,7 @@ export function createMembers(host: MembersHost): MembersShell {
           host.app.go("agent", `draft:${t("firstBot.newProposal", { description })}`);
         }
         else if (action === "member") { d.close(); newMember(null); }
-        else if (action === "conversation") { d.close(); select(Number(target.dataset.id)); }
+        else if (action === "conversation") { d.close(); void startConversation(Number(target.dataset.id)); }
         else d.close();
       },
     });

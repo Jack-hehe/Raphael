@@ -234,8 +234,10 @@ export function createMemberColumn(host: ColumnHost): MemberColumn {
       { id: "duplicate", label: t("members.sideDuplicate"), icon: "copy" },
       { id: "clear", label: t("members.sideClear"), icon: "trash" },
       { id: "hide", label: t("members.sideHide"), icon: "eyeOff" },
+      { id: "delete", label: t("members.delete"), icon: "trash" },
     ], pick => {
       if (pick === "move") host.moveMember(id, null, anchor);
+      else if (pick === "delete") host.deleteMember(id);
       else host.memberAction?.(id, pick);
     });
   }

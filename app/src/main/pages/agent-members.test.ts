@@ -25,6 +25,7 @@ const api = vi.hoisted(() => ({ statusGet: vi.fn(async () => ({ openrouter: { st
   membersToolChoices: vi.fn(),
   membersUpdate: vi.fn(),
   membersCreate: vi.fn(),
+  membersDelete: vi.fn(),
   membersSetAvatar: vi.fn(),
   routinesCreate: vi.fn(),
   toolsetsList: vi.fn(),
@@ -112,13 +113,40 @@ test("clearing conversations requires confirmation and scopes the request to tha
   expect(document.querySelector(".mb-confirm")).toBeNull(); agent.hide();
 });
 
-test("new conversation picker filters members and opens the selected member", async () => {
-  const agent = mount(); await flush();
-  $('[data-col="add"]').click(); $('[data-pick="conversation"]').click();
-  const search = $<HTMLInputElement>("[data-chat-search]"); search.value = LIST.members[2].name; search.dispatchEvent(new Event("input"));
-  expect(document.querySelectorAll('[data-dlg="conversation"]')).toHaveLength(1);
-  $('[data-dlg="conversation"]').click(); await flush();
+test("a member is deleted from its ⋯ menu only after the confirmation, and its open thread returns to Raphael", async () => {
+  api.membersDelete.mockResolvedValue({ deleted: true });
+  const agent = mount(); await flush(); await pick(3);
+  $('[data-member-more="3"]').click(); $('[data-pick="delete"]').click(); await flush();
+  expect(api.membersDelete).not.toHaveBeenCalled();
+  $('[data-dlg="delete"]').click(); await flush();
+  expect(api.membersDelete).toHaveBeenCalledWith(3);
+  expect(document.querySelector('.mb-chief[aria-current="true"]')).not.toBeNull();
+  agent.hide();
+});
+
+test("新對話 makes a new conversation with the picked member and opens it, also from that member's empty one", async () => {
+  const conversations = [{ id: 31, member_id: 3, title: "", is_default: 1, created_at_ms: 1, updated_at_ms: 1 }];
+  api.core.mockImplementation(async (method: string, params: { member_id?: number }) => {
+    if (method === "conversations.list") return { conversations: conversations.filter(c => c.member_id === params.member_id) };
+    if (method !== "conversations.create") return undefined;
+    const made = { id: 100 + conversations.length, member_id: params.member_id!, title: "", is_default: 0, created_at_ms: 2, updated_at_ms: 2 };
+    conversations.push(made);
+    return { conversation: made };
+  });
+  const agent = mount(); await flush(); await pick(3);
+  const start = async (name: string) => {
+    $('[data-col="add"]').click(); $('[data-pick="conversation"]').click();
+    const search = $<HTMLInputElement>("[data-chat-search]"); search.value = name; search.dispatchEvent(new Event("input"));
+    expect(document.querySelectorAll('[data-dlg="conversation"]')).toHaveLength(1);
+    $('[data-dlg="conversation"]').click(); await flush();
+  };
+  await start("日文老師");
+  expect(api.core).toHaveBeenCalledWith("conversations.create", { member_id: 3 });
+  expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ member_id: 3, conversation_id: 101 }));
+  await start("行程管家");
+  expect(api.core).toHaveBeenCalledWith("conversations.create", { member_id: 4 });
   expect(document.querySelector('[data-member="4"][aria-current="true"]')).not.toBeNull();
+  expect(api.agentHistoryList).toHaveBeenLastCalledWith(expect.objectContaining({ member_id: 4, conversation_id: 102 }));
   expect(document.querySelector(".mb-chat-picker")).toBeNull(); agent.hide();
 });
 
