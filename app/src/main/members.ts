@@ -88,6 +88,19 @@ export const memberOf = (list: MembersList | null, id: number): Member | undefin
   id === RAPHAEL_ID ? raphaelOf(list) : list?.members.find((member) => member.id === id);
 
 /**
+ * The member the owner chose as their primary contact: Raphael until another is chosen. It is read from the
+ * roster the core gives with the list (`team_context.primary_id`), the one place it is kept, and it is
+ * Raphael if the roster names nobody the list has. The chief of staff is Raphael whoever it is.
+ */
+export function primaryIdOf(list: MembersList | null): number {
+  const id = list?.team_context?.primary_id;
+  return typeof id === "number" && list!.members.some((member) => member.id === id) ? id : RAPHAEL_ID;
+}
+
+/** The small round mark on the face of the primary contact: a star, named for assistive technology only (no tooltip of its own). */
+export const primaryStarHTML = (): string => `<span class="mb-star" role="img" aria-label="${esc(t("members.primary"))}">${ico("star")}</span>`;
+
+/**
  * A row's second line: the last line of its thread (`preview`), or, while a question waits for the
  * owner there, that line in gold after 「等你處理：」 (the waiting turn is the thread's last, so its
  * line is what is asked), 「等你處理」 alone when there is none.

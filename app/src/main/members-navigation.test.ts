@@ -19,7 +19,7 @@ test("the sidebar exposes new conversations and member management actions", () =
   expect(document.querySelector("[data-pick=conversation]")).not.toBeNull();
   closeMenu();
   column.el.querySelector<HTMLElement>("[data-member-more='1']")!.click();
-  expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(el => el.dataset.pick)).toEqual(["pin", "move", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
+  expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(el => el.dataset.pick)).toEqual(["pin", "move", "primary", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
   document.querySelector<HTMLElement>("[data-pick=hide]")!.click();
   expect(action).toHaveBeenCalledWith(1, "hide");
 });

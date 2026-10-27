@@ -515,3 +515,56 @@ test("resource rows count saved skills including disabled ones and only active r
   expect(panel.el.querySelector('[data-tab="skills"] small')!.textContent).toContain("2");
   expect(panel.el.querySelector('[data-tab="routines"] small')!.textContent).toContain("1");
 });
+
+
+describe("the primary contact's star", () => {
+  const withPrimary = (primary_id: number): MembersList => ({ ...LIST, team_context: { primary_id } as MembersList["team_context"] });
+  const stars = (el: HTMLElement): number => el.querySelectorAll(".mb-star").length;
+
+  test("the primary wears it on its face, beside the button that changes the picture, and nobody else does", async () => {
+    const panel = mount();
+    await flush();
+    // the roster has not chosen anybody: Raphael is the primary, so member 3 has none
+    expect(stars(panel.el)).toBe(0);
+    host.list = () => withPrimary(3);
+    panel.draw();
+    const face = panel.el.querySelector<HTMLElement>(".mb-who-face")!;
+    const star = face.querySelector<HTMLElement>(".mb-star")!;
+    expect(star.getAttribute("role")).toBe("img");
+    expect(star.getAttribute("aria-label")).toBe("主要聯絡人");
+    expect(star.closest("button")).toBeNull();
+    expect(face.querySelector(".mb-avbtn")).not.toBeNull();
+    expect(stars(panel.el)).toBe(1);
+    host.list = () => withPrimary(4);
+    panel.draw();
+    expect(stars(panel.el)).toBe(0);
+  });
+
+  test("Raphael's panel has it until another member is chosen, and not after", async () => {
+    current = 0;
+    const panel = mount();
+    await flush();
+    expect(stars(panel.el)).toBe(1);
+    expect(panel.el.querySelector(".mb-who-face .mb-who-name")).toBeNull();
+    expect(panel.el.querySelector(".mb-who-name")!.textContent).toBe("拉斐爾");
+    host.list = () => withPrimary(4);
+    panel.draw();
+    expect(stars(panel.el)).toBe(0);
+  });
+
+  test("the star follows the roster while the name is being typed in, and the draft is kept", async () => {
+    const panel = mount();
+    await flush();
+    const name = panel.el.querySelector<HTMLInputElement>("#mb-det-name")!;
+    name.focus();
+    name.value = "Draft name";
+    host.list = () => withPrimary(3);
+    panel.draw();
+    expect(stars(panel.el)).toBe(1);
+    expect(document.activeElement).toBe(name);
+    expect(name.value).toBe("Draft name");
+    host.list = () => LIST;
+    panel.draw();
+    expect(stars(panel.el)).toBe(0);
+  });
+});
