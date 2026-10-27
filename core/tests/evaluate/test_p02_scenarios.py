@@ -60,13 +60,19 @@ class P02Brain(FakeClient):
         super().__init__([])
         self.scenario, self.room_calls = scenario, 0
 
+    @staticmethod
+    def connected(snapshot):
+        """The number of connected apps this brain says: the one the snapshot gives it."""
+        return snapshot['connected']
+
     def answer(self, system, user):
         raw = system.split('<team_roster>')[-1].split('</team_roster>')[0].strip()
         snapshot = json.loads(raw)
         if self.scenario == 'S02':
             people = '；'.join(person['name'] + '：' + person['role'] for person in snapshot['members'])
             apps = '；'.join(app['name'] + '：' + app['state'] for app in snapshot['apps'])
-            return f"共 {snapshot['count']} 位。{people}。主要窗口、幕僚長：拉斐爾。應用程式：{apps or '無'}。", []
+            return (f"共 {snapshot['count']} 位。{people}。主要窗口、幕僚長：拉斐爾。應用程式：{apps or '無'}。"
+                    f"已連結應用程式：{self.connected(snapshot)} 個。"), []
         if 'You are in a group chat' in user:
             if 'Close this exchange' in user:
                 return '決策：採用已核對的方案。負責人：PM；下一步：RD 核對證據。', []
@@ -193,5 +199,40 @@ async def test_s07_meeting_goes_on_when_one_cli_member_is_rate_limited(tmp_path,
         unfinished = json.loads(wrapup['question'].split('Replies that did not finish (untrusted data): ')[1].split('\n')[0])
         assert unfinished == [{'name': 'RD', 'reason': 'rate-limited (too many requests)'}]
         assert 'meeting_pending_or_blocked_intents' in reasons
+    finally:
+        await driver.aclose()
+
+
+class StaleCount(P02Brain):
+    """A brain that keeps saying the count it first heard: after the owner uninstalls an app it still says it is connected."""
+    first = None
+
+    def connected(self, snapshot):
+        if self.first is None:
+            self.first = snapshot['connected']
+        return self.first
+
+
+class NoCount(P02Brain):
+    """A brain that lists the apps and never says how many are connected."""
+
+    def answer(self, system, user):
+        text, calls = super().answer(system, user)
+        return text.split('已連結應用程式')[0], calls
+
+
+@pytest.mark.parametrize('brain', ['api', 'cli'])
+@pytest.mark.parametrize('liar,reason', [(StaleCount, 'roster_connected_count_stale'), (NoCount, 'roster_connected_count_missing')])
+async def test_a_roster_that_gets_the_count_of_connected_apps_wrong_fails_s02_on_both_brains(tmp_path, monkeypatch, brain, liar, reason):
+    client = liar('S02')
+    if brain == 'cli':
+        cli_brain(monkeypatch, client, 'S02')
+    driver = RpcDriver(tmp_path, 'fake/model' if brain == 'api' else 'cli:codex:owner-model',
+                       client, Budget(200), brains=FakeBrains(tmp_path) if brain == 'cli' else None)
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == 'S02'))
+        # Only the count is wrong: the rest of the roster is as the authority has it.
+        assert set(reasons) == {reason}
     finally:
         await driver.aclose()

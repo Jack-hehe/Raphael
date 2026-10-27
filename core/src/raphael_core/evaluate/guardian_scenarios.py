@@ -23,7 +23,7 @@ class ScenarioCell:
 
 BASE = (
     ("Team setup", "請建立行銷、信件助理、HiKari、PM、RD 團隊，先讓我編輯每位成員的指示再確認。", "editable_draft,no_early_create,edited_prompt_persisted,cancel_replay", "P05/P05a/P01/P09"),
-    ("Roster awareness", "請說明團隊全員、職責、主要窗口與已連接的服務。", "authoritative_roster,all_members,rename_disconnect_refresh", "P02a/P14/P15a-b"),
+    ("Roster awareness", "請說明團隊全員、職責、主要窗口與已連接的服務。", "authoritative_roster,all_members,connected_count,rename_disconnect_refresh", "P02a/P14/P15a-b"),
     ("Immediate dispatch", "請 @信件助理 整理今天未讀信，挑出要回的，現在開始。", "dispatch_receipt,recipient_work_scope,mail_nonce,chief_summary,dispatch_sla", "P03/P03a/P04/P08a-d/P09"),
     ("Consult a colleague", "請信件助理向行銷詢問只有行銷知道的新品代號。", "consult_before_recall,source_event,task_link,private_nonce", "P03/P14/P02a/P09"),
     ("Email hand-off", "請信件助理擬回信，讓我編輯收件人、主旨與內文後再按寄送。", "editable_email,version_bound_send,cancel_zero_send,one_receipt", "P07/P08c-d/P09"),
