@@ -356,18 +356,18 @@ async def test_a_stop_that_leaves_the_run_going_fails(tmp_path, monkeypatch):
 # --- S15 itself ----------------------------------------------------------------------------------------------
 
 
-def test_the_halves_of_s15_have_drivers_and_the_permission_card_has_none_yet():
+def test_the_halves_of_s15_have_drivers():
     by_id = {cell.id: cell for cell in cells()}
     assert by_id["S15.secret"].driver == "secret-card" and by_id["S15.computer"].driver == "computer-card"
-    assert by_id["S15.permission"].driver == "" and by_id["S15.permission"].dependency == "P08c"
+    assert by_id["S15.permission"].driver == "permission-card" and by_id["S15.permission"].dependency == "P08c"
     # No prompt tells a brain to show a card: the owner asks in plain words.
-    for identifier in ("S15.secret", "S15.computer"):
+    for identifier in ("S15.secret", "S15.computer", "S15.permission"):
         assert not any(word in by_id[identifier].prompt for word in ("卡片", "card", "request_secret", "computer_hand_over", "接管"))
 
 
 async def test_a_scenario_with_an_unbuilt_half_never_passes(tmp_path, monkeypatch):
-    # S15 is a key saved in a card and the owner's turn at the computer (P08b), and the local permission card
-    # (P08c): passing the first two alone is not S15.
+    # S15 is a key saved in a card, the owner's turn at the computer (P08b) and the local permission card (P08c):
+    # passing two of the three alone is not S15, however the third came to fail.
     from raphael_core.evaluate import guardian_suite
     from raphael_core.evaluate.guardian_suite import run
 
