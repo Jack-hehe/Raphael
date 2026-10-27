@@ -17,7 +17,8 @@ from . import use_utf8_output
 from .credentials import key_provider
 
 ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_MODEL = "anthropic/claude-sonnet-4.6"
+# Live, sonnet-4.6 listed rules an image followed and things it does not show (a "tile" behind a bare mark).
+DEFAULT_MODEL = "anthropic/claude-sonnet-5.5"
 VERSION = 1
 # One request per look image: the full matrix must fit the default; dollars stay the real limit.
 DEFAULT_MAX_REQUESTS = 1200
@@ -105,8 +106,9 @@ async def judge_image(image, *, model, prompt, references, rules, cache, client,
     for data in [image, *references]:
         mime = "image/png" if data.startswith(b"\x89PNG") else "image/jpeg"
         content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode()}})
-    async with asyncio.timeout(90):
-        response = await client.chat_tools(model=model, fallbacks=[], messages=[{"role": "user", "content": content}], tools=[], max_tokens=2000, timeout_s=60, reasoning_effort="none")
+    # Sonnet 5.5 refuses requests with reasoning off; low reasoning still fits the per-request ceiling.
+    async with asyncio.timeout(150):
+        response = await client.chat_tools(model=model, fallbacks=[], messages=[{"role": "user", "content": content}], tools=[], max_tokens=8000, timeout_s=120, reasoning_effort="low")
     if response.calls or response.model != model:
         raise ValueError("unexpected_model_or_tools")
     result = parse_review(response.content, rules)

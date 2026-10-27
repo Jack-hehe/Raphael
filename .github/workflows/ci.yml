@@ -135,7 +135,7 @@ jobs:
         if: steps.judge.outputs.enabled == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          RAPHAEL_JUDGE_MODEL: ${{ vars.RAPHAEL_JUDGE_MODEL || 'anthropic/claude-sonnet-4.6' }}
+          RAPHAEL_JUDGE_MODEL: ${{ vars.RAPHAEL_JUDGE_MODEL || 'anthropic/claude-sonnet-5.5' }}
         run: |
           $lookRun = Get-ChildItem .look -Directory -Filter 'run-*' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $lookRun) { throw 'No look run available for judge.' }
