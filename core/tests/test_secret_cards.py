@@ -382,3 +382,16 @@ async def test_the_roster_says_a_connection_needs_its_secret_after_a_call_found_
     with pytest.raises(McpFailure) as raised:
         connector._secrets(config)
     assert raised.value.kind == "missing_secret"
+
+
+async def test_the_cards_of_a_deleted_turn_go_with_it(tmp_path, conn):
+    rig = Rig(tmp_path, conn)
+    await rig.connection()
+    kept = rig.new_turn("kept")
+    rig.show("Weather")
+    rig.show("Weather", turn=kept)
+    assert conn.execute("SELECT COUNT(*) FROM secret_cards").fetchone()[0] == 2
+    rig.history.delete(rig.turn)
+    assert [row[0] for row in conn.execute("SELECT turn_id FROM secret_cards")] == [kept]
+    rig.history.clear()
+    assert conn.execute("SELECT COUNT(*) FROM secret_cards").fetchone()[0] == 0

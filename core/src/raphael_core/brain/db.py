@@ -922,6 +922,12 @@ CREATE TABLE handback_cards (
     returned_at_ms INTEGER,
     UNIQUE(turn_id, seq)
 );
+CREATE TRIGGER clear_secret_cards AFTER DELETE ON agent_turns BEGIN
+  DELETE FROM secret_cards WHERE turn_id=OLD.id;
+END;
+CREATE TRIGGER clear_handback_cards AFTER DELETE ON agent_turns BEGIN
+  DELETE FROM handback_cards WHERE turn_id=OLD.id;
+END;
 PRAGMA user_version = 37;
 COMMIT;
 """

@@ -267,3 +267,14 @@ async def test_unknown_cards_and_calls_without_a_card_are_refused(rig):
         for params in ({}, {"id": 3}, {"id": "missing"}):
             with pytest.raises(RpcError):
                 await rig.router.call(method, params)
+
+
+async def test_the_cards_of_a_deleted_turn_go_with_it(rig, conn):
+    run, card = await rig.hand_over(reply(content="不應該到這裡。"))
+    other = AgentHistory(conn).add(session_id="t", question="另一個", route="answer", prefix="", text="", status="done",
+                                   source="app", member_id=0)
+    conn.execute("INSERT INTO handback_cards (id, turn_id, seq, member_id, run_id, reason, language, state, created_at_ms,"
+                 " updated_at_ms, expires_at_ms) VALUES ('x', ?, 1, 0, 'r', 'sign_in', 'en', 'done', 1, 1, 2)", (other,))
+    AgentHistory(conn).delete(rig.turn)
+    assert [row[0] for row in conn.execute("SELECT turn_id FROM handback_cards")] == [other]
+    run.stop("owner")
