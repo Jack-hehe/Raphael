@@ -13,7 +13,7 @@ import pytest
 from raphael_core.agent.safety import ALLOW, ASK, DENY, SafetyGuard, SafetyRules
 from raphael_core.agent.speaker import Speaker
 from raphael_core.agent.tools import ToolResult
-from raphael_core.background.run import OWNER_SAID_NO
+from raphael_core.background.run import OWNER_SAID_NO, OWNER_SAID_NO_BEFORE
 from raphael_core.background.service import QUESTION_WAIT_S, continued
 from raphael_core.protocol import INVALID_PARAMS, RpcError
 
@@ -176,6 +176,31 @@ async def test_a_no_leaves_the_call_unmade_and_the_task_reports(make_rig, plugin
     assert ("Notes", "note", None, "none", "denied", task_id) in plugins.audit()
     steps = [(s.tool, s.outcome, s.reason) for s in rig.steps(task_id) if s.kind == "tool"]
     assert steps == [("note", "blocked", "denied")]
+
+
+async def test_after_a_no_the_task_gets_round_it_with_no_other_tool_and_asks_nothing_more(make_rig, plugins, calls, clock):
+    rig = make_rig(clock=clock)
+    await plugins.connect(look="T0", note="T2", wipe="T2")
+    rig.client.replies = [
+        turn("Noting.", [call("Notes__note", {"text": ARGUMENT}, "c1")], cost=0.002),
+        # Another way to the same end: the tool again, a synonym that also changes something, and a lookup.
+        turn("Another way.", [call("Notes__note", {"text": ARGUMENT}, "c2"), call("Notes__wipe", {}, "c3"),
+                              call("Notes__look", {"topic": "milk"}, "c4")], cost=0.002),
+        report("Did not note it.", cost=0.003),
+    ]
+    task_id = rig.submit()
+    asked = await paused(rig, task_id)
+    answer = {"task_id": task_id, "question_id": asked["question_id"], "approved": False}
+    assert await rig.rpc.call("background.answer", answer) == {"status": "denied"}
+    [done] = await rig.wait_for_reports()
+    assert done["text"] == "Did not note it."
+    # Only the lookup was made, and the owner was asked once: nobody was asked about the way round.
+    assert calls == ["look"] and {params["question_id"] for params in questions(rig)} == {asked["question_id"]}
+    told = [message["content"] for message in rig.client.chat_calls[2]["messages"] if message["role"] == "tool"]
+    assert sum(OWNER_SAID_NO_BEFORE in text for text in told) == 2 and sum("found milk" in text for text in told) == 1
+    steps = [(s.tool, s.outcome) for s in rig.steps(task_id) if s.kind == "tool"]
+    assert steps == [("note", "blocked"), ("note", "blocked"), ("wipe", "blocked"), ("look", "ok")]
+    assert ("Notes", "wipe", None, "none", "blocked", task_id) in plugins.audit()
 
 
 async def test_a_question_nobody_answers_in_ten_minutes_ends_the_task_politely(make_rig, plugins, calls, clock):

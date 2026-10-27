@@ -160,6 +160,10 @@ OWNER_SAID_NO = (
     "The owner said no to this call, so it was not made. Do not make it or anything like it: do "
     "the rest of the task without it, and say in the report what was not done."
 )
+OWNER_SAID_NO_BEFORE = (
+    "The owner already said no to a call of this task, so this one was not made either: a way round a no "
+    "is not tried. Do the rest of the task without it, and say in the report what was not done."
+)
 NOT_MADE_WHILE_WAITING = (
     "This call was not made: the task paused for the owner's answer to an earlier call of the same "
     "reply. Make it again if it is still needed."
@@ -226,6 +230,9 @@ class TaskRun:
         self.ask_before_members = ask_before_members
         # The call the task paused on, until the service takes it.
         self.waiting: Waiting | None = None
+        # The tools the owner said no to in this task: none of them is tried again, and no other tool of a
+        # connection that changes something is tried in its place (a synonym is no way round a no).
+        self._declined: set[str] = set()
         # The files of the task, by number from 1, and the addresses it has seen (see the module).
         self.attachments = list(attachments)
         self.seen_urls = SeenUrls([request])
@@ -544,6 +551,12 @@ class TaskRun:
         self, ref: ToolRef, arguments: dict, alias: str = "", call_id: str = ""
     ) -> tuple[dict, str, str | None, int | None]:
         now = self._gate.tier_now(ref.key)
+        if self._declined and (ref.key in self._declined or not self._gate.reads_only(ref.server, ref.name)):
+            # The owner said no to something in this task: this tool is not tried again, and no other that changes
+            # something is, whatever it is called. Nothing is asked and nothing is made.
+            self._gate.record_unrun(ref.key, outcome="blocked", task_id=self.task_id)
+            reply = {"ok": False, "kind": "declined", "content": OWNER_SAID_NO_BEFORE, "truncated": False}
+            return reply, "blocked", None if now is None else now.name, None
         if now is not None:
             screening = await self._screen(ref, arguments)
             if screening.verdict == DENY:
@@ -611,6 +624,8 @@ class TaskRun:
         Returns what the model is shown of it, as the worker shows a result."""
         ref = waiting.ref
         if action is None:
+            if ref.kind == MCP:
+                self._declined.add(ref.key)
             self._gate.record_unrun(ref.key, outcome="denied", task_id=self.task_id)
             self._step(
                 kind="tool", tool=ref.name, server=ref.server, tier=waiting.tier.name,
