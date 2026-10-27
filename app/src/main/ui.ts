@@ -208,10 +208,11 @@ export function actionRow(o: ActionRowOptions): string {
 /**
  * A button with an icon only (trash, ×, chevron, search, settings, sliders): what it does is its
  * label and its tooltip. It has no border, only a fill under the pointer and the focus ring
- * (styles.css `.btn.icon`): a border is what tells a button with words in it.
+ * (styles.css `.btn.icon`): a border is what tells a button with words in it. The ⋯ (`more`) is marked
+ * `data-overflow`: context-menu.ts presses it when its row is right-clicked.
  */
 export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
-  `<button type="button" class="btn icon${name === "trash" ? " danger" : ""}${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
+  `<button type="button" class="btn icon${name === "trash" ? " danger" : ""}${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}${name === "more" ? " data-overflow" : ""}>${ico(name)}</button>`;
 
 /** The filled primary send glyph shares the icon source with the line drawings. */
 export const sendGlyph = (): string => `<svg class="cmp-plane" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 20.85 12.92a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91Z"/></svg>`;
@@ -348,10 +349,31 @@ export function swapHTML(host: HTMLElement, html: string): void {
 interface MenuState {
   el: HTMLElement; anchor: HTMLElement; rect: DOMRect; stopOutside(): void;
   onKey?: (e: KeyboardEvent) => boolean; onClose?: () => void;
-  parent: MenuState | null; placement?: "beside" | "start"; anchorRect?: () => DOMRect;
+  parent: MenuState | null; placement?: "beside" | "start" | "pointer"; anchorRect?: () => DOMRect;
+  /** Set when a right click asked for the menu: it stands at that point rather than under its button. */
+  at?: PointerAt;
 }
 let menu: MenuState | null = null;
 let menuListening = false;
+
+/** Where a right click asked for the menu of a ⋯ button; `until` is when that stops holding (see `pressOverflow`). */
+interface PointerAt { x: number; y: number; until: number }
+const pointedAt = new WeakMap<HTMLElement, PointerAt>();
+/** How long a press waits for a menu that opens after something is read (a message's), and for one that replaces another. */
+const POINTED_GRACE_MS = 1500;
+
+/**
+ * Presses a ⋯ button for a right click (context-menu.ts). Its own handler runs as it always does. With a point, the menu it
+ * opens, and any that replaces it from the same button (「移到分組」 after the first), stands there instead of under the
+ * button; a left click on the button afterwards places the menu under it again. Any menu that is open closes first, unless
+ * the ⋯ is in it: it would otherwise take the press for a click outside it.
+ */
+export function pressOverflow(button: HTMLElement, at?: { x: number; y: number }): void {
+  if (!menu?.el.contains(button)) closeMenu();
+  if (at) pointedAt.set(button, { ...at, until: performance.now() + POINTED_GRACE_MS });
+  else pointedAt.delete(button);
+  button.click();
+}
 
 export function closeMenu(): void {
   while (menu) closeMenuLevel();
@@ -365,6 +387,7 @@ function closeMenuLevel(): void {
   closing.anchor.setAttribute("aria-expanded", "false");
   closing.anchor.removeAttribute("aria-controls");
   closing.el.remove();
+  if (closing.at) closing.at.until = performance.now() + POINTED_GRACE_MS;
   closing.onClose?.();
 }
 
@@ -416,12 +439,18 @@ function listenForMenuEvents(): void {
   });
   window.addEventListener("blur", closeMenu);
   window.addEventListener("resize", closeMenu);
+  // A click of the person's own on a ⋯ puts its menu under it again, however an earlier right click placed it.
+  document.addEventListener("click", (e) => {
+    if (e.isTrusted && e.target instanceof Element) { const more = e.target.closest<HTMLElement>("[data-overflow]"); if (more) pointedAt.delete(more); }
+  }, true);
   // Scrolling inside the menu (a long list) leaves it alone; scrolling the page carries it along
-  // with its button, and closes it once the button is out of sight.
+  // with its button, and closes it once the button is out of sight. A menu at the pointer has no
+  // button to follow: it closes.
   document.addEventListener(
     "scroll",
     (e) => {
       if (!menu || (e.target instanceof Node && menu.el.contains(e.target))) return;
+      if (menu.at) { closeMenu(); return; }
       const r = menu.anchor.getBoundingClientRect();
       if (!menu.anchor.isConnected || r.bottom < 0 || r.top > innerHeight) closeMenu();
       else placeMenu();
@@ -451,12 +480,18 @@ export function openMenuOnArrow(e: KeyboardEvent): boolean {
   return true;
 }
 
-/** Keep anchored menus inside the usable viewport, below any custom window controls. */
+const pointRect = (at: PointerAt): DOMRect => new DOMRect(at.x, at.y, 0, 0);
+
+/**
+ * Keep anchored menus inside the usable viewport, below any custom window controls. A menu ends at its
+ * anchor's right edge by default; `start` (a text completion) begins at its left edge and prefers the space above;
+ * `pointer` (a right click, whose anchor is a point) begins at the point and prefers the space below.
+ */
 export function menuPlacement(
   anchor: Pick<DOMRect, "top" | "bottom" | "right"> & Partial<Pick<DOMRect, "left">>,
   size: { width: number; height: number },
   viewport: { width: number; height: number; headerBottom: number },
-  alignment: "end" | "start" = "end",
+  alignment: "end" | "start" | "pointer" = "end",
 ): { left: number; top: number; maxHeight: number } {
   const upper = viewport.headerBottom + 8;
   const lower = Math.max(upper, viewport.height - 8);
@@ -469,7 +504,7 @@ export function menuPlacement(
     : size.height <= below || (size.height > above && below >= above);
   const maxHeight = useBelow ? below : above;
   return {
-    left: Math.max(8, Math.min(alignment === "start" ? anchor.left ?? anchor.right : anchor.right - size.width, viewport.width - size.width - 8)),
+    left: Math.max(8, Math.min(alignment === "end" ? anchor.right - size.width : anchor.left ?? anchor.right, viewport.width - size.width - 8)),
     top: useBelow ? belowTop : aboveBottom - Math.min(size.height, maxHeight),
     maxHeight,
   };
@@ -501,7 +536,7 @@ export function placeMenu(): void {
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
   const size = { width: el.offsetWidth, height: el.offsetHeight }, viewport = { width: innerWidth, height: innerHeight, headerBottom };
-  const placement = menu.placement === "beside" ? submenuPlacement(r, size, viewport) : menuPlacement(r, size, viewport, menu.placement === "start" ? "start" : "end");
+  const placement = menu.placement === "beside" ? submenuPlacement(r, size, viewport) : menuPlacement(r, size, viewport, menu.placement === "start" || menu.placement === "pointer" ? menu.placement : "end");
   el.style.maxHeight = `${placement.maxHeight}px`;
   el.style.left = `${placement.left}px`;
   el.style.top = `${placement.top}px`;
@@ -527,7 +562,10 @@ export interface PopoverOptions {
  */
 export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions): HTMLElement {
   listenForMenuEvents();
-  const rect = o.anchorRect?.() ?? anchor.getBoundingClientRect();
+  // A panel that places itself (a caret, a submenu) keeps its own place; any other from a button that a right click pressed stands where it was.
+  const pointed = o.anchorRect || o.placement === "beside" ? undefined : pointedAt.get(anchor);
+  const at = pointed && pointed.until > performance.now() ? pointed : undefined;
+  const rect = at ? pointRect(at) : o.anchorRect?.() ?? anchor.getBoundingClientRect();
   const parent = o.placement === "beside" && menu?.el.contains(anchor) ? menu : null;
   if (!parent) closeMenu();
   const el = document.createElement("div");
@@ -538,7 +576,8 @@ export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
-  menu = { el, anchor, rect, parent, placement: o.placement, anchorRect: o.anchorRect,
+  if (at) at.until = Infinity;
+  menu = { el, anchor, rect, parent, placement: at ? "pointer" : o.placement, anchorRect: at ? () => pointRect(at) : o.anchorRect, at,
     stopOutside: registerDismissal(el, () => { const root = menuRootAnchor(); closeMenu(); root?.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey, onClose: o.onClose };
   anchor.setAttribute("aria-expanded", "true");
   anchor.setAttribute("aria-controls", el.id);

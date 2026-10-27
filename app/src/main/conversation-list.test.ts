@@ -4,6 +4,7 @@ const core = vi.hoisted(() => vi.fn());
 vi.mock("./api", () => ({ core }));
 import { mountConversationList } from "./conversation-list";
 import { closeMenu } from "./ui";
+import { installContextMenus } from "./context-menu";
 
 afterEach(() => { closeMenu(); document.body.replaceChildren(); vi.clearAllMocks(); });
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
@@ -63,4 +64,41 @@ test("rename saves the selected row and delete waits for confirmation", async ()
   expect(core).toHaveBeenCalledWith("conversations.delete", { id: 2 });
   expect(document.querySelector(".toasts")?.textContent).toContain("已刪除「Cobalt notes」");
   list.destroy();
+});
+
+test("a right click on a conversation row opens the same rename and delete menu as its ⋯, at the pointer; a click still opens the conversation", async () => {
+  core.mockResolvedValue({ conversations: [
+    { id: 2, member_id: 7, title: "Cobalt notes", created_at_ms: 1, updated_at_ms: Date.now() },
+    { id: 9, member_id: 7, title: "An old question", kind: "quick", updated_at_ms: 1 },
+  ] });
+  const host = document.createElement("div"); document.body.append(host);
+  const onOpen = vi.fn();
+  const list = mountConversationList(host, { memberId: 7, onOpen });
+  await flush();
+  const stop = installContextMenus(document);
+  const items = (): (string | undefined)[] => [...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(item => item.dataset.pick);
+  const rightClick = (target: Element, x: number, y: number): void => {
+    target.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2, clientX: x, clientY: y }));
+    target.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: x, clientY: y }));
+  };
+  try {
+    const row = host.querySelector('[data-conversation-open="2"]')!;
+    rightClick(row, 120, 90);
+    expect(items()).toEqual(["rename", "delete"]);
+    expect(document.querySelector<HTMLElement>("#app-popover")!.style.left).toBe("120px");
+    closeMenu();
+    host.querySelector<HTMLButtonElement>("[data-conversation-more]")!.click();
+    expect(items()).toEqual(["rename", "delete"]);
+    closeMenu();
+    rightClick(row.closest(".conversation-row")!, 40, 40);
+    document.querySelector<HTMLButtonElement>('[data-pick="rename"]')!.click();
+    expect(document.querySelector(".conversation-name")).not.toBeNull();
+    expect(onOpen).not.toHaveBeenCalled();
+    document.querySelector<HTMLButtonElement>('[data-dlg="cancel"]')!.click();
+    // a quick conversation has no ⋯, so nothing opens for it; the left button opens it
+    rightClick(host.querySelector('[data-conversation-open="9"]')!, 10, 10);
+    expect(document.querySelector("#app-popover")).toBeNull();
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onOpen).toHaveBeenCalledWith(2);
+  } finally { stop(); list.destroy(); }
 });

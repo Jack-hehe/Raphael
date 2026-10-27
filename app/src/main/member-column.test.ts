@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 // The member column (member-column.ts): Raphael at the top, the groups and 未分組, the search, and
 // how a row shows a question that waits and a thread with news.
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type ColumnHost, columnHTML, createMemberColumn, memberRowHTML } from "./member-column";
 import { openNewGroupChat } from "./group-chats";
+import { installContextMenus } from "./context-menu";
 vi.mock("./group-chats", () => ({ createRoomsSection: () => document.createElement("section"), openNewGroupChat: vi.fn() }));
 import type { Member, MembersList } from "./types";
 
@@ -169,7 +170,9 @@ describe("the column, drawn", () => {
 
 describe("the column, used", () => {
   let host: ColumnHost & Record<string, ReturnType<typeof vi.fn>>;
+  let stopContextMenus: () => void;
   beforeEach(() => {
+    stopContextMenus = installContextMenus(document);
     document.body.innerHTML = "";
     localStorage.clear();
     host = {
@@ -178,6 +181,7 @@ describe("the column, used", () => {
       renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn(), newConversation: vi.fn(), memberAction: vi.fn(),
     } as never;
   });
+  afterEach(() => stopContextMenus());
   const mount = () => {
     const column = createMemberColumn(host);
     document.body.append(column.el);
@@ -279,7 +283,7 @@ describe("the column, used", () => {
     column.el.querySelector<HTMLElement>('[data-member-more="2"]')!.click();
     document.querySelector<HTMLElement>('#app-popover [data-pick="hide"]')!.click();
     expect(host.memberAction).toHaveBeenCalledWith(2, "hide");
-    column.el.querySelector('[data-member="1"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    column.el.querySelector('[data-member="1"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: 40, clientY: 50 }));
     document.querySelector<HTMLElement>('#app-popover [data-pick="move"]')!.click();
     expect(host.moveMember).toHaveBeenCalledWith(1, null, expect.any(HTMLElement));
   });

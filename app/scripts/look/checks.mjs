@@ -500,13 +500,49 @@ export function checkRendered(name) {
     }
     return { check: name, menuLeft: box.left, characterX: expected, delta: Math.abs(box.left - expected) };
   }
+  if (name === "context-menu" || name === "context-menu-key") {
+    // R-UI-44: a right click anywhere on a row, or the menu key on it, opens the menu of its ⋯: the same menu a click on the ⋯ opens.
+    const labels = () => [...document.querySelectorAll('#app-popover button')].map(button => button.textContent.trim().replace(/\s+/g, ' '));
+    const popover = document.querySelector('#app-popover'), opener = document.querySelector('[data-overflow][aria-expanded="true"]');
+    require(visible(popover) && opener, "a menu is open and belongs to a ⋯ button");
+    const box = popover.getBoundingClientRect(), shown = labels(), at = window.__look.pointer;
+    require(shown.length > 0, "the menu has items");
+    require(box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, "the menu is inside the window");
+    if (name === "context-menu") {
+      require(at, "the scene right-clicked first");
+      require(Math.abs(box.left - Math.max(8, Math.min(at.x, innerWidth - box.width - 8))) <= 2, `the menu starts at the pointer: its left edge is ${box.left}, the pointer is at ${at.x}`);
+      require(box.top >= at.y || box.bottom <= at.y, "the menu does not cover the pointer");
+    } else {
+      const anchor = opener.getBoundingClientRect();
+      require(Math.abs(box.left - Math.max(8, Math.min(anchor.right - box.width, innerWidth - box.width - 8))) <= 2, "a menu the key opens stands under its ⋯");
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    require(!document.querySelector('#app-popover'), "Escape closes the menu");
+    opener.click();
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const poll = () => {
+        try {
+          if (document.querySelector('#app-popover')) {
+            require(labels().join('|') === shown.join('|'), `the ⋯ gives the same menu: ${shown.join(' | ')} versus ${labels().join(' | ')}`);
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+            resolve({ check: name, items: shown, left: box.left, top: box.top, pointer: at ?? null });
+          } else if (Date.now() - started > 1500) require(false, "a click on the ⋯ opens a menu too");
+          else setTimeout(poll, 50);
+        } catch (error) { reject(error); }
+      };
+      poll();
+    });
+  }
   if (name === "home-overview") {
     const home = document.querySelector('.page-home:not([hidden])');
     const emblem = home?.querySelector('.ho-hero > .av');
     require(visible(emblem) && emblem.getBoundingClientRect().width >= 60, "Raphael's emblem is large on Home");
     require(!home.querySelector('h1'), "Home has no headline or slogan");
-    const ask = home.querySelector('.ho-ask');
-    require(visible(ask) && !ask.textContent.trim() && ask.getAttribute('aria-label'), "asking Raphael is a small labelled icon, not words");
+    require(!home.querySelector('.ho-hero [data-home-go="agent"], .ho-ask'), "the hero has no ask-Raphael icon: Raphael is asked on his own page");
+    const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const pictures = [...emblem.querySelectorAll('img')].map(image => image.getAttribute('src'));
+    require(pictures.length === 2 && pictures.every(src => /-loop\.webp$/.test(src) !== reduced), reduced ? "under reduced motion Raphael's emblem is his still picture" : "Raphael's emblem is the turning loop");
     require(!home.querySelector('.ho-pending [data-home-item^="routine:"], .ho-pending [data-home-item^="report:"]'), "Pending lists only what waits for the owner");
     for (const card of home.querySelectorAll('.ho-card')) require(visible(card.querySelector(':scope > header .ho-open')), "every card opens its details from an icon");
     require(document.querySelector('#nav .nav[aria-current="page"]')?.dataset.go === "home", "Home is the selected rail destination");
@@ -516,6 +552,25 @@ export function checkRendered(name) {
     for (const label of document.querySelectorAll('#nav .nav .nav-t')) if (visible(label))
       require(label.getBoundingClientRect().height < (parseFloat(getComputedStyle(label).lineHeight) || 20) * 1.5, `"${label.textContent}" does not fit on one line in the sidebar`);
     return { check: name, items: home.querySelectorAll('[data-home-item]').length, width: home.clientWidth };
+  }
+  if (name === "home-emblem-motion") {
+    // The loop plays by itself, which a canvas cannot show (it draws the first frame), so the check is that the page
+    // asks for the loop, and that what it asks for is an animation: its RIFF holds an ANIM header and many frames.
+    const picture = [...document.querySelectorAll('.page-home:not([hidden]) .ho-hero > .av img')].find(visible);
+    require(!matchMedia('(prefers-reduced-motion: reduce)').matches, "this scene runs with motion allowed");
+    require(picture && /app-emblem-(?:light|dark)-loop\.webp$/.test(picture.getAttribute('src')), "Raphael's emblem on Home is the turning loop when motion is allowed");
+    require(!document.querySelector('.page-home .ho-hero [data-home-go="agent"]'), "the hero has no ask-Raphael icon");
+    return fetch(picture.getAttribute('src')).then(response => response.arrayBuffer()).then(buffer => {
+      const view = new DataView(buffer), tag = at => String.fromCharCode(...new Uint8Array(buffer, at, 4));
+      require(tag(0) === 'RIFF' && tag(8) === 'WEBP', "the loop is a WebP picture");
+      let frames = 0, milliseconds = 0, animated = false;
+      for (let at = 12; at + 8 <= buffer.byteLength; at += 8 + view.getUint32(at + 4, true) + (view.getUint32(at + 4, true) & 1)) {
+        if (tag(at) === 'ANIM') animated = true;
+        if (tag(at) === 'ANMF') { frames++; milliseconds += view.getUint8(at + 8 + 12) | view.getUint8(at + 8 + 13) << 8 | view.getUint8(at + 8 + 14) << 16; }
+      }
+      require(animated && frames > 24 && milliseconds >= 2000, `the loop is an animation of many frames: ${frames} frames, ${milliseconds} ms`);
+      return { check: name, frames, milliseconds };
+    });
   }
   if (name === "home-report") {
     require(window.__look.calls.some(call => call.method === "agent.history.list" && call.params.member_id === 1), "Reported member history was requested");

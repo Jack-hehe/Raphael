@@ -9,4 +9,5 @@ export default [
   scene("home-routine", "A scheduled routine opens the calendar", [...ready, click('.ho-slot[data-home-item="routine:1"]'), wait('.au-page:not([hidden]) .au-occurrence'), check("calendar-shell")]),
   scene("home-calendar", "Today's icon opens the full calendar", [...ready, click('.ho-today [data-home-go="calendar"]'), wait('.au-page:not([hidden]) .au-occurrence'), check("calendar-shell")]),
   scene("home-many", "Many pending questions stay within their card", ready, { homeManyQuestions: true }),
+  { ...scene("home-motion", "Raphael's emblem turns on Home when motion is allowed: the loop plays, and the hero has no ask icon", [wait(".page-home:not([hidden]) .ho-hero"), { action: "freeze-motion", at: 600 }, check("home-emblem-motion"), check("home-overview")]), motion: true },
 ];

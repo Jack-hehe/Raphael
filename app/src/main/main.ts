@@ -33,6 +33,7 @@ import { labelNavItem, navAppsHTML, navItemHTML, navHomeHTML, renderAppsEntry } 
 import type { InventoryView } from "./apps-inventory";
 import { installWindowHotkeys } from "./window-hotkeys";
 import { installFocusKeys } from "./focus-keys";
+import { installContextMenus } from "./context-menu";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
 import { installWindowZoom } from "./window-zoom";
@@ -137,10 +138,8 @@ async function start(): Promise<void> {
   installWindowHotkeys(() => device.get());
   void loadGlyphTexture(GLYPH_URL);
 
-  // The browser's own menu (reload, back, ...) has no place in an app. Text fields keep theirs.
-  document.addEventListener("contextmenu", (e) => {
-    if (!(e.target instanceof HTMLInputElement)) e.preventDefault();
-  });
+  // A right click presses the ⋯ of the row under it; elsewhere the browser's own menu has no place in an app. Text fields keep theirs.
+  installContextMenus(document);
 
   const listeners = new Set<(event: MainEvent) => void>();
   const ctx: AppContext = {

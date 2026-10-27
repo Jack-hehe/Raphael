@@ -122,7 +122,12 @@ export async function run(options) {
           // Brand/key names and deliberately shared CTA decisions have identical values.
           return [...new Set(Object.entries(en).filter(([key, value]) => typeof value === 'string' && /[A-Za-z]/.test(value) && !/[<{}]/.test(value) && /[\u3400-\u9fff]/.test(zhTW[key] ?? '') && value !== zhTW[key]).map(([, value]) => value.trim()))];
         }) : [];
-        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: options.heights[width] ?? 900 }, namespaces, latinFor(scene), englishUI));
+        // The ⋯ buttons that no row of the app's own table (context-menu.ts) reaches with a right click: R-UI-44.
+        const unreached = scene.entry === "overlay.html" ? [] : await page.evaluate(async () => {
+          const { uncoveredOverflows } = await import('/src/main/context-menu.ts');
+          return uncoveredOverflows(document).map(button => ({ tag: "button", id: button.id, class: button.className, text: button.getAttribute("aria-label") ?? "" }));
+        });
+        Object.assign(result, await page.evaluate(auditDocument, undefined, { width, height: options.heights[width] ?? 900 }, namespaces, latinFor(scene), englishUI, unreached));
         const mockErrors = await page.evaluate(() => window.__look?.errors ?? ["Mock boundary was not installed"]);
         for (const message of mockErrors) error("ipc", message);
         const image = `${scene.name}-${theme}-${width}.png`;

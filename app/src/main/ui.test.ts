@@ -26,6 +26,13 @@ describe("popover placement", () => {
     expect(menuPlacement({ left: 690, right: 690, top: 300, bottom: 320 }, { width: 240, height: 120 }, viewport, "start").left).toBe(472);
   });
 
+  test("a menu at the pointer starts at the point, prefers the space below and keeps inside the window", () => {
+    const point = (x: number, y: number) => ({ left: x, right: x, top: y, bottom: y });
+    expect(menuPlacement(point(300, 200), { width: 240, height: 120 }, viewport, "pointer")).toEqual({ left: 300, top: 204, maxHeight: 268 });
+    expect(menuPlacement(point(300, 440), { width: 240, height: 120 }, viewport, "pointer")).toEqual({ left: 300, top: 316, maxHeight: 396 });
+    expect(menuPlacement(point(700, 200), { width: 240, height: 120 }, viewport, "pointer").left).toBe(472);
+  });
+
   test("an upward menu is clamped below the custom header and scrolls instead of covering it", () => {
     const placement = menuPlacement({ top: 300, bottom: 332, right: 600 }, { width: 320, height: 400 }, viewport);
     expect(placement).toEqual({ left: 280, top: 40, maxHeight: 256 });
