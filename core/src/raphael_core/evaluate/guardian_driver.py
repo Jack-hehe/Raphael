@@ -81,6 +81,12 @@ class RecordingConnector:
         self.receipts.append(receipt)
         return CallOutcome('test_mode: true; receipt: ' + receipt["receipt_id"] + '; nonce: ' + self.nonce, False)
 
+    def invalidate(self, *args):
+        """The owner uninstalled a connection or changed it: nothing is held here, but a production connector behind
+        this one drops what it holds."""
+        if self.production is not None:
+            self.production.invalidate(*args)
+
     async def aclose(self):
         pass
 
