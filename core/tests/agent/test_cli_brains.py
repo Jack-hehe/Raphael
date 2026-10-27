@@ -409,6 +409,8 @@ else:
 @pytest.mark.parametrize("shape,expected", [
     ("notified", ("error", "rate_limited")), ("snake_case", ("error", "rate_limited")),
     ("retried", ("final", "Public answer.")), ("exhausted", ("error", "quota")), ("other", ("error", "cli_turn_failed")),
+    # Live: "Selected model is at capacity" passes after a wait, like a 429.
+    ("overloaded", ("error", "rate_limited")), ("overloaded_snake", ("error", "rate_limited")),
 ])
 async def test_codex_too_many_requests_is_a_rate_limit_unless_the_plan_is_exhausted(tmp_path, monkeypatch, shape, expected):
     from raphael_core.agent.cli.drivers import Driver
@@ -422,6 +424,8 @@ def send(packet): print(json.dumps(packet), flush=True)
 camel = {"message":"exceeded retry limit, last status: 429 Too Many Requests",
          "codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}}}
 snake = {"message":"exceeded retry limit, last status: 429","codex_error_info":{"response_too_many_failed_attempts":{"http_status_code":429}}}
+overloaded = {"message":"Selected model is at capacity. Please try a different model.","codexErrorInfo":"serverOverloaded"}
+overloaded_snake = {"message":"model busy","codex_error_info":"server_overloaded"}
 for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
@@ -436,7 +440,8 @@ for line in sys.stdin:
             send({"method":"item/completed", "params":{"item":{"id":"final", "type":"agentMessage", "text":"Public answer."}}})
             send({"method":"turn/completed", "params":{"turn":{"id":"t", "status":"completed"}}})
         else:
-            error = snake if shape == "snake_case" else {"message":"PRIVATE-DIAGNOSTIC"} if shape == "other" else camel
+            error = {"snake_case": snake, "other": {"message":"PRIVATE-DIAGNOSTIC"}, "overloaded": overloaded,
+                     "overloaded_snake": overloaded_snake}.get(shape, camel)
             send({"method":"turn/completed", "params":{"turn":{"id":"t", "status":"failed", "error":error}}})
         break
 ''', encoding="utf-8")
