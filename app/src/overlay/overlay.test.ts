@@ -561,7 +561,7 @@ test("a long voiced answer is told page by page without its address, and its las
   const pages = lines().map((line) => line.slice("line:".length));
   expect(pages.length).toBeGreaterThan(2);
   expect(pages[0]!.startsWith("《答。1. ")).toBe(true);
-  expect(pages.at(-1)!.endsWith("》")).toBe(true);
+  expect(pages[pages.length - 1]!.endsWith("》")).toBe(true);
   expect(pages.join("")).not.toMatch(/https?:|\]\(/);
   expect(emblem.log).not.toContain("vanish"); // the last page stays while the voice speaks
   send({ type: "release" });
@@ -576,7 +576,7 @@ test("a voice that ends before the last page lets the pages that are left run on
   send({ type: "release" });
   vi.advanceTimersByTime(120_000);
   expect(lines().length).toBeGreaterThan(2);
-  expect(lines().at(-1)!.endsWith("》")).toBe(true);
+  expect(lines()[lines().length - 1]!.endsWith("》")).toBe(true);
   expect(emblem.last).toBe("vanish");
 });
 

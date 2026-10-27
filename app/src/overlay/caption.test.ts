@@ -35,7 +35,7 @@ test("a sentence too long for a page is cut after a comma", () => {
 test("Raphael's 《》 open on the first page and close on the last", () => {
   const pages = captionLines(`《答。${COMPOSIO}》`, "zh-TW");
   expect(pages[0]!.startsWith("《答。1. 建立帳號")).toBe(true);
-  expect(pages.at(-1)!.endsWith("》")).toBe(true);
+  expect(pages[pages.length - 1]!.endsWith("》")).toBe(true);
   for (const page of pages.slice(1)) expect(page.startsWith("《")).toBe(false);
   for (const page of pages.slice(0, -1)) expect(page.endsWith("》")).toBe(false);
   expect(pages.join("")).not.toMatch(/https?:/);
