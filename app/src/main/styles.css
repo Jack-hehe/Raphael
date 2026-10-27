@@ -172,7 +172,7 @@ svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor;
 :root[data-rail="true"] .brand .app-icon { width: 32px; height: 32px; }
 :root[data-rail="true"] .side .nav { justify-content: center; width: 40px; min-height: 40px; padding: 0; }
 :root[data-rail="true"] .side .nav-dot { top: 6px; right: 6px; margin-top: 0; }
-:root[data-rail="true"] .side .nav-count { position: absolute; top: 0; right: -2px; margin: 0; min-width: 18px; padding: 0 3px; line-height: 18px; box-shadow: 0 0 0 2px var(--side); }
+:root[data-rail="true"] .side .nav-count { position: absolute; top: 1px; right: 1px; margin: 0; min-width: 16px; padding: 0 2px; line-height: 16px; box-shadow: 0 0 0 2px var(--side); }
 :root[data-rail="true"] .usage-box { display: none; }
 :root[data-rail="true"] .side-foot { width: 40px; }
 /* the members' column runs up under the window controls: their bar takes its colours, not the content's */

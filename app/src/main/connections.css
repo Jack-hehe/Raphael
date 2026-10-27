@@ -51,6 +51,8 @@
 .cs-scrim.leaving > .cs-dialog { animation: dialog-out 0.14s ease-in forwards; }
 .cs-dialog { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--sp-3); width: min(440px, 100%); max-height: 100%; overflow-x: hidden; overflow-y: auto; padding: var(--sp-4); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--pop); }
 .cs-dialog:focus { outline: none; }
+/* The sticky actions also cover the dialog's bottom padding, so a long list of tools scrolls under them and not through the gap beneath. */
+.cs-dialog > .action-row.is-sticky { bottom: calc(var(--sp-4) * -1); margin-bottom: calc(var(--sp-4) * -1); padding-bottom: calc(var(--sp-3) + var(--sp-4)); }
 .cs-dlg-head { display: flex; align-items: center; gap: var(--sp-2); }
 .cs-dlg-head .sp { flex: 1; }
 .cs-dlg-head .tg { margin-right: var(--sp-1); }
