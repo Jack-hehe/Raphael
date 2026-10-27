@@ -373,7 +373,10 @@ export function installMock(fixture, config = {}, target = window) {
       }
       case "connectors.categories": return { items: data.pluginCategories };
       case "connectors.tools": return { items: data.pluginTools[p.id] ?? [] };
-      case "connectors.set_key": data.composioConfigured = true; return { configured: true };
+      case "connectors.set_key": {
+        if (p.key.startsWith("sk-or-")) return { ok: false, error: "openrouter_key" };
+        data.composioConfigured = true; return { configured: true };
+      }
       case "connectors.set_tools": {
         const connector = data.managedConnectors.find(c => c.id === p.id);
         if (p.enabled !== undefined) connector.enabled = p.enabled;

@@ -170,12 +170,17 @@ class ConnectorsService:
 
     async def set_key(self, params):
         key = _text(params, "key", optional=True)
-        if key and (not key.startswith("ak_") or len(key) < 4):
-            raise invalid_params("Use a Composio project API key")
+        if key.startswith("sk-or-"):
+            raise ConnectorFailure("openrouter_key")
         before = self.vault.get(KEY)
         if key:
             probe = ComposioClient(lambda: key, transport=self._transport)
-            await probe.request("GET", "/toolkits", params={"limit": 1})
+            try:
+                await probe.request("GET", "/toolkits", params={"limit": 1})
+            except ConnectorFailure as error:
+                if error.status in (401, 403):
+                    raise ConnectorFailure("auth", error.status) from None
+                raise
         if key != before:
             self._remove_managed(COMPOSIO_SERVER)
             self.store.session_id, self.store.config_version = "", None

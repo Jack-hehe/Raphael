@@ -37,6 +37,10 @@ export default [
   scene("plugins-store", "Managed plugin catalog", store),
   scene("plugins-store-category", "Plugin category dropdown", [...store, click('[data-k="conn-category"]'), wait('#app-popover [data-value="productivity"]')]),
   scene("plugins-store-key", "Missing Composio key", [...connections, click('[data-conn="tab"][data-id="store"]'), wait('#conn-key')], { composioConfigured: false }),
+  scene("plugins-store-key-openrouter", "An OpenRouter key gets an actionable, value-free Composio error", [
+    ...connections, click('[data-conn="tab"][data-id="store"]'), wait('#conn-key'),
+    type('#conn-key', 'sk-or-look-synthetic'), click('[data-conn="save-key"]'), wait('.cs-key-form [role="alert"]'), check("plugins-key-openrouter"),
+  ], { composioConfigured: false }),
   scene("plugins-connecting", "Waiting for browser sign-in", [...store, click('[data-conn="join"][data-id="github"]'), wait('.cs-wait')], { pluginsConnecting: true }),
   scene("connections-hover", "MCP server hover", [...connections, hover('[data-k="cs-open:notes"]')]),
   scene("server-menu", "MCP server detail actions", [...serverDetail, click('[data-conn="server-menu"][data-id="notes"]')]),

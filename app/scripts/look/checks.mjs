@@ -1009,6 +1009,20 @@ export function checkRendered(name) {
     require(document.querySelector('[data-run-act="show-allowance"]'), "subscription exclusion links to allowances");
     return { check: name, bill: bill.textContent, sidebar: sidebar.textContent };
   }
+  if (name === "plugins-key-openrouter") {
+    const alert = document.querySelector('.cs-key-form [role="alert"]');
+    const expected = {
+      "zh-TW": "這是 OpenRouter 的金鑰，請到「設定 → 模型與用量」輸入。",
+      en: "This is an OpenRouter key. Enter it in Settings → Models and usage.",
+      ja: "これは OpenRouter のキーです。「設定 → モデルと使用量」で入力してください。",
+    };
+    require(visible(alert) && Object.values(expected).includes(alert.textContent), "the key form explains where the OpenRouter key belongs");
+    require(document.querySelector('#conn-key').value === "", "the key field is cleared");
+    require(!document.body.textContent.includes('sk-or-look-synthetic'), "the error never echoes the key");
+    require(!window.__look.data.composioConfigured, "the wrong key never configures Composio");
+    require(window.__look.calls.filter(c => c.method === 'connectors.set_key').length === 1, "the error comes through the real IPC boundary");
+    return { check: name, message: alert.textContent };
+  }
   if (name === "usage-summary") {
     require(document.querySelectorAll(".run-tile").length === 5, "overview totals remain available");
     require(!document.querySelector(".run-list, .run-timeline, [data-run-id]"), "per-run navigation is absent");

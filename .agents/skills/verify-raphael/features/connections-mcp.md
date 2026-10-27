@@ -27,7 +27,9 @@ until members can share across users (P13).
 
 The Store uses connectors.catalog and connectors.categories, shared search/dropdown,
 paged cards, browser sign-in progress and already-added state. A missing Composio key
-shows only the password prompt and Save action; keys never enter view state or error
+shows only the password prompt and Save action. Non-empty keys are probed without a local
+prefix rule. Errors distinguish an OpenRouter key, Composio refusal and network/timeout
+failure, with generic copy otherwise; keys never enter view state or error
 copy. Remote logos accept only HTTPS Composio domains under the existing image CSP;
 bundled marks/generic plug cover absent artwork. The fixture uses installed marks
 and does not prove remote image availability.
@@ -43,7 +45,7 @@ complete its login in the browser, then return to 已連結.
 ## Driving it with look
 
 ```powershell
-npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-connecting --theme both --width 1120,720,1920x1080
+npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-store-key-openrouter plugins-connecting --theme both --width 1120,720,1920x1080
 npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
 npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
 npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connections-app-switch connector-many-tools connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080

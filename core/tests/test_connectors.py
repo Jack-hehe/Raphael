@@ -765,3 +765,36 @@ async def test_google_api_http_boundary_and_private_logs(tool, args, caplog):
     assert (await client.call(tool, args))["id"] == "test"
     assert len(seen) == 1
     assert not any(x in caplog.text for x in ("Bearer ", "private-mail", "private-event", "Private subject"))
+
+
+@pytest.mark.parametrize("outcome", ["accepted", "401", "403", "network", "timeout", "openrouter", "500"])
+async def test_key_probe_accepts_any_prefix_and_classifies_private_failures(tmp_path, conn, caplog, outcome):
+    requests = []
+    candidate = "sk-or-private-test-value" if outcome == "openrouter" else "project-private-test-value"
+
+    def respond(request):
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/api/v3.1/toolkits"
+        assert dict(request.url.params) == {"limit": "1"}
+        assert request.headers["x-api-key"] == candidate
+        if outcome == "network":
+            raise httpx.ConnectError(candidate, request=request)
+        if outcome == "timeout":
+            raise httpx.ReadTimeout(candidate, request=request)
+        return httpx.Response(200 if outcome == "accepted" else int(outcome), json={"items": [], "private": candidate})
+
+    router, service, hub, vault = setup_service(tmp_path, conn, respond)
+    vault.set("connectors:composio:key", "previous-private-key")
+    with caplog.at_level(logging.DEBUG):
+        result = await router.call("connectors.set_key", {"key": candidate})
+    if outcome == "accepted":
+        assert result == {"configured": True}
+        assert vault.get("connectors:composio:key") == candidate
+    else:
+        kind = {"401": "auth", "403": "auth", "network": "network", "timeout": "timeout", "openrouter": "openrouter_key", "500": "http_error"}[outcome]
+        assert result == {"ok": False, "error": kind, "http_status": int(outcome) if outcome.isdigit() else None}
+        assert vault.get("connectors:composio:key") == "previous-private-key"
+        assert not service.store.session_id
+    assert len(requests) == (0 if outcome == "openrouter" else 1)
+    assert candidate not in json.dumps(result) + caplog.text

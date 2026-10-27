@@ -207,3 +207,25 @@ test("only trusted remote logos are rendered and they never send a referrer", ()
   expect(html).toContain('src="https://logos.composio.dev/notion.svg"');
   expect(html).toContain('referrerpolicy="no-referrer"');
 });
+
+
+test.each(["zh-TW", "en", "ja"] as const)("key failure copy is specific and private in %s", async locale => {
+  const messages = {
+    "zh-TW": ["這是 OpenRouter 的金鑰，請到「設定 → 模型與用量」輸入。", "Composio 不接受這把金鑰。請使用 Composio「Settings → Project Settings → API Keys」中的專案金鑰。", "連不上 Composio，請稍後再試。", "無法儲存金鑰，請檢查金鑰後重試。"],
+    en: ["This is an OpenRouter key. Enter it in Settings → Models and usage.", "Composio did not accept this key. Use a project key from Composio Settings → Project Settings → API Keys.", "Could not reach Composio. Try again later.", "Could not save the key. Check it and retry."],
+    ja: ["これは OpenRouter のキーです。「設定 → モデルと使用量」で入力してください。", "Composio がこのキーを受け付けませんでした。Composio の「Settings → Project Settings → API Keys」にあるプロジェクトキーを使用してください。", "Composio に接続できません。しばらくしてから再試行してください。", "キーを保存できません。確認して再試行してください。"],
+  };
+  setLocale(locale);
+  api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
+  const { c, root, click } = setup(); await c.load(); click("tab", "store");
+  for (const [kind, index] of [["openrouter_key", 0], ["auth", 1], ["network", 2], ["timeout", 2], ["private-provider-payload", 3]] as const) {
+    api.connectorsSetKey.mockRejectedValueOnce(new Error(kind));
+    root.querySelector<HTMLInputElement>("#conn-key")!.value = "private-project-key";
+    click("save-key"); await settle();
+    expect(root.querySelector('[role="alert"]')?.textContent).toBe(messages[locale][index]);
+    expect(root.querySelector<HTMLInputElement>("#conn-key")?.value).toBe("");
+    expect(root.innerHTML + JSON.stringify(c.view())).not.toContain("private-project-key");
+    expect(root.textContent).not.toContain("private-provider-payload");
+  }
+  c.reset();
+});

@@ -87,7 +87,7 @@ export interface ConnectionsView {
   category: string;
   nextCursor: string | null;
   keyBusy: boolean;
-  keyError: boolean;
+  keyError: "" | "openrouter_key" | "auth" | "unreachable" | "unknown";
   /** The connected services: being read, read, or not to be had. */
   groups: ConnectionGroup[] | "loading" | "failed";
   /** The store, the same way. */
@@ -122,7 +122,7 @@ export interface ConnectionsView {
 }
 
 export const emptyConnectionsView = (): ConnectionsView => ({
-  configured: null, categories: [], category: "", nextCursor: null, keyBusy: false, keyError: false,
+  configured: null, categories: [], category: "", nextCursor: null, keyBusy: false, keyError: "",
   groups: "loading",
   catalog: "loading",
   inventory: "loading",
@@ -514,10 +514,19 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   );
 }
 
+function keyErrorMessage(kind: ConnectionsView["keyError"]): string {
+  switch (kind) {
+    case "openrouter_key": return t("plugins.keyOpenRouter");
+    case "auth": return t("plugins.keyRefused");
+    case "unreachable": return t("plugins.keyUnreachable");
+    default: return t("plugins.keyFailed");
+  }
+}
+
 function storeHTML(v: ConnectionsView): string {
   if (v.configured === false) return `<div class="cs-key-form"><label for="conn-key">${esc(t("plugins.keyPrompt"))}</label>` +
     `<input class="field" type="password" id="conn-key" autocomplete="new-password" spellcheck="false"${v.keyBusy ? " disabled" : ""}>` +
-    (v.keyError ? `<p role="alert">${esc(t("plugins.keyFailed"))}</p>` : "") +
+    (v.keyError ? `<p role="alert">${esc(keyErrorMessage(v.keyError))}</p>` : "") +
     actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div>`;
   if (v.catalog === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
   if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-store"')}</div>`;
@@ -704,7 +713,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let category = "";
   let nextCursor: string | null = null;
   let keyBusy = false;
-  let keyError = false;
+  let keyError: ConnectionsView["keyError"] = "";
   let managed: ManagedConnector[] = [];
   let catalogLoads = 0;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -860,12 +869,16 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (!input?.value.trim() || keyBusy) return;
     let key = input.value.trim();
     input.value = "";
-    keyBusy = true; keyError = false; redraw();
+    keyBusy = true; keyError = ""; redraw();
     try {
       await api.connectorsSetKey(key);
       configured = true;
       await loadCatalog();
-    } catch { keyError = true; }
+    } catch (error) {
+      const kind = error instanceof Error ? error.message : "";
+      keyError = kind === "openrouter_key" || kind === "auth" ? kind
+        : kind === "network" || kind === "timeout" ? "unreachable" : "unknown";
+    }
     finally { key = ""; keyBusy = false; redraw(); }
   }
 
@@ -1411,7 +1424,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     clearTimeout(searchTimer);
     catalogLoads++;
     category = "";
-    keyError = false;
+    keyError = "";
     stopOutside?.(); stopOutside = null;
     clearTimeout(confirmTimer);
     confirming = null;
