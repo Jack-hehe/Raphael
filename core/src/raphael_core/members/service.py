@@ -19,6 +19,12 @@ The RPC methods (the main window only, through the shell's allow-list):
   `members.set_avatar`. Raphael (0) is not changed here: his picture is the app's to change.
 - `members.delete {id}` -> `{deleted}`: the member, its conversation (and the exchanges of other
   threads with it), its memory folder, its routines, its tasks and its picture. The app asks first.
+- `members.set_primary {id}` -> `{primary_id}`: the owner's primary contact, the Bot that new work is brought
+  to and that hands it to the colleague it belongs to. Raphael (0) until the owner chooses another; exactly one
+  at a time. The roster says who it is to every model and to the window (`members.list`'s `team_context`,
+  `primary_id`), which is the one place it is read from. It is Raphael again when the member is hidden or
+  deleted. Raphael stays the chief of staff, in every room, whoever it is, and only the choice changes: no
+  room, task or conversation is touched.
 - `members.set_avatar {id, name, mime, data}` -> `{member}`: a picture of the owner's own, in
   base64, checked as the images of a request are (`services.attachments`), copied into
   `<local>\\avatars\\members\\` under a name of its own: the path it came from is never known here.
@@ -264,6 +270,7 @@ class MembersService:
             "members.create": self._create,
             "members.update": self._update,
             "members.delete": self._delete,
+            "members.set_primary": self._set_primary,
             "members.set_avatar": self._set_avatar,
             "members.presets": self._presets,
             "members.read": self._read,
@@ -328,6 +335,10 @@ class MembersService:
             Speaker(id=member.id, name=member.name, role=member.role, blurb=member.blurb)
             for member in self.store.members()
         ]
+
+    def primary_id(self) -> int:
+        """The owner's primary contact (0 for Raphael): the one place the roster, the window and the prompts read it from."""
+        return self.store.primary_id()
 
     def team_context(self, self_id=0, language="zh-TW", room_member_ids=None):
         from ..agent.team_context import snapshot
@@ -825,6 +836,17 @@ class MembersService:
         logger.info("A member was deleted")
         return {"deleted": deleted}
 
+    async def _set_primary(self, params: dict) -> dict:
+        member_id = _whole(params, "id")
+        try:
+            changed = self.store.set_primary(member_id)
+        except MemberError as error:
+            raise _rpc_error(error) from None
+        if changed:
+            logger.info("The primary contact was changed")
+            self._changed()
+        return {"primary_id": member_id}
+
     async def _set_avatar(self, params: dict) -> dict:
         member_id = self._member_id(params)
         name, mime, data = params.get("name"), params.get("mime"), params.get("data")
@@ -1207,7 +1229,7 @@ class MembersService:
                                 "skills_count": len(self.capabilities.skills(identifier)) if identifier else 0,
                                 "commands_count": len(self.capabilities.commands(identifier)) if identifier else 0,
                                 "routines": (await self._routines_list({"member_id": identifier}))["routines"]})
-            return {"members": members, "groups": roster["groups"],
+            return {"members": members, "groups": roster["groups"], "primary_id": roster["team_context"]["primary_id"],
                     "avatar_presets": [{"avatar": preset["avatar"], "name": preset["name"]}
                                        for preset in (await self._presets({}))["presets"]]}
         if name in ("member_create", "member_update"):

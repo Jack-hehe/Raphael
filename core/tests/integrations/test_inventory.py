@@ -79,6 +79,10 @@ class Team:
     def roster():
         return []
 
+    @staticmethod
+    def primary_id():
+        return 0
+
 
 # --- one connection by itself ---------------------------------------------------------------------------------
 

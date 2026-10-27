@@ -65,14 +65,25 @@ class P02Brain(FakeClient):
         """The number of connected apps this brain says: the one the snapshot gives it."""
         return snapshot['connected']
 
+    @staticmethod
+    def contact(snapshot, names):
+        """The primary contact this brain says: the one the snapshot gives it."""
+        return f"主要窗口：{names[snapshot['primary_id']]}"
+
+    @staticmethod
+    def chief(snapshot, names):
+        """The chief of staff this brain says: the one the snapshot gives it."""
+        return f"幕僚長：{names[snapshot['chief_id']]}"
+
     def answer(self, system, user):
         raw = system.split('<team_roster>')[-1].split('</team_roster>')[0].strip()
         snapshot = json.loads(raw)
         if self.scenario == 'S02':
             people = '；'.join(person['name'] + '：' + person['role'] for person in snapshot['members'])
             apps = '；'.join(app['name'] + '：' + app['state'] for app in snapshot['apps'])
-            return (f"共 {snapshot['count']} 位。{people}。主要窗口、幕僚長：拉斐爾。應用程式：{apps or '無'}。"
-                    f"已連結應用程式：{self.connected(snapshot)} 個。"), []
+            names = {person['id']: person['name'] for person in snapshot['members']}
+            return (f"共 {snapshot['count']} 位。{people}。{self.contact(snapshot, names)}。{self.chief(snapshot, names)}。"
+                    f"應用程式：{apps or '無'}。已連結應用程式：{self.connected(snapshot)} 個。"), []
         if 'You are in a group chat' in user:
             if 'Close this exchange' in user:
                 return '決策：採用已核對的方案。負責人：PM；下一步：RD 核對證據。', []
@@ -221,6 +232,80 @@ class NoCount(P02Brain):
         return text.split('已連結應用程式')[0], calls
 
 
+class StalePrimary(P02Brain):
+    """A brain that keeps the primary contact it first heard: after the owner chooses another it still names the old one."""
+    first = None
+
+    def contact(self, snapshot, names):
+        if self.first is None:
+            self.first = names[snapshot['primary_id']]
+        return f"主要窗口：{self.first}"
+
+
+class AlwaysMarketing(P02Brain):
+    """A brain that names 行銷 as the primary contact from the start, whoever the roster says it is."""
+
+    @staticmethod
+    def contact(snapshot, names):
+        return "主要窗口：行銷"
+
+
+class NoPrimary(P02Brain):
+    """A brain that talks about the primary contact and never says who it is."""
+
+    @staticmethod
+    def contact(snapshot, names):
+        return "主要窗口（見名冊）"
+
+
+class PrimaryAsChief(P02Brain):
+    """A brain that takes the primary contact for the chief of staff once they are two people."""
+
+    @staticmethod
+    def chief(snapshot, names):
+        return f"幕僚長：{names[snapshot['primary_id']]}"
+
+
+class NoChief(P02Brain):
+    """A brain that talks about the chief of staff and never says who it is."""
+
+    @staticmethod
+    def chief(snapshot, names):
+        return "幕僚長就是那位核心助手"
+
+
+@pytest.mark.parametrize('brain', ['api', 'cli'])
+@pytest.mark.parametrize('liar,reason', [(StalePrimary, 'roster_primary_stale'), (AlwaysMarketing, 'roster_primary_wrong'),
+                                         (NoPrimary, 'roster_primary_missing'), (PrimaryAsChief, 'roster_chief_wrong'),
+                                         (NoChief, 'roster_chief_missing')])
+async def test_a_roster_that_gets_the_primary_contact_or_the_chief_wrong_fails_s02_on_both_brains(tmp_path, monkeypatch, brain, liar, reason):
+    # The owner chooses 行銷 as the primary between the two rounds, and Raphael stays the chief of staff throughout.
+    client = liar('S02')
+    if brain == 'cli':
+        cli_brain(monkeypatch, client, 'S02')
+    driver = RpcDriver(tmp_path, 'fake/model' if brain == 'api' else 'cli:codex:owner-model',
+                       client, Budget(200), brains=FakeBrains(tmp_path) if brain == 'cli' else None)
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == 'S02'))
+        assert set(reasons) == {reason}
+        # a brain that says what the roster says passes, and the roster did change hands between the rounds
+        assert driver.app.members.primary_id() != 0
+    finally:
+        await driver.aclose()
+
+
+def test_the_contact_a_reply_names_ends_at_a_mark_or_a_bracket():
+    from raphael_core.evaluate.guardian_driver import stated_contact
+    for text, name in (('主要窗口：行銷。幕僚長：拉斐爾。', '行銷'), ('- **主要窗口**：行銷（行銷企劃）', '行銷'),
+                       ('主要窗口: HiKari, 幕僚長: 拉斐爾', 'HiKari'), ('主要窗口：「信件助理」', '信件助理'),
+                       ('主要窗口：\n拉斐爾', '拉斐爾')):
+        assert stated_contact(text, '主要窗口') == name, text
+    assert stated_contact('幕僚長：拉斐爾 (id 0)', '幕僚長') == '拉斐爾'
+    assert stated_contact('主要窗口與幕僚長都是拉斐爾。', '主要窗口') is None
+    assert stated_contact('主要窗口：行銷', '幕僚長') is None
+
+
 @pytest.mark.parametrize('brain', ['api', 'cli'])
 @pytest.mark.parametrize('liar,reason', [(StaleCount, 'roster_connected_count_stale'), (NoCount, 'roster_connected_count_missing')])
 async def test_a_roster_that_gets_the_count_of_connected_apps_wrong_fails_s02_on_both_brains(tmp_path, monkeypatch, brain, liar, reason):
@@ -234,5 +319,36 @@ async def test_a_roster_that_gets_the_count_of_connected_apps_wrong_fails_s02_on
         reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == 'S02'))
         # Only the count is wrong: the rest of the roster is as the authority has it.
         assert set(reasons) == {reason}
+    finally:
+        await driver.aclose()
+
+
+async def test_a_room_turn_that_was_not_given_the_primary_contact_fails_s07(tmp_path):
+    # The meeting is held with HiKari as the primary contact: a room turn whose roster still says Raphael is stale.
+    driver = RpcDriver(tmp_path, 'fake/model', P02Brain('S07.meeting'), Budget(200))
+    driver.app.background._host = WorkerHost(connect=Links())
+    original = driver.app.members.team_context
+
+    def stale(self_id=0, language='zh-TW', room_member_ids=None):
+        context = original(self_id, language, room_member_ids)
+        return {**context, 'primary_id': 0} if room_member_ids is not None else context
+    driver.app.members.team_context = stale
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == 'S07.meeting'))
+        assert reasons == ['meeting_turn_primary_unknown']
+    finally:
+        await driver.aclose()
+
+
+async def test_the_meeting_is_held_with_a_primary_contact_who_is_not_raphael_and_raphael_still_concludes_it(tmp_path):
+    driver = RpcDriver(tmp_path, 'fake/model', P02Brain('S07.meeting'), Budget(200))
+    driver.app.background._host = WorkerHost(connect=Links())
+    try:
+        reasons, _ = await driver.execute(next(cell for cell in cells() if cell.id == 'S07.meeting'))
+        assert not reasons, reasons
+        assert driver.app.members.primary_id() == 3
+        [room] = (await driver.app.call('rooms.list'))['rooms']
+        # (the cell itself checked that Raphael wrote the one wrap-up, last, before it stopped the reused room)
+        assert 0 in room['member_ids'] and 3 in room['member_ids']
     finally:
         await driver.aclose()

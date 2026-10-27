@@ -8,6 +8,8 @@ export function installMock(fixture, config = {}, target = window) {
   if (variant.liveScenarioOwnerView) data.turns = structuredClone(data.liveScenarioOwnerTurns);
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
   if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
+  // The owner's primary contact: Raphael until another member is chosen (`primaryMember` seeds it). The roster says it, as the core does.
+  data.primaryId = variant.primaryMember ?? 0;
   if (variant.problem) data.status.openrouter.state = "no_key";
   let adminQuestion = variant.adminApproval ? data.adminQuestions[variant.adminApproval] : null;
   let adminTurn = adminQuestion ? data.turns.find(turn => turn.id === adminQuestion.turn_id) : null;
@@ -246,7 +248,7 @@ export function installMock(fixture, config = {}, target = window) {
         // the roster of every model carries the same inventory and the same count as the sidebar and the connections page
         const counted = inventory();
         return { members: data.members, groups: data.groups, team_context: {
-          schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: 0, chief_id: 0,
+          schema_version: 1, revision: "fixture", self_id: 0, count: data.members.length, primary_id: data.primaryId, chief_id: 0,
           inventory_state: counted.state, room_member_ids: null,
           members: data.members.map(m => ({ id: m.id, name: m.name, role: m.role, blurb: m.blurb ?? "" })),
           apps: counted.apps, connected: counted.count,
@@ -255,9 +257,14 @@ export function installMock(fixture, config = {}, target = window) {
       case "members.presets": return { presets: data.presets };
       case "members.viewing": case "members.read": return {};
       case "members.tool_choices": return { tools: [], connections: data.servers };
-      case "members.update": { const member = update(data.members, p.id, p); notify("MembersChanged", { member_id: p.id }); return { member }; }
+      case "members.update": { const member = update(data.members, p.id, p); if (p.hidden && p.id === data.primaryId) data.primaryId = 0; notify("MembersChanged", { member_id: p.id }); return { member }; }
+      case "members.set_primary": {
+        // as the core: Raphael or a member that is there and not hidden from the sidebar; only the choice changes
+        if (p.id !== 0 && !data.members.some(member => member.id === p.id && !member.hidden)) throw new Error("Invalid params: no such member");
+        data.primaryId = p.id; notify("MembersChanged", { member_id: p.id }); return { primary_id: p.id };
+      }
       case "members.create": { const member = { ...data.members[1], ...p, id: nextId(data.members) }; data.members.push(member); notify("MembersChanged", { member_id: member.id }); return { member, routine_offer: null }; }
-      case "members.delete": data.members = data.members.filter(item => item.id !== p.id); notify("MembersChanged", { member_id: p.id }); return { deleted: true };
+      case "members.delete": data.members = data.members.filter(item => item.id !== p.id); if (p.id === data.primaryId) data.primaryId = 0; notify("MembersChanged", { member_id: p.id }); return { deleted: true };
       case "members.skills.list": return { skills: byMember(data.skills, p).map(skillRow) };
       case "members.skills.read": { const skill = skillOf(p); return { skill: skillRow(skill), text: skillText(skill) }; }
       case "members.skills.update": {

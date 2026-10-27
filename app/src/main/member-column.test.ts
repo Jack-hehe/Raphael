@@ -61,6 +61,50 @@ describe("the column, drawn", () => {
     expect(chief.getAttribute("aria-current")).toBe("true");
   });
 
+  test("the primary contact wears a star: Raphael until another is chosen, and one member at a time", () => {
+    const stars = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".mb-star")].map((star) => star.closest<HTMLElement>("[data-member]")!.dataset.member);
+    // the roster says nothing yet: Raphael is the primary
+    expect(stars(dom(columnHTML(view())))).toEqual(["0"]);
+    const roster = (primary_id: number): MembersList => ({ ...LIST, team_context: { schema_version: 1, revision: "r", self_id: 0, count: 5, primary_id, chief_id: 0, inventory_state: "complete", room_member_ids: null, members: [], apps: [], connected: 0 } });
+    expect(stars(dom(columnHTML(view({ list: roster(3) }))))).toEqual(["3"]);
+    expect(stars(dom(columnHTML(view({ list: roster(0) }))))).toEqual(["0"]);
+    // a roster that names nobody the list has leaves Raphael the primary, never two stars or none
+    expect(stars(dom(columnHTML(view({ list: roster(99) }))))).toEqual(["0"]);
+    // no list read yet: no star at all, as no row
+    expect(stars(dom(columnHTML(view({ list: null }))))).toEqual([]);
+  });
+
+  test("the star is a named mark on the face's corner, not text, not a second row and not a tooltip", () => {
+    const list = { ...LIST, team_context: { primary_id: 1 } } as unknown as MembersList;
+    const row =dom(columnHTML(view({ list }))).querySelector<HTMLElement>('[data-member="1"]')!;
+    const star = row.querySelector<HTMLElement>(".mb-star")!;
+    expect(star.getAttribute("role")).toBe("img");
+    expect(star.getAttribute("aria-label")).toBe("主要聯絡人");
+    expect(star.textContent).toBe("");
+    expect(star.getAttribute("title")).toBeNull();
+    expect(star.querySelector("svg.i")).not.toBeNull();
+    expect(row.querySelector(".mb-row-t b")!.textContent).toBe("進度官");
+    // Raphael's row has no star now and still his bare emblem and name only
+    const chief = dom(columnHTML(view({ list }))).querySelector<HTMLElement>(".mb-chief")!;
+    expect(chief.querySelector(".mb-star")).toBeNull();
+    expect(chief.textContent).toBe("拉斐爾");
+  });
+
+  test("on the face strip the primary keeps its star, beside the waiting and unread dots", () => {
+    const list = { ...LIST, team_context: { primary_id: 4 } } as unknown as MembersList;
+    const strip = dom(columnHTML(view({ list, collapsed: true })));
+    expect([...strip.querySelectorAll<HTMLElement>(".mb-star")].map((star) => star.closest<HTMLElement>("[data-member]")!.dataset.member)).toEqual(["4"]);
+    const primary = strip.querySelector<HTMLElement>('[data-member="4"]')!;
+    expect(primary.querySelector(".mb-dot.is-unread")).not.toBeNull();
+    // alone on the strip, its star is said in its name and tooltip too; the others keep their names
+    expect(primary.getAttribute("aria-label")).toBe("行程管家 · 主要聯絡人");
+    expect(primary.dataset.tooltip).toBe("行程管家 · 主要聯絡人");
+    expect(strip.querySelector<HTMLElement>('[data-member="3"]')!.dataset.tooltip).toBe("日文老師");
+    const raphaelStrip = dom(columnHTML(view({ collapsed: true })));
+    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.dataset.tooltip).toBe("拉斐爾 · 主要聯絡人");
+    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.getAttribute("aria-label")).toBe("拉斐爾 · 主要聯絡人");
+  });
+
   test("the groups under their headers in their order, then 未分組", () => {
     const el = dom(columnHTML(view()));
     expect([...el.querySelectorAll(".mb-gname")].map((n) => n.textContent)).toEqual(["專案", "學習", "未分組"]);
@@ -226,7 +270,10 @@ describe("the column, used", () => {
   test("a row's more gives 移到分組 and 刪除; a right click gives the same", () => {
     const column = mount();
     column.el.querySelector<HTMLElement>('[data-member-more="2"]')!.click();
-    expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(b => b.dataset.pick)).toEqual(["pin", "move", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
+    expect([...document.querySelectorAll<HTMLElement>("#app-popover [data-pick]")].map(b => b.dataset.pick)).toEqual(["pin", "move", "primary", "unread", "read-all", "edit", "duplicate", "clear", "hide"]);
+    document.querySelector<HTMLElement>('#app-popover [data-pick="primary"]')!.click();
+    expect(host.memberAction).toHaveBeenCalledWith(2, "primary");
+    column.el.querySelector<HTMLElement>('[data-member-more="2"]')!.click();
     document.querySelector<HTMLElement>('#app-popover [data-pick="hide"]')!.click();
     expect(host.memberAction).toHaveBeenCalledWith(2, "hide");
     column.el.querySelector('[data-member="1"]')!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));

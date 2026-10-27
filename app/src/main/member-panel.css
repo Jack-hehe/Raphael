@@ -16,8 +16,11 @@
 .mb-chat-picker { max-width: 480px; }
 .mb-chat-choices { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); margin-top: var(--sp-3); max-height: 52vh; overflow-x: hidden; overflow-y: auto; }
 .mb-chat-choice.btn { display: flex; justify-content: flex-start; align-items: center; gap: var(--sp-3); width: 100%; text-align: left; border: 0; background: transparent; padding: var(--sp-2); }
-.mb-chat-choice > span:last-child { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.mb-chat-choice > span:last-child, .mb-chat-choice > .mb-chat-text { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); min-width: 0; }
 .mb-chat-choice small { color: var(--text-3); }
+/* 選擇主要成員: the chosen member is tinted and carries a check, so that colour is not the only sign of it */
+.mb-primary-picker .mb-chat-choice[aria-checked="true"] { background: var(--selected); }
+.mb-primary-picker .mb-chat-choice > .i { flex: none; margin-left: auto; color: var(--accent-text); }
 .mb-hidden-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); margin-top: var(--sp-5); }
 .mb-hidden-row { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; }
 .mb-hidden-row > span { flex: 1; }

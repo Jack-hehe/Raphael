@@ -32,7 +32,8 @@ import {
   openEditMemberDialog,
   openDialog,
 } from "./member-dialogs";
-import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
+import { RAPHAEL_ID, faceHTML, memberOf, memberSections, primaryIdOf, raphaelOf } from "./members";
+import { openPrimaryPicker } from "./primary-picker";
 import type { AppContext, AvatarPreset, MainEvent, Member, MemberGroup, MemberPatch, MembersList, WireAttachment } from "./types";
 import { type Choice, btn, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
@@ -393,6 +394,7 @@ export function createMembers(host: MembersHost): MembersShell {
     const m = memberOf(list, id);
     if (!m || id === RAPHAEL_ID) return;
     if (action === "edit") return editMember(m);
+    if (action === "primary") return choosePrimary(id);
     try {
       if (action === "pin") await update(id, {pinned: !m.pinned});
       else if (action === "hide") {
@@ -419,6 +421,25 @@ export function createMembers(host: MembersHost): MembersShell {
         });
       }
     } catch (err) { toaster.info(describeError(err)); }
+  }
+
+  /**
+   * 設為主要: the window that lists the members to choose from (Raphael too, and not the primary now), with the one the
+   * menu was opened from chosen. The choice moves only the primary contact: the core's roster then says it to every
+   * Bot, and the list is read again so that the star moves. Raphael stays the chief of staff in every room.
+   */
+  async function choosePrimary(from: number): Promise<void> {
+    if (!list) return;
+    const now = primaryIdOf(list);
+    const candidates = [raphaelOf(list), ...memberSections(list).flatMap((section) => section.members)].filter((m) => m.id !== now);
+    const chosen = await openPrimaryPicker({ members: candidates, chosen: from });
+    if (chosen === null || chosen === now) return;
+    try {
+      await api.membersSetPrimary(chosen);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    await load();
   }
 
   function newConversation(): void {

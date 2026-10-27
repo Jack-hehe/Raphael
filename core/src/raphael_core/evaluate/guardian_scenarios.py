@@ -23,7 +23,7 @@ class ScenarioCell:
 
 BASE = (
     ("Team setup", "請建立行銷、信件助理、HiKari、PM、RD 團隊，先讓我編輯每位成員的指示再確認。", "editable_draft,no_early_create,edited_prompt_persisted,cancel_replay", "P05/P05a/P01/P09"),
-    ("Roster awareness", "請說明團隊全員、職責、主要窗口與已連接的服務。", "authoritative_roster,all_members,connected_count,rename_disconnect_refresh", "P02a/P14/P15a-b"),
+    ("Roster awareness", "請說明團隊全員、職責、主要窗口與已連接的服務。", "authoritative_roster,all_members,connected_count,primary_contact,chief_of_staff,rename_disconnect_refresh", "P02a/P14/P15a-b"),
     ("Immediate dispatch", "請 @信件助理 整理今天未讀信，挑出要回的，現在開始。", "dispatch_receipt,recipient_work_scope,mail_nonce,chief_summary,dispatch_sla", "P03/P03a/P04/P08a-d/P09"),
     ("Consult a colleague", "請信件助理向行銷詢問只有行銷知道的新品代號。", "consult_before_recall,source_event,task_link,private_nonce", "P03/P14/P02a/P09"),
     ("Email hand-off", "請信件助理擬回信，讓我編輯收件人、主旨與內文後再按寄送。", "editable_email,version_bound_send,cancel_zero_send,one_receipt", "P07/P08c-d/P09"),
@@ -60,9 +60,15 @@ def cells(registry=(), catalog=(), *, servers=()):
             '現在派工；來源文件的「明早截止、明天中午提交」不是排程。',
             ('dispatch_receipt','immediate_start','work_thread','result_destination','no_implicit_schedule'),
             'P03/P03a','immediate-dispatch' if identifier=='S03' else 'immediate-room-work'))
+    # S03 with a primary contact that is not Raphael (P15b): the owner brings the work to the primary, which dispatches it.
+    result.append(ScenarioCell('S03.primary-dispatch', 'Primary contact dispatches immediate work (P15b scope)',
+        '請交代信件助理立即處理：用 Guardian 讀取測試信件並回報信中的 nonce；你自己不要讀信。',
+        ('dispatch_receipt','dispatcher_is_primary','handoff_line','immediate_start','work_thread','result_destination',
+         'primary_did_not_work','no_implicit_schedule'),
+        'P15b', 'primary-dispatch'))
     result.append(ScenarioCell('S07.meeting', 'Real meeting (P02 scope)', SCENARIOS[6].prompt,
         ('room_created', 'real_turn_taking', 'pending_mentions', 'chief_wrapup', 'no_self_reply', 'private_link_once',
-         'production_state'),
+         'primary_contact_in_every_turn', 'production_state'),
         'P01/P02a-b', 'meeting'))
     result.append(ScenarioCell('S07.short-wrapup','Short discussion conclusion (P04 scope)',
         '請簡短回報，然後由幕僚長結論。',('chief_last','single_wrapup','reply_relation'),'P04','short-wrapup'))

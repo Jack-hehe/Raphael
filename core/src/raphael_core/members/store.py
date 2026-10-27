@@ -15,7 +15,10 @@
 - `member_unread`: the threads (Raphael's as 0) with news the owner has not seen.
 
 Raphael himself is not a row: he is member 0 everywhere, cannot be renamed or deleted, and has
-every tool. A name, a role, a personality, an instruction, a title and a prompt are what the owner wrote, so
+every tool. The primary contact is the member whose `primary_contact` is 1 (at most one, by the table's
+own index), or Raphael while none is: choosing another never touches the chief of staff, who is Raphael
+whoever the primary is, and a member that is hidden or deleted stops being it. A name, a role, a personality,
+an instruction, a title and a prompt are what the owner wrote, so
 nothing here logs one; a refusal says which field was wrong, never what was in it.
 
 Use it on the thread that owns `conn` (the event loop).
@@ -61,7 +64,7 @@ _AVATAR = re.compile(r"(?:preset|file):[A-Za-z0-9._ -]{1,120}")
 class MemberError(ValueError):
     """A change that cannot be made. `kind` says why in one word ("name", "taken", "role",
     "instructions", "group", "model", "tools", "avatar", "title", "prompt", "schedule", "sources",
-    "full", "not_found", "raphael"), and `str()` names the field: never what the owner wrote."""
+    "full", "not_found", "raphael", "primary", "hidden"), and `str()` names the field: never what the owner wrote."""
 
     def __init__(self, kind: str, message: str) -> None:
         super().__init__(message)
@@ -561,6 +564,9 @@ class MemberStore:
                 changes[field] = _MEMBER_FIELDS[field](value)
             else:
                 raise MemberError(field, f"{field} cannot be changed")
+        if changes.get("hidden"):
+            # The owner sees who the primary contact is in the sidebar: a member that leaves it hands the role back to Raphael.
+            changes["primary_contact"] = 0
         if changes:
             assignments = ", ".join(f"{column} = ?" for column in changes)
             with self.transaction():
@@ -572,6 +578,34 @@ class MemberStore:
         updated = self.member(member_id)
         assert updated is not None
         return updated
+
+    def primary_id(self) -> int:
+        """The member the owner chose as their primary contact: Raphael (0) until they choose another,
+        and again once that one is hidden or deleted. The one definition of it, for the roster, the
+        window and every prompt."""
+        row = self._conn.execute("SELECT id FROM members WHERE primary_contact = 1").fetchone()
+        return 0 if row is None else int(row[0])
+
+    def set_primary(self, member_id: Any) -> bool:
+        """Make `member_id` the primary contact (0 is Raphael), and nobody else: whether that changed
+        anything. Only the flag moves. The chief of staff, the rooms, the tasks, the exchanges and
+        the conversations are not touched, so nothing under way is run again, handed on or ended.
+        MemberError when it is not a whole number, nobody, or a member hidden from the sidebar."""
+        if type(member_id) is not int or member_id < 0:
+            raise MemberError("primary", "primary must be the id of a member")
+        if member_id:
+            member = self.member(member_id)
+            if member is None:
+                raise MemberError("not_found", "there is no such member")
+            if member.hidden:
+                raise MemberError("hidden", "a hidden member cannot be the primary contact")
+        if member_id == self.primary_id():
+            return False
+        with self.transaction():
+            self._conn.execute("UPDATE members SET primary_contact = 0 WHERE primary_contact = 1")
+            if member_id:
+                self._conn.execute("UPDATE members SET primary_contact = 1 WHERE id = ?", (member_id,))
+        return True
 
     def delete_member(self, member_id: int) -> bool:
         """Delete a member's row, its routines and its unread mark; whether there was one. Its

@@ -12,6 +12,8 @@ const pcCard = '[data-computer-card="card-pc"]';
 const permCard = id => `[data-permission-card="${id}"]`;
 const mailCard = '[data-mail-card="mail-1"]';
 const mailField = field => `${mailCard} [data-mail-field="${field}"]`;
+// The owner's primary contact (P15b): 小森's menu, 設為主要, and 選擇主要成員 with 小森 chosen already.
+const primaryMenu = [{ action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), click('#app-popover [data-pick="primary"]'), wait(".mb-dialog.mb-primary-picker")];
 const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
   click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
 const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
@@ -91,6 +93,11 @@ export default [
   scene("members-collapsed", "Remembered member face strip with active and waiting markers", [{ action: "member-column", collapsed: true }, click('.mb-col [data-member="1"]'), check("member-column")], { waitingMember: 3 }),
   scene("members-collapsed-hover", "Member name tooltip over the collapsed face strip", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="2"]'), check("member-column"), wait('.message-tooltip:not([hidden])')], { waitingMember: 3 }),
   scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
+  scene("primary-contact-menu", "A member's menu gives 設為主要, with the star, right after 移到分組", [{ action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), wait('#app-popover [data-pick="primary"]'), check("primary-menu")]),
+  scene("primary-contact-picker", "設為主要 in 小森's menu opens 選擇主要成員 while 小晴 is the primary: Raphael and the other members as buttons, 小森 chosen, the primary action ready", [...primaryMenu, check("primary-picker")], { primaryMember: 1 }),
+  scene("primary-contact-strip", "On the collapsed face strip the primary wears the star and its tooltip says so", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="1"]'), wait(".message-tooltip:not([hidden])"), check("primary-strip")], { primaryMember: 1 }),
+  scene("primary-contact-set", "設為主要 on 小晴 moves the star to her row and her details; no room, task or conversation is touched", [...primaryMenu, click('.mb-primary-picker [data-id="1"]'), click('.mb-primary-picker [data-dlg="set"]'), wait('.mb-col [data-member="1"] .mb-star'), member(1), { action: "open-details" }, wait(".mb-det .mb-who-face .mb-star"), check("primary-set")]),
+  scene("primary-room-chief", "With 小晴 as the primary contact Raphael is still in the room, wears the chief's crown and writes its one wrap-up", [{ action: "member-column", collapsed: false }, room(1), wait(".au-room-wrapup"), check("primary-room-chief")], { primaryMember: 1, roomWrapup: true }),
   scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
   scene("plain-bot-chat", "Raphael's stored two-message 《答。…》 reply reads plainly", [wait(".ra .chat-message[data-expandable]"), check("conversation-design"), check("plain-bot-chat")], { splitReply: true }),
   scene("centred-system-events", "Hand-off, consultation and meeting lines centred between question and answer", [wait("[data-handoff]"), check("centred-system-events")], { systemEvents: true }),

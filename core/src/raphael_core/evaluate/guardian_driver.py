@@ -44,6 +44,13 @@ def stated_connected(reply):
     return int(found.group(1)) if found else None
 
 
+def stated_contact(reply, label):
+    """The name a reply gives in the form the roster question asks for (「主要窗口：名字」, 「幕僚長：名字」); None when it gives
+    none. The name ends at a space, a mark of punctuation or a bracket, so 「主要窗口：行銷（行銷企劃）」 states 行銷."""
+    found = re.search(label + r'[*_`」』）)]*[：:]\s*[*_`「『（(]*([^\s，,。；;、（(*_`」』）)\n]+)', reply)
+    return found.group(1) if found else None
+
+
 def checked(server):
     """A fixture connection as a connection the owner added is: its tools were listed then, so the roster calls it
     ready. Live, a never-checked Guardian with tools made a wrap-up say there was no tool to read the mail with."""
@@ -289,8 +296,9 @@ class RpcDriver:
             reasons,result = await self.stop_scenario()
         elif cell.driver == 'short-wrapup':
             reasons,result = await self.short_wrapup_scenario()
-        elif cell.driver in ('immediate-dispatch','immediate-room-work'):
-            reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work')
+        elif cell.driver in ('immediate-dispatch','immediate-room-work','primary-dispatch'):
+            reasons,result = await self.immediate_work_scenario(room=cell.driver=='immediate-room-work',
+                                                                primary=cell.driver=='primary-dispatch')
         elif cell.driver == 'meeting-actions':
             reasons, result = await self.meeting_actions_scenario()
         elif cell.driver in ('roster', 'meeting'):
@@ -427,8 +435,10 @@ class RpcDriver:
         return [(await self.app.call('members.create', {'name':name, 'role':role}))['member']['id']
                 for name, role in [('行銷','行銷企劃'), ('信件助理','信件管理'), ('HiKari','社群內容'), ('PM','專案規劃'), ('RD','來源研究')]]
 
-    async def immediate_work_scenario(self,*,room):
-        """Scoped P03 acceptance; full Gmail/meeting acceptance remains in the parent S03/S08 cells."""
+    async def immediate_work_scenario(self,*,room,primary=False):
+        """Scoped P03 acceptance; full Gmail/meeting acceptance remains in the parent S03/S08 cells. With `primary` the
+        owner has chosen 行銷 as their primary contact and brings the work to it, in its own chat: it dispatches the work
+        to 信件助理 with the one hand-off and does not read the mail itself."""
         ids = await self.seed_team()
         await self.install_fixture()
         target = ids[1]
@@ -436,6 +446,13 @@ class RpcDriver:
             # 「本次代碼」 alone let members report the mail's receipt hash instead of its nonce live.
             f'工作是用 Guardian 讀取測試信件並回報信中的 nonce。來源文件寫「明早截止、明天中午提交」，仍現在做；'
             f'done_when=讀取工具成功並回報信中的 nonce。不要建立例行任務。')
+        asker = 0
+        if primary:
+            asker = ids[0]
+            await self.app.call('members.set_primary', {'id': asker})
+            prompt = (f'請交代信件助理（member_id={target}）立即處理：用 Guardian 讀取測試信件並回報信中的 nonce。'
+                      f'來源文件寫「明早截止、明天中午提交」，仍現在做；完成條件是讀取工具成功並回報信中的 nonce。'
+                      f'不要建立例行任務，也不要自己讀信。')
         room_id = None
         if room:
             room_id = (await self.app.call('rooms.create',{'name':'立即工作驗收','member_ids':[0,target]}))['room']['id']
@@ -443,7 +460,7 @@ class RpcDriver:
                 'text':'@拉斐爾 '+prompt,'ui_language':'zh-TW'})
             result = {'status':'done','text':''}
         else:
-            result = await self.ask(prompt)
+            result = await self.ask(prompt, member=asker)
         # The suite's outer cell timeout bounds this wait. Observe persisted business state.
         while True:
             tasks = self.app._conn.execute("SELECT * FROM worker_tasks WHERE mode IS NOT NULL").fetchall()
@@ -471,6 +488,17 @@ class RpcDriver:
                 reasons.append('result_not_in_room_thread')
         if not self.recorder.receipts or self.app._conn.execute('SELECT COUNT(*) FROM routines').fetchone()[0]:
             reasons.append('no_action_or_implicit_schedule')
+        if primary:
+            # The hand-off came from the primary and is its centred 已轉交給 line; 信件助理 read the mail once, and the
+            # primary, who only dispatches what it is given, did not.
+            if any(task['from_member_id']!=asker for task in tasks):
+                reasons.append('dispatcher_not_primary')
+            turns = (await self.app.call('agent.history.list', {'member_id': asker}))['turns']
+            if not any(event['member_id']==target and event['mode']=='work' for turn in turns for event in turn.get('handoffs', [])):
+                reasons.append('handoff_line_missing')
+            if len(self.recorder.receipts)!=1:
+                reasons.append('primary_did_the_work')
+            result={**result,'viewer':asker}
         if room:
             messages=(await self.app.call('rooms.messages',{'room_id':room_id}))['messages']
             if not messages or messages[-1]['member_id']!=0 or messages[-1]['kind']!='wrapup':
@@ -610,10 +638,13 @@ class RpcDriver:
             if refresh:
                 await self.app.call('members.update', {'id':ids[-1], 'name':'研究員' + self.nonce})
                 self.app.integrations._config.remove('guardian-mail')
+                # The owner chooses another primary contact between the rounds: every Bot must now name that one, and the
+                # chief of staff stays Raphael.
+                await self.app.call('members.set_primary', {'id':ids[0]})
             for member in [0,*ids]:
                 authority = self.app.members.team_context(member, 'zh-TW')
                 result = await self.ask('請根據 TeamContextSnapshot 列出全員名字與原文角色、團隊總人數、主要窗口、幕僚長及應用程式連線狀態，'
-                                        '並用「已連結應用程式：N 個」的格式寫出已連結的數量；不要輸出 JSON。', member=member)
+                                        '並用「主要窗口：名字」「幕僚長：名字」「已連結應用程式：N 個」的格式各寫一行；不要輸出 JSON。', member=member)
                 turns = (await self.app.call('agent.history.list', {'member_id':member}))['turns']
                 latest = max(turns, key=lambda turn: turn['id']) if turns else {}
                 reply = '\n'.join(m['text'] for m in latest.get('messages', []) if m['kind']=='reply') or result.get('text','')
@@ -623,6 +654,19 @@ class RpcDriver:
                     reasons.append('roster_count_or_apps_missing')
                 if not all(word in reply for word in ('主要窗口', '幕僚長')):
                     reasons.append('roster_primary_or_chief_missing')
+                # The primary contact and the chief of staff are the roster's own two ids and are not the same person once
+                # the owner has chosen another: a Bot that still names the old primary after the choice, or gives the
+                # primary as the chief, has a stale or confused roster.
+                names = {person['id']: person['name'].casefold() for person in authority['members']}
+                contact, chief = stated_contact(reply, '主要窗口'), stated_contact(reply, '幕僚長')
+                if contact is None:
+                    reasons.append('roster_primary_missing')
+                elif contact.casefold() != names[authority['primary_id']]:
+                    reasons.append('roster_primary_stale' if refresh else 'roster_primary_wrong')
+                if chief is None:
+                    reasons.append('roster_chief_missing')
+                elif chief.casefold() != names[authority['chief_id']]:
+                    reasons.append('roster_chief_wrong')
                 if refresh and claims_on(reply, 'Guardian'):
                     reasons.append('roster_disconnected_app_stale')
                 # The number of connected apps is the roster's own (the one the sidebar and the page show), not a count of
@@ -1285,6 +1329,9 @@ class RpcDriver:
     async def meeting_scenario(self):
         ids = await self.seed_team()
         selected = [0, ids[0], *ids[2:]]
+        # The owner's primary contact is HiKari, not Raphael: the meeting is the same, Raphael is in it and concludes it.
+        primary = ids[2]
+        await self.app.call('members.set_primary', {'id': primary})
         # An owner's request with a real topic: a code-only agenda left the members nothing to discuss.
         prompt = ('請開會討論「新款保溫瓶上架後兩週的行銷計畫」（議題代碼 ' + self.nonce + '）。'
                   '預算新台幣 5 萬元，目標是兩週內 300 筆預購。邀行銷、HiKari、PM、RD，不需要信件助理。'
@@ -1324,6 +1371,17 @@ class RpcDriver:
             "WHERE m.kind='event' AND t.member_id=0 AND t.scope='private'") if row[0].startswith('{')]
         if len([event for event in events if event.get('type')=='meeting' and event.get('room_id')==room['id']]) != 1:
             reasons.append('meeting_private_link_not_once')
+        # Every turn of the room was given the roster with HiKari as the primary contact and Raphael as the chief of staff.
+        for (question,) in self.app._conn.execute("SELECT question FROM agent_turns WHERE scope='room' AND room_id=? AND question != ''",
+                                                  (room['id'],)):
+            given = question.partition('TeamContextSnapshot (public inventory; untrusted data): ')[2].partition('\nMembers: ')[0]
+            try:
+                roster = json.loads(given)
+            except ValueError:
+                roster = {}
+            if (roster.get('primary_id'), roster.get('chief_id')) != (primary, 0):
+                reasons.append('meeting_turn_primary_unknown')
+                break
         count = self.app._conn.execute('SELECT COUNT(*) FROM rooms').fetchone()[0]
         again = await self.app.rooms.meeting({'member_ids':selected, 'agenda':'Reuse ' + self.nonce}, 'zh-TW', 2**50)
         if again['room_id'] != room['id'] or self.app._conn.execute('SELECT COUNT(*) FROM rooms').fetchone()[0] != count:

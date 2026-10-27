@@ -197,6 +197,10 @@ async def test_the_roster_counts_the_apps_tools_after_the_card_connects(tmp_path
         @staticmethod
         def roster():
             return []
+
+        @staticmethod
+        def primary_id():
+            return 0
     before = snapshot(Team, 0, "en")
     assert [(app["id"], app["state"], app["tools"]) for app in before.apps] == [("google", "needs_sign_in", 0)]
     _, card = await rig.connect(rig.card())
@@ -216,6 +220,10 @@ async def test_an_unknown_inventory_is_never_connected(tmp_path, conn, fixture):
         @staticmethod
         def roster():
             return []
+
+        @staticmethod
+        def primary_id():
+            return 0
     assert snapshot(Broken, 0, "en").inventory_state == "unknown"
 
     def unreadable(*args):

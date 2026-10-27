@@ -91,6 +91,18 @@ Only committed admin operations count toward tool coverage. The offline fake API
 and sequential authenticated CLI/MCP tests are deterministic evidence; they do not
 establish live provider acceptance.
 
+## S02, S03 and S07 with a primary contact (P15b-1)
+
+The owner's primary contact is Raphael until they choose another member (`members.set_primary`). S02 asks every Bot for 「主要窗口：名字」, 「幕僚長：名字」 and
+「已連結應用程式：N 個」, one line each, then changes the primary to 行銷 (with the rename and the removed app) and asks every Bot again: each reply must name
+the roster's primary (`roster_primary_missing`, `roster_primary_stale`, `roster_primary_wrong`) and Raphael as the chief of staff (`roster_chief_missing`,
+`roster_chief_wrong`). `S03.primary-dispatch` makes 行銷 the primary and tells it, in its own chat, to have 信件助理 read the mail now: one durable task
+from the primary to 信件助理 (`dispatcher_not_primary`), the primary's centred 已轉交給 line (`handoff_line_missing`), one receipt, so the primary did not read the
+mail itself (`primary_did_the_work`), and the usual immediate-start, scope, result and no-routine checks. `S07.meeting` is held with HiKari as the primary: Raphael
+is in the room and writes its one wrap-up as before, and every room turn must carry the roster with that primary and Raphael as the chief
+(`meeting_turn_primary_unknown`). Offline honest fake brains and a lying brain for each check are in core/tests/evaluate/test_p02_scenarios.py and
+test_guardian_scenarios.py.
+
 ## S16 quick question (P19)
 
 S16 asks as the Alt+Space hotkey does (`agent.ask` with `destination: "quick"`, no

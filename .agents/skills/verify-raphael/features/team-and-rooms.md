@@ -57,7 +57,15 @@ npm run look -- room-composer-empty room-text room-composer-hover team-composer-
 npm run look -- room-replies room-discussion room-thinking room-wrapup room-row-menu new-room-responder room-reply-send room-stop --theme both --width 1120,720,1920x1080
 npm run look -- room-required-chief room-generated-name room-private-isolation room-reply-owner room-reply-peer room-reply-source-missing --theme both --width 1120,720,1920x1080
 npm run look -- team-roster-aware mentions-bots-apps member-mentions-bots-apps plus-create-room room-mentions room-routing-fallback meeting-open-room meeting-chief-event room-role-assignment room-round-typing room-mention-after-hop-limit room-mention-after-turn-limit room-mention-blocked room-wrapup-after-replies --theme both --width 1120,720,1920x1080
+npm run look -- primary-room-chief --theme both --width 1120,720,1920x1080
 ```
+
+The owner's primary contact (see [Members](members.md)) is not the chief of staff. Raphael is in every room, wears the crown and writes each exchange's one wrap-up
+whoever the primary is, and he can never be taken out of a room; choosing another primary or hiding or deleting the primary changes no room, task or exchange.
+`primary-room-chief` opens a room with 小晴 as the primary (the star is on her row, not on Raphael's) and checks that the header names every member with the crown on
+Raphael alone and that the room ends with his one wrap-up. Offline proof: core/tests/members/test_primary.py runs the same exchange with the primary chosen before the owner
+speaks, while the chief frames it, after the first reply, while the wrap-up runs and back to Raphael, and every one gives the same turns and one conclusion; Guardian S07.meeting
+is held with HiKari as the primary and requires every room turn to carry that roster.
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
 composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: at 1920x1080 the group panels occupy at least 80% of workspace width and 35% of workspace area, remain inside the scrollport, and keep names and roles at a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention items lead with the member's face, the app's connection mark or the team icon in one aligned column, with an app's state quiet on the right; slash items start at the row padding; neither reserves an empty icon/check column. For mutation work extend scenes through create,

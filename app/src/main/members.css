@@ -89,6 +89,15 @@
 .mb-col.is-collapsed .mb-row[aria-current="true"] { background: var(--selected); box-shadow: inset 2px 0 var(--accent-text); }
 .mb-col.is-collapsed .mb-dot { position: absolute; top: 4px; right: 2px; width: 7px; height: 7px; }
 
+/* ---------- the primary contact: a small round star at the corner of its face (never on the face itself) ---------- */
+.mb-star { position: absolute; z-index: 1; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); pointer-events: none; }
+.mb-star .i { fill: currentColor; }
+.nav.mb-row > .mb-star { left: calc(var(--sp-2) + var(--pa-row-av) - 16px); top: calc(50% + var(--pa-row-av) / 2 - 16px); }
+.nav.mb-chief.mb-row > .mb-star { left: calc(50% + var(--pa-chief-av) / 2 - 16px); top: calc(var(--sp-3) + var(--pa-chief-av) - 18px); }
+.mb-col.is-collapsed .nav.mb-row > .mb-star { top: auto; left: auto; right: 2px; bottom: 2px; }
+.mb-who-face { position: relative; display: inline-flex; }
+.mb-who-face > .mb-star { right: 2px; bottom: calc(6px + 4 * var(--pa-u)); }
+
 /* ---------- the members' faces (never Raphael's: see the top) ---------- */
 .av.mb-av { overflow: hidden; border-radius: var(--r-pill); }
 .av.mb-av-placeholder { display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-2); user-select: none; }

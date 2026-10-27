@@ -202,6 +202,9 @@ export const membersCreate = (member: NewMember): Promise<{ member: Member; rout
 export const membersUpdate = (id: number, patch: MemberPatch): Promise<{ member: Member }> => core("members.update", { id, ...patch });
 /** Deletes a member with its conversation, its memory and its routines. The page asks the owner first. */
 export const membersDelete = (id: number): Promise<{ deleted: boolean }> => core("members.delete", { id });
+
+/** Makes member `id` the owner's primary contact (0 is Raphael). Only that choice changes; the roster of `membersList` says who it is. */
+export const membersSetPrimary = (id: number): Promise<{ primary_id: number }> => core("members.set_primary", { id });
 /** A picture of this PC for a member: name, type and bytes in base64, checked by the core as the composer's images are. */
 export const membersSetAvatar = (id: number, file: WireAttachment): Promise<{ member: Member }> => core("members.set_avatar", { id, ...file });
 /** The images of the presets folder (`<app data>\avatars\presets`), none when it is not there. */
