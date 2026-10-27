@@ -139,8 +139,12 @@ async def run_cell(cell, brain, model, directory, *, client, brains, budget, sec
             actual |= set(driver.transport.models)
         if not actual or actual != {model}:
             reasons.append("actual_model_unverified_or_changed")
-        if brain == "C" and set(driver.actual_cli_models) != {brain_ref(model)[1]}:
-            reasons.append("cli_actual_model_unverified_or_changed")
+        # S16's formal side may be a second Codex model (the owner keeps conversation tests on the Codex quota);
+        # its turns then report that model too, and the S16 driver checks which turns answered on which.
+        if brain == "C":
+            expected_cli = {brain_ref(model)[1]} | ({brain_ref(contrast)[1]} if contrast and brain_ref(contrast) else set())
+            if set(driver.actual_cli_models) != expected_cli:
+                reasons.append("cli_actual_model_unverified_or_changed")
         result.update(status="FAIL" if reasons else "PASS", reason="; ".join(dict.fromkeys(reasons)),
                       actual_model=(driver.actual_cli_models[-1] if driver.actual_cli_models else None) if brain == "C"
                       else next(iter(actual)) if len(actual) == 1 else None,

@@ -87,6 +87,18 @@ async def test_s16_passes_on_both_brains_through_the_suite(tmp_path, monkeypatch
     assert sessions[0] is None and (brain == "C" or sessions[-1] is not None)
 
 
+async def test_s16_passes_on_the_codex_brain_alone_with_a_second_codex_model(tmp_path, monkeypatch):
+    # The owner keeps conversation tests on the Codex quota: live, a second Codex model on the formal side failed
+    # as a changed model because the suite expected the run's own model in every CLI turn.
+    honest_cli(monkeypatch)
+    formal = "cli:codex:formal-model?effort=low"
+    result = await run_cell(S16, "C", CLI, tmp_path, client=HonestBrain(), brains=FakeBrains(tmp_path),
+                            budget=Budget(40), seconds=30, run_id="offline-s16", head="test-head",
+                            registry=await inventory(), contrast=formal)
+    assert result["status"] == "PASS", result
+    assert result["settings"]["agent_model"] == formal
+
+
 async def run_s16(tmp_path, brain="A"):
     model, contrast = brains_for(brain)
     driver = RpcDriver(tmp_path, model, HonestBrain(), Budget(40), brains=FakeBrains(tmp_path), contrast=contrast)
