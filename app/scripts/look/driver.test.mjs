@@ -17,6 +17,16 @@ describe("look browser interaction contracts", () => {
     await expect(perform(page, { action: "click", selector: ".target" })).rejects.toThrow("application failure");
     expect(page.waitForFunction).toHaveBeenCalledTimes(3);
   });
+  it.each([true, false])("opens the wide member picker through visible column controls (collapsed=%s)", async collapsed => {
+    const clicked = [];
+    const page = {
+      evaluate: vi.fn().mockResolvedValue(false),
+      $eval: vi.fn().mockResolvedValue(collapsed),
+      waitForFunction: vi.fn().mockImplementation(async (_fn, _options, selector) => ({ asElement: () => ({ click: async () => { clicked.push(selector); }, dispose: vi.fn() }) })),
+    };
+    await perform(page, { action: "member-picker" });
+    expect(clicked).toEqual([...(collapsed ? ['[data-col="collapse"]'] : []), '[data-col="add"]', '#app-popover [data-pick="conversation"]']);
+  });
   it("fails after three pre-dispatch stale handles", async () => {
     const target = { click: vi.fn().mockRejectedValue(new Error("Node is detached from document")), dispose: vi.fn() };
     const page = { waitForFunction: vi.fn().mockResolvedValue({ asElement: () => target }) };

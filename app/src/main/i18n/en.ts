@@ -1201,7 +1201,6 @@ export const en = {
   "auto.weekdaysAt": "Weekdays at {p0}",
   "auto.delete": "Delete routine",
   "team.title": "Team",
-  "team.chief": "Chief assistant",
   "team.chat": "Chat",
   "team.newGroup": "New group",
   "team.composer": "Message your team",

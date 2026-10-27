@@ -4,7 +4,7 @@ import * as api from "../api";
 import { occurrences } from "../automation-calendar";
 import { describeError, formatClock } from "../format";
 import { getLocale, onLocaleChange, t } from "../i18n";
-import { dayName, faceHTML } from "../members";
+import { dayName, faceHTML, primaryFirst, primaryIdOf } from "../members";
 import { openRoutineDialog } from "../routine-dialog";
 import { dateKey, localDay, shiftDay, monthLabel, monthGrid } from "../schedule-picker";
 import type { AppContext, Member, Page, Routine, RoutineRun } from "../types";
@@ -33,7 +33,7 @@ export function createAutomationsPage(app: AppContext): Page {
       const [people, plans] = await Promise.all([api.membersList(getLocale()), api.routinesList()]);
       const histories = await Promise.all(plans.routines.map(async r => [r.id, await api.routineRuns(r.id)] as const));
       if (mine !== loads || !visible) return;
-      members = people.members; routines = plans.routines; logs = new Map(histories.map(([id, h]) => [id, h.runs])); runCounts = new Map(histories.map(([id, h]) => [id, h.total ?? h.runs.length])); pending = false; draw();
+      members = primaryFirst(people.members, primaryIdOf(people)); routines = plans.routines; logs = new Map(histories.map(([id, h]) => [id, h.runs])); runCounts = new Map(histories.map(([id, h]) => [id, h.total ?? h.runs.length])); pending = false; draw();
     } catch (error) { if (mine === loads && visible) { pending = false; draw(); toaster.info(describeError(error)); } }
   }
   function rangeLabel(start: Date, end: Date): string {

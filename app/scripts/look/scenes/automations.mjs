@@ -4,7 +4,7 @@ const auto = [page("home"), click('.ho-today [data-home-go="calendar"]'), wait("
 const calendar = [...auto, wait(".au-occurrence"), check("calendar-chips"), check("calendar-shell")];
 const dialog = [...auto, click('[data-au="new"]'), wait(".mb-dialog")];
 const more = [...dialog, click('[data-dlg="more"]')];
-const team = [page("team"), wait(".team-member"), check("team-header")];
+const team = [page("team"), wait(".team-member"), check("team-header"), check("team-chief-visible"), check("team-canvas-open"), check("team-content-size"), check("team-member-columns")];
 const tools = [...calendar, { action: "calendar-tools" }, check("calendar-tools")];
 const groupMenu = [...team, click('[data-team="group-menu"]')];
 export default [
@@ -50,19 +50,25 @@ export default [
   scene("automation-delete", "Delete an automation confirmation", [...auto, click('[data-au="edit"]'), click('[data-dlg="delete"]'), check("delete-confirmation")]),
   scene("automation-drag-prefill", "Calendar drop opens a prefilled automation", [...tools, { action: "drag-start", selector: '[data-drag-member="2"]' }, { action: "drop", selector: '[data-slot][data-hour="9"]', memberId: 2 }]),
   scene("automation-more-bottom", "Scrollable automation advanced fields", [...more, click('[data-dlg="end"]'), click('[data-value="after"]'), scroll(".au-more")]),
-  scene("team", "Grouped team board", [...team, check("team-board-space"), check("team-no-overlap")]),
-  scene("team-panned", "Right-button drag pans without a menu", [...team, { action: "pointer-drag", selector: '[data-team-card="1"] .team-member-head b', button: "right", dx: 60, dy: -40, expectMenuClosed: true }, check("team-canvas-panned"), check("team-no-overlap")]),
-  scene("team-rearranged", "Group headers move independently on the canvas", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check("team-canvas-rearranged"), check("team-no-overlap")]),
-  scene("team-member-menu", "Right click on a team card opens its shared member menu", [...team, rightClick('[data-team-card="1"]'), wait('#app-popover'), check('context-menu'), rightClick('[data-team-card="1"]'), wait('#app-popover'), check('team-no-overlap')]),
-  scene("team-fit", "Fit includes a moved group and the chief", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check('team-canvas-rearranged'), click('[data-team="fit"]'), check('team-canvas-fit'), check('team-no-overlap')]),
+  scene("primary-team-board", "The primary takes the top board card and Raphael takes its group slot", [...team, check("primary-board"), check("team-no-overlap"), check("team-board-space")], { teamBoardRoster: true, primaryMember: 3 }),
+  scene("primary-team-mentions", "Mentions put the primary where Raphael was", [...team, type('.team-composer textarea', '@'), check("team-mentions"), check("primary-mentions")], { primaryMember: 1 }),
+  scene("primary-room-picker", "Room choices swap display order while Raphael stays required", [newRoom(), check("primary-room-picker"), click('[data-dlg="member"][data-member="1"]'), check("primary-room-picker"), click('[data-dlg="responder"]'), check("room-responder")], { primaryMember: 1 }),
+  scene("primary-room-members", "Room membership editor keeps Raphael required after the display swap", [room(1), click('[data-room-menu]'), click('[data-pick="members"]'), check("primary-room-picker")], { primaryMember: 1 }),
+  scene("primary-calendar-members", "Calendar member tools use primary display order", [...tools, check("primary-calendar")], { primaryMember: 1 }),
+  scene("primary-routine-members", "Routine choices change display order without changing their selection", [...dialog, check("primary-routine-picker")], { primaryMember: 1 }),
+  scene("team", "Grouped team board", [...team, check("team-board-space"), check("team-no-overlap"), check("team-content-size"), check("team-member-columns")], { teamBoardRoster: true }),
+  scene("team-panned", "Right-button drag pans without a menu", [...team, { action: "pointer-drag", selector: '[data-team-card="3"] .team-member-head b', button: "right", dx: 60, dy: -40, expectMenuClosed: true }, check("team-canvas-panned"), check("team-no-overlap"), check("team-content-size"), check("team-member-columns")], { teamBoardRoster: true }),
+  scene("team-rearranged", "Group headers move independently on the canvas", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check("team-canvas-rearranged"), check("team-no-overlap"), check("team-content-size"), check("team-member-columns")], { teamBoardRoster: true }),
+  scene("team-member-menu", "Right click on a team card opens its shared member menu", [...team, rightClick('[data-team-card="3"]'), wait('#app-popover'), check('context-menu'), rightClick('[data-team-card="3"]'), wait('#app-popover'), check('team-no-overlap'), check('team-content-size')], { teamBoardRoster: true }),
+  scene("team-fit", "Fit includes a moved group and the chief", [...team, { action: "pointer-drag", selector: '[data-team-group="1"] > header h2', dx: 36, dy: 64 }, check('team-canvas-rearranged'), click('[data-team="fit"]'), check('team-canvas-fit'), check('team-chief-visible'), check('team-no-overlap'), check('team-content-size')], { teamBoardRoster: true }),
   scene("team-group-menu", "Team group actions", groupMenu),
   ...["rename", "delete"].map(action => scene(`team-${action}`, `Team group ${action}`, [...groupMenu, click(`[data-pick="${action}"]`), ...(action === "delete" ? [check("delete-confirmation")] : [])])),
   scene("team-new-menu", "Team creation menu", [...team, click('[data-team="new"]')]),
   scene("team-new-group", "New team group", [...team, click('[data-team="new"]'), wait('#app-popover [data-pick="group"]'), click('#app-popover [data-pick="group"]'), wait(".mb-dialog")]),
   scene("team-mentions", "Mentions follow the character at line start, after a newline and inline", [...team, type(".team-composer textarea", "@"), check("team-mentions"), type(".team-composer textarea", "請整理進度。\n@"), check("team-mentions"), type(".team-composer textarea", "請 @"), check("team-mentions")]),
   scene("team-empty", "Team board with Raphael only", team, { groups: [], onlyRaphael: true }),
-  scene("team-drop-target", "Team member drag destination", [...team, { action: "drag-start", selector: ".team-member[draggable]" }, { action: "wheel", selector: ".team-board-scroll", reveal: '[data-team-group="2"]', marginBottom: 180 }, { action: "drag-over", selector: '[data-team-group="2"]', memberId: 1 }, check("team-canvas-drop"), check("team-no-overlap")]),
-  scene("team-zoom", "Zoomed team board at the wheel pointer", [...team, click('[data-team="zoom-in"]'), { action: "wheel", selector: ".team-board-scroll", ctrl: true, deltaY: -40 }, check("team-no-overlap")]),
+  scene("team-drop-target", "Team member drag destination", [...team, { action: "drag-start", selector: '[data-team-card="1"]' }, { action: "wheel", selector: ".team-board-scroll", reveal: '[data-team-group="1"]', marginBottom: 180 }, { action: "drag-over", selector: '[data-team-group="1"]', memberId: 1 }, check("team-canvas-drop"), check("team-no-overlap"), check("team-content-size"), check("team-member-columns")], { teamBoardRoster: true }),
+  scene("team-zoom", "Zoomed team board at the wheel pointer", [...team, click('[data-team="zoom-in"]'), { action: "wheel", selector: ".team-board-scroll", ctrl: true, deltaY: -40 }, page("agent"), page("team"), check("team-canvas-reopened"), check("team-chief-visible"), check("team-no-overlap"), check("team-content-size"), check("team-member-columns")], { teamBoardRoster: true }),
   scene("sidebar", "Conversation sidebar and rooms", []),
   scene("compact-rooms", "Rooms in the compact picker", [{ action: "rooms-menu" }]),
   scene("new-room", "New room dialog", [newRoom()]),

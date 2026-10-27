@@ -7,7 +7,7 @@
 
 import { t } from "./i18n";
 import { openDialog } from "./member-dialogs";
-import { faceHTML, memberMatches } from "./members";
+import { faceHTML, memberRole, memberMatches } from "./members";
 import type { Member } from "./types";
 import { btn, esc, ico } from "./ui";
 
@@ -59,7 +59,7 @@ export function openPrimaryPicker(o: PrimaryPickerOptions): Promise<number | nul
         ? shown
             .map((member) =>
               btn(
-                `${faceHTML(member, 34)}<span class="mb-chat-text"><b>${esc(member.name)}</b>${member.blurb || member.role ? `<small>${esc(member.blurb || member.role)}</small>` : ""}</span>${member.id === chosen ? ico("check") : ""}`,
+                `${faceHTML(member, 34)}<span class="mb-chat-text"><b>${esc(member.name)}</b>${member.blurb || memberRole(member) ? `<small>${esc(member.blurb || memberRole(member))}</small>` : ""}</span>${member.id === chosen ? ico("check") : ""}`,
                 "mb-chat-choice",
                 ` role="radio" aria-checked="${member.id === chosen}" data-dlg="pick" data-id="${member.id}"`,
               ),

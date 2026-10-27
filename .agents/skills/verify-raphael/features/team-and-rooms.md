@@ -62,13 +62,13 @@ npm run look -- primary-room-chief --theme both --width 1120,720,1920x1080
 
 The owner's primary contact (see [Members](members.md)) is not the chief of staff. Raphael is in every room, wears the crown and writes each exchange's one wrap-up
 whoever the primary is, and he can never be taken out of a room; choosing another primary or hiding or deleting the primary changes no room, task or exchange.
-`primary-room-chief` opens a room with 小晴 as the primary (the star is on her row, not on Raphael's) and checks that the header names every member with the crown on
+`primary-room-chief` opens a room with 小晴 as the primary (she takes the top display slot while Raphael keeps his emblem in her former slot) and checks that the header names every member with the crown on
 Raphael alone and that the room ends with his one wrap-up. Offline proof: core/tests/members/test_primary.py runs the same exchange with the primary chosen before the owner
 speaks, while the chief frames it, after the first reply, while the wrap-up runs and back to Raphael, and every one gives the same turns and one conclusion; Guardian S07.meeting
 is held with HiKari as the primary and requires every room turn to carry that roster.
 
 Keep board/picker/thread/dialog PNGs. Check membership, authors, mention lists,
-composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: at 1920x1080 the group panels occupy at least 80% of workspace width and 35% of workspace area, remain inside the scrollport, and keep names and roles at a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention items lead with the member's face, the app's connection mark or the team icon in one aligned column, with an app's state quiet on the right; slash items start at the row padding; neither reserves an empty icon/check column. For mutation work extend scenes through create,
+composer and overlay clearance. Team journeys assert the header padding and aligned Add action. The default team scene also checks R-UI-01: group panels size to their own members without stretching to a taller sibling. At 1920x1080 their columns span at least 80% of workspace width; there is no minimum panel area. Tall rosters remain reachable by panning, and names and roles keep a readable measure. The team-mentions scene checks line-start, multiline and inline @ positions, requiring the menu's left edge within 24px of the character at all three sizes. Mention items lead with the member's face, the app's connection mark or the team icon in one aligned column, with an app's state quiet on the right; slash items start at the row padding; neither reserves an empty icon/check column. For mutation work extend scenes through create,
 send, rename and membership changes; assert UI and mock boundary records. Native
 proof needs a harmless room message, actual recipient responses and persistence
 after reopening the isolated dev instance. Record recipients, states and cleanup.
@@ -150,9 +150,9 @@ npm run look -- team team-panned team-rearranged team-member-menu team-drop-targ
 
 The board pans with a right or middle drag anywhere except an action, or a left drag on empty canvas.
 Wheel movement pans; Ctrl+wheel zooms at the pointer, within 50-150%. Minus/plus zoom about the
-viewport center. The monitor icon fits the chief and all groups in view within the same zoom range.
-If a layout is larger than the viewport even at 50%, fit centers its bounds; reset restores the automatic layout.
-The chief remains above the automatic groups. Drag a group's header to move that panel independently.
+viewport center. Opening starts at 100% and reopening retains the zoom chosen in this page session; opening only pans to reveal the top card. The monitor icon alone fits the chief and all groups in view within the same zoom range.
+If a layout is taller than the viewport even at 50%, fit starts at the top instead of clipping the chief. Opening or fitting the board brings the entire chief card into the canvas with a 16px inset; overflowing groups remain reachable by panning. Reset restores the automatic layout.
+The primary occupies the top card above the automatic groups; Raphael exchanges into its original group slot and remains the room chief. The geometry class `team-chief` names the top slot, not a new coordinator identity. Drag a group's header to move that panel independently.
 Device-local positions are keyed by group id in `raphael.team.positions`; missing, invalid or inaccessible
 localStorage falls back to automatic layout/in-memory placement. The Add menu's Reset group layout
 clears all manual positions and restores the initial pan/zoom. Manual groups take priority; automatic groups
@@ -160,10 +160,12 @@ flow around them. Each drag resolves to the nearest free position with a 16px ga
 an obstacle. Loading, resizing and zooming resolve conflicting saved positions without rewriting the
 saved preference. Drop previews also trigger layout so growing groups do not cover their neighbours.
 
-Every ordinary member card has the column's shared overflow menu (pin, move, primary, unread,
+Within each group, member cards fill the available width in up to three columns, then wrap to another row. A one-member group retains a single card width; groups keep their own content height. Drop previews update this width capacity before resolving collisions, then restore it on leave/end. At 1920 the one/eight-member fixture uses one and three columns; at 720 its large group uses two.
+
+Every ordinary member card, including a primary in the top slot, has the column's shared overflow menu (pin, move, primary, unread,
 read all, edit, duplicate, clear, hide, delete), including the same submenus, confirmations and RPCs.
 Raphael keeps the column's protected chief behavior: conversation action and double click, no destructive
-member menu. Cards show waiting/unread dots and `member.model`, falling back to the answer model.
+member menu. Cards show waiting/unread dots and `member.model`, falling back to the answer model. `modelPickerSelection` supplies the same catalog/CLI display name and subscription source as the model picker button; neither text nor tooltip exposes a raw CLI ref or effort suffix. Cached CLI metadata remains usable after logout.
 A card double click opens its private conversation. During a cross-group drag the destination is outlined
 and tinted, with an inert preview of the arriving member at the end of its list; leaving or ending the drag
 clears it. Dropping updates group membership, not ordering inside a group.
@@ -178,3 +180,11 @@ Inspect every contact sheet and full-size image, especially the 720px composer a
 DOM tests in `pages/team.test.ts` cover pointer/wheel math, persistence/reset, unavailable storage,
 menu equality and each action's effect, confirmation cancellation, drop cleanup and double-click navigation.
 Browser fixtures prove rendered interactions and localStorage writes, not native relaunch or provider calls.
+
+## Content-sized team panels (owner screenshot, 2026-10-27)
+
+The seven canvas scenes above use `fixture.json`'s `teamBoard` roster through the shared mock IPC variant: 學習 has 紫苑 alone, 未分組 has eight members, and the answer/member refs include `cli:codex:gpt-6.1-sol?effort=high` and `cli:claude:haiku`. `team-member-columns` checks available column count (at most three), first-row filling, one-member width and Raphael role consistency. `team-content-size` compares each panel's own content, margins and padding with its height, and rejects raw CLI labels. `team-chief-visible` checks the whole chief card on opening and after fit. `team-no-overlap` remains active after every canvas interaction. Inspect every contact sheet and all 720/1920 PNGs: one-person panels stay short, CLI names include their source, the top card is not cut on opening/fit, and composer/zoom remain reachable. At the 50% floor a tall roster can extend below the canvas; fit does not claim every group fits in that case.
+
+## Primary display exchange (owner, 2026-10-27)
+
+`primary-team-board` uses the one/eight-member CLI fixture with 紫苑 as primary: her card takes the top slot, and Raphael takes her place in 學習 with his emblem, localized chief-of-staff role and protected actions. It checks the exchanged IDs, 100% opening zoom, wrapped content-sized panels, no overlap and top-card visibility, without pressing Fit before capture. `team-fit` independently checks fitting; `team-zoom` checks retained zoom after reopening. `primary-team-mentions` checks member ordering while keeping everyone/groups/apps and mention values unchanged. `primary-room-picker`, `primary-room-members` and `primary-room-chief` cover display order with identity 0 still required/crowned and authoring the single wrap-up. See [Members](members.md) for the shared order and other pickers. No core or routing contract changes.

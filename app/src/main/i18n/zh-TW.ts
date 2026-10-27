@@ -1200,7 +1200,6 @@ export const zhTW = {
   "auto.weekdaysAt": "平日 {p0}",
   "auto.delete": "刪除例行任務",
   "team.title": "團隊",
-  "team.chief": "核心助理",
   "team.chat": "對話",
   "team.newGroup": "新增分組",
   "team.composer": "傳訊息給團隊",

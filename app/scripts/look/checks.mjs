@@ -432,6 +432,8 @@ export function checkRendered(name) {
   if (name === "room-responder") {
     const menu = document.querySelector('#app-popover');
     for (const value of ['auto', 'member:0', 'member:1', 'everyone']) require(visible(menu?.querySelector(`[data-value="${value}"]`)), `${value} is selectable`);
+    const members = [...menu.querySelectorAll('[data-value^="member:"]')].map(row => row.dataset.value);
+    require(members.join() === (window.__look.data.primaryId === 1 ? 'member:1,member:0' : 'member:0,member:1'), "responder choices follow the primary display exchange");
     require(!document.querySelector('.mb-dialog select'), "responder uses the app's selector");
     return { check: name, choices: 4 };
   }
@@ -632,6 +634,48 @@ export function checkRendered(name) {
     }
     return { check: name, popover: !!popover, weekdays: weekdays.map(day => day.textContent) };
   }
+  if (name === "team-content-size") {
+    const groups = [...document.querySelectorAll('.team-group:not([hidden])')];
+    const panels = groups.map(group => {
+      const style = getComputedStyle(group), px = key => parseFloat(style[key]) || 0;
+      const content = [...group.children].reduce((sum, child) => {
+        const childStyle = getComputedStyle(child);
+        return sum + child.offsetHeight + (parseFloat(childStyle.marginTop) || 0) + (parseFloat(childStyle.marginBottom) || 0);
+      }, 0);
+      const expected = content + px('paddingTop') + px('paddingBottom') + px('borderTopWidth') + px('borderBottomWidth');
+      require(group.offsetHeight <= expected + 1, 'R-UI-01: a group must not stretch beyond its own content and padding');
+      return { id: group.dataset.teamGroup, height: group.offsetHeight, expected };
+    });
+    for (const card of document.querySelectorAll('.team-member')) {
+      require(!/cli:|\?effort=/.test(card.textContent + (card.querySelector('.team-model')?.title ?? '')), 'cards show model names and sources, never raw CLI refs');
+    }
+    return { check: name, panels };
+  }
+  if (name === "team-member-columns") {
+    const panels = [...document.querySelectorAll('.team-group-members')].map(members => {
+      const cards = [...members.children], group = members.parentElement;
+      const columns = getComputedStyle(members).gridTemplateColumns.split(/\s+/).filter(Boolean).length;
+      const width = parseFloat(getComputedStyle(group).getPropertyValue('--team-card-width'));
+      const gap = parseFloat(getComputedStyle(members).columnGap) || 0;
+      const available = Math.max(1, Math.floor((members.clientWidth + gap + 1) / (width + gap)));
+      require(columns === Math.min(3, Math.max(1, cards.length), available), 'team cards wrap into all available columns, at most three');
+      if (cards.length === 1) require(members.clientWidth <= width + 1, 'a one-member group keeps one card width');
+      if (cards.length) {
+        const top = cards[0].offsetTop, firstRow = cards.filter(card => Math.abs(card.offsetTop - top) <= 1);
+        require(firstRow.length === columns, 'the group fills its first row before wrapping');
+      }
+      return { id: group.dataset.teamGroup, cards: cards.length, columns, width: members.clientWidth };
+    });
+    const chief = document.querySelector('[data-team-card="0"] .team-member-head > div > span');
+    if (chief) require(chief.textContent === '幕僚長', 'Raphael uses the same chief-of-staff role on the board and in the column');
+    return { check: name, panels };
+  }
+  if (name === "team-chief-visible") {
+    const view = document.querySelector('.team-board-scroll').getBoundingClientRect();
+    const chief = document.querySelector('.team-chief .team-member').getBoundingClientRect();
+    require(chief.left >= view.left - 1 && chief.right <= view.right + 1 && chief.top >= view.top - 1 && chief.bottom <= view.bottom + 1, 'the whole chief card is inside the canvas');
+    return { check: name, chief: chief.toJSON(), canvas: view.toJSON() };
+  }
   if (name === "team-no-overlap") {
     const nodes = [...document.querySelectorAll('.team-group:not([hidden]), .team-chief .team-member')];
     const boxes = nodes.map(node => ({ id: node.dataset.teamGroup ?? 'chief', box: node.getBoundingClientRect() }));
@@ -645,13 +689,15 @@ export function checkRendered(name) {
     const viewport = document.querySelector('.team-board-scroll'), board = document.querySelector('.team-board');
     const view = viewport.getBoundingClientRect();
     const matrix = new DOMMatrix(getComputedStyle(board).transform);
+    if (name === 'team-canvas-open') require(Math.abs(matrix.a - 1) < 0.001, 'opening the board keeps 100 percent zoom instead of fitting');
+    if (name === 'team-canvas-reopened') require(Math.abs(matrix.a - 1.1 * Math.exp(0.08)) < 0.001, 'reopening the board preserves the zoom chosen in this session');
     if (name === 'team-canvas-panned') require(Math.abs(matrix.e - 60) <= 1 && Math.abs(matrix.f + 40) <= 1 && !document.querySelector('#app-popover'), 'right drag moves the canvas without a menu');
     if (name === 'team-canvas-rearranged') {
       const positions = JSON.parse(localStorage.getItem('raphael.team.positions'));
       require(Number.isFinite(positions['1']?.x) && getComputedStyle(document.querySelector('[data-team-group="1"]')).transform !== 'none', 'the moved group has a saved device-local position');
     }
     if (name === 'team-canvas-drop') {
-      const target = document.querySelector('[data-team-group="2"]');
+      const target = document.querySelector('.team-group.is-drop-target');
       require(target.classList.contains('is-drop-target') && visible(target.querySelector('.team-drop-preview')), 'the destination lights up and shows the arriving member');
       require(getComputedStyle(target).outlineStyle === 'solid', 'the destination has a visible outline');
       const preview = target.querySelector('.team-drop-preview').getBoundingClientRect();
@@ -659,7 +705,7 @@ export function checkRendered(name) {
     }
     if (name === 'team-canvas-fit') {
       const boxes = [...board.querySelectorAll('.team-chief, .team-group:not([hidden])')].map(node => node.getBoundingClientRect());
-      require(boxes.every(box => box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1), 'fit keeps the team inside the canvas');
+      require(boxes.every(box => box.left >= view.left - 1 && box.right <= view.right + 1 && box.top >= view.top - 1 && box.bottom <= view.bottom + 1) || matrix.a <= 0.501, 'fit keeps the team inside the canvas unless it exceeds the minimum zoom');
     }
     const controls = document.querySelector('.team-zoom').getBoundingClientRect(), composer = document.querySelector('.team-composer').getBoundingClientRect();
     require(controls.left >= 0 && controls.right <= innerWidth && controls.bottom <= innerHeight && (composer.right <= controls.left + 1 || composer.bottom <= controls.top + 1), 'zoom and composer remain reachable without overlap');
@@ -671,11 +717,9 @@ export function checkRendered(name) {
     if (innerWidth < 1400 || !groups.length) return { check: name, wide: false };
     const left = Math.min(...groups.map(box => box.left)), right = Math.max(...groups.map(box => box.right));
     const widthShare = (right - left) / workspace.width;
-    const areaShare = groups.reduce((sum, box) => sum + box.width * box.height, 0) / (workspace.width * workspace.height);
     require(widthShare >= 0.8, "R-UI-01: team groups must use at least 80% of the workspace width");
-    require(areaShare >= 0.35, "R-UI-01: team groups must use at least 35% of the workspace area");
-    require(groups.every(box => box.left >= workspace.left && box.right <= workspace.right && box.bottom <= workspace.bottom), "R-UI-01: the default board fits its workspace");
-    return { check: name, wide: true, widthShare, areaShare };
+    require(groups.every(box => box.left >= workspace.left && box.right <= workspace.right), "R-UI-01: the default board's columns fit its workspace width");
+    return { check: name, wide: true, widthShare };
   }
   if (name === "team-header") {
     const page = document.querySelector('.team-page'), header = page.querySelector('.page-head');
@@ -928,7 +972,8 @@ export function checkRendered(name) {
     require(visible(column) && visible(toggle), "member column and toggle are visible at every width");
     require(toggle.getAttribute('aria-expanded') === String(!collapsed), "toggle reflects the column state");
     const rows = [...column.querySelectorAll('[data-member]')];
-    require(rows[0].dataset.member === "0", "Raphael remains first");
+    require(rows[0].dataset.member === String(window.__look.data.primaryId), "the primary occupies the top slot");
+    require(!column.querySelector(".mb-star"), "position identifies the primary without a star");
     require(rows.filter(row => row.getAttribute('aria-current') === 'true').length === 1, "one active member is marked");
     if (collapsed) {
       require(Math.abs(column.getBoundingClientRect().width - 56) < 1, "collapsed column is 56px wide");
@@ -937,42 +982,43 @@ export function checkRendered(name) {
       for (const row of rows) require(row.dataset.tooltip === row.getAttribute('aria-label') && row.dataset.tooltip, "faces have localized name tooltips");
       require(visible(column.querySelector('.mb-dot.is-wait')), "waiting dot survives collapse");
     } else {
-      require(rows[0].querySelector('.av').getBoundingClientRect().width >= 64, "expanded Raphael emblem retains its original size");
-      require(!rows[0].querySelector('.mb-pin, time, .mb-row-p'), "Raphael retains the original emblem and name only, and the star while he is the primary contact");
+      require(rows[0].querySelector('.av').getBoundingClientRect().width >= 64, "the expanded top slot retains its large face");
+      require(!rows[0].querySelector('.mb-pin, time, .mb-row-p'), "the top slot shows its face and name without row metadata");
     }
     return { check: name, collapsed, width: column.getBoundingClientRect().width, members: rows.length };
   }
-  // The primary contact (P15b): a star on one face at a time, kept apart from the crown of the chief of staff in a room.
+  // Primary is a display position; the room's coordinator remains identity 0.
   if (name === "primary-menu") {
     const menu = document.querySelector('#app-popover');
     require(visible(menu), "the member's menu is open");
     const items = [...menu.querySelectorAll('[data-pick]')], picks = items.map(item => item.dataset.pick), row = items[picks.indexOf('primary')];
     require(row && picks.indexOf('primary') === picks.indexOf('move') + 1 && picks.filter(pick => pick === 'primary').length === 1, "設為主要 is one item, right after 移到分組");
-    require(visible(row.querySelector('.ck svg.i')) && row.textContent.trim() !== "" && !row.classList.contains('danger'), "it has the star icon and its words, and is no destructive item");
+    require(visible(row.querySelector('.ck svg.i')) && row.textContent.trim() !== "" && !row.classList.contains('danger'), "the primary action keeps its label and a non-star icon");
     const box = menu.getBoundingClientRect();
     require(box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, "the menu is inside the viewport");
     require(window.__look.calls.every(call => call.method !== "members.set_primary"), "opening the menu sets nothing");
+    require(!document.querySelector('.mb-star'), "primary faces have no star badges");
     return { check: name, items: picks.length };
   }
-  if (name === "primary-picker" || name === "primary-set" || name === "primary-room-chief" || name === "primary-strip") {
+  if (name.startsWith("primary-")) {
     const data = window.__look.data, calls = window.__look.calls;
     const sets = calls.filter(call => call.method === "members.set_primary");
     const column = document.querySelector('.mb-col');
-    // The star sits at the corner of the face it marks, inside its row, and clear of the name beside or under it.
-    const onFace = row => {
-      const star = row.querySelector('.mb-star'), face = row.querySelector('.av'), at = row.getBoundingClientRect();
-      const s = star.getBoundingClientRect(), f = face.getBoundingClientRect();
-      require(s.width >= 16 && s.height >= 16 && Math.abs(s.width - s.height) < 1, "the star is a round mark of its own");
-      require(s.left < f.right && s.right > f.left && s.top < f.bottom && s.bottom > f.top, "the star touches its face");
-      require(s.left >= at.left - 1 && s.right <= at.right + 1 && s.top >= at.top - 1 && s.bottom <= at.bottom + 1, "the star stays inside its row");
-      const text = row.querySelector('.mb-row-main, b');
-      if (text && visible(text) && !column.classList.contains('is-collapsed')) {
-        const t = text.getBoundingClientRect();
-        require(s.right <= t.left + 1 || s.bottom <= t.top + 1, "the star does not cover the name");
-      }
-      return { size: s.width, color: getComputedStyle(star).backgroundColor };
+    require(!document.querySelector('.mb-star'), "no primary star remains anywhere");
+    const order = nodes => [...nodes].map(node => Number(node.dataset.member ?? node.dataset.id ?? node.dataset.value ?? node.dataset.dragMember));
+    const swapped = ids => {
+      const result = [...ids], chief = result.indexOf(0), primary = result.indexOf(data.primaryId);
+      if (chief >= 0 && primary >= 0) [result[chief], result[primary]] = [result[primary], result[chief]];
+      return result;
     };
-    const starred = () => [...document.querySelectorAll('.mb-col .mb-star')].map(star => star.closest('[data-member]').dataset.member);
+    const columnSwap = () => {
+      const rows = [...column.querySelectorAll('.mb-list [data-member]')];
+      require(Number(rows[0].dataset.member) === data.primaryId, "the primary occupies the column's top slot");
+      require(rows.filter(row => row.dataset.member === '0').length === 1, "Raphael appears exactly once");
+      require(column.querySelector('[data-member="0"] .av') && !column.querySelector('[data-member="0"] .mb-av'), "Raphael keeps his emblem in the exchanged slot");
+      require(column.querySelector('.mb-sec [data-member="0"]') || data.primaryId === 0 || column.classList.contains('is-collapsed'), "Raphael takes the primary's group slot");
+      return order(rows);
+    };
     if (name === "primary-picker") {
       const dialog = document.querySelector('.mb-dialog.mb-primary-picker');
       require(visible(dialog), "the picker window is open");
@@ -995,50 +1041,69 @@ export function checkRendered(name) {
       require(sets.length === 0 && data.primaryId === 1, "nothing is set before 設為主要 is pressed");
       return { check: name, choices: choices.length, picked: picked[0].dataset.id };
     }
+    if (name === "primary-board") {
+      const top = document.querySelector('.team-chief .team-member'), original = data.members.find(member => member.id === data.primaryId);
+      require(Number(top.dataset.teamCard) === data.primaryId, "the primary occupies the board's top card");
+      const group = document.querySelector(`[data-team-group="${original.group_id ?? 'none'}"]`);
+      require(group.querySelector('[data-team-card="0"] .av') && !group.querySelector('[data-team-card="0"] .mb-av'), "Raphael takes the primary's original group slot with his emblem");
+      require(document.querySelectorAll('[data-team-card="0"]').length === 1 && !document.querySelector('[data-team="member-menu"][data-member="0"]'), "Raphael remains one protected identity");
+      require(sets.length === 0, "displaying the primary changes no preference");
+      return { check: name, primary: data.primaryId, group: original.group_id };
+    }
+    if (name === "primary-member-picker" || name === "primary-conversation-picker") {
+      const rows = document.querySelectorAll(name === 'primary-member-picker' && !document.querySelector('.mb-chat-picker') ? '#app-popover [data-value]' : '.mb-chat-choices [data-dlg="conversation"]');
+      require(JSON.stringify(order(rows)) === JSON.stringify(swapped(data.members.filter(m => !m.hidden).map(m => m.id))), "picker exchanges only Raphael and the primary");
+      require(sets.length === 0, "opening a picker sets nothing");
+      return { check: name, members: order(rows) };
+    }
+    if (name === "primary-mentions") {
+      const rows = [...document.querySelectorAll('#app-popover[data-team-mentions] [data-value]')].slice(1, data.members.length + 1);
+      const expected = swapped(data.members.map(m => m.id)).map(id => data.members.find(m => m.id === id).name);
+      require(JSON.stringify(rows.map(row => row.dataset.value)) === JSON.stringify(expected), "mentions swap member order without changing names");
+      return { check: name, members: expected };
+    }
+    if (name === "primary-room-picker" || name === "primary-routine-picker" || name === "primary-calendar") {
+      const rows = [...document.querySelectorAll(name === 'primary-calendar' ? '[data-drag-member]' : '[data-dlg="member"]')].filter(visible);
+      require(JSON.stringify(order(rows)) === JSON.stringify(swapped(data.members.map(m => m.id))), "member choices exchange only the primary and Raphael");
+      if (name === 'primary-room-picker') {
+        const chief = document.querySelector('[data-dlg="member"][data-member="0"]');
+        require(chief.disabled && chief.getAttribute('aria-pressed') === 'true' && !chief.querySelector('.mb-av'), "Raphael remains the required chief with his emblem");
+        const picked = document.querySelector('[data-picked]');
+        if (picked) {
+          const expected = [...rows].filter(row => row.getAttribute('aria-pressed') === 'true').map(row => data.members.find(m => m.id === Number(row.dataset.member)).name);
+          require(JSON.stringify([...picked.children].map(chip => chip.textContent)) === JSON.stringify(expected), "selected member chips retain the exchanged order after a click");
+        }
+      }
+      if (name === 'primary-routine-picker') require(document.querySelector('[data-dlg="member"][data-member="0"]').getAttribute('aria-pressed') === 'true', "routine selection does not follow the display swap");
+      return { check: name, members: order(rows) };
+    }
     if (name === "primary-set") {
       require(sets.length === 1 && sets[0].params.id === 1 && data.primaryId === 1, "one boundary call chose 小晴 and nothing else");
       require(!document.querySelector('.mb-dialog'), "the window closed");
       require(!calls.some(call => /^(rooms|routines|worker|agent)\./.test(call.method ?? '') && /(update|create|delete|rerun|cancel|ask|stop)/.test(call.method)), "no room, routine, task or conversation was touched");
-      let size = null;
-      if (visible(column)) {
-        require(starred().join() === '1', `only 小晴 wears the star in the column, found ${starred().join()}`);
-        size = onFace(column.querySelector('[data-member="1"]'));
-        require(!column.querySelector('[data-member="0"] .mb-star'), "Raphael has no star now");
-        require(column.querySelector('[data-member="0"]').textContent.trim() === '拉斐爾' || column.classList.contains('is-collapsed'), "Raphael is still first, with his name");
-      }
-      const details = document.querySelector('.mb-det');
-      require(visible(details) && details.querySelectorAll('.mb-star').length === 1, "the details of the member wear the star too");
-      const face = details.querySelector('.mb-who-face'), badge = face.querySelector('.mb-star');
-      require(visible(badge) && !badge.closest('button') && badge.getAttribute('role') === 'img' && !!badge.getAttribute('aria-label'), "the details' star is a named mark (主要聯絡人) beside the picture button");
-      const f = face.querySelector('.av').getBoundingClientRect(), s = badge.getBoundingClientRect();
-      require(s.left < f.right && s.right > f.left && s.top < f.bottom && s.bottom > f.top, "the details' star touches the face");
-      return { check: name, column: visible(column), size };
+      const members = visible(column) ? columnSwap() : [];
+      require(visible(document.querySelector('.mb-det .mb-who-face')), "the selected member's details remain available without a star");
+      return { check: name, members };
     }
-    require(data.primaryId === 1 && sets.length === 0, "the primary contact is 小晴 from the start, and nothing changes it here");
+    require(sets.length === 0, "this scene only displays the existing primary");
+    const members = visible(column) ? columnSwap() : [];
     if (name === "primary-strip") {
       require(column.classList.contains('is-collapsed') && Math.abs(column.getBoundingClientRect().width - 56) < 1, "the face strip is collapsed");
-      require(starred().join() === '1', `only 小晴 wears the star on the strip, found ${starred().join()}`);
-      const row = column.querySelector('[data-member="1"]'), tip = document.querySelector('.message-tooltip:not([hidden])');
-      require(row.dataset.tooltip === row.getAttribute('aria-label') && row.dataset.tooltip.includes(' · '), "its name and tooltip say it is the primary contact too");
-      require(visible(tip) && tip.textContent.trim() === row.dataset.tooltip, "the hover tooltip says so");
-      require(column.querySelector('[data-member="0"]').dataset.tooltip === column.querySelector('[data-member="0"]').getAttribute('aria-label') && !column.querySelector('[data-member="0"]').dataset.tooltip.includes(' · '), "Raphael's face keeps his name alone");
-      return { check: name, size: onFace(row) };
+      const row = column.querySelector(`[data-member="${data.primaryId}"]`), tip = document.querySelector('.message-tooltip:not([hidden])');
+      require(row.dataset.tooltip === row.getAttribute('aria-label') && row.dataset.tooltip.includes(' · '), "its name and tooltip identify the primary");
+      require(visible(tip) && tip.textContent.trim() === row.dataset.tooltip, "the hover tooltip identifies the primary");
+      return { check: name, members };
     }
+    if (name === "primary-column") return { check: name, members };
     const room = data.rooms[0], faces = [...document.querySelectorAll('.au-room-heading .au-room-participant')];
-    require(room.member_ids.includes(0) && faces.length === room.member_ids.length, "the header names every member of the room, Raphael included");
+    require(room.member_ids.includes(0) && faces.length === room.member_ids.length, "every room member is still present");
     const crowned = faces.filter(face => face.querySelector('.au-room-crown'));
-    require(crowned.length === 1 && crowned[0].querySelector('.av') && !crowned[0].querySelector('.mb-av'), "the crown is Raphael's alone (his emblem): he is the chief of staff, not the primary contact");
+    require(crowned.length === 1 && crowned[0].querySelector('.av') && !crowned[0].querySelector('.mb-av'), "only Raphael keeps the chief's crown");
+    require(data.members.find(m => m.id === data.primaryId).name === faces[0].dataset.tooltip.split(' · ')[0], "the room's face list follows primary display order");
     const card = document.querySelector('.au-room-wrapup');
-    require(visible(card) && card.querySelector('.ra-face .av') && !card.querySelector('.ra-face .mb-av'), "Raphael (his emblem) writes the wrap-up");
-    require(document.querySelectorAll('.au-room-wrapup').length === 1 && (document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup')), "the room ends with its one wrap-up");
-    let size = null;
-    if (visible(column) && !column.classList.contains('is-collapsed')) {
-      require(starred().join() === '1', `only 小晴 wears the star beside the room list, found ${starred().join()}`);
-      size = onFace(column.querySelector('[data-member="1"]'));
-    } else if (visible(column)) {
-      require(starred().join() === '1', "the strip marks 小晴 alone");
-    }
-    return { check: name, crowned: crowned[0].dataset.tooltip, column: visible(column), size };
+    require(visible(card) && card.querySelector('.ra-face .av') && !card.querySelector('.ra-face .mb-av'), "Raphael writes the wrap-up");
+    require(document.querySelectorAll('.au-room-wrapup').length === 1 && (document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup')), "the room ends with one wrap-up");
+    return { check: name, crowned: crowned[0].dataset.tooltip, members };
   }
   if (name === "usage-allowance-link") {
     const heading = document.querySelector(".run-allowance h3");

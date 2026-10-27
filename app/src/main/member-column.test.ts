@@ -62,48 +62,44 @@ describe("the column, drawn", () => {
     expect(chief.getAttribute("aria-current")).toBe("true");
   });
 
-  test("the primary contact wears a star: Raphael until another is chosen, and one member at a time", () => {
-    const stars = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".mb-star")].map((star) => star.closest<HTMLElement>("[data-member]")!.dataset.member);
-    // the roster says nothing yet: Raphael is the primary
-    expect(stars(dom(columnHTML(view())))).toEqual(["0"]);
-    const roster = (primary_id: number): MembersList => ({ ...LIST, team_context: { schema_version: 1, revision: "r", self_id: 0, count: 5, primary_id, chief_id: 0, inventory_state: "complete", room_member_ids: null, members: [], apps: [], connected: 0 } });
-    expect(stars(dom(columnHTML(view({ list: roster(3) }))))).toEqual(["3"]);
-    expect(stars(dom(columnHTML(view({ list: roster(0) }))))).toEqual(["0"]);
-    // a roster that names nobody the list has leaves Raphael the primary, never two stars or none
-    expect(stars(dom(columnHTML(view({ list: roster(99) }))))).toEqual(["0"]);
-    // no list read yet: no star at all, as no row
-    expect(stars(dom(columnHTML(view({ list: null }))))).toEqual([]);
+  test("the primary swaps with Raphael in its group, with default and missing choices unchanged", () => {
+    const ids = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>("[data-member]")].map(row => Number(row.dataset.member));
+    const roster = (primary_id: number): MembersList => ({ ...LIST, team_context: { primary_id } as MembersList["team_context"] });
+    for (const primary of [0, 99]) expect(ids(dom(columnHTML(view({ list: roster(primary) }))))).toEqual([0, 1, 2, 3, 4]);
+    const el = dom(columnHTML(view({ list: roster(3) })));
+    expect(ids(el)).toEqual([3, 1, 2, 0, 4]);
+    expect(el.querySelector('[data-group="20"] [data-member="0"] .av')).not.toBeNull();
+    expect(el.querySelector('[data-group="20"] [data-member="0"] .mb-av')).toBeNull();
+    expect(el.querySelector('[data-member-more="0"]')).toBeNull();
+    expect(el.querySelector('.mb-chief')?.getAttribute('data-member')).toBe('3');
+    expect(el.querySelector('.mb-chief .av')?.getAttribute('style')).toBe('--av:64px');
+    expect(el.querySelector('[data-member-more="3"]')).not.toBeNull();
+    expect(el.querySelector('.mb-star')).toBeNull();
+    expect(LIST.members[3].group_id).toBe(20);
   });
 
-  test("the star is a named mark on the face's corner, not text, not a second row and not a tooltip", () => {
-    const list = { ...LIST, team_context: { primary_id: 1 } } as unknown as MembersList;
-    const row =dom(columnHTML(view({ list }))).querySelector<HTMLElement>('[data-member="1"]')!;
-    const star = row.querySelector<HTMLElement>(".mb-star")!;
-    expect(star.getAttribute("role")).toBe("img");
-    expect(star.getAttribute("aria-label")).toBe("主要聯絡人");
-    expect(star.textContent).toBe("");
-    expect(star.getAttribute("title")).toBeNull();
-    expect(star.querySelector("svg.i")).not.toBeNull();
-    expect(row.querySelector(".mb-row-t b")!.textContent).toBe("進度官");
-    // Raphael's row has no star now and still his bare emblem and name only
-    const chief = dom(columnHTML(view({ list }))).querySelector<HTMLElement>(".mb-chief")!;
-    expect(chief.querySelector(".mb-star")).toBeNull();
-    expect(chief.textContent).toBe("拉斐爾");
+  test("a primary's pinned slot goes to Raphael, and searching finds each member only in its new place", () => {
+    const list = { ...LIST, members: LIST.members.map(m => m.id === 1 ? { ...m, pinned: true } : m), team_context: { primary_id: 1 } } as MembersList;
+    const el = dom(columnHTML(view({ list })));
+    expect(el.querySelector('.mb-pinned [data-member="0"]')).not.toBeNull();
+    expect(el.querySelector('.mb-chief')?.getAttribute('data-member')).toBe('1');
+    const search = dom(columnHTML(view({ list, query: '拉斐爾' })));
+    expect(search.querySelectorAll('[data-member]')).toHaveLength(1);
+    expect(search.querySelector('.mb-none')).toBeNull();
+    expect(search.querySelector('[data-member="0"] .mb-av')).toBeNull();
   });
 
-  test("on the face strip the primary keeps its star, beside the waiting and unread dots", () => {
+  test("the face strip puts the primary first, keeps dots and identifies it without a star", () => {
     const list = { ...LIST, team_context: { primary_id: 4 } } as unknown as MembersList;
     const strip = dom(columnHTML(view({ list, collapsed: true })));
-    expect([...strip.querySelectorAll<HTMLElement>(".mb-star")].map((star) => star.closest<HTMLElement>("[data-member]")!.dataset.member)).toEqual(["4"]);
+    expect([...strip.querySelectorAll<HTMLElement>('[data-member]')].map(row => row.dataset.member)).toEqual(['4', '1', '2', '3', '0']);
     const primary = strip.querySelector<HTMLElement>('[data-member="4"]')!;
-    expect(primary.querySelector(".mb-dot.is-unread")).not.toBeNull();
-    // alone on the strip, its star is said in its name and tooltip too; the others keep their names
-    expect(primary.getAttribute("aria-label")).toBe("行程管家 · 主要聯絡人");
-    expect(primary.dataset.tooltip).toBe("行程管家 · 主要聯絡人");
-    expect(strip.querySelector<HTMLElement>('[data-member="3"]')!.dataset.tooltip).toBe("日文老師");
-    const raphaelStrip = dom(columnHTML(view({ collapsed: true })));
-    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.dataset.tooltip).toBe("拉斐爾 · 主要聯絡人");
-    expect(raphaelStrip.querySelector<HTMLElement>('[data-member="0"]')!.getAttribute("aria-label")).toBe("拉斐爾 · 主要聯絡人");
+    expect(primary.querySelector('.mb-dot.is-unread')).not.toBeNull();
+    expect(primary.getAttribute('aria-label')).toBe('行程管家 · 主要聯絡人');
+    expect(primary.dataset.tooltip).toBe(primary.getAttribute('aria-label'));
+    expect(strip.querySelector<HTMLElement>('[data-member="0"]')!.dataset.tooltip).toBe('拉斐爾');
+    expect(strip.querySelector('[data-member="0"] .mb-av')).toBeNull();
+    expect(strip.querySelector('.mb-star')).toBeNull();
   });
 
   test("the groups under their headers in their order, then 未分組", () => {

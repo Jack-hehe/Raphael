@@ -67,6 +67,14 @@ export function createTeamCanvas(viewport: HTMLElement, board: HTMLElement, chan
     pan = { x: x - (x - pan.x) * ratio, y: y - (y - pan.y) * ratio };
     zoom = next; layout();
   }
+  function revealChief(): void {
+    const chief = chiefBounds()[0];
+    if (!chief || !viewport.clientWidth || !viewport.clientHeight) return;
+    const axis = (value: number, start: number, size: number, available: number): number =>
+      Math.max(16 - start * zoom, Math.min(value, available - 16 - (start + size) * zoom));
+    pan = { x: axis(pan.x, chief.x, chief.width, viewport.clientWidth), y: axis(pan.y, chief.y, chief.height, viewport.clientHeight) };
+    draw();
+  }
   function fit(): void {
     layout();
     const nodes = [...board.querySelectorAll<HTMLElement>(".team-chief, [data-team-group]")].filter(node => !node.hidden);
@@ -79,8 +87,8 @@ export function createTeamCanvas(viewport: HTMLElement, board: HTMLElement, chan
     const bottom = (Math.max(...boxes.map(box => box.bottom)) - view.top - pan.y) / zoom;
     if (right <= left || bottom <= top) return;
     zoom = clampZoom(Math.min((viewport.clientWidth - 32) / (right - left), (viewport.clientHeight - 32) / (bottom - top)));
-    pan = { x: (viewport.clientWidth - (right - left) * zoom) / 2 - left * zoom, y: (viewport.clientHeight - (bottom - top) * zoom) / 2 - top * zoom };
-    draw();
+    pan = { x: (viewport.clientWidth - (right - left) * zoom) / 2 - left * zoom, y: Math.max(16, (viewport.clientHeight - (bottom - top) * zoom) / 2) - top * zoom };
+    draw(); revealChief();
   }
   viewport.addEventListener("pointerdown", event => {
     if (event.button === 2) draggedRight = false;
@@ -124,7 +132,7 @@ export function createTeamCanvas(viewport: HTMLElement, board: HTMLElement, chan
   }, { passive: false });
   const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(layout);
   observer?.observe(viewport);
-  return { layout, zoomBy: (delta: number) => zoomAt(Math.round((zoom + delta) * 10) / 10), fit,
+  return { layout, zoomBy: (delta: number) => zoomAt(Math.round((zoom + delta) * 10) / 10), fit, revealChief,
     reset() { positions = {}; save(); pan = { x: 0, y: 0 }; zoom = 1; layout(); },
     cancel: finish };
 }

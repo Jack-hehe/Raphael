@@ -9,7 +9,7 @@ import { messageHTML } from "./message-content";
 import { teamMentions } from "./team-mentions";
 import { roomWrapupHTML } from "./room-wrapup";
 import { filesHTML, messageActionsHTML } from "./timeline";
-import { faceHTML } from "./members";
+import { primaryFirst, primaryIdOf, memberRole, faceHTML } from "./members";
 import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
 import type { HandoffView } from "./types";
@@ -41,7 +41,7 @@ export function clearRoomSelection(): void { selectedRoom = null; changed(); }
 const changed = (): void => { for (const listener of listeners) listener(); };
 const responderChoices = (list: MembersList, selected: Set<number>) => [
   { value: "auto", label: t("rooms.autoResponder") },
-  ...list.members.filter(m => selected.has(m.id)).map(m => ({ value: `member:${m.id}`, label: m.name })),
+  ...primaryFirst(list.members, primaryIdOf(list)).filter(m => selected.has(m.id)).map(m => ({ value: `member:${m.id}`, label: m.name })),
   { value: "everyone", label: t("team.everyone") },
 ];
 const responderField = (list: MembersList, selected: Set<number>, value: string) => `<div class="au-field"><span>${esc(t("rooms.responder"))}</span><span data-responder>${sel(responderChoices(list,selected),value,t("rooms.responder"),' data-dlg="responder"')}</span></div>`;
@@ -65,11 +65,11 @@ export async function openNewGroupChat(opts: { onCreated?(room: Room): void } = 
     const dialog = openDialog({ title: t("rooms.new"), cls: "au-group-dialog", body:
       `<label class="au-field"><span>${esc(t("rooms.name"))}</span><input id="room-name" class="mb-fin" maxlength="24" autocomplete="off" value="${esc(list.members.find(m=>m.id===0)?.name??"Raphael")}" placeholder="${esc(t("rooms.namePlaceholder"))}" aria-label="${esc(t("rooms.name"))}"></label>` +
       `<div class="au-field"><span>${esc(t("rooms.group"))}</span>${sel(choices, group, t("rooms.group"), ' data-dlg="group"')}</div>` +
-      `<section class="au-field"><span>${esc(t("rooms.members"))}</span><div class="au-members au-room-members">${list.members.map(m => btn(faceHTML(m,30)+`<span>${esc(m.name)}</span><span data-check>${m.id===0?ico("check"):""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${m.id===0}"${m.id===0?" disabled":""}`)).join("")}</div></section>` + `<div class="room-picked" data-picked>${list.members.filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("")}</div>` + responderField(list,selected,responder),
+      `<section class="au-field"><span>${esc(t("rooms.members"))}</span><div class="au-members au-room-members">${primaryFirst(list.members, primaryIdOf(list)).map(m => btn(faceHTML(m,30)+`<span>${esc(m.name)}</span><span data-check>${m.id===0?ico("check"):""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${m.id===0}"${m.id===0?" disabled":""}`)).join("")}</div></section>` + `<div class="room-picked" data-picked>${primaryFirst(list.members, primaryIdOf(list)).filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("")}</div>` + responderField(list,selected,responder),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("rooms.create")), attrs: ' data-dlg="create"' } }, canClose: () => !saving,
       onEnter: () => void save(), onAct(act, target) {
         if (act === "cancel") dialog.close();
-        else if (act === "member") { const id=Number(target.dataset.member);if(id===0)return;if(selected.has(id))selected.delete(id);else {if(selected.size>=6){toaster.info(t("rooms.memberCount"));return;}selected.add(id);}target.setAttribute("aria-pressed",String(selected.has(id)));target.querySelector("[data-check]")!.innerHTML=selected.has(id)?ico("check"):"";if(responder===`member:${id}`&&!selected.has(id))responder="auto";dialog.el.querySelector('[data-responder]')!.innerHTML=sel(responderChoices(list,selected),responder,t("rooms.responder"),' data-dlg="responder"');dialog.el.querySelector('[data-picked]')!.innerHTML=list.members.filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("");if(!nameEdited)nameInput.value=list.members.filter(m=>selected.has(m.id)).map(m=>m.name).join(" · ").slice(0,24); }
+        else if (act === "member") { const id=Number(target.dataset.member);if(id===0)return;if(selected.has(id))selected.delete(id);else {if(selected.size>=6){toaster.info(t("rooms.memberCount"));return;}selected.add(id);}target.setAttribute("aria-pressed",String(selected.has(id)));target.querySelector("[data-check]")!.innerHTML=selected.has(id)?ico("check"):"";if(responder===`member:${id}`&&!selected.has(id))responder="auto";dialog.el.querySelector('[data-responder]')!.innerHTML=sel(responderChoices(list,selected),responder,t("rooms.responder"),' data-dlg="responder"');dialog.el.querySelector('[data-picked]')!.innerHTML=primaryFirst(list.members, primaryIdOf(list)).filter(m=>selected.has(m.id)).map(m=>`<span>${esc(m.name)}</span>`).join("");if(!nameEdited)nameInput.value=list.members.filter(m=>selected.has(m.id)).map(m=>m.name).join(" · ").slice(0,24); }
         else if (act === "create") void save();
         else if (act === "group") openMenu(target, choices, group, value => { group = value; target.querySelector("span")!.textContent = choices.find(c => c.value === value)!.label; });
         else if (act === "responder") { const choices=responderChoices(list,selected);openMenu(target,choices,responder,value=>{responder=value;target.querySelector('span')!.textContent=choices.find(c=>c.value===value)!.label;}); }
@@ -102,7 +102,7 @@ async function editRoomMembers(room: Room, saved: () => void): Promise<void> {
     const list = await api.membersList(getLocale()), selected = new Set([0,...room.member_ids]);
     let saving = false, responder = room.default_responder ?? "auto";
     const dialog = openDialog({ title: t("rooms.members"), cls: "au-group-dialog",
-      body: `<div class="au-members">${list.members.map(m => btn(faceHTML(m,30) + `<span>${esc(m.name)}</span><span data-check>${selected.has(m.id) ? ico("check") : ""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${selected.has(m.id)}"${m.id===0?" disabled":""}`)).join("")}</div>` + responderField(list,selected,responder),
+      body: `<div class="au-members">${primaryFirst(list.members, primaryIdOf(list)).map(m => btn(faceHTML(m,30) + `<span>${esc(m.name)}</span><span data-check>${selected.has(m.id) ? ico("check") : ""}</span>`, "", ` data-dlg="member" data-member="${m.id}" aria-pressed="${selected.has(m.id)}"${m.id===0?" disabled":""}`)).join("")}</div>` + responderField(list,selected,responder),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.save")), attrs: ' data-dlg="save"' } },
       canClose: () => !saving,
       onAct(act, target) {
@@ -136,7 +136,7 @@ async function editRoomRoles(room: Room, saved: () => void): Promise<void> {
       { value: "pro", label: t("rooms.pro") }, { value: "con", label: t("rooms.con") }];
     let saving = false;
     const dialog = openDialog({ title: t("rooms.roles"), cls: "au-group-dialog",
-      body: room.member_ids.map(id => `<div class="au-field"><span>${esc(list.members.find(m => m.id === id)?.name ?? "")}</span>${sel(choices, roles[id] ?? "participant", t("rooms.roles"), ` data-dlg="role" data-member="${id}"`)}</div>`).join(""),
+      body: primaryFirst(room.member_ids.map(id => ({ id })), primaryIdOf(list)).map(({ id }) => `<div class="au-field"><span>${esc(list.members.find(m => m.id === id)?.name ?? "")}</span>${sel(choices, roles[id] ?? "participant", t("rooms.roles"), ` data-dlg="role" data-member="${id}"`)}</div>`).join(""),
       actions: { secondary: btn(esc(t("common.cancel")), "", ' data-dlg="cancel"'), primary: { label: esc(t("members.save")), attrs: ' data-dlg="save"' } },
       canClose: () => !saving,
       onAct(action, target) {
@@ -199,7 +199,7 @@ export function createRoomPane(_app: AppContext, onClose: () => void, onRender: 
   const person=(id:number|null)=>list.members.find(m=>m.id===id);
   function draw():void {
     if(!room)return;
-    el.querySelector('.au-room-heading')!.innerHTML=`<b>${esc(room.name)}</b><div class="au-room-faces">${room.member_ids.map(id=>{const m=person(id);return m?`<span class="au-room-participant" data-tooltip="${esc(m.role?`${m.name} · ${m.role}`:m.name)}">${faceHTML(m,24)}${id===0?`<span class="au-room-crown" role="img" aria-label="${esc(t("rooms.chief"))}">${ico("crown")}</span>`:""}</span>`:"";}).join("")}</div>`;
+    el.querySelector('.au-room-heading')!.innerHTML=`<b>${esc(room.name)}</b><div class="au-room-faces">${primaryFirst(room.member_ids.map(id => ({ id })), primaryIdOf(list)).map(({ id })=>{const m=person(id);return m?`<span class="au-room-participant" data-tooltip="${esc(memberRole(m)?`${m.name} · ${memberRole(m)}`:m.name)}">${faceHTML(m,24)}${id===0?`<span class="au-room-crown" role="img" aria-label="${esc(t("rooms.chief"))}">${ico("crown")}</span>`:""}</span>`:"";}).join("")}</div>`;
     const active=exchange&&["queued","running"].includes(exchange.state);
     composer.setTaskState(active || handoffs.some(task=>["queued","running","waiting"].includes(task.state)) ? "running" : sendingRooms.has(room.id) ? "ack" : "idle");
     status.innerHTML=room.membership_state==="needs_adjustment"?btn(esc(t("rooms.adjustMembers")),"sm",' data-room-act="members"'):"";

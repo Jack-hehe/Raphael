@@ -9,8 +9,12 @@ import {
   isMemberNameTaken,
   isPictureUrl,
   memberMatches,
+  memberRole,
   memberPlaceholder,
   memberSections,
+  memberDisplayList,
+  orderedMembers,
+  primaryFirst,
   parseSource,
   previewOf,
   raphaelOf,
@@ -20,6 +24,13 @@ import {
 import type { Member, MembersList } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
+
+test.each([["zh-TW", "幕僚長"], ["en", "Chief of staff"], ["ja", "参謀長"]] as const)("Raphael's role uses one localized label in %s", (locale, expected) => {
+  setLocale(locale);
+  expect(memberRole({ id: 0, role: "Legacy assistant" })).toBe(expected);
+  expect(memberMatches(member(0, { role: "Legacy assistant" }), expected)).toBe(true);
+  expect(memberRole({ id: 1, role: "Research" })).toBe("Research");
+});
 
 const PNG = "data:image/png;base64,iVBORw0KGgo=";
 
@@ -75,6 +86,25 @@ describe("the column's sections", () => {
     expect(isMemberNameTaken("raphael", [])).toBe(true);
     expect(isMemberNameTaken("ラファエル", [])).toBe(true);
     expect(isMemberNameTaken("進度官", ["日文 老師"])).toBe(false);
+  });
+});
+
+describe("primary display order", () => {
+  test("swaps identities without mutating the source, including group and pinned placement", () => {
+    const list = { ...LIST, members: LIST.members.map(m => m.id === 3 ? { ...m, pinned: true } : m), team_context: { primary_id: 3 } } as MembersList;
+    const before = JSON.stringify(list), display = memberDisplayList(list);
+    expect(display.members.map(m => m.id)).toEqual([3, 1, 2, 0, 4, 5]);
+    expect(display.members.find(m => m.id === 0)).toMatchObject({ group_id: 20, pinned: true, name: '拉斐爾' });
+    expect(orderedMembers(list).map(m => m.id)).toEqual([3, 1, 2, 0, 4, 5]);
+    expect(JSON.stringify(list)).toBe(before);
+  });
+  test("default, absent and invalid primaries retain Raphael first and original group order", () => {
+    for (const primary_id of [undefined, 0, 999]) {
+      const list = { ...LIST, team_context: { primary_id } } as MembersList;
+      expect(orderedMembers(list).map(m => m.id)).toEqual([0, 1, 2, 3, 4, 5]);
+    }
+    expect(orderedMembers(null).map(m => m.id)).toEqual([0]);
+    expect(primaryFirst([{ id: 2 }, { id: 1 }], 1).map(m => m.id)).toEqual([2, 1]);
   });
 });
 

@@ -31,8 +31,8 @@ describe("the primary contact's window", () => {
     expect(setButton().disabled).toBe(true);
     expect(radios[1].textContent).toContain("小晴");
     expect(radios[1].textContent).toContain("研究");
-    // Raphael is offered like any member, by his name alone
-    expect(radios[0].textContent).toBe("拉斐爾");
+    // Raphael uses the same localized role as other member surfaces.
+    expect(radios[0].textContent).toBe("拉斐爾幕僚長");
     dialog().querySelector<HTMLElement>('[data-dlg="cancel"]')!.click();
     expect(await answer).toBeNull();
   });

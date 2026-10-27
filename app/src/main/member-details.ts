@@ -26,8 +26,6 @@ import {
   faceHTML,
   isMemberNameTaken,
   memberOf,
-  primaryIdOf,
-  primaryStarHTML,
   scheduleText,
   sourceLabel,
 } from "./members";
@@ -149,15 +147,12 @@ export function createDetails(host: DetailsHost): DetailsPanel {
 
   // ---------- drawing ----------
 
-  /** Whether the member is the owner's primary contact, as the roster of the list says (Raphael until another is chosen). */
-  const isPrimary = (member: Member): boolean => host.list() !== null && primaryIdOf(host.list()) === member.id;
-
   function whoHTML(member: Member): string {
-    // The face is the button that changes it; the star of the primary contact sits on it, outside the button.
+    // The face is the button that changes its picture.
     const face =
       `<span class="mb-who-face"><button type="button" class="btn mb-avbtn" data-det="avatar" data-k="det-avatar" aria-haspopup="menu" aria-expanded="false" aria-label="${esc(t("members.changeAvatar"))}" title="${esc(t("members.changeAvatar"))}">` +
       faceHTML(member, 64) +
-      `</button>${isPrimary(member) ? primaryStarHTML() : ""}</span>`;
+      `</button></span>`;
     if (member.id === RAPHAEL_ID) return face + `<b class="mb-who-name">${esc(member.name)}</b>`;
     return (
       face +
@@ -249,12 +244,6 @@ export function createDetails(host: DetailsHost): DetailsPanel {
     } else {
       const av = who.querySelector<HTMLElement>(".mb-avbtn");
       if (av) av.innerHTML = faceHTML(member, 64);
-      // The star follows the roster while the name or the role is typed in.
-      const holder = who.querySelector<HTMLElement>(".mb-who-face");
-      if (holder && Boolean(holder.querySelector(".mb-star")) !== isPrimary(member)) {
-        holder.querySelector(".mb-star")?.remove();
-        if (isPrimary(member)) holder.insertAdjacentHTML("beforeend", primaryStarHTML());
-      }
       // A focused field keeps its draft; the other field can still change remotely.
       for (const [id, value] of [["mb-det-name", member.name], ["mb-det-role", member.role]]) {
         const input = who.querySelector<HTMLInputElement>(`#${id}`);

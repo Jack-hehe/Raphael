@@ -5,6 +5,15 @@ import { checkRendered } from "./checks.mjs";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixture.json", import.meta.url), "utf8"));
 describe("shared look IPC boundary", () => {
+  it("loads the one-member and eight-member team roster without replacing its fixture data with the flag", async () => {
+    const target = {}; installMock(fixture, { fixture: { teamBoardRoster: true } }, target);
+    const invoke = (method) => target.__TAURI_INTERNALS__.invoke('core_call', { method, params: {} });
+    const roster = await invoke('members.list');
+    expect(roster.members.filter(member => member.group_id === 1)).toHaveLength(1);
+    expect(roster.members.filter(member => member.id && member.group_id === null)).toHaveLength(8);
+    expect(roster.members.find(member => member.id === 3).model).toBe('cli:claude:haiku');
+    expect((await invoke('brains.cli')).clis.find(cli => cli.id === 'codex').models.some(model => model.name === 'GPT-6.1 Sol')).toBe(true);
+  });
   it("reconciles the month bill exactly with sidebar ledger spend, including fractional costs", async () => {
     const target = {};
     installMock(fixture, { fixture: { usageFishVoice: true } }, target);

@@ -27,7 +27,7 @@
 .mb-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 0 var(--pa-pad) 14px; }
 .mb-list { display: flex; flex-direction: column; gap: var(--sp-1); }
 
-/* Raphael's original bare emblem and name, above the regular member rows. */
+/* The primary contact uses the large top slot; Raphael keeps his bare emblem in any row. */
 .nav.mb-chief.mb-row { position: relative; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: var(--sp-2); min-height: 0; padding: var(--sp-3) var(--sp-2) var(--sp-5); text-align: center; }
 .nav.mb-chief.mb-row > .av { --av: var(--pa-chief-av) !important; }
 .nav.mb-chief.mb-row:hover, .nav.mb-chief.mb-row[aria-current="true"] { background: transparent; }
@@ -75,6 +75,7 @@
 .page-agent .mb-item:hover .btn.mb-more, .page-agent .mb-item .btn.mb-more:focus-visible, .page-agent .mb-item .btn.mb-more[aria-expanded="true"] { opacity: 1; }
 .mb-item:hover .nav.mb-row, .mb-item:has(.mb-more[aria-expanded="true"]) .nav.mb-row { padding-right: calc(var(--pa-more) + 8px); }
 .mb-item:hover .mb-row .mb-dot, .mb-item:has(.mb-more[aria-expanded="true"]) .mb-row .mb-dot { display: none; }
+.mb-item:hover .nav.mb-chief, .mb-item:has(.mb-more[aria-expanded="true"]) .nav.mb-chief { padding-right: var(--sp-2); }
 
 /* The remembered face strip keeps every member reachable, including folded groups. */
 .page.page-agent:has(.mb-col.is-collapsed) { --pa-col: 56px; }
@@ -89,14 +90,7 @@
 .mb-col.is-collapsed .mb-row[aria-current="true"] { background: var(--selected); box-shadow: inset 2px 0 var(--accent-text); }
 .mb-col.is-collapsed .mb-dot { position: absolute; top: 4px; right: 2px; width: 7px; height: 7px; }
 
-/* ---------- the primary contact: a small round star at the corner of its face (never on the face itself) ---------- */
-.mb-star { position: absolute; z-index: 1; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); pointer-events: none; }
-.mb-star .i { fill: currentColor; }
-.nav.mb-row > .mb-star { left: calc(var(--sp-2) + var(--pa-row-av) - 16px); top: calc(50% + var(--pa-row-av) / 2 - 16px); }
-.nav.mb-chief.mb-row > .mb-star { left: calc(50% + var(--pa-chief-av) / 2 - 16px); top: calc(var(--sp-3) + var(--pa-chief-av) - 18px); }
-.mb-col.is-collapsed .nav.mb-row > .mb-star { top: auto; left: auto; right: 2px; bottom: 2px; }
 .mb-who-face { position: relative; display: inline-flex; }
-.mb-who-face > .mb-star { right: 2px; bottom: calc(6px + 4 * var(--pa-u)); }
 
 /* ---------- the members' faces (never Raphael's: see the top) ---------- */
 .av.mb-av { overflow: hidden; border-radius: var(--r-pill); }

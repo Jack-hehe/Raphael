@@ -512,7 +512,8 @@ function concreteCurrent(o: ModelPickerLook, models = pickerModels(o)): string {
     models.find((m) => Object.values(m.effort_models ?? {}).includes(ref))?.id ?? ref;
 }
 
-function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
+/** The same model name and connection source for picker buttons and read-only cards. */
+export function modelPickerSelection(o: ModelPickerLook): { name: string; source: string; model?: CatalogModel } {
   // Public cached names remain useful after logout; only pickerModels can supply runnable rows.
   const models = [...pickerModels(o).filter((m) => !m.id.startsWith("cli:")), ...cliModels(o.clis ?? [], false)];
   const inherited = baseRef(o.current) === o.lead?.id && o.inheritFrom;
@@ -522,6 +523,11 @@ function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
   const provider = local ? t("picker.tabLocal") : model ? connectionName(model) : ref.startsWith("cli:") ?
     `${CLIS.find((c) => ref.startsWith(`cli:${c.id}`))?.name ?? ""} ${t("brains.subscription")}` : o.lead?.id === ref ? t("chooser.same") : "";
   const source = inherited ? `${provider} · ${t("services.sameAsAnswer")}` : provider;
+  return { name, source, model };
+}
+
+function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
+  const { name, source, model } = modelPickerSelection(o);
   return { inner: `${model ? modelMark(model) : ""}<span class="mp-ttext"><strong class="mp-tname">${esc(name)}</strong><span class="mp-source">${esc(source)}</span></span>${ico("down")}`,
     label: `${o.label}: ${name}${source ? ` · ${source}` : ""}` };
 }

@@ -150,6 +150,22 @@ test("新對話 makes a new conversation with the picked member and opens it, al
   expect(document.querySelector(".mb-chat-picker")).toBeNull(); agent.hide();
 });
 
+test.each([undefined, 0, 4])("primary %s swaps both conversation pickers without changing the open thread", async primary_id => {
+  api.membersList.mockResolvedValue({ ...LIST, team_context: { primary_id } });
+  const agent = mount(); await flush();
+  const expected = primary_id === 4 ? ['4', '3', '0'] : ['0', '3', '4'];
+  const historyCalls = api.agentHistoryList.mock.calls.length;
+  $('.mb-pick').click();
+  expect([...document.querySelectorAll<HTMLElement>('#app-popover [data-value]')].slice(0, 3).map(row => row.dataset.value)).toEqual(expected);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  $('[data-col="add"]').click(); $('[data-pick="conversation"]').click();
+  expect([...document.querySelectorAll<HTMLElement>('[data-dlg="conversation"]')].map(row => row.dataset.id)).toEqual(expected);
+  expect(document.querySelector('[data-dlg="conversation"][data-id="0"] .mb-av')).toBeNull();
+  expect(api.agentHistoryList).toHaveBeenCalledTimes(historyCalls);
+  expect(document.querySelector('.mb-col [data-member="0"][aria-current="true"]')).not.toBeNull();
+  $('[data-dlg="cancel"]').click(); agent.hide();
+});
+
 test("files dropped into a member's thread are sent only to that member", async () => {
   const agent = mount(); await flush(); await pick(3);
   const event = new Event("drop", { bubbles: true, cancelable: true });

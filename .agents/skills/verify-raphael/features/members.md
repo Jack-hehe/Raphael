@@ -5,11 +5,11 @@
 Remembered member-column collapse, original Raphael emblem, identity/personality, profile editing, avatar selection, memory, routines, skills,
 commands and voice settings, and the Permissions tab's two switches: ask before contacting colleagues, and write mail as a draft for the owner to send
 (`draft_first`, on by default; see the P08c section of [Conversation](conversation.md)). Members have independent conversations.
-The owner's primary contact (P15b-1, the last section) wears a star in the sidebar and in its details.
+The owner's primary contact (P15b-1, the last section) takes the top display slot in place of Raphael, without a star. `memberRole` uses the single three-language `rooms.chief` key for Raphael on the board, column, pickers, participant tooltips and member usage; ordinary profiles retain their role text. This does not write profile data or change room coordination.
 
 ## How to get to it (user POV)
 
-In Conversation the top-left arrow collapses the member column to a 56px face strip; the same arrow expands it. Raphael stays first with his original large bare emblem and name when expanded. Collapsed faces retain localized tooltips, active selection and unread/waiting dots, including members in folded groups. The choice is remembered in localStorage, with an in-memory fallback when storage is unavailable. Compact windows initially use the face strip; the member picker still exposes rooms and search. An open details overlay temporarily hides an expanded compact column so the title remains reachable; closing details restores it without changing the saved choice. The details-closed scene explicitly expands the column before testing the title.
+In Conversation the top-left arrow collapses the member column to a 56px face strip; the same arrow expands it. The primary takes the large top face and name when expanded. Raphael takes its original group or pinned slot and keeps his bare emblem. When Raphael is the primary, the original layout is unchanged. Collapsed faces retain localized tooltips, active selection and unread/waiting dots, including members in folded groups. The choice is remembered in localStorage, with an in-memory fallback when storage is unavailable. Compact windows initially use the face strip; the member picker still exposes rooms and search. An open details overlay temporarily hides an expanded compact column so the title remains reachable; closing details restores it without changing the saved choice. The details-closed scene explicitly expands the column before testing the title.
 
 Select a member, then click the stacked header title for details.
 At compact width use the member picker to select the member first. The same title
@@ -114,23 +114,17 @@ core/tests/background/test_room_cli.py and core/tests/members/test_cli_brains.py
 The owner chooses which member is their primary contact, the Bot that new work is brought to and that hands it to the colleague it belongs to.
 Raphael is the primary until another is chosen, and exactly one is at a time. Choosing is 設為主要 in a member's menu (the row's more button
 or a right click): it opens 「選擇主要成員」, a list of real buttons (Raphael and the other visible members, not the primary now) with the member whose menu
-it was chosen already, 取消 and the primary 設為主要. The primary wears a round star at the corner of its face in the column, the face strip and the details.
-Raphael's row has no menu, so he is chosen again from another member's menu. Raphael stays the chief of staff, in every room and the one wrap-up, whoever
-the primary is: nothing about rooms, tasks, exchanges or conversations changes when the primary does. The primary does not move the owner's own entry points
-either (the video and the spec say nothing about them): the 拉斐爾 page still opens on Raphael, Alt+Space quick questions stay his (P19), and a new conversation lists
-him first; the owner reaches the primary by selecting its row, and it is the other Bots and the brains that route new work to it.
+it was chosen already, 取消 and the primary 設為主要. Position alone identifies the primary: no star badge is drawn in the column, face strip or details, and the menu uses an up arrow instead of a star.
+The primary takes Raphael's large top slot in the member column, collapsed strip and team board; Raphael takes the primary's former group/pinned position and keeps his emblem. The same identity swap orders member/conversation pickers, mentions, room membership/responder choices, room participant faces/role choices, and calendar/routine choices. It never mutates stored groups, pins, identities, current conversation, default recipient or the core roster.
+Raphael's row has no destructive menu wherever it moves; an ordinary primary keeps its member menu at the top. Raphael can be chosen again from another member's primary picker. Raphael stays the chief of staff (`room_coordinator_id = 0`), remains required in rooms and writes their single wrap-up. Opening the Conversation page and Alt+Space quick questions retain their existing thread behavior; this change only exchanges display positions.
 
 ```powershell
-npm run look -- primary-contact-menu primary-contact-picker primary-contact-set primary-contact-strip --theme both --width 1120,720,1920x1080
-npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded details raphael-details --theme both --width 1120,720,1920x1080
+npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded primary-contact-column primary-contact-menu primary-contact-picker primary-contact-set primary-contact-strip primary-member-picker primary-new-conversation primary-team-board primary-team-mentions primary-room-picker primary-room-members primary-calendar-members primary-routine-members primary-room-chief --theme both --width 1120,720,1920x1080
 ```
 
-`primary-contact-menu` opens 小森's menu and checks that 設為主要, with the star icon, is one item right after 移到分組. `primary-contact-picker` opens the window from it while 小晴 is the primary (fixture key `primaryMember`) and checks the title, that
-the members are buttons of one radio group with no native control, that 小晴 is not offered and Raphael is, one choice with its check, 取消 just left
-of the primary 設為主要, and that nothing was set yet. `primary-contact-set` chooses 小晴 and presses 設為主要: one `members.set_primary` call, the star on
-her row (and no longer on Raphael's) and on the face in her details, and no room, routine, task or conversation call. `primary-contact-strip` collapses the column with 小晴 as the primary: the star is on her face alone and her name and tooltip say 「小晴 · 主要聯絡人」. The scenes of the
-column and the details show Raphael's star while he is the primary. The IPC double keeps `primaryId` as the core keeps the flag: the list's
-`team_context.primary_id` says it, a hidden or deleted primary is Raphael again, and a hidden member cannot be chosen.
+`primary-contact-column` and `primary-contact-strip` check the exchanged positions, Raphael's emblem and localized name tooltips without a star. `primary-contact-menu` retains 設為主要 after 移到分組; `primary-contact-picker` excludes the current primary while offering Raphael, with one checked choice, 取消 immediately before 設為主要 and no write before confirmation. `primary-contact-set` asserts one `members.set_primary` call, the updated top row, badge-free details and no room/task/conversation mutation. The board scene also checks top-card visibility before/after fit, natural panel heights and no overlap. Member/new-conversation/mention/calendar/routine/room scenes assert the exchanged order; room choices still require identity 0 and routine selection stays unchanged. The member-picker driver uses the compact picker when available and the real new-conversation picker at wide widths.
+
+The IPC double keeps `primaryId` as the core keeps the flag: the list's `team_context.primary_id` says it, a hidden or deleted primary is Raphael again, and a hidden member cannot be chosen. Unit cases cover default/explicit Raphael, valid and absent primary IDs, grouped/pinned/ungrouped slots, source immutability, details drafts, picker identities and restricted mentions.
 
 The core keeps the flag on the member's row (schema v39, a unique index) and the roster is the one place it is read from: the snapshot's `primary_id`
 (and `chief_id`, always 0) is in its revision, and every prompt (an API turn, a resumed CLI thread's per-turn team block, a background task or
