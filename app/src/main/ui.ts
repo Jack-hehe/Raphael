@@ -356,7 +356,7 @@ interface MenuState {
 let menu: MenuState | null = null;
 let menuListening = false;
 
-/** Where a right click asked for the menu of a ⋯ button; `until` is when that stops holding (see `pressAt`). */
+/** Where a right click asked for the menu of a ⋯ button; `until` is when that stops holding (see `pressOverflow`). */
 interface PointerAt { x: number; y: number; until: number }
 const pointedAt = new WeakMap<HTMLElement, PointerAt>();
 /** How long a press waits for a menu that opens after something is read (a message's), and for one that replaces another. */
@@ -365,11 +365,11 @@ const POINTED_GRACE_MS = 1500;
 /**
  * Presses a ⋯ button for a right click (context-menu.ts). Its own handler runs as it always does. With a point, the menu it
  * opens, and any that replaces it from the same button (「移到分組」 after the first), stands there instead of under the
- * button; a left click on the button afterwards places the menu under it again. Any menu that is open closes first: it
- * would otherwise take the press for a click outside it.
+ * button; a left click on the button afterwards places the menu under it again. Any menu that is open closes first, unless
+ * the ⋯ is in it: it would otherwise take the press for a click outside it.
  */
 export function pressOverflow(button: HTMLElement, at?: { x: number; y: number }): void {
-  closeMenu();
+  if (!menu?.el.contains(button)) closeMenu();
   if (at) pointedAt.set(button, { ...at, until: performance.now() + POINTED_GRACE_MS });
   else pointedAt.delete(button);
   button.click();

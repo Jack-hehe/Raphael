@@ -60,7 +60,8 @@ afterEach(() => {
 });
 function clicked(event: Event): void {
   const more = (event.target as Element).closest<HTMLElement>("[data-conversation-more]");
-  if (more) openFor(more);
+  // like the member column's search panel, whose rows draw a ⋯ that nothing listens to
+  if (more && !more.closest("#app-popover")) openFor(more);
 }
 
 describe("a right click is the ⋯ of its row", () => {
@@ -179,6 +180,13 @@ describe("what is not a click", () => {
     expect(rightClick(document.body).defaultPrevented).toBe(true);
     expect(rightClick(document.getElementById("field")!).defaultPrevented).toBe(false);
     expect(popover()).toBeNull();
+  });
+
+  test("a row inside an open panel is pressed like a click on it: the panel stays", () => {
+    openPopover(document.getElementById("field")!, '<div class="conversation-row" id="in"><button type="button" class="btn conversation-open" id="open-in">in</button><button type="button" class="btn icon" data-conversation-more="in" data-overflow></button></div>', { className: "menu conversation-search", role: "dialog" });
+    const panel = popover()!;
+    rightClick(document.getElementById("open-in")!);
+    expect(popover()).toBe(panel);
   });
 
   test("a ⋯ that cannot be pressed opens nothing, and a right click that another handler took is left to it", () => {
