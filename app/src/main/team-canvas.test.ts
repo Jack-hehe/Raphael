@@ -37,7 +37,7 @@ function fixture(saved: Record<string, { x: number; y: number }> = {}) {
     const all = [...boxes.keys()].filter(node => !node.hidden).map(drawn);
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) expect(intersects(all[i], all[j])).toBe(false);
   };
-  return { canvas, viewport, first, second, chief, boxes, drawn, separated, resize: () => resize() };
+  return { canvas, viewport, board, first, second, chief, boxes, drawn, separated, resize: () => resize() };
 }
 
 test("automatic panels flow around saved panels, and a hidden group is not an obstacle", () => {
@@ -63,6 +63,27 @@ test("dragging into a panel saves the nearest free drop, using the currently res
   f.separated(); expect(f.drawn(f.first)).toMatchObject({ x: 24, y: 140 });
   expect(JSON.parse(localStorage.getItem("raphael.team.positions")!)["1"]).toEqual({ x: 24, y: 140 });
   f.canvas.layout(); f.separated();
+});
+
+test("fit at minimum zoom keeps the chief visible when a tall roster cannot all fit", () => {
+  const f = fixture();
+  Object.defineProperties(f.viewport, { clientWidth: { value: 800 }, clientHeight: { value: 600 } });
+  f.boxes.set(f.second, { x: 160, y: 140, width: 120, height: 3000 });
+  const screen = (node: HTMLElement): DOMRect => {
+    const [x, y, zoom] = f.board.style.transform.match(/-?[\d.]+/g)!.map(Number), box = f.drawn(node);
+    return { left: x + box.x * zoom, top: y + box.y * zoom, right: x + (box.x + box.width) * zoom, bottom: y + (box.y + box.height) * zoom } as DOMRect;
+  };
+  vi.spyOn(f.viewport, 'getBoundingClientRect').mockReturnValue({ left: 0, top: 0 } as DOMRect);
+  for (const node of [f.first, f.second]) vi.spyOn(node, 'getBoundingClientRect').mockImplementation(() => screen(node));
+  vi.spyOn(f.board.querySelector<HTMLElement>('.team-chief')!, 'getBoundingClientRect').mockImplementation(() => screen(f.chief));
+  f.canvas.fit();
+  expect(f.board.style.transform).toContain('scale(0.5)');
+  expect(screen(f.chief).top).toBeGreaterThanOrEqual(16); expect(screen(f.chief).bottom).toBeLessThanOrEqual(584);
+  expect(screen(f.second).bottom).toBeGreaterThan(600);
+  f.viewport.dispatchEvent(new WheelEvent('wheel', { deltaX: 2000, deltaY: 2000 }));
+  f.canvas.revealChief();
+  expect(screen(f.chief).left).toBeGreaterThanOrEqual(16); expect(screen(f.chief).right).toBeLessThanOrEqual(784);
+  expect(screen(f.chief).top).toBeGreaterThanOrEqual(16); expect(screen(f.chief).bottom).toBeLessThanOrEqual(584);
 });
 
 test("a growing drop preview triggers another collision-free layout", () => {

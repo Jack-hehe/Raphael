@@ -1,4 +1,104 @@
 {
+  "teamBoard": {
+    "groups": [
+      {
+        "id": 1,
+        "name": "學習",
+        "position": 0,
+        "sources": []
+      }
+    ],
+    "members": [
+      {
+        "id": 0,
+        "name": "拉斐爾",
+        "role": "幕僚長",
+        "group_id": null,
+        "model": ""
+      },
+      {
+        "id": 3,
+        "name": "紫苑",
+        "role": "日文老師",
+        "group_id": 1,
+        "model": "cli:claude:haiku"
+      },
+      {
+        "id": 1,
+        "name": "哥不挺",
+        "role": "員工一號",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 2,
+        "name": "執行長",
+        "role": "CEO / 策略與商業決策",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 4,
+        "name": "營運長",
+        "role": "COO / 營運與執行",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 5,
+        "name": "技術長",
+        "role": "CTO / 技術架構與研發",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 6,
+        "name": "產品經理",
+        "role": "PM / 產品策略與需求",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 7,
+        "name": "研發工程師",
+        "role": "RD / 產品開發與維護",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 8,
+        "name": "成長行銷",
+        "role": "行銷 / 成長與品牌",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 9,
+        "name": "財務長",
+        "role": "財務 / 現金流與單位經濟",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      }
+    ],
+    "models": {
+      "codex": {
+        "id": "cli:codex:gpt-6.1-sol",
+        "name": "GPT-6.1 Sol",
+        "is_default": true,
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "claude": {
+        "id": "cli:claude:haiku",
+        "name": "Haiku",
+        "is_default": true,
+        "reasoning_efforts": []
+      }
+    }
+  },
   "permissionTurns": {
     "tool": {
       "turn": {

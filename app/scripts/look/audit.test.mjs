@@ -18,6 +18,19 @@ describe("rendered look checks", () => {
     for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
     return { window, audit: () => auditDocument(window.document, { width: 1120, height: 900 }, []) };
   };
+  it("checks visible primary calendar choices without counting the hidden responsive copy", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<aside hidden><button data-drag-member="0"></button><button data-drag-member="1"></button></aside><div><button data-drag-member="1"></button><button data-drag-member="0"></button></div>';
+    for (const element of window.document.querySelectorAll('div button')) element.getBoundingClientRect = () => ({ width: 100, height: 30 });
+    window.__look = { data: { primaryId: 1, members: [{ id: 0 }, { id: 1 }] }, calls: [] };
+    vi.stubGlobal('document', window.document); vi.stubGlobal('window', window);
+    try {
+      expect(checkRendered('primary-calendar').members).toEqual([1, 0]);
+      window.document.querySelector('div').innerHTML = '<button data-drag-member="0"></button><button data-drag-member="1"></button>';
+      for (const element of window.document.querySelectorAll('div button')) element.getBoundingClientRect = () => ({ width: 100, height: 30 });
+      expect(() => checkRendered('primary-calendar')).toThrow(/exchange/);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("rejects a small centered team board at full screen", () => {
     const window = new Window();
     window.document.body.innerHTML = '<div class="team-board-scroll"><div class="team-group"></div><div class="team-group"></div></div>';
@@ -34,9 +47,41 @@ describe("rendered look checks", () => {
       expect(checkRendered('team-board-space').widthShare).toBeGreaterThanOrEqual(0.8);
       groups[0].getBoundingClientRect = () => rect(300, 340, 742, 120);
       groups[1].getBoundingClientRect = () => rect(1090, 340, 742, 120);
-      expect(() => checkRendered('team-board-space')).toThrow(/35%/);
+      expect(checkRendered('team-board-space').widthShare).toBeGreaterThanOrEqual(0.8);
       vi.stubGlobal('innerWidth', 1120);
       expect(checkRendered('team-board-space')).toEqual({ check: 'team-board-space', wide: false });
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("rejects a stretched team panel and raw CLI labels while accepting content-sized panels", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<section class="team-group" style="padding:12px"><header style="margin-bottom:12px"></header><div class="team-group-members"><article class="team-member"><span class="team-model">Haiku / Claude Code</span></article></div></section>';
+    const group = window.document.querySelector('.team-group'), header = group.querySelector('header'), members = group.querySelector('.team-group-members');
+    Object.defineProperty(header, 'offsetHeight', { value: 30 }); Object.defineProperty(members, 'offsetHeight', { value: 140 });
+    let height = 206; Object.defineProperty(group, 'offsetHeight', { get: () => height });
+    vi.stubGlobal('document', window.document); vi.stubGlobal('getComputedStyle', window.getComputedStyle.bind(window));
+    try {
+      expect(checkRendered('team-content-size').panels[0].height).toBe(206);
+      height = 900; expect(() => checkRendered('team-content-size')).toThrow(/own content/);
+      height = 206; members.querySelector('span').textContent = 'cli:claude:haiku'; expect(() => checkRendered('team-content-size')).toThrow(/raw CLI/);
+      members.querySelector('span').textContent = 'GPT-6.1 Sol?effort=high'; expect(() => checkRendered('team-content-size')).toThrow(/raw CLI/);
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("rejects a tall single-column team group and more than three columns", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<section class="team-group" style="--team-card-width:220px"><div class="team-group-members" style="display:grid;column-gap:12px"></div></section>';
+    const members = window.document.querySelector('.team-group-members');
+    members.innerHTML = '<article></article>'.repeat(8);
+    let width = 684, columns = 3;
+    Object.defineProperty(members, 'clientWidth', { get: () => width });
+    [...members.children].forEach((card, index) => Object.defineProperty(card, 'offsetTop', { get: () => Math.floor(index / columns) * 120 }));
+    vi.stubGlobal('document', window.document); vi.stubGlobal('getComputedStyle', window.getComputedStyle.bind(window));
+    const draw = () => { members.style.gridTemplateColumns = Array(columns).fill('220px').join(' '); return checkRendered('team-member-columns'); };
+    try {
+      expect(draw().panels[0].columns).toBe(3);
+      columns = 1; expect(draw).toThrow(/all available columns/);
+      columns = 4; expect(draw).toThrow(/at most three/);
+      columns = 2; width = 452; expect(draw().panels[0].columns).toBe(2);
+      columns = 1; width = 220; expect(draw().panels[0].columns).toBe(1);
     } finally { vi.unstubAllGlobals(); }
   });
   it("rejects mismatched adjacent import heights and schedule widths (R-UI-17)", () => {

@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AppContext, Member, MembersList, Page } from "../types";
-const api = vi.hoisted(() => ({ membersList: vi.fn(), settingsGet: vi.fn(), membersUpdate: vi.fn(), membersDelete: vi.fn(), membersPresets: vi.fn(), membersSetPrimary: vi.fn(), core: vi.fn() }));
+const api = vi.hoisted(() => ({ membersList: vi.fn(), settingsGet: vi.fn(), modelsCatalog: vi.fn(), brainsCli: vi.fn(), membersUpdate: vi.fn(), membersDelete: vi.fn(), membersPresets: vi.fn(), membersSetPrimary: vi.fn(), core: vi.fn() }));
 vi.mock("../api", () => api);
 import { createTeamPage } from "./team";
 import { createMemberColumn } from "../member-column";
@@ -30,6 +30,7 @@ async function mount(): Promise<void> {
 beforeEach(async () => {
   document.body.innerHTML = ""; localStorage.clear(); vi.resetAllMocks(); setLocale("en"); go = vi.fn();
   list = { members: [person(0), person(1, { model: "anthropic/own-model", waiting: true }), person(2, { unread: true })], groups: [{ id: 1, name: "Work", position: 0, sources: [] }, { id: 2, name: "Other", position: 1, sources: [] }] };
+  api.modelsCatalog.mockResolvedValue(null); api.brainsCli.mockResolvedValue({ clis: [] });
   api.membersList.mockImplementation(async () => list); api.settingsGet.mockResolvedValue({ settings: { agent_model: "openai/answer-model" } });
   api.membersUpdate.mockResolvedValue({}); api.membersDelete.mockResolvedValue({}); api.membersPresets.mockResolvedValue({ presets: [] }); api.membersSetPrimary.mockResolvedValue({}); api.core.mockResolvedValue({ member: person(9) });
   stop = installContextMenus(); await mount();
@@ -69,6 +70,14 @@ test("fit centers every visible panel in the viewport within the zoom range", ()
   for (const node of page.el.querySelectorAll<HTMLElement>('.team-chief, [data-team-group]')) vi.spyOn(node, 'getBoundingClientRect').mockReturnValue({ left: 100, top: 100, right: 700, bottom: 500 } as DOMRect);
   click('[data-team="fit"]'); const [x, y, z] = transform(); expect(z).toBeCloseTo(1.28); expect(x + 400 * z).toBeCloseTo(400); expect(y + 300 * z).toBeCloseTo(300);
 });
+test("opening keeps 100 percent and reopening preserves the session zoom", async () => {
+  expect(transform()[2]).toBe(1);
+  expect(query('[data-team-card="0"] .team-member-head').textContent).toContain('Chief of staff');
+  click('[data-team="zoom-in"]');
+  page.hide(); page.show(); await flush();
+  expect(transform()[2]).toBe(1.1);
+});
+
 test("group header drag saves positions by id, restores them on another page, and reset restores auto layout", async () => {
   drag(query('[data-team-group="1"] > header'), 0, 140, 60);
   expect(JSON.parse(localStorage.getItem('raphael.team.positions')!)).toEqual({ "1": { x: 140, y: 60 } });
@@ -87,11 +96,46 @@ test("unavailable storage still permits dragging and reset", async () => {
   page.hide(); page.el.remove(); vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw Error('unavailable'); }); vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('unavailable'); });
   await mount(); drag(query('[data-team-group="1"] > header'), 0, 30, 60); expect(query('[data-team-group="1"]').style.transform).toBe('translate(30px, 60px)'); click('[data-team="new"]'); click('[data-pick="reset-layout"]'); expect(query('[data-team-group="1"]').style.transform).toBe('');
 });
+test.each([undefined, 0, 1, 999])("primary %s swaps only the board's top and group slots", async primary_id => {
+  page.hide(); page.el.remove(); list.team_context = { primary_id } as MembersList['team_context'];
+  const before = JSON.stringify(list); await mount();
+  const top = primary_id === 1 ? 1 : 0, moved = top === 1 ? 0 : 1;
+  expect(query('.team-chief .team-member').dataset.teamCard).toBe(String(top));
+  expect(query(`[data-team-group="1"] [data-team-card="${moved}"]`)).not.toBeNull();
+  expect(page.el.querySelectorAll('[data-team-card="0"]')).toHaveLength(1);
+  expect(query('[data-team-card="0"] .av')).not.toBeNull();
+  expect(page.el.querySelector('[data-team-card="0"] .mb-av, [data-team="member-menu"][data-member="0"]')).toBeNull();
+  if (top === 1) {
+    menu(); expect(items()).toContain('primary'); closeMenu();
+    click('[data-team-card="0"] [data-team="chat"]'); expect(go).toHaveBeenCalledWith('agent');
+  }
+  expect(JSON.stringify(list)).toBe(before);
+  expect(api.membersUpdate).not.toHaveBeenCalled(); expect(api.membersSetPrimary).not.toHaveBeenCalled();
+});
+
 test("cards show actual models, waiting before unread, and double click opens that conversation", () => {
   expect(query('[data-team-card="1"] .team-model').textContent).toContain('own-model'); expect(query('[data-team-card="2"] .team-model').textContent).toContain('answer-model');
   expect(query('[data-team-card="1"] .is-wait')).not.toBeNull(); expect(query('[data-team-card="2"] .is-unread')).not.toBeNull();
   const listener = vi.fn(); window.addEventListener('raphael:open-member', listener); query('[data-team-card="1"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); expect(go).toHaveBeenCalledWith('agent'); expect(listener.mock.calls[0][0].detail.memberId).toBe(1); window.removeEventListener('raphael:open-member', listener);
 });
+test("CLI cards share the picker's cached model names and subscription sources, even after logout", async () => {
+  page.hide(); page.el.remove();
+  list.members[1].model = "cli:claude:haiku"; list.members[2].model = "";
+  api.settingsGet.mockResolvedValue({ settings: { agent_model: "cli:codex:gpt-6.1-sol?effort=high" } });
+  api.brainsCli.mockResolvedValue({ clis: [
+    { id: "codex", available: false, models: [{ id: "gpt-6.1-sol", name: "GPT-6.1 Sol" }] },
+    { id: "claude", available: true, models: [{ id: "haiku", name: "Haiku" }] },
+  ] });
+  await mount();
+  expect(query('[data-team-card="0"] .team-model').textContent).toContain('GPT-6.1 Sol · Codex Subscription');
+  expect(query('[data-team-card="1"] .team-model').textContent).toContain('Haiku · Claude Code Subscription');
+  expect(query('[data-team-card="2"] .team-model').textContent).toContain('GPT-6.1 Sol');
+  for (const node of document.querySelectorAll<HTMLElement>('.team-model')) expect(node.textContent + node.title).not.toMatch(/cli:|\?effort=/);
+  page.hide(); page.el.remove(); api.modelsCatalog.mockRejectedValue(Error('offline')); api.brainsCli.mockRejectedValue(Error('offline'));
+  await mount(); expect(query('[data-team-card="2"] .team-model').textContent).toContain('gpt-6.1-sol');
+  expect(query('[data-team-card="1"] .team-model').textContent).toContain('haiku');
+});
+
 test("card overflow has exactly the column's labels, icons and items, including delete", () => {
   const column = createMemberColumn({ view: () => ({ list, current: 0, previews: new Map(), fresh: new Set() }), select: vi.fn(), newMember: vi.fn(), newGroup: vi.fn(), moveMember: vi.fn(), deleteMember: vi.fn(), renameGroup: vi.fn(), editSources: vi.fn(), deleteGroup: vi.fn() });
   document.body.append(column.el); column.draw(); column.menu(1, query('[data-member-more="1"]')); const expected = query('#app-popover').innerHTML; closeMenu(); menu(); expect(query('#app-popover').innerHTML).toBe(expected); expect(items()).toEqual(['pin', 'move', 'primary', 'unread', 'read-all', 'edit', 'duplicate', 'clear', 'hide', 'delete']);
@@ -107,6 +151,21 @@ test("clear and delete require their existing confirmations", async () => {
   await pick('clear'); click('[data-dlg="clear"]'); await flush(); expect(api.core).toHaveBeenCalledWith('agent.history.clear', { member_id: 1 });
   await pick('delete'); expect(api.membersDelete).not.toHaveBeenCalled(); click('[data-dlg="cancel"]'); await pick('delete'); click('[data-dlg="delete"]'); await flush(); expect(api.membersDelete).toHaveBeenCalledExactlyOnceWith(1);
 });
+test("drop previews expand the column capacity and leaving restores content width", async () => {
+  list.members.push(person(3, { group_id: 2 })); page.show(); await flush();
+  const card = query('[data-team-member="1"]'), target = query('[data-team-group="2"]');
+  const drag = (name: string, node: Element): void => {
+    const event = new Event(name, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { setData: vi.fn(), types: ['application/x-raphael-member'] } });
+    node.dispatchEvent(event);
+  };
+  expect(target.style.getPropertyValue('--team-columns')).toBe('1');
+  drag('dragstart', card); drag('dragover', target);
+  expect(target.style.getPropertyValue('--team-columns')).toBe('2');
+  drag('dragleave', target);
+  expect(target.style.getPropertyValue('--team-columns')).toBe('1');
+});
+
 test("drag target lights up with the member preview, clears on leave/end/drop, and moves only members", async () => {
   const card = query('[data-team-member="1"]'), target = query('[data-team-group="2"]'); const transfer = { setData: vi.fn(), getData: () => '1', types: ['application/x-raphael-member'] };
   const event = (node: Element, name: string): void => { const e = new Event(name, { bubbles: true, cancelable: true }); Object.defineProperty(e, 'dataTransfer', { value: transfer }); node.dispatchEvent(e); };

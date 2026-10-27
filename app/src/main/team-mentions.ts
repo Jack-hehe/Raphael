@@ -1,6 +1,6 @@
 import { iconHTML } from "./connections";
 import { t } from "./i18n";
-import { faceHTML } from "./members";
+import { faceHTML, primaryFirst, primaryIdOf } from "./members";
 import { serviceIconOf } from "./service-icons";
 import type { MembersList } from "./types";
 import { closeMenu, ico, menuIsOpenFor, openMenu } from "./ui";
@@ -19,7 +19,7 @@ export function teamMentions(input: HTMLTextAreaElement, list: MembersList, allo
     if (menuIsOpenFor(input) && document.querySelector("#app-popover[data-team-mentions]")) closeMenu();
     return;
   }
-  const people = list.team_context?.members ?? list.members;
+  const people = primaryFirst<{ id: number; name: string }>(list.team_context?.members ?? list.members, primaryIdOf(list));
   const face = (id: number, name: string): string => faceHTML(list.members.find(m => m.id === id) ?? { id, name }, 20);
   const choices = [
     { value: t("team.everyone"), label: "@" + t("team.everyone"), lead: ico("grid") },

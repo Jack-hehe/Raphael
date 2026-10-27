@@ -78,11 +78,11 @@
 .team-chief { display: flex; justify-content: center; margin-bottom: var(--sp-6); }
 .team-chief .team-member { border-color: var(--accent-text); width: 256px; }
 .team-groups { display: flex; flex-wrap: wrap; gap: var(--sp-5); justify-content: center; align-items: flex-start; }
-.team-group { background: var(--side); border: 0; border-radius: 0; padding: var(--sp-3); width: 278px; min-height: 130px; }
+.team-group { --team-card-width: 220px; --team-card-gap: var(--sp-3); --team-group-padding: var(--sp-3); background: var(--side); border: 0; border-radius: 0; padding: var(--team-group-padding); width: calc(var(--team-columns, 1) * var(--team-card-width) + (var(--team-columns, 1) - 1) * var(--team-card-gap) + 2 * var(--team-group-padding)); max-width: 100%; }
 .team-group > header { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-3); }
 .team-group h2 { flex: 1; margin: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 .team-group > header > span { color: var(--text-3); font-size: var(--fs-2xs); }
-.team-group-members { display: flex; flex-direction: column; gap: var(--sp-3); min-height: 50px; }
+.team-group-members { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--team-card-width)), 1fr)); gap: var(--team-card-gap); min-height: 50px; }
 .team-member { padding: var(--sp-4); border: 0; border-radius: 0; background: transparent; min-width: 0; }
 .team-member[draggable] { cursor: grab; }
 .team-member-head { display: flex; gap: var(--sp-3); align-items: center; }
@@ -156,9 +156,8 @@
   .team-board { display: flex; flex-direction: column; gap: clamp(24px, 4cqh, 48px); padding: clamp(24px, 4cqh, 48px) clamp(32px, 4cqw, 72px); max-width: 1760px; margin-inline: auto; }
   .team-chief { margin-bottom: 0; }
   .team-chief .team-member { width: clamp(320px, 28cqw, 440px); }
-  .team-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: stretch; gap: clamp(24px, 3cqw, 48px); }
-  .team-group { width: auto; padding: clamp(24px, 2cqw, 36px); min-height: clamp(320px, 42cqh, 480px); }
-  .team-group-members { gap: var(--sp-5); }
+  .team-groups { gap: clamp(24px, 3cqw, 48px); }
+  .team-group { --team-card-width: 300px; --team-card-gap: var(--sp-5); --team-group-padding: clamp(24px, 2cqw, 36px); }
   .team-member { padding: var(--sp-5); }
   .team-member-head > div { flex: 1; max-width: 36ch; }
   .team-member-head b { font-size: var(--fs-md); }

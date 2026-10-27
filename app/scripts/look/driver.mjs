@@ -109,6 +109,14 @@ export async function perform(page, step) {
       if (await page.evaluate(() => document.querySelector('[data-au="tools"]').getBoundingClientRect().width > 0)) await click('[data-au="tools"]');
       break;
     }
+    case "member-picker": {
+      if (await compact()) await click('.mb-pick');
+      else {
+        if (await page.$eval('.mb-col', column => column.classList.contains('is-collapsed'))) await click('[data-col="collapse"]');
+        await click('[data-col="add"]'); await click('#app-popover [data-pick="conversation"]');
+      }
+      break;
+    }
     case "member-column": {
       const collapsed = await page.$eval('.mb-col', column => column.classList.contains('is-collapsed'));
       if (collapsed !== step.collapsed) await click('[data-col="collapse"]');

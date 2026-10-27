@@ -3,7 +3,7 @@ import * as api from "./api";
 import { describeError } from "./format";
 import { t } from "./i18n";
 import { confirmDelete, groupChoices, groupFromValue, groupValue, openEditMemberDialog, openDialog } from "./member-dialogs";
-import { RAPHAEL_ID, memberOf, memberSections, primaryIdOf, raphaelOf } from "./members";
+import { RAPHAEL_ID, memberOf, orderedMembers, primaryIdOf } from "./members";
 import { openPrimaryPicker } from "./primary-picker";
 import type { AvatarPreset, Member, MemberPatch, MembersList, WireAttachment } from "./types";
 import { btn, esc, openMenu, toaster } from "./ui";
@@ -63,7 +63,7 @@ export function createMemberActions(host: MemberActionHost) {
     const list = host.list();
     if (!list) return;
     const now = primaryIdOf(list);
-    const candidates = [raphaelOf(list), ...memberSections(list).flatMap((section) => section.members)].filter((m) => m.id !== now);
+    const candidates = orderedMembers(list).filter((m) => m.id !== now);
     const chosen = await openPrimaryPicker({ members: candidates, chosen: from });
     if (chosen === null || chosen === now) return;
     try {

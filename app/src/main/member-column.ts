@@ -1,8 +1,8 @@
-// The member column keeps Raphael pinned first, followed by member groups and ungrouped members.
-// Raphael keeps his original large emblem; the other rows retain their message previews.
+// The member column puts the primary contact first, followed by member groups and ungrouped members.
+// Raphael keeps his emblem even when the primary contact takes his large top slot.
 //
 // A row's borderless 「more」 that shows under the pointer, or a right click on the row (context-menu.ts), gives 「設為主要」 (the
-// primary contact, marked by a star on its face), 「移到分組 ▸」 and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
+// primary contact, shown in the top slot), 「移到分組 ▸」 and 「刪除」; a group header's gives 「重新命名」, 「看的地方」 and 「刪除」. What they do is the host's
 // (members-shell.ts): the column only draws and says what was asked.
 //
 // `columnHTML` draws the list from a snapshot (pure, so its rules can be tested without a browser);
@@ -12,7 +12,7 @@ import { createRoomsSection, openNewGroupChat } from "./group-chats";
 import { t } from "./i18n";
 import { formatClock } from "./format";
 import { createMessageSearch } from "./message-search";
-import { type MemberSection, faceHTML, memberMatches, memberSections, previewOf, primaryIdOf, primaryStarHTML, raphaelOf } from "./members";
+import { type MemberSection, faceHTML, memberMatches, memberSections, memberDisplayList, memberRole, previewOf, raphaelOf } from "./members";
 import type { Member, MembersList } from "./types";
 import { closeMenu, esc, ico, iconButton, openPopover } from "./ui";
 
@@ -31,7 +31,7 @@ export interface ColumnView {
   collapsed?: boolean;
 }
 
-/** A member's row: its picture (with the star of the primary contact), name, role, the line under them and the dot; then its 「more」. */
+/** A member's row: its picture, name, role, preview and dot; then its protected member actions. */
 export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "previews" | "fresh"> & { list?: ColumnView["list"] }): string {
   const chief = member.id === 0;
   const lastAt = new Date(member.last_at ?? NaN);
@@ -43,10 +43,9 @@ export function memberRowHTML(member: Member, v: Pick<ColumnView, "current" | "p
       : "";
   return (
     `<div class="mb-item${v.fresh.has(member.id) ? " is-new" : ""}" data-member-item="${member.id}">` +
-    `<button type="button" class="nav mb-row${chief ? " mb-chief" : ""}" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
+    `<button type="button" class="nav mb-row" data-member="${member.id}" aria-current="${member.id === v.current}" data-k="member:${member.id}">` +
     faceHTML(member, 40) +
-    (v.list && primaryIdOf(v.list) === member.id ? primaryStarHTML() : "") +
-    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${chief || member.pinned ? `<span class="mb-pin" aria-label="${esc(t("members.sidePinned"))}">${ico("pin")}</span>` : ""}${member.role ? `<i>${esc(member.role)}</i>` : ""}` +
+    `<span class="mb-row-main"><span class="mb-row-t"><b>${esc(member.name)}</b>${member.pinned ? `<span class="mb-pin" aria-label="${esc(t("members.sidePinned"))}">${ico("pin")}</span>` : ""}${memberRole(member) ? `<i>${esc(memberRole(member))}</i>` : ""}` +
     (Number.isFinite(lastAt.getTime()) ? `<time class="mb-row-time" datetime="${lastAt.toISOString()}">${formatClock(lastAt.getTime())}</time>` : "") + `</span>` +
     (preview.text ? `<span class="mb-row-p${preview.waiting ? " is-wait" : ""}">${esc(preview.text)}</span>` : "") +
     `</span>${dot}</button>` +
@@ -74,26 +73,24 @@ function sectionHTML(section: MemberSection, v: ColumnView): string {
   );
 }
 
-/** The list under the search: Raphael, the groups, 未分組; or a line that nothing matches. */
+/** The list under the search: the primary, groups and ungrouped members, or an empty result. */
 export function columnHTML(v: ColumnView): string {
-  const raphael = raphaelOf(v.list);
-  const all = v.list ?? { members: [], groups: [] };
-  const pinned = all.members.filter(m => m.id !== 0 && m.pinned && !m.hidden && memberMatches(m, v.query));
-  const sections = memberSections({ ...all, members: all.members.filter(m => !m.pinned) }, v.query);
+  const all = memberDisplayList(v.list), top = all.members[0];
+  const pinned = all.members.filter(m => m.id !== top.id && m.pinned && !m.hidden && memberMatches(m, v.query));
+  const sections = memberSections({ ...all, members: all.members.filter(m => !m.pinned) }, v.query, top.id);
   const searching = v.query.trim() !== "";
-  // The star marks the primary contact, Raphael until the owner chooses another; the strip and the column show it alike.
-  const primary = v.list ? primaryIdOf(v.list) : -1;
-  // Where a face stands alone (the strip) or a row is named by its label, the star is said in words too.
+  // The top slot identifies the primary contact in both column layouts.
   const named = (name: string, marked: boolean): string => esc(marked ? `${name} · ${t("members.primary")}` : name);
-  const chief = `<button type="button" class="nav mb-row mb-chief" data-member="0" aria-current="${v.current === 0}" data-k="member:0" aria-label="${named(raphael.name, primary === 0)}"${v.collapsed ? ` data-tooltip="${named(raphael.name, primary === 0)}"` : ""}>` +
-    faceHTML(raphael, 64) + (primary === 0 ? primaryStarHTML() : "") + `<b>${esc(raphael.name)}</b>` +
-    (raphael.waiting || raphael.unread ? `<span class="mb-dot ${raphael.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(raphael.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`;
+  let chief = `<button type="button" class="nav mb-row mb-chief" data-member="${top.id}" aria-current="${v.current === top.id}" data-k="member:${top.id}" aria-label="${named(top.name, true)}"${v.collapsed ? ` data-tooltip="${named(top.name, true)}"` : ""}>` +
+    faceHTML(top, 64) + `<b>${esc(top.name)}</b>` +
+    (top.waiting || top.unread ? `<span class="mb-dot ${top.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(top.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`;
+  if (top.id !== 0 && !v.collapsed) chief = `<div class="mb-item" data-member-item="${top.id}">${chief}${iconButton("more", t("members.more", { p0: top.name }), ` data-member-more="${top.id}" aria-haspopup="menu" aria-expanded="false"`, "mb-more")}</div>`;
   if (v.collapsed) {
     const rows = [...pinned, ...sections.flatMap(section => section.members)];
-    return chief + rows.map(m => `<button type="button" class="nav mb-row mb-face" data-member="${m.id}" data-k="member:${m.id}" aria-current="${m.id === v.current}" aria-label="${named(m.name, m.id === primary)}" data-tooltip="${named(m.name, m.id === primary)}">` +
-      faceHTML(m, 40) + (m.id === primary ? primaryStarHTML() : "") + (m.waiting || m.unread ? `<span class="mb-dot ${m.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(m.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`).join("");
+    return chief + rows.map(m => `<button type="button" class="nav mb-row mb-face" data-member="${m.id}" data-k="member:${m.id}" aria-current="${m.id === v.current}" aria-label="${named(m.name, false)}" data-tooltip="${named(m.name, false)}">` +
+      faceHTML(m, 40) + (m.waiting || m.unread ? `<span class="mb-dot ${m.waiting ? "is-wait" : "is-unread"}" role="img" aria-label="${esc(t(m.waiting ? "members.waitingShort" : "members.unread"))}"></span>` : "") + `</button>`).join("");
   }
-  const showChief = !searching || memberMatches(raphael, v.query);
+  const showChief = !searching || memberMatches(top, v.query);
   return (showChief ? chief : "") + (pinned.length ? `<div class="mb-pinned">${pinned.map(m => memberRowHTML(m, v)).join("")}</div>` : "") + sections.map((section) => sectionHTML(section, v)).join("") + (searching && !showChief && sections.length === 0 && pinned.length === 0 ? `<p class="mb-none">${esc(t("members.noMatch"))}</p>` : "");
 }
 
@@ -157,7 +154,7 @@ export function memberMenu(id: number, anchor: HTMLElement, host: Pick<ColumnHos
   openActions(anchor, [
     { id: "pin", label: t(member?.pinned ? "members.sideUnpin" : "members.sidePin"), icon: "pin" },
     { id: "move", label: t("members.moveTo"), icon: "folder", sub: true },
-    { id: "primary", label: t("members.sidePrimary"), icon: "star" },
+    { id: "primary", label: t("members.sidePrimary"), icon: "up" },
     { id: "unread", label: t("members.sideUnread"), icon: "chat" },
     { id: "read-all", label: t("members.sideReadAll"), icon: "check" },
     { id: "edit", label: t("members.sideEdit"), icon: "pencil" },

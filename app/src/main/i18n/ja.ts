@@ -1199,7 +1199,6 @@ export const ja = {
   "auto.weekdaysAt": "平日 {p0}",
   "auto.delete": "定期タスクを削除",
   "team.title": "チーム",
-  "team.chief": "統括アシスタント",
   "team.chat": "会話",
   "team.newGroup": "グループを追加",
   "team.composer": "チームにメッセージ",

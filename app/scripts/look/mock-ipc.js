@@ -6,6 +6,13 @@ export function installMock(fixture, config = {}, target = window) {
   Object.assign(data.device, { appearance: config.theme ?? "light", ui_language: config.locale ?? "zh-TW", onboarded: !variant.onboarding });
   data.settings.skin = config.skin ?? "default";
   if (variant.liveScenarioOwnerView) data.turns = structuredClone(data.liveScenarioOwnerTurns);
+  if (variant.teamBoardRoster) {
+    const roster = data.teamBoard;
+    data.members = roster.members.map((member, position) => ({ ...structuredClone(data.members.find(item => item.id === member.id) ?? data.members[1]), ...member, position }));
+    data.groups = structuredClone(roster.groups);
+    for (const cli of data.clis) if (roster.models[cli.id]) cli.models.push(structuredClone(roster.models[cli.id]));
+    data.settings.agent_model = "cli:codex:gpt-6.1-sol?effort=high";
+  }
   if (variant.onlyRaphael) data.members = data.members.filter(member => member.id === 0);
   if (variant.waitingMember !== undefined) data.members.find(member => member.id === variant.waitingMember).waiting = true;
   // The owner's primary contact: Raphael until another member is chosen (`primaryMember` seeds it). The roster says it, as the core does.

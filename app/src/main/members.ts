@@ -18,6 +18,10 @@ import { esc, ico } from "./ui";
 /** Raphael's id among the members: member 0 everywhere in the core's API. */
 export const RAPHAEL_ID = 0;
 
+/** Raphael's role is a localized identity label, independent of stored profile text. */
+export const memberRole = (member: { id: number; role?: string }): string =>
+  member.id === RAPHAEL_ID ? t("rooms.chief") : member.role ?? "";
+
 /** The longest name, role, instructions and group name the core takes (members.* and groups.*). */
 export const NAME_MAX = 16;
 export const ROLE_MAX = 24;
@@ -45,9 +49,9 @@ export function isMemberNameTaken(name: string, taken: readonly string[]): boole
 const fold = (text: string): string => text.normalize("NFKC").toLocaleLowerCase();
 
 /** Whether a member answers the column's search: in its name or its role. Blank matches all. */
-export function memberMatches(member: Pick<Member, "name" | "role" | "blurb">, query: string): boolean {
+export function memberMatches(member: Pick<Member, "id" | "name" | "role" | "blurb">, query: string): boolean {
   const q = fold(query.trim());
-  return q === "" || fold(member.name).includes(q) || fold(member.role ?? "").includes(q) || fold(member.blurb ?? "").includes(q);
+  return q === "" || fold(member.name).includes(q) || fold(memberRole(member)).includes(q) || fold(member.blurb ?? "").includes(q);
 }
 
 /** A section of the column: a group (null: 未分組) and its members that answer the search. */
@@ -57,16 +61,16 @@ export interface MemberSection {
 }
 
 /**
- * The column under Raphael: the groups in their order, then 未分組, each with its members in the
+ * The column under its first member (Raphael by default): groups in their order, then 未分組, with members in the
  * order the core lists them. With a search, only the members that answer it, and only the sections
  * that keep one; without, every group, an empty one too (so that it can be filled), and 未分組 only
  * when it holds someone. A member whose group is gone is 未分組.
  */
-export function memberSections(list: MembersList, query = ""): MemberSection[] {
+export function memberSections(list: MembersList, query = "", firstId = RAPHAEL_ID): MemberSection[] {
   const searching = query.trim() !== "";
   const groups = [...list.groups].sort((a, b) => a.position - b.position || a.id - b.id);
   const known = new Set(groups.map((group) => group.id));
-  const people = list.members.filter((member) => member.id !== RAPHAEL_ID && !member.hidden && memberMatches(member, query));
+  const people = list.members.filter((member) => member.id !== firstId && !member.hidden && memberMatches(member, query));
   const sections: MemberSection[] = groups.map((group) => ({ group, members: people.filter((member) => member.group_id === group.id) }));
   sections.push({ group: null, members: people.filter((member) => member.group_id === null || !known.has(member.group_id)) });
   return sections.filter((section) => (searching || section.group === null ? section.members.length > 0 : true));
@@ -97,8 +101,27 @@ export function primaryIdOf(list: MembersList | null): number {
   return typeof id === "number" && list!.members.some((member) => member.id === id) ? id : RAPHAEL_ID;
 }
 
-/** The small round mark on the face of the primary contact: a star, named for assistive technology only (no tooltip of its own). */
-export const primaryStarHTML = (): string => `<span class="mb-star" role="img" aria-label="${esc(t("members.primary"))}">${ico("star")}</span>`;
+/** Swap only display positions; identities and the core roster stay unchanged. */
+export function primaryFirst<T extends { id: number }>(members: readonly T[], primaryId: number): T[] {
+  const ordered = [...members], chief = ordered.findIndex(member => member.id === RAPHAEL_ID), primary = ordered.findIndex(member => member.id === primaryId);
+  if (chief >= 0 && primary >= 0) [ordered[chief], ordered[primary]] = [ordered[primary], ordered[chief]];
+  return ordered;
+}
+
+/** A view-only roster: the primary takes the top slot and Raphael takes its group/pinned slot. */
+export function memberDisplayList(list: MembersList | null): MembersList {
+  const source = list ?? { members: [], groups: [] }, raphael = raphaelOf(list), primary = memberOf(list, primaryIdOf(list))!;
+  const members = primaryFirst([raphael, ...source.members.filter(member => member.id !== RAPHAEL_ID)], primary.id)
+    .map(member => member.id === RAPHAEL_ID && primary.id !== RAPHAEL_ID
+      ? { ...member, group_id: primary.group_id, position: primary.position, pinned: primary.pinned } : member);
+  return { ...source, members };
+}
+
+/** Member pickers use the same top/group order as the board, without changing selection or routing. */
+export function orderedMembers(list: MembersList | null): Member[] {
+  const display = memberDisplayList(list), top = display.members[0];
+  return [top, ...memberSections(display, "", top.id).flatMap(section => section.members)];
+}
 
 /**
  * A row's second line: the last line of its thread (`preview`), or, while a question waits for the

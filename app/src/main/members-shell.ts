@@ -30,7 +30,7 @@ import {
   openNewMember,
   openDialog,
 } from "./member-dialogs";
-import { RAPHAEL_ID, faceHTML, memberOf, memberSections, raphaelOf } from "./members";
+import { RAPHAEL_ID, faceHTML, memberOf, orderedMembers, memberRole, raphaelOf } from "./members";
 import type { AppContext, AvatarPreset, MainEvent, Member, MemberGroup, MemberPatch, MembersList, WireAttachment } from "./types";
 import { type Choice, btn, closeMenu, esc, ico, leave, openMenu, toaster } from "./ui";
 
@@ -300,10 +300,10 @@ export function createMembers(host: MembersHost): MembersShell {
   }
 
   picker.addEventListener("click", () => {
-    const people: Choice[] = [raphaelOf(list), ...memberSections(list ?? { members: [], groups: [] }).flatMap((s) => s.members)].map((m) => ({
+    const people: Choice[] = orderedMembers(list).map((m) => ({
       value: String(m.id),
       label: m.name,
-      ...(m.role ? { detail: m.role } : {}),
+      ...(memberRole(m) ? { detail: memberRole(m) } : {}),
       ...(m.waiting ? { tag: t("members.waitingShort") } : m.unread ? { tag: t("members.unread") } : {}),
     }));
     openMenu(picker, people, String(current), (value) => select(Number(value)), undefined, [
@@ -424,9 +424,9 @@ export function createMembers(host: MembersHost): MembersShell {
       const q = input.value.trim().toLocaleLowerCase();
       choices.innerHTML = (q ? btn(`${ico("plus")}<span>${esc(t("firstBot.describe"))}</span>`, "mb-chat-choice", ' data-dlg="describe"') : "") +
         btn(`${ico("plus")}<span>${esc(t("members.newMember"))}</span>`, "mb-chat-choice", ' data-dlg="member"') +
-        [raphaelOf(list), ...memberSections(list ?? {members: [], groups: []}).flatMap(section => section.members)]
-          .filter(m => `${m.name} ${m.role} ${m.blurb ?? ""}`.toLocaleLowerCase().includes(q))
-          .map(m => btn(`${faceHTML(m, 34)}<span><b>${esc(m.name)}</b><small>${esc(m.blurb || m.role)}</small></span>`, "mb-chat-choice", ` data-dlg="conversation" data-id="${m.id}"`)).join("");
+        orderedMembers(list)
+          .filter(m => `${m.name} ${memberRole(m)} ${m.blurb ?? ""}`.toLocaleLowerCase().includes(q))
+          .map(m => btn(`${faceHTML(m, 34)}<span><b>${esc(m.name)}</b><small>${esc(m.blurb || memberRole(m))}</small></span>`, "mb-chat-choice", ` data-dlg="conversation" data-id="${m.id}"`)).join("");
     };
     input.addEventListener("input", draw); draw();
   }

@@ -30,6 +30,20 @@ test('slash and mention menus retain their own focus, keyboard and dismissal beh
   menu.destroy();
 });
 
+test.each([undefined, 0, 2])('primary %s swaps mention order without changing roster identities or permitted recipients', primary_id => {
+  const { input, menu } = setup();
+  const members = [{ id: 0, name: 'Raphael' }, { id: 1, name: 'Alice' }, { id: 2, name: 'Bob' }];
+  const list = { members, groups: [], team_context: { primary_id, members } } as unknown as MembersList;
+  input.value = '@'; input.setSelectionRange(1, 1); teamMentions(input, list);
+  const names = [...document.querySelectorAll<HTMLElement>('#app-popover [data-value]')].slice(1).map(row => row.dataset.value);
+  expect(names).toEqual(primary_id === 2 ? ['Bob', 'Alice', 'Raphael'] : ['Raphael', 'Alice', 'Bob']);
+  expect(members.map(m => m.id)).toEqual([0, 1, 2]);
+  teamMentions(input, list, [0, 2]);
+  expect([...document.querySelectorAll<HTMLElement>('#app-popover [data-value]')].slice(1).map(row => row.dataset.value)).toEqual(primary_id === 2 ? ['Bob', 'Raphael'] : ['Raphael', 'Bob']);
+  document.querySelector<HTMLElement>('[data-value="Raphael"]')!.click(); expect(input.value).toBe('@Raphael ');
+  menu.destroy();
+});
+
 test('command filtering is limited to a slash at the start and excludes arguments', () => {
   expect(matchingCommands(commands, '/REv').map(c => c.name)).toEqual(['review']);
   for (const text of ['hello /', '/review text', ' /']) expect(matchingCommands(commands, text)).toEqual([]);

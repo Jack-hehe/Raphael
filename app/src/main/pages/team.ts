@@ -8,12 +8,13 @@ import { createMemberActions } from "../member-actions";
 import { createTeamCanvas } from "../team-canvas";
 import { memberMenu, openActions } from "../member-column";
 import { openNewGroupChat, openGroupChat } from "../group-chats";
-import { faceHTML } from "../members";
+import { faceHTML, memberDisplayList, memberRole } from "../members";
 import { messageTooltip } from "../message-tooltip";
 import { modelMark } from "../provider-marks";
+import { modelPickerSelection } from "../model-picker";
 import { openMemberThread } from "../team-navigation";
 import { teamMentions } from "../team-mentions";
-import type { AppContext, Member, MemberGroup, MembersList, Page, MemberPatch, WireAttachment } from "../types";
+import type { AppContext, Member, MemberGroup, MembersList, Page, MemberPatch, WireAttachment, ModelCatalog, CliBrain } from "../types";
 import { btn, esc, ico, iconButton, toaster } from "../ui";
 import "../members.css";
 import "../automations.css";
@@ -26,6 +27,7 @@ export function createTeamPage(app: AppContext): Page {
   const hideTooltip = messageTooltip(el);
   const board = el.querySelector<HTMLElement>(".team-board")!, input = composer.input;
   let list: MembersList = { members: [], groups: [] }, model = "", zoom = 1, visible = false, loads = 0, sending = false;
+  let catalog: ModelCatalog | null = null, clis: CliBrain[] = [];
   let requestId: string | undefined, retryText = "", activeRoom: number | undefined, stopPending = false;
   async function stopTask():Promise<void>{stopPending=true;if(activeRoom){await api.roomStop(activeRoom);await syncTask();}}
   async function syncTask():Promise<void>{const id=activeRoom;if(!id)return;const snapshot=await api.roomMessages(id);if(id!==activeRoom)return;composer.setTaskState(snapshot.exchange && ["queued","running"].includes(snapshot.exchange.state) || snapshot.handoffs?.some(task=>["queued","running","waiting"].includes(task.state)) ? "running" : sending ? "ack" : "idle");}
@@ -43,27 +45,42 @@ export function createTeamPage(app: AppContext): Page {
   const canvas = createTeamCanvas(el.querySelector(".team-board-scroll")!, board, value => { zoom = value; drawZoom(); });
   function card(m: Member): string {
     const usedModel = m.model || model;
+    const selected = modelPickerSelection({ role: "answer", current: usedModel, catalog, clis, label: "" });
+    const modelLabel = [selected.name, selected.source].filter(Boolean).join(" · ");
     const dot = m.waiting ? `<span class="mb-dot is-wait" role="img" aria-label="${esc(t("members.waitingShort"))}"></span>` : m.unread ? `<span class="mb-dot is-unread" role="img" aria-label="${esc(t("members.unread"))}"></span>` : "";
-    return `<article class="team-member" data-team-card="${m.id}"${m.id ? ` draggable="true" data-team-member="${m.id}"` : ""}><div class="team-member-head">${faceHTML(m, 40)}<div><b>${esc(m.name)}</b><span>${esc(m.id === 0 ? t("team.chief") : m.role)}</span></div>${dot}${m.id ? iconButton("more", t("members.more", { p0: m.name }), ` data-team="member-menu" data-member="${m.id}" aria-haspopup="menu" aria-expanded="false"`) : ""}</div><footer>${btn(ico("chat") + esc(t("team.chat")), "sm", ` data-team="chat" data-member="${m.id}"`)}<span class="team-model" title="${esc(usedModel)}">${modelMark({ id: usedModel })}<span>${esc(usedModel.split("/").pop() ?? usedModel)}</span></span></footer></article>`;
+    return `<article class="team-member" data-team-card="${m.id}"${m.id ? ` draggable="true" data-team-member="${m.id}"` : ""}><div class="team-member-head">${faceHTML(m, 40)}<div><b>${esc(m.name)}</b><span>${esc(memberRole(m))}</span></div>${dot}${m.id ? iconButton("more", t("members.more", { p0: m.name }), ` data-team="member-menu" data-member="${m.id}" aria-haspopup="menu" aria-expanded="false"`) : ""}</div><footer>${btn(ico("chat") + esc(t("team.chat")), "sm", ` data-team="chat" data-member="${m.id}"`)}<span class="team-model" title="${esc(modelLabel)}">${modelMark(selected.model ?? { id: usedModel })}<span>${esc(modelLabel)}</span></span></footer></article>`;
   }
-  function group(group: MemberGroup | null): string {
-    const people = list.members.filter(m => m.id !== 0 && m.group_id === (group?.id ?? null));
+  function group(group: MemberGroup | null, display: MembersList): string {
+    const people = display.members.filter(m => m.id !== display.members[0].id && m.group_id === (group?.id ?? null));
     if (!group && !people.length) return `<section class="team-group team-drop-empty" data-team-group="none" hidden><h2>${esc(t("members.ungrouped"))}</h2></section>`;
     return `<section class="team-group" data-team-group="${group?.id ?? "none"}"><header><h2>${esc(group?.name ?? t("members.ungrouped"))}</h2><span>${people.length}</span>${group ? iconButton("more", t("members.more", { p0: group.name }), ` data-team="group-menu" data-group="${group.id}"`) : ""}</header><div class="team-group-members">${people.map(card).join("")}</div></section>`;
   }
+  function layoutGroups(): void {
+    for (const group of board.querySelectorAll<HTMLElement>("[data-team-group]")) {
+      const count = group.querySelectorAll(".team-group-members > .team-member").length;
+      group.style.setProperty("--team-columns", String(Math.max(1, Math.min(3, count))));
+    }
+    canvas.layout();
+  }
   function draw(): void {
     el.querySelector(".page-head")!.innerHTML = `<h1>${esc(t("team.title"))}</h1>${btn(ico("plus") + esc(t("auto.new")), "pri", ' data-team="new"')}`;
-    board.innerHTML = `<div class="team-chief">${list.members[0] ? card(list.members[0]) : ""}</div><div class="team-groups">${list.groups.map(group).join("")}${group(null)}</div>`;
-    canvas.layout();
+    const display = memberDisplayList(list);
+    board.innerHTML = `<div class="team-chief">${list.members.length ? card(display.members[0]) : ""}</div><div class="team-groups">${list.groups.map(g => group(g, display)).join("")}${group(null, display)}</div>`;
+    layoutGroups();
     input.placeholder = t("team.composer"); input.setAttribute("aria-label", t("team.composer"));
     composer.draw();
   }
   function drawZoom(): void {
     el.querySelector(".team-zoom")!.innerHTML = iconButton("minus", t("team.zoomOut"), ` data-team="zoom-out"${zoom <= 0.5 ? " disabled" : ""}`) + `<span>${Math.round(zoom * 100)}%</span>` + iconButton("plus", t("team.zoomIn"), ` data-team="zoom-in"${zoom >= 1.5 ? " disabled" : ""}`) + iconButton("monitor", t("team.fit"), ' data-team="fit"');
   }
-  async function load(): Promise<void> {
+  async function load(opening = false): Promise<void> {
     const mine = ++loads;
-    try { const [people, settings] = await Promise.all([api.membersList(getLocale()), api.settingsGet()]); if (!visible || mine !== loads) return; list = people; model = settings.settings.agent_model ?? ""; draw(); }
+    try {
+      const [people, settings, models, brains] = await Promise.all([api.membersList(getLocale()), api.settingsGet(), api.modelsCatalog().catch(() => null), api.brainsCli().catch(() => ({ clis: [] }))]);
+      if (!visible || mine !== loads) return;
+      list = people; model = settings.settings.agent_model ?? ""; catalog = models; clis = brains.clis; draw();
+      if (opening) canvas.revealChief();
+    }
     catch (error) { if (visible && mine === loads) toaster.info(describeError(error)); }
   }
   async function newGroup(): Promise<void> {
@@ -122,12 +139,12 @@ export function createTeamPage(app: AppContext): Page {
   function clearDrop(): void {
     board.querySelectorAll(".is-drop-target").forEach(node => node.classList.remove("is-drop-target"));
     board.querySelector(".team-drop-preview")?.remove();
-    canvas.layout();
+    layoutGroups();
   }
   function endDrag(): void {
     clearDrop(); dragging?.classList.remove("is-dragging"); dragging = null;
     const target = board.querySelector<HTMLElement>(".team-drop-empty"); if (target) target.hidden = true;
-    canvas.layout();
+    layoutGroups();
   }
   board.addEventListener("dragstart", e => {
     const card = (e.target as Element).closest<HTMLElement>("[data-team-member]"); if (!card) return;
@@ -135,7 +152,7 @@ export function createTeamPage(app: AppContext): Page {
     e.dataTransfer?.setData("application/x-raphael-member", card.dataset.teamMember!);
     if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
     const target = board.querySelector<HTMLElement>(".team-drop-empty"); if (target) target.hidden = false;
-    canvas.layout();
+    layoutGroups();
   });
   board.addEventListener("dragend", endDrag);
   board.addEventListener("dragover", e => {
@@ -151,7 +168,7 @@ export function createTeamPage(app: AppContext): Page {
       preview.className = "team-member team-drop-preview"; preview.inert = true; preview.setAttribute("aria-hidden", "true");
       preview.querySelectorAll("button").forEach(button => button.remove());
       (group.querySelector(".team-group-members") ?? group).append(preview);
-      canvas.layout();
+      layoutGroups();
     }
   });
   board.addEventListener("dragleave", e => {
@@ -164,7 +181,7 @@ export function createTeamPage(app: AppContext): Page {
     if (!id || !list.members.some(member => member.id === id)) return;
     void actions.update(id, { group_id: group.dataset.teamGroup === "none" ? null : Number(group.dataset.teamGroup) });
   });
-  app.onEvent(event => { if(event.type==="RoomsChanged")void syncTask().catch(error=>toaster.info(describeError(error))); if (visible && ["MembersChanged", "ConnectionsChanged", "CoreReady", "ProvidersChanged"].includes(event.type)) void load(); });
+  app.onEvent(event => { if(event.type==="RoomsChanged")void syncTask().catch(error=>toaster.info(describeError(error))); if (visible && ["MembersChanged", "ConnectionsChanged", "CoreReady", "ProvidersChanged", "BrainsChanged"].includes(event.type)) void load(); });
   onLocaleChange(() => { if (visible) { draw(); void load(); } });
-  return { id: "team", el, show() { visible = true; draw(); void load(); }, hide() { visible = false; loads++; canvas.cancel(); endDrag(); hideTooltip(); } };
+  return { id: "team", el, show() { visible = true; draw(); canvas.revealChief(); void load(true); }, hide() { visible = false; loads++; canvas.cancel(); endDrag(); hideTooltip(); } };
 }
