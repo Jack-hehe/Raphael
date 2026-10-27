@@ -1014,6 +1014,16 @@ END;
 PRAGMA user_version = 38;
 COMMIT;
 """
+# The owner's primary contact (`members.set_primary`, `agent.team_context`): the one member whose row carries the flag,
+# and Raphael (member 0, who is no row) while none does. The unique index keeps it to one, and a member that is deleted
+# stops being it with its row.
+_MIGRATIONS[39] = """
+BEGIN;
+ALTER TABLE members ADD COLUMN primary_contact INTEGER NOT NULL DEFAULT 0 CHECK (primary_contact IN (0, 1));
+CREATE UNIQUE INDEX one_primary_contact ON members(primary_contact) WHERE primary_contact = 1;
+PRAGMA user_version = 39;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

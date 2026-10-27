@@ -369,6 +369,10 @@ async def test_the_roster_says_a_connection_needs_its_secret_after_a_call_found_
         @staticmethod
         def roster():
             return []
+
+        @staticmethod
+        def primary_id():
+            return 0
     assert [app["state"] for app in snapshot(Team, 0, "en").apps] == ["unchecked"]
     rig.hub._failure[server] = "missing_secret"  # what a call that found the key missing leaves
     (app,) = snapshot(Team, 0, "en").apps
