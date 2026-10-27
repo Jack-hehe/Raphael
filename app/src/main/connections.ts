@@ -1,7 +1,7 @@
 // One connected view joins managed toolkits, private Google, custom MCP servers and the members' private skills:
 // the apps that can be called now first (their number is the core's, the one the sidebar and every model's roster
 // show), then the ones that cannot, and the skills. Details group tool switches by write/read and say how many are
-// on; removal stays in the overflow menu. The store uses the managed catalog, shared category dropdown and browser login.
+// on; removal stays in the overflow menu. The store starts with built-in services and offers Composio as an optional catalog.
 // Existing custom MCP setup and device reauthentication stay available.
 // Secrets go directly to the core vault and never enter the render snapshot.
 
@@ -86,12 +86,14 @@ export interface ConnectionsView {
   categories: Choice[];
   category: string;
   nextCursor: string | null;
+  keyOpen: boolean;
   keyBusy: boolean;
-  keyError: "" | "openrouter_key" | "auth" | "unreachable" | "unknown";
+  keyError: "" | "openrouter_key" | "consumer_key" | "auth" | "unreachable" | "unknown";
   /** The connected services: being read, read, or not to be had. */
   groups: ConnectionGroup[] | "loading" | "failed";
-  /** The store, the same way. */
+  /** Built-in services, loaded independently from the optional managed catalog. */
   catalog: StoreService[] | "loading" | "failed";
+  composioCatalog: StoreService[] | "loading" | "failed";
   /** The owner's apps as the core counts them: the number beside 「已連結」 is its count, the one of the sidebar and the roster. */
   inventory: InventoryView;
   /** The private skills of the members, beside the apps. */
@@ -122,9 +124,10 @@ export interface ConnectionsView {
 }
 
 export const emptyConnectionsView = (): ConnectionsView => ({
-  configured: null, categories: [], category: "", nextCursor: null, keyBusy: false, keyError: "",
+  configured: null, categories: [], category: "", nextCursor: null, keyOpen: false, keyBusy: false, keyError: "",
   groups: "loading",
   catalog: "loading",
+  composioCatalog: "loading",
   inventory: "loading",
   skills: "loading",
   skill: null,
@@ -259,12 +262,12 @@ export const connectionsAddHTML = (): string =>
 function barHTML(v: ConnectionsView): string {
   // 「已連結」 counts the apps whose tools can be called now, as the core counts them (the sidebar's number and the roster's): not the rows below it.
   const installed = countText(v.inventory);
-  const store = Array.isArray(v.catalog) ? v.catalog.length : 0;
+  const store = storeEntries(v).length;
   const tab = (id: Tab, label: string, count: number | string) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
   return (
     `<div class="cs-bar">` +
     tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"), store)], v.tab, { label: t("conn.tabs"), kind: "nav", plain: true }) +
-    (v.tab === "store" && v.configured === false ? "" : `<div class="cs-find">${v.tab === "store" && v.configured ? sel([{ value: "", label: t("plugins.allCategories") }, ...v.categories], v.category, t("plugins.category"), ' data-k="conn-category"') : ""}${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}</div>`) + `</div>`
+    `<div class="cs-find">${fieldHTML(t("conn.search"), v.search, { id: "conn-search", icon: "search", label: t("conn.search") })}</div></div>`
   );
 }
 
@@ -495,9 +498,10 @@ function dialogHTML(g: ConnectionGroup, v: ConnectionsView): string {
 /** The button that adds a store entry, or what takes its place: the wait for the login, or that it is added. */
 function joinControl(s: StoreService, v: ConnectionsView): string {
   const here = v.login?.target === s.id;
-  if (s.server_id) return `<span class="cs-state">${st("ok", t(s.source ? "plugins.added" : "conn.installed"))}</span>`;
-  if (here) return s.source ? `<span class="cs-wait" role="status">${esc(t("conn.connecting"))}</span>` : btn(esc(t("conn.cancel")), "sm", ' data-conn="cancel-login"');
-  return btn(`${ico("plus")}${esc(t("conn.join"))}`, s.source ? "sm pri" : "sm", ` data-conn="join" data-id="${esc(s.id)}" aria-label="${esc(t("conn.joinAria", { p0: s.name }))}"${s.can_connect === false ? ` title="${esc(t("plugins.unavailable"))}"` : ""}${v.login || s.can_connect === false ? " disabled" : ""}`);
+  if (s.server_id) return `<span class="cs-state">${st("ok", t("conn.installed"))}</span>`;
+  // Managed sign-in has no cancellation RPC; keep the shared action disabled until it completes.
+  if (here) return btn(esc(t("conn.cancel")), "sm", ` data-conn="cancel-login"${s.source ? " disabled" : ""}`);
+  return btn(`${ico("plus")}${esc(t("conn.join"))}`, "sm", ` data-conn="join" data-id="${esc(s.id)}" aria-label="${esc(t("conn.joinAria", { p0: s.name }))}"${s.can_connect === false ? ` title="${esc(t("plugins.unavailable"))}"` : ""}${v.login || s.can_connect === false ? " disabled" : ""}`);
 }
 
 function cardHTML(s: StoreService, v: ConnectionsView): string {
@@ -505,11 +509,11 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
   const line = here ? t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn") : words(s.summary);
   return (
     `<div class="cs-card">` +
-    (s.source ? `<div class="cs-main"><span class="ic">${entryIcon(s, "md")}</span><span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub" title="${esc(line)}">${esc(line)}</span></span></div>` : btn(
+    btn(
       `<span class="ic">${entryIcon(s, "md")}</span><span class="tx"><span class="nm">${esc(s.name)}</span><span class="sub${here ? " wait" : ""}">${esc(line)}</span></span>`,
       "cs-main",
       ` data-conn="open-store" data-id="${esc(s.id)}" data-k="cs-store:${esc(s.id)}" title="${esc(`${s.name}: ${words(s.summary)}`)}"`,
-    )) +
+    ) +
     `${joinControl(s, v)}</div>`
   );
 }
@@ -517,35 +521,63 @@ function cardHTML(s: StoreService, v: ConnectionsView): string {
 function keyErrorMessage(kind: ConnectionsView["keyError"]): string {
   switch (kind) {
     case "openrouter_key": return t("plugins.keyOpenRouter");
+    case "consumer_key": return t("plugins.keyConsumer");
     case "auth": return t("plugins.keyRefused");
     case "unreachable": return t("plugins.keyUnreachable");
     default: return t("plugins.keyFailed");
   }
 }
 
+/** Built-in apps win over matching managed slugs or names, regardless of the current filter. */
+function uniqueComposio(v: ConnectionsView): StoreService[] {
+  if (!v.configured || !Array.isArray(v.composioCatalog)) return [];
+  const identity = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const owned = new Set((Array.isArray(v.catalog) ? v.catalog : []).flatMap(s => [identity(s.id), identity(s.name)]));
+  const seen = new Set<string>();
+  return v.composioCatalog.filter(s => {
+    const id = identity(s.id), name = identity(s.name);
+    if (owned.has(id) || owned.has(name) || seen.has(id)) return false;
+    seen.add(id); return true;
+  });
+}
+
+function storeEntries(v: ConnectionsView): StoreService[] {
+  return [...(Array.isArray(v.catalog) ? v.catalog : []), ...uniqueComposio(v)]
+    .filter(s => matches(v.search, s.name, s.publisher, words(s.summary)));
+}
+
+const composioMark = (): string => `<span class="cs-icon md cs-composio-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h6v10H4zM14 7h6v10h-6zM10 10h4m-4 4h4"/></svg></span>`;
+
+function keyDialogHTML(v: ConnectionsView): string {
+  return `<div class="cs-scrim" data-conn="scrim" data-dialog="composio-key"><div class="cs-dialog" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>` +
+    `<div class="cs-dlg-head">${composioMark()}<h2 class="cs-dlg-name" id="cs-dlg-title">Composio</h2><span class="sp"></span>${closeButton()}</div>` +
+    `<div class="cs-key-form"><label for="conn-key">${esc(t("plugins.keyPrompt"))}</label>` +
+    `<input class="field" type="password" id="conn-key" autocomplete="new-password" spellcheck="false"${v.keyBusy ? " disabled" : ""}${v.keyError ? ' aria-invalid="true" aria-describedby="conn-key-error"' : ""}>` +
+    (v.keyError ? `<p id="conn-key-error" role="alert">${esc(keyErrorMessage(v.keyError))}</p>` : "") +
+    actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div></div></div>`;
+}
+
 function storeHTML(v: ConnectionsView): string {
-  if (v.configured === false) return `<div class="cs-key-form"><label for="conn-key">${esc(t("plugins.keyPrompt"))}</label>` +
-    `<input class="field" type="password" id="conn-key" autocomplete="new-password" spellcheck="false"${v.keyBusy ? " disabled" : ""}>` +
-    (v.keyError ? `<p role="alert">${esc(keyErrorMessage(v.keyError))}</p>` : "") +
-    actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div>`;
-  if (v.catalog === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
-  if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-store"')}</div>`;
-  if (v.configured) {
-    const grid = `<div class="cs-grid" data-stagger="plugins-store">${v.catalog.map(s => cardHTML(s, v)).join("")}</div>`;
-    // Browsing rather than searching or choosing a category: the apps people connect most come first, as 「為你推薦」, each with its add button.
-    const browsing = !v.search.trim() && !v.category && v.catalog.length > 0;
-    return (browsing ? `<section class="cs-sec"><h2>${esc(t("conn.recommended"))}</h2>${grid}</section>` : grid) +
-      (!v.catalog.length ? `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` : "") +
-      (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "");
-  }
-  const found = v.catalog.filter((s) => matches(v.search, s.name, s.publisher, words(s.summary)));
-  if (!found.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
   const section = (key: string, title: string, list: StoreService[]): string =>
-    list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid" data-stagger="store:${key}">${list.map((s) => cardHTML(s, v)).join("")}</div></section>` : "";
-  // The popular ones first; 「全部」 is the rest, by name. A search lists what it finds under 「全部」 alone.
-  const popular = v.search.trim() ? [] : found.filter((s) => s.popular);
-  const rest = found.filter((s) => !popular.includes(s)).sort((a, b) => a.name.localeCompare(b.name));
-  return section("hot", t("conn.hot"), popular) + section("all", t("conn.all"), rest);
+    list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid" data-stagger="store:${key}">${list.map(s => cardHTML(s, v)).join("")}</div></section>` : "";
+  const retry = (action: string): string => `<div class="alert core-note" role="alert">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="${action}"`)}</div>`;
+  const loading = `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
+  const found = Array.isArray(v.catalog) ? v.catalog.filter(s => matches(v.search, s.name, s.publisher, words(s.summary))) : [];
+  const popular = v.search.trim() ? [] : found.filter(s => s.popular);
+  const rest = found.filter(s => !popular.includes(s)).sort((a, b) => a.name.localeCompare(b.name));
+  let html = v.catalog === "loading" ? loading : v.catalog === "failed" ? retry("retry-builtin-store")
+    : section("hot", t("conn.hot"), popular) + section("all", t("conn.all"), rest);
+  if (v.configured) {
+    const managed = uniqueComposio(v).filter(s => matches(v.search, s.name, s.publisher, words(s.summary)));
+    html += `<section class="cs-sec cs-composio-section"><div class="cs-store-heading"><h2>Composio</h2>${sel([{ value: "", label: t("plugins.allCategories") }, ...v.categories], v.category, t("plugins.category"), ' data-k="conn-category"')}</div>` +
+      (v.composioCatalog === "loading" ? loading : v.composioCatalog === "failed" ? retry("retry-store")
+        : managed.length ? `<div class="cs-grid" data-stagger="plugins-store">${managed.map(s => cardHTML(s, v)).join("")}</div>` : `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`) +
+      (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "") + `</section>`;
+  } else if (v.configured === false) {
+    html += `<div class="cs-composio-setup">${composioMark()}<span>${esc(t("plugins.moreApps"))}</span>${btn(esc(t("plugins.configure")), "sm", ' data-conn="configure-composio"')}</div>`;
+  }
+  if (Array.isArray(v.catalog) && !storeEntries(v).length && !v.configured) html = `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` + html;
+  return html;
 }
 
 const backHTML = (): string => `<div class="cs-back">${btn(`${ico("left")}${esc(t("conn.back"))}`, "", ' data-conn="back"')}</div>`;
@@ -556,8 +588,8 @@ function storePageHTML(s: StoreService, v: ConnectionsView): string {
     ? `<span class="cs-state">${st("ok", t("conn.installed"))}</span>` +
       btn(esc(t("conn.manage")), "", ` data-conn="manage" data-id="${esc(s.server_id)}"`)
     : here
-      ? `<span class="cs-wait" role="status">${esc(t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn"))}</span>` + btn(esc(t("conn.cancel")), "", ' data-conn="cancel-login"')
-      : btn(`${ico("plus")}${esc(t("conn.join"))}`, "pri", ` data-conn="join" data-id="${esc(s.id)}"${v.login ? " disabled" : ""}`);
+      ? `<span class="cs-wait" role="status">${esc(t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn"))}</span>` + btn(esc(t("conn.cancel")), "", ` data-conn="cancel-login"${s.source ? " disabled" : ""}`)
+      : btn(`${ico("plus")}${esc(t("conn.join"))}`, "pri", ` data-conn="join" data-id="${esc(s.id)}"${v.login || s.can_connect === false ? " disabled" : ""}`);
   const failed = v.loginError?.target === s.id ? `<div class="note" role="alert">${st("err", loginFailure(v.loginError.kind))}</div>` : "";
   const examples = (s.examples[getLocale()] ?? s.examples.en ?? []).map((text) => `<li>${ico("chat")}<span>${esc(text)}</span></li>`).join("");
   return (
@@ -565,9 +597,9 @@ function storePageHTML(s: StoreService, v: ConnectionsView): string {
     `<div class="cs-head">${entryIcon(s, "xl")}<div class="tx"><h2 class="big">${esc(s.name)}</h2><div class="by">${esc(t("conn.by", { p0: s.publisher }))}</div></div>` +
     `<div class="cs-join">${action}</div></div>` +
     failed +
-    `<div class="cs-sec"><h3>${esc(t("conn.try"))}</h3><ul class="cs-say">${examples}</ul></div>` +
+    (examples ? `<div class="cs-sec"><h3>${esc(t("conn.try"))}</h3><ul class="cs-say">${examples}</ul></div>` : "") +
     `<div class="cs-sec"><h3>${esc(t("conn.about"))}</h3><p class="cs-desc">${esc(words(s.about))}</p></div>` +
-    `<div class="cs-meta"><span>${ico("link")}<span class="cs-key">${esc(t("conn.server"))}</span><span class="code">${esc(s.url)}</span></span></div>`
+    (s.url ? `<div class="cs-meta"><span>${ico("link")}<span class="cs-key">${esc(t("conn.server"))}</span><span class="code">${esc(s.url)}</span></span></div>` : "")
   );
 }
 
@@ -642,14 +674,14 @@ const openGroup = (v: ConnectionsView): ConnectionGroup | undefined =>
 export function connectionsHTML(v: ConnectionsView): string {
   if (v.form) return `<div class="cs cs-form">${formHTML(v.form)}</div>`;
   if (v.open?.tab === "store") {
-    const s = Array.isArray(v.catalog) ? v.catalog.find((x) => x.id === v.open!.id) : undefined;
+    const s = [...(Array.isArray(v.catalog) ? v.catalog : []), ...uniqueComposio(v)].find(x => x.id === v.open!.id);
     if (s) return `<div class="cs cs-page">${deviceHTML(v)}${storePageHTML(s, v)}</div>`;
   }
   const g = openGroup(v);
   // A device login started from a service's dialog shows its code there instead.
   const device = g && v.login?.target === g.id ? "" : deviceHTML(v);
   const skill = openSkill(v);
-  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
+  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (v.keyOpen ? keyDialogHTML(v) : g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
 }
 
 /** The skill whose page is open, if it is still there. */
@@ -712,6 +744,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   let categories: Choice[] = [];
   let category = "";
   let nextCursor: string | null = null;
+  let keyOpen = false;
+  let keySaves = 0;
   let keyBusy = false;
   let keyError: ConnectionsView["keyError"] = "";
   let managed: ManagedConnector[] = [];
@@ -719,6 +753,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let groups: ConnectionsView["groups"] = "loading";
   let catalog: ConnectionsView["catalog"] = "loading";
+  let composioCatalog: ConnectionsView["composioCatalog"] = "loading";
   let inventory: InventoryView = "loading";
   let skills: ConnectionsView["skills"] = "loading";
   let skill: SkillPage | null = null;
@@ -743,7 +778,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let stopOutside: (() => void) | null = null;
 
   /** A dialog is over the list: an app's, or a skill's. */
-  const dialogOpen = (): boolean => open?.tab === "installed" || skill !== null;
+  const dialogOpen = (): boolean => keyOpen || open?.tab === "installed" || skill !== null;
 
   const redraw = (): void => {
     // The page is drawn again whole: the document that is being edited keeps its caret, its selection and its scroll.
@@ -761,8 +796,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   };
 
   const view = (): ConnectionsView => ({
-    configured, categories, category, nextCursor, keyBusy, keyError,
-    groups, catalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
+    configured, categories, category, nextCursor, keyOpen, keyBusy, keyError,
+    groups, catalog, composioCatalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -770,14 +805,16 @@ export function createConnections(host: ConnectionsHost): Connections {
     const body = typeof document !== "undefined" ? document.querySelector<HTMLElement>("[data-cs-body]") : null;
     if (body && host.visible()) body.innerHTML = bodyHTML(view());
     else redraw();
+    const count = typeof document !== "undefined" ? (host.root ?? document).querySelector('[data-k="conn-tab:store"] .n') : null;
+    if (count) count.textContent = String(storeEntries(view()).length);
   }
 
   const groupById = (id: string): ConnectionGroup | undefined => (Array.isArray(groups) ? groups.find((g) => g.id === id) : undefined);
-  const entryById = (id: string): StoreService | undefined => (Array.isArray(catalog) ? catalog.find((s) => s.id === id) : undefined);
+  const entryById = (id: string): StoreService | undefined => ([...(Array.isArray(catalog) ? catalog : []), ...uniqueComposio(view())].find(s => s.id === id));
 
   async function load(withSkills = true): Promise<void> {
     const mine = ++loads;
-    const [list, status, recent, counted] = await Promise.allSettled([api.toolsetsList(), api.connectorsStatus(), api.integrationsAudit(AUDIT_READ), api.integrationsInventory()]);
+    const [list, status, recent, counted, builtins] = await Promise.allSettled([api.toolsetsList(), api.connectorsStatus(), api.integrationsAudit(AUDIT_READ), api.integrationsInventory(), api.integrationsCatalog()]);
     if (mine !== loads) return;
     // The count is the core's, read with the list it counts: both say the same moment.
     inventory = counted.status === "fulfilled" ? counted.value : "failed";
@@ -791,8 +828,8 @@ export function createConnections(host: ConnectionsHost): Connections {
       ...list.value.groups.filter(g => !["connectors_composio", "connectors_google"].includes(g.id)),
     ];
     else if (!Array.isArray(groups)) groups = "failed";
-    if (status.status === "rejected" && !Array.isArray(catalog)) catalog = "failed";
-    if (Array.isArray(catalog)) catalog = catalog.map(s => s.source ? { ...s,
+    catalog = builtins.status === "fulfilled" ? builtins.value.services : "failed";
+    if (Array.isArray(composioCatalog)) composioCatalog = composioCatalog.map(s => s.source ? { ...s,
       server_id: managed.find(c => c.id === `composio:${s.id}` && c.status === "ACTIVE")?.id ?? null } : s);
     if (recent.status === "fulfilled") audit = recent.value.entries;
     // what is open is gone (removed from elsewhere): back to the list
@@ -804,7 +841,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     }
     redraw();
     if (withSkills) void loadSkills();
-    if (configured && status.status === "fulfilled" && !Array.isArray(catalog)) await loadCatalog();
+    if (configured && status.status === "fulfilled" && !Array.isArray(composioCatalog)) await loadCatalog();
   }
 
   /** The private skills of the members: read again whenever the list is, and when a skill is changed anywhere (`MembersChanged`). */
@@ -826,23 +863,23 @@ export function createConnections(host: ConnectionsHost): Connections {
   async function loadCatalog(append = false): Promise<void> {
     if (!configured) return;
     const mine = ++catalogLoads;
-    const before = Array.isArray(catalog) ? catalog : [];
+    const before = Array.isArray(composioCatalog) ? composioCatalog : [];
     const cursor = append ? nextCursor ?? undefined : undefined;
-    catalog = "loading";
+    composioCatalog = "loading";
     repaintBody();
     try {
       const result = await api.connectorsCatalog({ search, category, cursor });
       if (mine !== catalogLoads) return;
       const entries = result.items.map(s => storePlugin(s, managed));
-      catalog = append ? [...before, ...entries.filter(s => !before.some(b => b.id === s.id))] : entries;
+      composioCatalog = append ? [...before, ...entries.filter(s => !before.some(b => b.id === s.id))] : entries;
       nextCursor = result.next_cursor && result.next_cursor !== cursor ? result.next_cursor : null;
       const resultCategories = await api.connectorsCategories();
       if (mine !== catalogLoads) return;
       categories = resultCategories.items.map(c => ({ value: c.id, label: c.name }));
     } catch (error) {
       if (mine !== catalogLoads) return;
-      if (error instanceof Error && error.message === "missing_key") { configured = false; catalog = []; }
-      else catalog = "failed";
+      if (error instanceof Error && error.message === "missing_key") { configured = false; composioCatalog = []; }
+      else composioCatalog = "failed";
     }
     redraw();
   }
@@ -867,19 +904,22 @@ export function createConnections(host: ConnectionsHost): Connections {
   async function saveKey(): Promise<void> {
     const input = (host.root ?? document).querySelector<HTMLInputElement>("#conn-key");
     if (!input?.value.trim() || keyBusy) return;
+    const mine = ++keySaves;
     let key = input.value.trim();
     input.value = "";
     keyBusy = true; keyError = ""; redraw();
     try {
       await api.connectorsSetKey(key);
-      configured = true;
+      if (mine !== keySaves) return;
+      configured = true; keyOpen = false;
       await loadCatalog();
     } catch (error) {
+      if (mine !== keySaves) return;
       const kind = error instanceof Error ? error.message : "";
-      keyError = kind === "openrouter_key" || kind === "auth" ? kind
+      keyError = kind === "openrouter_key" || kind === "consumer_key" || kind === "auth" ? kind
         : kind === "network" || kind === "timeout" ? "unreachable" : "unknown";
     }
-    finally { key = ""; keyBusy = false; redraw(); }
+    finally { key = ""; if (mine === keySaves) { keyBusy = false; redraw(); } }
   }
 
   /** Does `work` for a service (its buttons wait meanwhile), says what went wrong, and reads everything again. */
@@ -915,6 +955,10 @@ export function createConnections(host: ConnectionsHost): Connections {
    */
   function closeDialog(): void {
     if (closing) return;
+    if (keyOpen) {
+      keyOpen = false; keyError = ""; keySaves++; keyBusy = false;
+      redraw(); focusOn('[data-conn="configure-composio"]'); return;
+    }
     if (skill && open?.tab !== "installed") {
       // The page of a skill goes the same way: the document that was being edited is dropped with it.
       const page = skill;
@@ -1052,7 +1096,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     redraw();
     let result: { connected: boolean; error?: string };
     try {
-      result = "id" in target && !groupById(target.id)?.source ? await api.integrationsConnect(target)
+      result = ("catalog_id" in target ? !entryById(target.catalog_id)?.source : !groupById(target.id)?.source) ? await api.integrationsConnect(target)
         : "id" in target && groupById(target.id)?.source === "google"
         ? await api.connectorsGoogleConnect()
         : await api.connectorsConnect(key.replace(/^composio:/, ""));
@@ -1297,6 +1341,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         break;
       }
       case "cancel-login":
+        if (login && (entryById(login.target)?.source || groupById(login.target)?.source)) break;
         void api.integrationsConnectCancel().catch((err) => toaster.info(describeError(err)));
         break;
       case "form-cancel":
@@ -1306,6 +1351,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "connect":
         void connectCustom();
         break;
+      case "configure-composio": keyOpen = true; keyError = ""; redraw(); focusOn("#conn-key"); break;
       case "save-key": void saveKey(); break;
       case "skill-open": openSkillPage(Number(button.dataset.member), Number(id)); break;
       case "skill-enable": void toggleSkill(Number(button.dataset.member), Number(id)); break;
@@ -1314,6 +1360,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "skill-retry": void readSkill(); break;
       case "retry-skills": void loadSkills(); break;
       case "retry-connections": void load(); break;
+      case "retry-builtin-store": void load(false); break;
       case "retry-store": void (configured ? loadCatalog() : load()); break;
       case "load-more": void loadCatalog(true); break;
       default:
@@ -1329,7 +1376,8 @@ export function createConnections(host: ConnectionsHost): Connections {
         clearTimeout(searchTimer);
         catalogLoads++;
         searchTimer = setTimeout(() => void loadCatalog(), 250);
-      } else repaintBody();
+      }
+      repaintBody();
       return true;
     }
     if (el.id === "conn-key") return true;
@@ -1424,7 +1472,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     clearTimeout(searchTimer);
     catalogLoads++;
     category = "";
-    keyError = "";
+    keyError = ""; keyOpen = false; keySaves++; keyBusy = false;
     stopOutside?.(); stopOutside = null;
     clearTimeout(confirmTimer);
     confirming = null;

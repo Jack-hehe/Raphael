@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { auditDocument, failedChecks } from "./audit.mjs";
 import { checkRendered } from "./checks.mjs";
 import { scenes } from "./scenes/index.mjs";
+import { LATIN_NAMES } from "./runner.mjs";
 
 describe("rendered look checks", () => {
   it("rejects known English interface labels while preserving user content and brands", () => {
@@ -197,6 +198,12 @@ describe("rendered look checks", () => {
     for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
     expect(auditDocument(window.document, { width: 1120, height: 900 }, [], ["claude", "claude code", "key=value"]).mixedLanguage.map(item => item.word)).toEqual(["Code", "required", "Coder", "value"]);
   });
+  it("allows the exact external Composio menu path while rejecting English settings labels", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<p>Composio「Settings → Project Settings → API Keys」</p><button>Settings</button><button>API Keys</button>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }, [], LATIN_NAMES.map(name => name.toLowerCase())).mixedLanguage.map(item => item.word)).toEqual(["Settings", "Keys"]);
+  });
   it("allows the exact command-template token while rejecting input used as English prose", () => {
     const window = new Window();
     window.document.body.innerHTML = '<textarea placeholder="指令範本；以 {input} 代入後續文字"></textarea><p>input required</p>';
@@ -264,4 +271,27 @@ describe("rendered look checks", () => {
     expect(result.nativeControls).toEqual([]);
     expect(result.missingI18nKeys).toEqual([]);
   });
+});
+
+
+it("rejects divergent store add classes, row markup and card styling", () => {
+  const browser = new Window();
+  const row = `<div class="cs-card" style="display:flex;border-radius:0px;border-bottom:1px solid;border-left:0px solid"><button class="btn cs-main" data-conn="open-store"><span class="ic"></span><span class="tx"><span class="nm">App</span><span class="sub">Summary</span></span></button><button class="btn sm" data-conn="join">Add</button></div>`;
+  browser.document.body.innerHTML = row + row;
+  const previous = { document: globalThis.document, window: globalThis.window };
+  globalThis.document = browser.document; globalThis.window = browser;
+  try {
+    expect(checkRendered("plugins-store-rows")).toEqual({ check: "plugins-store-rows", rows: 2, addClass: "btn sm" });
+    const second = browser.document.querySelectorAll('.cs-card')[1];
+    const add = second.querySelector('[data-conn="join"]');
+    add.classList.add('pri');
+    expect(() => checkRendered("plugins-store-rows")).toThrow("same outlined class list");
+    add.classList.remove('pri');
+    const main = second.querySelector('.cs-main');
+    const oldMain = browser.document.createElement('div'); oldMain.className = 'cs-main';
+    oldMain.innerHTML = main.innerHTML; main.replaceWith(oldMain);
+    expect(() => checkRendered("plugins-store-rows")).toThrow("same detail button");
+    oldMain.replaceWith(main); second.style.display = 'grid';
+    expect(() => checkRendered("plugins-store-rows")).toThrow("same compact row and divider");
+  } finally { globalThis.document = previous.document; globalThis.window = previous.window; browser.happyDOM.abort(); }
 });

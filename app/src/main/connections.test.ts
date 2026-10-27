@@ -812,7 +812,7 @@ describe("what the tab does", () => {
     const c = createConnections(host);
     await c.load();
     expect(c.view().groups).toBe("failed");
-    expect(c.view().catalog).toBe("failed");
+    expect(c.view().catalog).toEqual(CATALOG);
     await c.load();
     api.toolsetsList.mockRejectedValueOnce("down");
     api.connectorsStatus.mockRejectedValueOnce("down");
@@ -1203,7 +1203,7 @@ describe("what the tab does", () => {
   });
 
   test("leaving the tab drops the form, the page, the search and a pending disconnect, but not a login that is under way", async () => {
-    api.connectorsConnect.mockReturnValue(new Promise(() => undefined));
+    api.integrationsConnect.mockReturnValue(new Promise(() => undefined));
     const c = createConnections(host);
     await c.load();
     c.click(button("open", { id: "ab12" }));

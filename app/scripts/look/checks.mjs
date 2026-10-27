@@ -1056,16 +1056,64 @@ export function checkRendered(name) {
     require(document.querySelector('[data-run-act="show-allowance"]'), "subscription exclusion links to allowances");
     return { check: name, bill: bill.textContent, sidebar: sidebar.textContent };
   }
-  if (name === "plugins-key-openrouter") {
+  if (name === "plugins-store-rows") {
+    const rows = [...document.querySelectorAll('.cs-card')];
+    require(rows.length > 0, "the store has app rows");
+    const add = [...document.querySelectorAll('.cs-card [data-conn="join"]')];
+    require(add.length > 0 && add.every(button => button.className === add[0].className && button.className === 'btn sm'), "every store add button has the same outlined class list");
+    for (const row of rows) {
+      const [main, action] = row.children;
+      require(row.className === 'cs-card' && row.children.length === 2, "every app row has the same two slots");
+      require(main.tagName === 'BUTTON' && main.className === 'btn cs-main' && main.dataset.conn === 'open-store', "every source uses the same detail button");
+      require(main.children.length === 2 && main.children[0].className === 'ic' && main.children[1].className === 'tx', "every row has the same mark and text structure");
+      const [title, summary] = main.children[1].children;
+      require(main.children[1].children.length === 2 && title.tagName === 'SPAN' && title.className === 'nm' && summary.tagName === 'SPAN' && ['sub', 'sub wait'].includes(summary.className), "every row has the same name and one-line summary");
+      require(action.matches('button.btn.sm[data-conn="join"], button.btn.sm[data-conn="cancel-login"], span.cs-state'), "every state stays in the shared inline action slot");
+      const style = window.getComputedStyle(row);
+      require(style.display === 'flex' && style.borderRadius === '0px' && parseFloat(style.borderBottomWidth) === 1 && parseFloat(style.borderLeftWidth) === 0, "every source keeps the same compact row and divider");
+    }
+    return { check: name, rows: rows.length, addClass: add[0].className };
+  }
+  if (name === "plugins-store") {
+    const cards = [...document.querySelectorAll('.cs-card')];
+    const ids = cards.map(card => card.querySelector('[data-conn="join"], [data-conn="manage"]')?.dataset.id);
+    require(cards.length === Number(document.querySelector('[data-k="conn-tab:store"] .n').textContent), "tab count equals rendered cards");
+    require(document.querySelector('[data-stagger="store:hot"] .cs-card') && document.querySelector('[data-stagger="store:all"] .cs-card'), "popular and all built-in sections remain available");
+    require(window.__look.calls.some(c => c.method === 'integrations.catalog'), "built-in catalog uses the real IPC boundary");
+    require(!document.querySelector('#conn-key'), "key form does not replace the store");
+    require(new Set(ids).size === cards.length, "duplicate apps appear once");
+    if (window.__look.data.composioConfigured) {
+      require(document.querySelector('.cs-composio-section .cs-card'), "Composio has its own section");
+      require(document.querySelector('.cs-composio-section [data-k="conn-category"]'), "category control belongs to Composio");
+      require(document.querySelector('[data-conn="open-store"][data-id="notion"]'), "the built-in app wins over its managed duplicate");
+    } else {
+      require(document.querySelector('[data-conn="configure-composio"]'), "optional Composio row follows the built-ins");
+      require(!window.__look.calls.some(c => c.method === 'connectors.catalog'), "missing key never requests the managed catalog");
+    }
+    return { check: name, cards: cards.length };
+  }
+  if (name === "plugins-builtin-join") {
+    require(window.__look.calls.some(c => c.method === 'integrations.connect' && c.params.catalog_id === 'github'), "own sign-in uses the built-in RPC");
+    require(!window.__look.calls.some(c => c.method === 'connectors.connect'), "own sign-in is independent of Composio");
+    require(visible(document.querySelector('.cs-card .sub.wait')), "the pending sign-in is visible");
+    return { check: name };
+  }
+  if (name === "plugins-key-openrouter" || name === "plugins-key-consumer") {
+    require(visible(document.querySelector('[role="dialog"] #conn-key')), "the key field belongs to a small connection dialog");
     const alert = document.querySelector('.cs-key-form [role="alert"]');
-    const expected = {
+    const consumer = name === "plugins-key-consumer";
+    const expected = consumer ? {
+      "zh-TW": "這是 Composio 的消費者金鑰（ck_ 開頭）。請改用專案金鑰：Composio「Settings → Project Settings → API Keys」。",
+      en: "This is a Composio consumer key (starting with ck_). Use a project key from Composio Settings → Project Settings → API Keys.",
+      ja: "これは Composio のコンシューマーキー（ck_ で始まるキー）です。Composio の「Settings → Project Settings → API Keys」にあるプロジェクトキーを使用してください。",
+    } : {
       "zh-TW": "這是 OpenRouter 的金鑰，請到「設定 → 模型與用量」輸入。",
       en: "This is an OpenRouter key. Enter it in Settings → Models and usage.",
       ja: "これは OpenRouter のキーです。「設定 → モデルと使用量」で入力してください。",
     };
-    require(visible(alert) && Object.values(expected).includes(alert.textContent), "the key form explains where the OpenRouter key belongs");
+    require(visible(alert) && Object.values(expected).includes(alert.textContent), "the key form explains how to correct the key type");
     require(document.querySelector('#conn-key').value === "", "the key field is cleared");
-    require(!document.body.textContent.includes('sk-or-look-synthetic'), "the error never echoes the key");
+    require(!document.body.textContent.includes(consumer ? 'ck_look-synthetic' : 'sk-or-look-synthetic'), "the error never echoes the key");
     require(!window.__look.data.composioConfigured, "the wrong key never configures Composio");
     require(window.__look.calls.filter(c => c.method === 'connectors.set_key').length === 1, "the error comes through the real IPC boundary");
     return { check: name, message: alert.textContent };

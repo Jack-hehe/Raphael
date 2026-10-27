@@ -172,6 +172,8 @@ class ConnectorsService:
         key = _text(params, "key", optional=True)
         if key.startswith("sk-or-"):
             raise ConnectorFailure("openrouter_key")
+        if key.startswith("ck_"):
+            raise ConnectorFailure("consumer_key")
         before = self.vault.get(KEY)
         if key:
             probe = ComposioClient(lambda: key, transport=self._transport)

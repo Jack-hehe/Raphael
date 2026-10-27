@@ -1714,26 +1714,147 @@
       "url": "https://mcp.notion.com/mcp",
       "category": "docs",
       "icon": "notion",
+      "auth": "oauth",
       "popular": true,
       "summary": {
-        "zh-TW": "搜尋與整理工作區",
-        "en": "Search and organize your workspace",
-        "ja": "ワークスペースを検索"
+        "zh-TW": "搜尋、閱讀和編輯你的頁面與資料庫",
+        "en": "Search, read and edit your pages and databases",
+        "ja": "ページとデータベースを検索・閲覧・編集"
       },
       "about": {
-        "zh-TW": "連接你的工作區",
-        "en": "Connect your workspace",
-        "ja": "ワークスペースを接続"
+        "zh-TW": "讓拉斐爾在你的 Notion 工作區裡找資料、讀取頁面，也能新增和修改內容。",
+        "en": "Lets Raphael find things in your Notion workspace, read pages, and add or change content.",
+        "ja": "Notion のワークスペースで情報を探し、ページを読み、内容を追加・編集できます。"
       },
       "examples": {
         "zh-TW": [
-          "整理這週的專案筆記"
+          "在 Notion 搜尋上週的會議記錄",
+          "把剛剛的想法記到 Notion",
+          "我的 Notion 待辦資料庫裡有什麼"
         ],
         "en": [
-          "Organize project notes"
+          "Search Notion for last week's meeting notes",
+          "Save that idea to Notion",
+          "What is in my Notion to-do database"
         ],
         "ja": [
-          "今週のメモを整理"
+          "Notion で先週の議事録を探して",
+          "さっきのアイデアを Notion にメモして",
+          "Notion のタスク一覧を教えて"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "publisher": "Linear",
+      "url": "https://mcp.linear.app/mcp",
+      "category": "projects",
+      "icon": "linear",
+      "auth": "oauth",
+      "popular": true,
+      "summary": {
+        "zh-TW": "查看和建立 Linear 的問題與專案",
+        "en": "Find and create Linear issues and projects",
+        "ja": "Linear の課題とプロジェクトを確認・作成"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾查詢你的 Linear 問題、專案和週期，也能建立問題、留言和更新狀態。",
+        "en": "Lets Raphael look up your Linear issues, projects and cycles, and create issues, comment and change status.",
+        "ja": "Linear の課題・プロジェクト・サイクルを調べ、課題の作成、コメント、ステータス更新ができます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "我在 Linear 上有哪些進行中的問題",
+          "在 Linear 建立一個問題：登入頁面壞掉",
+          "把那個問題標成已完成"
+        ],
+        "en": [
+          "What Linear issues are assigned to me",
+          "Create a Linear issue: the login page is broken",
+          "Mark that issue as done"
+        ],
+        "ja": [
+          "Linear で自分に割り当てられた課題は？",
+          "Linear に課題を作成して：ログイン画面が壊れている",
+          "その課題を完了にして"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "publisher": "Sentry",
+      "url": "https://mcp.sentry.dev/mcp",
+      "category": "developer",
+      "icon": "sentry",
+      "auth": "oauth",
+      "popular": false,
+      "summary": {
+        "zh-TW": "查看 Sentry 的錯誤與問題",
+        "en": "Look into Sentry errors and issues",
+        "ja": "Sentry のエラーと課題を確認"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾查詢 Sentry 專案裡的錯誤、堆疊追蹤和發生次數。",
+        "en": "Lets Raphael look up the errors, stack traces and counts in your Sentry projects.",
+        "ja": "Sentry のプロジェクトにあるエラー、スタックトレース、発生回数を調べられます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "Sentry 最近有哪些新的錯誤",
+          "這個錯誤發生了幾次",
+          "哪個專案的錯誤最多"
+        ],
+        "en": [
+          "What new errors came up in Sentry",
+          "How many times did this error happen",
+          "Which project has the most errors"
+        ],
+        "ja": [
+          "Sentry に新しいエラーはある？",
+          "このエラーは何回発生した？",
+          "エラーが一番多いプロジェクトは？"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "publisher": "GitHub",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "category": "developer",
+      "icon": "github",
+      "auth": "device",
+      "popular": false,
+      "summary": {
+        "zh-TW": "你的程式庫、議題、PR 和通知",
+        "en": "Your repositories, issues, pull requests and notifications",
+        "ja": "リポジトリ、Issue、PR、通知"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾搜尋程式碼、閱讀和整理議題與 PR，也能查看你的通知。",
+        "en": "Lets Raphael search code, read and manage issues and pull requests, and check your notifications.",
+        "ja": "コードの検索、Issue や PR の閲覧・整理、通知の確認ができます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "我有哪些待處理的 PR",
+          "在這個程式庫開一個議題",
+          "看一下我的 GitHub 通知"
+        ],
+        "en": [
+          "Which pull requests are waiting for me",
+          "Open an issue in this repository",
+          "Check my GitHub notifications"
+        ],
+        "ja": [
+          "自分宛ての PR を教えて",
+          "このリポジトリに Issue を作って",
+          "GitHub の通知を確認して"
         ]
       },
       "server_id": null

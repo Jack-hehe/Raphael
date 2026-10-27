@@ -131,7 +131,7 @@
 .cs-say li { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: 0; border: 0; background: transparent; font-size: var(--fs-xs); line-height: 1.5; }
 .cs-say .i { color: var(--text-3); }
 
-/* 商店: cards in two columns in the list's style, each a button that opens the page and one that adds */
+/* Store rows share the detail button, action slot and divider across both catalogs. */
 .cs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2) var(--sp-3); }
 .cs-card { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 64px; padding-right: var(--sp-3); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 .cs-card:hover { background: var(--hover); }
@@ -145,12 +145,15 @@
 .cs-card > .btn { flex: none; padding-inline: var(--sp-2); }
 .cs-card > .cs-state { flex: none; font-size: var(--fs-xs); }
 .cs-card .cs-state .st { font-size: var(--fs-xs); color: var(--text-3); }
-.cs-card:has(> div.cs-main) { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); min-height: 138px; padding: var(--sp-4); border: 1px solid var(--edge); border-radius: var(--r-lg); }
-.cs-card > div.cs-main { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
-.cs-card > div.cs-main .nm { font-size: var(--fs-sm); }
-.cs-card > div.cs-main .sub { margin-top: var(--sp-1); }
-.cs-card:has(> div.cs-main) > :last-child { justify-self: end; align-self: end; }
-.cs-key-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); max-width: 440px; margin-top: var(--sp-5); }
+.cs-key-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); width: 100%; }
+.cs-composio-setup { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-5); padding: var(--sp-4) 0; border-top: 1px solid var(--edge); }
+.cs-composio-setup > span:nth-child(2) { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+.cs-composio-setup > button { flex: none; }
+.cs-composio-mark { color: var(--text-2); }
+.cs-composio-mark svg { width: 20px; height: 20px; }
+.cs-store-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+.cs-store-heading h2 { margin-bottom: 0; }
+.cs-store-heading .sel { max-width: 180px; }
 .cs-key-form label { font-size: var(--fs-sm); font-weight: 600; }
 .cs-key-form > p { margin: 0; font-size: var(--fs-xs); color: var(--err); }
 

@@ -767,10 +767,10 @@ async def test_google_api_http_boundary_and_private_logs(tool, args, caplog):
     assert not any(x in caplog.text for x in ("Bearer ", "private-mail", "private-event", "Private subject"))
 
 
-@pytest.mark.parametrize("outcome", ["accepted", "401", "403", "network", "timeout", "openrouter", "500"])
-async def test_key_probe_accepts_any_prefix_and_classifies_private_failures(tmp_path, conn, caplog, outcome):
+@pytest.mark.parametrize("outcome", ["accepted", "401", "403", "network", "timeout", "openrouter", "consumer", "500"])
+async def test_key_probe_accepts_project_keys_and_classifies_private_failures(tmp_path, conn, caplog, outcome):
     requests = []
-    candidate = "sk-or-private-test-value" if outcome == "openrouter" else "project-private-test-value"
+    candidate = {"openrouter": "sk-or-private-test-value", "consumer": "ck_private-test-value"}.get(outcome, "project-private-test-value")
 
     def respond(request):
         requests.append(request)
@@ -792,9 +792,9 @@ async def test_key_probe_accepts_any_prefix_and_classifies_private_failures(tmp_
         assert result == {"configured": True}
         assert vault.get("connectors:composio:key") == candidate
     else:
-        kind = {"401": "auth", "403": "auth", "network": "network", "timeout": "timeout", "openrouter": "openrouter_key", "500": "http_error"}[outcome]
+        kind = {"401": "auth", "403": "auth", "network": "network", "timeout": "timeout", "openrouter": "openrouter_key", "consumer": "consumer_key", "500": "http_error"}[outcome]
         assert result == {"ok": False, "error": kind, "http_status": int(outcome) if outcome.isdigit() else None}
         assert vault.get("connectors:composio:key") == "previous-private-key"
         assert not service.store.session_id
-    assert len(requests) == (0 if outcome == "openrouter" else 1)
+    assert len(requests) == (0 if outcome in ("openrouter", "consumer") else 1)
     assert candidate not in json.dumps(result) + caplog.text

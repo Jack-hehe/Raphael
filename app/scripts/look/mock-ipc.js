@@ -375,6 +375,7 @@ export function installMock(fixture, config = {}, target = window) {
       case "connectors.tools": return { items: data.pluginTools[p.id] ?? [] };
       case "connectors.set_key": {
         if (p.key.startsWith("sk-or-")) return { ok: false, error: "openrouter_key" };
+        if (p.key.startsWith("ck_")) return { ok: false, error: "consumer_key" };
         data.composioConfigured = true; return { configured: true };
       }
       case "connectors.set_tools": {
@@ -520,6 +521,10 @@ export function installMock(fixture, config = {}, target = window) {
         return { draft: copy(carrier.drafts[0]), handed: true };
       }
       case "toolsets.list": return { groups: data.servers };
+      case "integrations.connect": {
+        if (variant.pluginsConnecting) return new Promise(() => {});
+        return { connected: false, error: "cancelled" };
+      }
       case "integrations.catalog": return { services: data.services };
       case "integrations.audit": return { entries: [] };
       case "integrations.inventory": return inventory();

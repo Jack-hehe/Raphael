@@ -5,6 +5,7 @@ import { managedGroup, pluginLogoURL, storePlugin } from "./plugins-data";
 import { setLocale } from "./i18n";
 
 const api = vi.hoisted(() => ({
+  integrationsCatalog: vi.fn(), integrationsConnect: vi.fn(), integrationsConnectCancel: vi.fn(),
   toolsetsList: vi.fn(), integrationsAudit: vi.fn(), integrationsDisconnect: vi.fn(),
   connectorsStatus: vi.fn(), connectorsCatalog: vi.fn(), connectorsCategories: vi.fn(),
   connectorsTools: vi.fn(), connectorsSetTools: vi.fn(), connectorsConnect: vi.fn(),
@@ -32,6 +33,7 @@ beforeEach(() => {
     { id: "google", kind: "google", status: "ACTIVE", enabled: true, enabled_tools: [], disabled_tools: [] }];
   api.toolsetsList.mockResolvedValue({ groups: [{ ...managedGroup(connectors[0]!), id: "custom", source: undefined, catalog_id: null, auth: "none", name: "Local MCP" },
     { ...managedGroup(connectors[0]!), id: "connectors_composio" }, { ...managedGroup(connectors[1]!), id: "connectors_google" }] });
+  api.integrationsCatalog.mockResolvedValue({ services: [] });
   api.integrationsAudit.mockResolvedValue({ entries: [] });
   api.integrationsInventory.mockResolvedValue({ state: "complete", count: 0, apps: [] });
   api.membersList.mockResolvedValue({ members: [], groups: [] });
@@ -119,7 +121,7 @@ test("store uses shared categories, sends search to the catalog, and paginates",
   const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
   expect(root.querySelector('[data-k="conn-category"]')?.classList.contains("sel")).toBe(true);
   expect(root.querySelector("select")).toBeNull();
-  expect(root.textContent).toContain("Added");
+  expect(root.textContent).toContain("Installed");
   c.menuFor("conn-category")!.pick("docs"); await settle();
   expect(api.connectorsCatalog).toHaveBeenLastCalledWith({ search: "", category: "docs", cursor: undefined });
   c.input({ id: "conn-search", value: "issue" } as HTMLInputElement);
@@ -130,7 +132,7 @@ test("store uses shared categories, sends search to the catalog, and paginates",
   api.connectorsCatalog.mockResolvedValueOnce({ items: [{ ...toolkit, slug: "linear" }], next_cursor: null });
   click("load-more"); await settle();
   expect(api.connectorsCatalog).toHaveBeenLastCalledWith({ search: "issue", category: "", cursor: "next" });
-  expect(c.view().catalog).toHaveLength(2); c.reset();
+  expect(c.view().composioCatalog).toHaveLength(2); c.reset();
 });
 
 test("new search results win over an older in-flight catalog request", async () => {
@@ -140,14 +142,16 @@ test("new search results win over an older in-flight catalog request", async () 
   c.menuFor("conn-category")!.pick("docs");
   c.menuFor("conn-category")!.pick("other"); await settle();
   finish({ items: [], next_cursor: null }); await settle();
-  expect(c.view().catalog).toHaveLength(2); c.reset();
+  expect(c.view().composioCatalog).toHaveLength(2); c.reset();
 });
 
-test("missing key displays only a password prompt and never loads the grid", async () => {
+test("missing key offers an optional dialog without requesting managed apps", async () => {
   api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
   const { c, root, click } = setup(); await c.load(); click("tab", "store");
+  expect(root.querySelector("#conn-key")).toBeNull();
+  click("configure-composio");
   expect(root.querySelector<HTMLInputElement>("#conn-key")?.type).toBe("password");
-  expect(root.querySelector(".cs-grid")).toBeNull();
+  expect(root.querySelector(".cs-composio-section")).toBeNull();
   expect(api.connectorsCatalog).not.toHaveBeenCalled();
 });
 
@@ -155,7 +159,7 @@ test.each([false, true])("saving a key never retains or echoes its value (failur
   api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
   if (failed) api.connectorsSetKey.mockRejectedValue(new Error("ak_secret-provider-error"));
   else api.connectorsSetKey.mockResolvedValue({ configured: true });
-  const { c, root, click } = setup(); await c.load(); click("tab", "store");
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); click("configure-composio");
   root.querySelector<HTMLInputElement>("#conn-key")!.value = "ak_secret";
   click("save-key");
   expect(root.innerHTML).not.toContain("ak_secret"); await settle();
@@ -174,7 +178,9 @@ test("one login at a time, connecting state, notification refresh and installed 
   click("join", "github"); click("join", "github");
   expect(api.connectorsConnect).toHaveBeenCalledTimes(1);
   expect(api.connectorsConnect).toHaveBeenCalledWith("github");
-  expect(root.querySelector(".cs-wait")).not.toBeNull();
+  expect(root.querySelector(".cs-card .sub.wait")).not.toBeNull();
+  expect(root.querySelector<HTMLButtonElement>('[data-conn="cancel-login"]')?.disabled).toBe(true);
+  click("cancel-login"); expect(api.integrationsConnectCancel).not.toHaveBeenCalled();
   connectors.push({ ...connectors[0]!, id: "composio:github", name: "GitHub", disabled_tools: [] });
   c.followEvent({ type: "ConnectionsChanged" }); await settle();
   expect(c.view().groups).toHaveLength(4);
@@ -211,21 +217,103 @@ test("only trusted remote logos are rendered and they never send a referrer", ()
 
 test.each(["zh-TW", "en", "ja"] as const)("key failure copy is specific and private in %s", async locale => {
   const messages = {
-    "zh-TW": ["這是 OpenRouter 的金鑰，請到「設定 → 模型與用量」輸入。", "Composio 不接受這把金鑰。請使用 Composio「Settings → Project Settings → API Keys」中的專案金鑰。", "連不上 Composio，請稍後再試。", "無法儲存金鑰，請檢查金鑰後重試。"],
-    en: ["This is an OpenRouter key. Enter it in Settings → Models and usage.", "Composio did not accept this key. Use a project key from Composio Settings → Project Settings → API Keys.", "Could not reach Composio. Try again later.", "Could not save the key. Check it and retry."],
-    ja: ["これは OpenRouter のキーです。「設定 → モデルと使用量」で入力してください。", "Composio がこのキーを受け付けませんでした。Composio の「Settings → Project Settings → API Keys」にあるプロジェクトキーを使用してください。", "Composio に接続できません。しばらくしてから再試行してください。", "キーを保存できません。確認して再試行してください。"],
+    "zh-TW": ["這是 OpenRouter 的金鑰，請到「設定 → 模型與用量」輸入。", "Composio 不接受這把金鑰。請使用 Composio「Settings → Project Settings → API Keys」中的專案金鑰。", "連不上 Composio，請稍後再試。", "無法儲存金鑰，請檢查金鑰後重試。", "這是 Composio 的消費者金鑰（ck_ 開頭）。請改用專案金鑰：Composio「Settings → Project Settings → API Keys」。"],
+    en: ["This is an OpenRouter key. Enter it in Settings → Models and usage.", "Composio did not accept this key. Use a project key from Composio Settings → Project Settings → API Keys.", "Could not reach Composio. Try again later.", "Could not save the key. Check it and retry.", "This is a Composio consumer key (starting with ck_). Use a project key from Composio Settings → Project Settings → API Keys."],
+    ja: ["これは OpenRouter のキーです。「設定 → モデルと使用量」で入力してください。", "Composio がこのキーを受け付けませんでした。Composio の「Settings → Project Settings → API Keys」にあるプロジェクトキーを使用してください。", "Composio に接続できません。しばらくしてから再試行してください。", "キーを保存できません。確認して再試行してください。", "これは Composio のコンシューマーキー（ck_ で始まるキー）です。Composio の「Settings → Project Settings → API Keys」にあるプロジェクトキーを使用してください。"],
   };
   setLocale(locale);
   api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
-  const { c, root, click } = setup(); await c.load(); click("tab", "store");
-  for (const [kind, index] of [["openrouter_key", 0], ["auth", 1], ["network", 2], ["timeout", 2], ["private-provider-payload", 3]] as const) {
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); click("configure-composio");
+  for (const [kind, index] of [["openrouter_key", 0], ["auth", 1], ["network", 2], ["timeout", 2], ["private-provider-payload", 3], ["consumer_key", 4]] as const) {
     api.connectorsSetKey.mockRejectedValueOnce(new Error(kind));
-    root.querySelector<HTMLInputElement>("#conn-key")!.value = "private-project-key";
+    const candidate = kind === "consumer_key" ? "ck_private-consumer-test-value" : "private-project-key";
+    root.querySelector<HTMLInputElement>("#conn-key")!.value = candidate;
     click("save-key"); await settle();
     expect(root.querySelector('[role="alert"]')?.textContent).toBe(messages[locale][index]);
     expect(root.querySelector<HTMLInputElement>("#conn-key")?.value).toBe("");
-    expect(root.innerHTML + JSON.stringify(c.view())).not.toContain("private-project-key");
+    expect(root.innerHTML + JSON.stringify(c.view())).not.toContain(candidate);
     expect(root.textContent).not.toContain("private-provider-payload");
   }
   c.reset();
+});
+
+
+test("built-in services work without a key, search locally, and use their existing join RPC", async () => {
+  const own = { ...storePlugin({ ...toolkit, slug: "sentry", name: "Sentry" }, []), source: undefined, popular: true };
+  api.integrationsCatalog.mockResolvedValue({ services: [own] });
+  api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
+  api.integrationsConnect.mockReturnValue(new Promise(() => {}));
+  const { c, root, click } = setup(); await c.load(); click("tab", "store");
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(1);
+  expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("1");
+  expect(root.querySelector('[data-conn="configure-composio"]')).not.toBeNull();
+  c.input({ id: "conn-search", value: "unmatched" } as HTMLInputElement);
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(0);
+  expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("0");
+  c.input({ id: "conn-search", value: "Sentry" } as HTMLInputElement);
+  click("join", "sentry");
+  expect(api.integrationsConnect).toHaveBeenCalledWith({ catalog_id: "sentry" });
+  expect(api.connectorsConnect).not.toHaveBeenCalled();
+  expect(api.connectorsCatalog).not.toHaveBeenCalled(); c.reset();
+});
+
+test("own services win across slugs and names, and Composio categories leave them visible", async () => {
+  api.integrationsCatalog.mockResolvedValue({ services: [{ ...storePlugin(toolkit, []), source: undefined, popular: true }] });
+  api.connectorsCatalog.mockResolvedValue({ items: [toolkit, { ...toolkit, slug: "notion-alt" }, { ...toolkit, slug: "github", name: "GitHub" }], next_cursor: null });
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(2);
+  expect(root.querySelectorAll('[data-conn="join"][data-id="notion"]')).toHaveLength(1);
+  expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("2");
+  api.connectorsCatalog.mockResolvedValueOnce({ items: [], next_cursor: null });
+  c.menuFor("conn-category")!.pick("docs"); await settle();
+  expect(root.querySelectorAll(".cs-card")).toHaveLength(1);
+  expect(root.querySelector('[data-conn="join"][data-id="notion"]')).not.toBeNull();
+  expect(root.querySelector('[data-k="conn-tab:store"] .n')?.textContent).toBe("1"); c.reset();
+});
+
+test("a managed catalog failure leaves built-ins available and a late key reply cannot reopen a closed dialog", async () => {
+  api.integrationsCatalog.mockResolvedValue({ services: [{ ...storePlugin(toolkit, []), source: undefined }] });
+  api.connectorsCatalog.mockRejectedValue(new Error("offline"));
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
+  expect(root.querySelector('[data-conn="join"][data-id="notion"]')).not.toBeNull();
+  expect(root.querySelector('.cs-composio-section [role="alert"]')).not.toBeNull();
+  api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false }); await c.load();
+  let reject!: (error: Error) => void;
+  api.connectorsSetKey.mockReturnValue(new Promise((_, no) => { reject = no; }));
+  click("configure-composio"); root.querySelector<HTMLInputElement>("#conn-key")!.value = "private-key"; click("save-key");
+  click("close"); reject(new Error("consumer_key")); await settle();
+  expect(c.view()).toMatchObject({ keyOpen: false, keyBusy: false, keyError: "" });
+  expect(root.querySelector("#conn-key")).toBeNull(); c.reset();
+});
+
+
+test.each(["available", "added", "connecting", "unavailable"])("both store sources share their row and action markup when %s", state => {
+  const base = { ...storePlugin({ ...toolkit, logo: "" }, []), server_id: state === "added" ? "existing" : null, can_connect: state !== "unavailable" };
+  const render = (managed: boolean) => {
+    const item = { ...base, source: managed ? "composio" as const : undefined };
+    const root = document.createElement("div");
+    root.innerHTML = connectionsHTML({ ...emptyConnectionsView(), tab: "store", configured: true,
+      catalog: managed ? [] : [item], composioCatalog: managed ? [item] : [],
+      login: state === "connecting" ? { target: item.id, name: item.name } : null });
+    return root.querySelector<HTMLElement>(".cs-card")!;
+  };
+  const own = render(false), managed = render(true);
+  if (state === "connecting") {
+    expect(own.querySelector<HTMLButtonElement>('[data-conn="cancel-login"]')!.disabled).toBe(false);
+    const cancel = managed.querySelector<HTMLButtonElement>('[data-conn="cancel-login"]')!;
+    expect(cancel.disabled).toBe(true); cancel.removeAttribute("disabled");
+  }
+  expect(managed.outerHTML).toBe(own.outerHTML);
+  if (state === "unavailable") expect(managed.querySelector<HTMLButtonElement>('[data-conn="join"]')!.disabled).toBe(true);
+});
+
+test("managed store rows open the shared detail and join through their own provider", async () => {
+  api.connectorsConnect.mockResolvedValue({ connected: false, error: "cancelled" });
+  const { c, root, click } = setup(); await c.load(); click("tab", "store"); await settle();
+  click("open-store", "github");
+  expect(root.querySelector(".cs-page .cs-head")?.textContent).toContain("GitHub");
+  expect(root.querySelector(".cs-meta, .cs-say")).toBeNull();
+  click("join", "github"); await settle();
+  expect(api.connectorsConnect).toHaveBeenCalledWith("github");
+  expect(api.integrationsConnect).not.toHaveBeenCalled(); c.reset();
 });

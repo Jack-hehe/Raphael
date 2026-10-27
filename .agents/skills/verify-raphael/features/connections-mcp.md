@@ -25,12 +25,30 @@ its name, who has it, its description (when it is used), a switch, the whole
 SKILL.md as editable text and 刪除技能. Sharing an app or a skill is not offered
 until members can share across users (P13).
 
-The Store uses connectors.catalog and connectors.categories, shared search/dropdown,
-paged cards, browser sign-in progress and already-added state. A missing Composio key
-shows only the password prompt and Save action. Non-empty keys are probed without a local
-prefix rule. Errors distinguish an OpenRouter key, Composio refusal and network/timeout
-failure, with generic copy otherwise; keys never enter view state or error
-copy. Remote logos accept only HTTPS Composio domains under the existing image CSP;
+The Store always reads Raphael's built-in services from integrations.catalog, with
+popular/all sections, local search and the existing integrations.connect join flow.
+Composio is optional. Without a key, a final row opens the small connection-style
+password dialog; it never replaces the service list. With a key, connectors.catalog
+and connectors.categories supply a separate Composio section below the built-ins.
+Its category selector filters only that section. Matching normalized slugs or names
+appear once, as Raphael's built-in service. Search covers both sources; the Store
+badge counts the currently rendered unique service cards (not the setup row or
+unloaded pages). Failure/loading of Composio leaves the built-in catalog available.
+Both catalogs render through the same compact row component: a bare mark, a name,
+one summary line, a right-aligned outlined Add button and a bottom divider. Added,
+connecting and unavailable states use the same row/action slots, with no managed
+card CSS or primary Add variant. Every row's name opens the shared store detail;
+managed entries omit unavailable example/server sections. Managed sign-in does not
+expose a cancellation RPC, so its shared Cancel control is disabled while waiting;
+built-in cancellation still uses integrations.connect_cancel.
+Known mismatched key types fail before
+any request: sk-or- is an OpenRouter key and ck_ is a Composio consumer key, not the
+project key Raphael needs. Other non-empty keys are probed without a prefix allowlist.
+Errors distinguish both mismatched key types, Composio refusal and network/timeout
+failure, with generic copy otherwise; keys never enter view state or error copy.
+Consumer-key errors point to Composio Settings > Project Settings > API Keys in
+zh-TW, en and ja; the password field is cleared.
+Remote logos accept only HTTPS Composio domains under the existing image CSP;
 bundled marks/generic plug cover absent artwork. The fixture uses installed marks
 and does not prove remote image availability.
 
@@ -39,19 +57,38 @@ and does not prove remote image availability.
 Press 連結應用程式 at the bottom of the sidebar (the plug with a count at the bottom
 of the rail), or open Settings > Connections. Use 已連結 to open a service
 detail or a private skill, change their switches or open an overflow. Add offers custom command/URL, pasted JSON and import.
-Use Store to save a Composio project key, filter the catalog and Add a service;
-complete its login in the browser, then return to 已連結.
+Use Store to search and Add a built-in service without configuring Composio;
+complete its existing login, then return to 已連結. Optionally use the setup row at
+the end to save a Composio project key and add its extra apps.
 
 ## Driving it with look
 
 ```powershell
-npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-store-key-openrouter plugins-connecting --theme both --width 1120,720,1920x1080
+npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-store-key-openrouter plugins-store-key-consumer plugins-connecting --theme both --width 1120,720,1920x1080
 npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
 npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
 npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connections-app-switch connector-many-tools connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
 ```
 
-The last command is the apps and skills set (`scenes/apps.mjs`). Each scene enters
+For this local store change, the selected acceptance matrix is:
+
+```powershell
+npm run look -- plugins-store plugins-store-category plugins-store-key plugins-store-key-openrouter plugins-store-key-consumer plugins-connecting --theme both --width 1120,720,1920x1080
+```
+
+`plugins-store-rows` runs in all six selected store scenes and checks identical
+Add classes, main/text/action slot structure, flex layout and bottom dividers. Its
+regression test rejects primary Add variants, static managed main slots and card
+grid styling. Unit tests compare the sources in all four service states.
+`plugins-store` checks both sources, count and deduplication; `plugins-store-key`
+checks built-ins plus the optional setup row without issuing connectors.catalog.
+Both error scenes open the small password dialog. `plugins-connecting` joins the
+built-in GitHub entry without a Composio key and checks integrations.connect.
+The fixture has four representative built-ins from the repository catalog, not
+all 37 entries or live provider accounts. Tests also cover local search/count,
+source failures, category isolation, pagination and late key replies after close.
+
+The last command in the broader list above is the apps and skills set (`scenes/apps.mjs`). Each scene enters
 through the sidebar's 連結應用程式; `apps-count` compares the badge, the tab's
 number, the rows and the roster, `apps-unreadable` checks that a core that cannot
 list the apps leaves 「—」 and no number in all of them. An app has one switch, in
