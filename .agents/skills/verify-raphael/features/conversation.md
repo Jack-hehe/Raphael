@@ -302,3 +302,12 @@ waiting all retain Stop in the existing gold slot. Microphone release never foll
 The shared composer tests cover IME Enter, Stop acknowledgement races, independent send completion
 and the return to the voice emblem/tooltip at idle. Native microphone/controller behavior remains
 unverified by rendered fixtures.
+
+## Right click on an answer (R-UI-44)
+
+A right click anywhere on one of Raphael's answers opens the menu of its ⋯ (重新產生, 朗讀, 刪除這則), at the pointer, as a click on the ⋯ opens it: see
+[Members](members.md) for the rule and its table. A conversation row in a member's details gives its rename and delete menu the same way; its left click still opens the conversation.
+
+```powershell
+npm run look -- context-menu-message context-menu-conversation --theme both --width 1120,720,1920x1080
+```

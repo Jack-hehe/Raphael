@@ -1,7 +1,9 @@
 // Self-contained so the same checks run in Chromium and in the DOM contract tests.
 // `latinAllowed` (lower-case words, names or syntax) enables the Chinese window's language check: any other
 // Latin word in visible text, a placeholder, an aria-label or a title is interface copy left in English.
-export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = [], latinAllowed = null, englishUI = []) {
+// `overflowOrphans` is the runner's list (it asks the page's context-menu.ts) of the ⋯ buttons that no row of the app's table
+// reaches with a right click: each is a violation of R-UI-44.
+export function auditDocument(doc = document, viewport = { width: innerWidth, height: innerHeight }, namespaces = [], latinAllowed = null, englishUI = [], overflowOrphans = []) {
   const win = doc.defaultView;
   const describe = element => ({ tag: element.tagName.toLowerCase(), id: element.id, class: typeof element.className === "string" ? element.className : "", text: element.textContent?.trim().slice(0, 100) });
   const visible = element => {
@@ -170,6 +172,7 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
       }
     }
   }
+  for (const orphan of overflowOrphans) productRules.push({ ...orphan, rule: 'R-UI-44', reason: 'A ⋯ button that a right click on its row does not reach' });
   const documentWidth = Math.max(doc.documentElement.scrollWidth, doc.body.scrollWidth);
   return { horizontalOverflow: { document: documentWidth > viewport.width + 1, documentWidth, viewportWidth: viewport.width, elements: horizontalOverflow }, outsideViewport, missingI18nKeys, nativeControls, invalidDurations, mixedLanguage, rawMarkdown, productRules };
 }

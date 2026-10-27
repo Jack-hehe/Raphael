@@ -135,3 +135,9 @@ npm run look -- room-workflow-blocked room-final-owner composer-task-stop room-p
 Inspect every sheet and full-size Stop, blocked and short-wrap-up image. These scenes use IPC
 fixtures; P00 S07.short-wrapup, S08.completion and S11 use production loops with offline API/CLI
 brains. Native controller/microphone behavior and paid providers require separate acceptance.
+
+## Right click on a room or a group (R-UI-44)
+
+A right click on a room's row in the sidebar, on the header of an open room, on a group's header in the member column or on a group's header on the team board opens the
+menu of its ⋯ at the pointer, the same one the ⋯ opens (rename, members, delete, and the rest). The rule and its table are in [Members](members.md); the scenes above show
+those ⋯ and the audit of every look scene fails one that no row reaches.

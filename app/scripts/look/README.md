@@ -57,7 +57,7 @@ journeys then click the real Raphael rail destination before driving their steps
 Home scenes cover rich/empty data, reports, routines and calendar navigation.
 
 Add a `scene(name, description, steps, fixtureOverrides)` to a module in `scenes/` and
-export it from `scenes/index.mjs`. Steps include click, type, hover, key, wait, scroll,
+export it from `scenes/index.mjs`. Steps include click, type, hover, key (`shift: true` holds Shift), right-click, wait, scroll,
 member/room selection and drag/drop. Use real UI selectors and wait for the resulting
 state; do not replace app modules or inject a separate preview page. Fixture overrides
 can replace collections; `running`, `problem`, `onlyRaphael`, `usageEmpty`
@@ -79,9 +79,10 @@ Coverage merges auto's automation/team/room matrix, nav's settings/MCP/usage mat
 polish's composers/skins, layout's dictation/notices/onboarding and narrate's chat states.
 Conversation management opens through the title-controlled details panel. Usage
 retains aggregate summaries, grouping, allowances and CSV; per-run navigation is removed. The deliberately removed owner menu/photo controls have no
-scenes. There are 270 current scenes (1620 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen. Model-choice scenes cover cloud/local row spacing, themed borders, readable metadata, scroll access and keyboard selection without downloading.
+scenes. There are 277 current scenes (1662 combinations across light/dark and 1120, 720, 1920x1080). The member-column scenes cover the restored Raphael row, collapse, face tooltips and re-expansion; dictation tabs use horizontal keyboard navigation. Team mentions and slash commands align to their text character and prefer the space above it, without an empty icon/check column. Calendar checks prohibit horizontal scrolling, keep all seven days visible and exercise responsive month/member/keep-awake controls. Team headers share the page padding and align Add with the title. Geometry checks cover all three sizes. The default Team scene also enforces R-UI-01: group panels use at least 80% of workspace width and 35% of its area at full screen. Model-choice scenes cover cloud/local row spacing, themed borders, readable metadata, scroll access and keyboard selection without downloading.
 Team administration scenes cover full, long and eight-member batch approvals, held deletion approval,
 live member selection after approval, and an unchanged roster after rejection.
+The right-click scenes (`scenes/context-menu.mjs`, R-UI-44) press the real right button with the `right-click` step, which keeps its point in `window.__look.pointer`, and their `context-menu` check asserts that the menu is open, starts at the pointer, does not cover it and has the items of the menu a click on the ⋯ opens; `context-menu-key` presses Shift+F10 on a focused row. Every scene's audit also asks `context-menu.ts` for the ⋯ buttons that no row of its table reaches (`R-UI-44`).
 The primary-contact scenes (`primary-contact-menu`, `primary-contact-picker`, `primary-contact-set`, `primary-contact-strip`, `primary-room-chief`) choose the owner's primary contact through the real member menu and
 picker; the IPC double keeps `primaryId` (the fixture key `primaryMember` seeds it) and answers `members.set_primary` and the list's `team_context.primary_id` as the core does.
 The apps and skills scenes (`scenes/apps.mjs`) enter through the sidebar's connected-apps entry.
@@ -110,6 +111,6 @@ Its rules, feature context, external reference paths, budgets and cache are
 documented in the verify-raphael skill and `GUARDIAN-NOTES.md`. The verify alias is
 `npm run verify -- --judge <look run>`; set `RAPHAEL_JUDGE_REFERENCES` to a JSON array
 of external image paths. Live matrix and judge opt into paid network requests;
-ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1620 (the full matrix has 1620 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
+ordinary verify/look and their fake-model unit tests remain offline. The judge request cap is 1662 (the full matrix has 1662 images); dollar budgets and per-request admission ceilings still apply. Every PR runs
 the repo's contracts and full look matrix in CI. Missing hosted secrets produce
 an explicit SKIP notice, never live/design acceptance.

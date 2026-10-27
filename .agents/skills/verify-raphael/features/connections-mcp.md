@@ -126,3 +126,12 @@ description names and see it used; delete it and see that it is not.
 Custom MCP transport uses the shared dropdown (`data-k="conn-type"`); HTTP
 journeys choose the `http` menu item. Custom server deletion asks to delete; managed
 connector disconnection asks to disconnect. Security and secret-storage notices remain.
+
+## Right click on a connection (R-UI-44)
+
+A custom server's ⋯ sits in the header of its dialog, and a subscription account's ⋯ on its card in Settings › 模型; a right click anywhere on the header or the card
+opens that menu at the pointer (測試, 編輯伺服器, 刪除; 中斷連線), the one the ⋯ opens. See [Members](members.md) for the rule and its table.
+
+```powershell
+npm run look -- context-menu-connection context-menu-cli-account --theme both --width 1120,720,1920x1080
+```

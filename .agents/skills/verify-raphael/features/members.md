@@ -157,3 +157,26 @@ sequential HTTP MCP paths, edits, direct/ask modes, cancellation, expiry, resend
 atomic rollback, target scope, current safety, saved first Bot identity and replay.
 Guardian S01 runs the production loops for both fake brains. Browser IPC fixtures
 prove rendered interactions only; live brains and native persistence remain separate.
+
+## Right click is the ⋯ (R-UI-44)
+
+Every row, card or item that has a ⋯ opens that button's menu when it is right-clicked anywhere on it, at the pointer (the owner, 2026-10-27, about every
+overflow menu and the conversation list of a member's details): member rows and group headers in the column, conversations and routines in a member's details,
+the notes, routines, skills and commands of a member's profile, rooms (the sidebar's rows and the room's header), the team board's group headers, a custom
+server's header and a subscription account's card in Settings, memory notes, safety rules, computer apps, History rows, dictionary words and Raphael's answers.
+The menu is the very one the ⋯ opens, because the button is pressed and its own handler runs, so a menu that replaces the first from the same button
+(「移到分組」) stands at the pointer too. Shift+F10 and the Menu key open it under the ⋯ of the focused row. A right button dragged more than a few pixels opens
+nothing, so that a drag (the team board's pan, later) is not a click. Anywhere else there is no browser menu, and a text field keeps its own. A left click on a conversation row
+still opens that conversation: it is the row's own action, and a menu on it would leave no way to open one from the list.
+
+`OVERFLOW_ROWS` in app/src/main/context-menu.ts is the one table of every ⋯ and its row. A ⋯ drawn without a line in it fails app/src/main/context-menu.test.ts,
+and the audit of every look scene (`R-UI-44`) fails a rendered ⋯ that no row reaches.
+
+```powershell
+npm run look -- context-menu-member context-menu-conversation context-menu-routine context-menu-key --theme both --width 1120,720,1920x1080
+```
+
+Each scene presses the real right button (the `right-click` driver step, which keeps the point it pressed) and its `context-menu` check asserts that the menu is open, starts
+at the pointer, does not cover it, and has the same items as the menu a click on the ⋯ opens. It closes the menu on the way, and the scene presses again so that the picture
+shows it. `context-menu-key` presses Shift+F10 (`key` with `shift`) on the focused member row and asserts that the menu stands under its ⋯. The connection and message
+scenes are in [Connections and MCP](connections-mcp.md) and [Conversation](conversation.md).

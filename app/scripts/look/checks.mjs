@@ -468,6 +468,40 @@ export function checkRendered(name) {
     }
     return { check: name, menuLeft: box.left, characterX: expected, delta: Math.abs(box.left - expected) };
   }
+  if (name === "context-menu" || name === "context-menu-key") {
+    // R-UI-44: a right click anywhere on a row, or the menu key on it, opens the menu of its ⋯: the same menu a click on the ⋯ opens.
+    const labels = () => [...document.querySelectorAll('#app-popover button')].map(button => button.textContent.trim().replace(/\s+/g, ' '));
+    const popover = document.querySelector('#app-popover'), opener = document.querySelector('[data-overflow][aria-expanded="true"]');
+    require(visible(popover) && opener, "a menu is open and belongs to a ⋯ button");
+    const box = popover.getBoundingClientRect(), shown = labels(), at = window.__look.pointer;
+    require(shown.length > 0, "the menu has items");
+    require(box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, "the menu is inside the window");
+    if (name === "context-menu") {
+      require(at, "the scene right-clicked first");
+      require(Math.abs(box.left - Math.max(8, Math.min(at.x, innerWidth - box.width - 8))) <= 2, `the menu starts at the pointer: its left edge is ${box.left}, the pointer is at ${at.x}`);
+      require(box.top >= at.y || box.bottom <= at.y, "the menu does not cover the pointer");
+    } else {
+      const anchor = opener.getBoundingClientRect();
+      require(Math.abs(box.left - Math.max(8, Math.min(anchor.right - box.width, innerWidth - box.width - 8))) <= 2, "a menu the key opens stands under its ⋯");
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    require(!document.querySelector('#app-popover'), "Escape closes the menu");
+    opener.click();
+    return new Promise((resolve, reject) => {
+      const started = Date.now();
+      const poll = () => {
+        try {
+          if (document.querySelector('#app-popover')) {
+            require(labels().join('|') === shown.join('|'), `the ⋯ gives the same menu: ${shown.join(' | ')} versus ${labels().join(' | ')}`);
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+            resolve({ check: name, items: shown, left: box.left, top: box.top, pointer: at ?? null });
+          } else if (Date.now() - started > 1500) require(false, "a click on the ⋯ opens a menu too");
+          else setTimeout(poll, 50);
+        } catch (error) { reject(error); }
+      };
+      poll();
+    });
+  }
   if (name === "home-overview") {
     const home = document.querySelector('.page-home:not([hidden])');
     const emblem = home?.querySelector('.ho-hero > .av');

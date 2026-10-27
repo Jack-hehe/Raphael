@@ -173,7 +173,22 @@ export async function perform(page, step) {
     case "require":
       if (!await page.$(step.selector)) throw new Error(`Unavailable in this checkout: ${step.reason} (${step.selector})`);
       break;
-    case "key": await page.keyboard.press(step.key); break;
+    case "key":
+      if (step.shift) await page.keyboard.down("Shift");
+      try { await page.keyboard.press(step.key); } finally { if (step.shift) await page.keyboard.up("Shift"); }
+      break;
+    case "right-click": {
+      // A real press of the right button in the middle of the element; the page's own `contextmenu` follows it. Where it was is kept for the check.
+      const element = await visible(step.selector);
+      try {
+        await element.scrollIntoView();
+        const box = await element.boundingBox();
+        const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+        await page.mouse.click(point.x, point.y, { button: "right" });
+        await page.evaluate(at => { window.__look.pointer = at; }, point);
+      } finally { await element.dispose(); }
+      break;
+    }
     case "focus": await page.focus(step.selector); break;
     case "scroll": { const element = await visible(step.selector); await element.evaluate(element => element.scrollIntoView({ block: "end", inline: "nearest" })); await element.dispose(); break; }
     case "wait-scroll-end": {

@@ -119,6 +119,14 @@ describe("rendered look checks", () => {
     const { audit } = productAudit('<div class="mp-resource"><button class="danger">Delete</button></div><div role="menu"><div class="mp-resource"><button class="danger">Delete</button></div></div><div class="mp-resource" hidden><button class="danger">Delete</button></div>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-11']);
   });
+  it("rejects a ⋯ that a right click on its row does not reach (R-UI-44)", () => {
+    const { window, audit } = productAudit('<div class="row"><button class="btn icon" data-overflow aria-label="更多"></button></div>');
+    expect(audit().productRules).toEqual([]);
+    const orphan = { tag: "button", id: "", class: "btn icon", text: "更多" };
+    const result = auditDocument(window.document, { width: 1120, height: 900 }, [], null, [], [orphan]);
+    expect(result.productRules.map(item => item.rule)).toEqual(["R-UI-44"]);
+    expect(failedChecks({ ...result, runtimeErrors: [] })).toBe(true);
+  });
   it("checks text frames and bare icon borders", () => {
     const { audit } = productAudit('<button class="btn" style="border: none">Save</button><button class="btn icon" style="border: 1px solid red">X</button><button class="btn" style="border: 1px solid red">Cancel</button><button class="btn brand" style="border:none">Raphael</button>');
     expect(audit().productRules.map(item => item.rule)).toEqual(['R-UI-18', 'R-UI-18']);
