@@ -163,9 +163,9 @@ sends one formal and one quick question through the real composer and checks the
 each names at the native boundary and that neither thread shows the other. `quick-stop` presses
 Stop in the gold slot on a running quick question; only that session stops and the formal turn
 is untouched. `quick-model-selection` (Settings › Models) picks a Codex model and High effort for
-quick questions and checks that Raphael's answer model stays. The existing `quick-conversation`,
-`quick-model-menu` and `quick-effort-menu` scenes cover opening the stored quick thread and the two
-quick setting menus. Rendered fixtures do not prove the native hotkey, routing or a live model:
+quick questions, both inside the model chooser, and checks that Raphael's answer model stays. The
+existing `quick-conversation`, `quick-model-menu` and `quick-effort-menu` scenes cover opening the
+stored quick thread, the quick model chooser and its effort row. Rendered fixtures do not prove the native hotkey, routing or a live model:
 core tests and Guardian S16 cover those, and the native Alt+Space entry needs its own live check.
 
 ## Connecting an app from the chat (P08a)

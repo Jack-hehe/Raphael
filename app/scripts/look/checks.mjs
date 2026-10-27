@@ -216,8 +216,7 @@ export function checkRendered(name) {
     require(visible(picker) && !!picker.querySelector('.mp-tname')?.textContent && !!picker.querySelector('.mp-source')?.textContent, "quick model uses the shared named provider card");
     require(row.querySelector('.models-purpose-note')?.textContent.includes("Alt+Space"), "quick questions describe the shortcut's purpose");
     require(!!row.querySelector('[data-price="quick-model"]')?.textContent, "quick questions show the effective model price");
-    const effort = row.querySelector('[data-k="quick-effort"]');
-    require(visible(effort) && Math.abs(picker.getBoundingClientRect().right - effort.getBoundingClientRect().right) < 2, "effort aligns under the model card");
+    require(!row.querySelector('[data-k="quick-effort"]') && !row.querySelector('.sel:not(.mp-trigger)'), "quick questions' effort is chosen inside the model list, as the answer model's is, not beside it");
     return { check: name };
   }
   if (name === "quick-conversation-list") {

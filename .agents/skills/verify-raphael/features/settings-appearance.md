@@ -3,8 +3,10 @@
 Models in use includes one Quick questions row directly below Raphael's answer.
 The model uses the shared provider/model card and chooser, with the shortcut's
 purpose and price on the left. An empty quick model displays and inherits the answer
-model; quick effort defaults to low, offers the selected brain's supported choices,
-and uses the shared dropdown aligned beneath the model card.
+model. Quick effort is chosen inside the chooser, in the same effort row as the answer
+model's (owner, 2026-10-27: never a separate control beside the card); a newly chosen
+model starts at low, and under 「與回答相同」 the row is the answer model's. The core
+still saves the quick model and its effort apart (`quick_model`, `quick_effort`).
 API effort metadata and CLI effort mappings follow their existing catalogs.
 
 ```powershell

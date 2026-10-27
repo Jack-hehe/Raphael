@@ -41,7 +41,7 @@ async function mount(open: SettingsPane = "models") {
 }
 const click = (selector: string) => { const button = document.querySelector<HTMLButtonElement>(selector); expect(button, selector).not.toBeNull(); button!.click(); };
 
-test("quick model card and supported effort save independent settings", async () => {
+test("快速提問 picks its effort inside the model list, as the answer model does, and saves model and effort apart", async () => {
   api.settingsGet.mockResolvedValue({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low" } });
   api.settingsSet.mockImplementation(async (key: string, value: string) => ({ settings: { agent_model: "cli:codex", quick_model: "", quick_effort: "low", [key]: value } }));
   api.brainsCli.mockResolvedValue({ clis: [{ id: "codex", name: "Codex", available: true, installed: true, logged_in: true,
@@ -52,14 +52,23 @@ test("quick model card and supported effort save independent settings", async ()
   expect(page.el.querySelector('[data-k="quick-model"] .mp-tname')!.textContent).toBe("Fast");
   expect(page.el.querySelector('[data-k="quick-model"] .mp-source')!.textContent).toContain("Codex");
   expect(page.el.querySelector('[data-price="quick-model"]')!.textContent).toBe(t("brains.subscription"));
-  click('[data-k="quick-effort"]');
-  expect(document.querySelector('.menu [data-value="high"]')).toBeNull();
-  click('.menu [data-value="medium"]'); await flush();
-  expect(api.settingsSet).toHaveBeenCalledWith("quick_effort", "medium");
+  expect(page.el.querySelector('[data-row="quick-model"] [data-k="quick-effort"]')).toBeNull();
+  // 與回答相同: the list shows the answer model's effort row, from the saved effort
+  click('[data-k="quick-model"]');
+  expect(document.querySelector('.model-chooser .mc-inherit')!.getAttribute("aria-pressed")).toBe("true");
+  expect([...document.querySelectorAll<HTMLElement>('.model-chooser [data-effort]')].map(b => b.dataset.effort)).toEqual(["low", "medium"]);
+  expect(document.querySelector('.model-chooser [data-effort="low"]')!.getAttribute("aria-pressed")).toBe("true");
+  click('.model-chooser [data-effort="medium"]'); click('.model-chooser [data-dlg="use"]'); await flush();
+  expect(api.settingsSet).toHaveBeenCalledWith("quick_model", "");
+  expect(api.settingsSet).toHaveBeenLastCalledWith("quick_effort", "medium");
+  // a model of its own starts quick (low) and takes its effort in the same list
   click('[data-k="quick-model"]'); click('[data-source="cli:codex"]');
   expect(document.querySelector('.model-chooser [data-dlg="sources"]')!.classList.contains("ghost")).toBe(false);
-  click('.model-chooser [data-model="cli:codex:fast"]'); click('.model-chooser [data-dlg="use"]'); await flush();
+  click('.model-chooser [data-model="cli:codex:fast"]');
+  expect(document.querySelector('.model-chooser [data-effort="low"]')!.getAttribute("aria-pressed")).toBe("true");
+  click('.model-chooser [data-effort="medium"]'); click('.model-chooser [data-dlg="use"]'); await flush();
   expect(api.settingsSet).toHaveBeenCalledWith("quick_model", "cli:codex:fast");
+  expect(api.settingsSet).toHaveBeenLastCalledWith("quick_effort", "medium");
   expect(page.el.querySelector('select')).toBeNull();
 });
 

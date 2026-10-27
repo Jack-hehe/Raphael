@@ -421,10 +421,10 @@ export interface ModelPickerOptions {
   onFavorite?: (id: string, on: boolean) => void;
   /** A choice above every model (`PickerLead`): 看圖片's 「與回答相同」. `current` may be its id. */
   lead?: PickerLead;
-  /** The effective model shown on the card when the inheritance lead is selected. */
+  /** The model the inheritance lead stands for: shown on the card, and its effort row is the list's when the lead is chosen. */
   inheritFrom?: string;
-  /** A separate settings control owns effort; this picker chooses only the base model. */
-  separateEffort?: boolean;
+  /** The effort a newly chosen model starts at when it has it, instead of the model's own default (快速提問: low, to stay quick). */
+  defaultEffort?: string;
 }
 
 /** What a picker's button is drawn from: all but what choosing does. */
@@ -451,8 +451,14 @@ export interface ChooserSource {
 }
 
 const baseRef = (ref: string): string => ref.split("?effort=")[0];
-const effortOf = (ref: string, models: CatalogModel[]): string => ref.split("?effort=")[1] ??
+const effortOf = (ref: string, models: readonly CatalogModel[]): string => ref.split("?effort=")[1] ??
   models.flatMap((model) => Object.entries(model.effort_models ?? {})).find(([, value]) => value === ref)?.[0] ?? "";
+
+/** A chosen ref as a model and an effort, for a page that saves them apart (快速提問): an effort's own model id gives its model. */
+export function splitEffort(ref: string, models: readonly CatalogModel[]): { model: string; effort: string } {
+  const base = baseRef(ref);
+  return { model: models.find((m) => Object.values(m.effort_models ?? {}).includes(base))?.id ?? base, effort: effortOf(ref, models) };
+}
 const groupKeys = { subscriptions: "chooser.subscriptions", api: "chooser.api", local: "chooser.local" } as const;
 const isLocal = (kind: string): boolean => ["ollama", "lmstudio", "lm_studio"].includes(kind);
 const shortName = (id: string): string => {
@@ -509,7 +515,7 @@ function concreteCurrent(o: ModelPickerLook, models = pickerModels(o)): string {
 function buttonFace(o: ModelPickerLook): { inner: string; label: string } {
   // Public cached names remain useful after logout; only pickerModels can supply runnable rows.
   const models = [...pickerModels(o).filter((m) => !m.id.startsWith("cli:")), ...cliModels(o.clis ?? [], false)];
-  const inherited = o.current === o.lead?.id && o.inheritFrom;
+  const inherited = baseRef(o.current) === o.lead?.id && o.inheritFrom;
   const ref = concreteCurrent(inherited ? { ...o, current: inherited } : o, models), model = models.find((m) => m.id === ref);
   const local = o.local?.active ? faceTitle(o.local) : null;
   const name = local ? local.split(" · ").slice(1).join(" · ") : o.lead?.id === ref ? o.lead.name : model?.name ?? shortName(ref);
@@ -603,8 +609,10 @@ class MountedPicker implements ModelPicker {
     const models = pickerModels(this.o);
     this.draft = concreteCurrent(this.o, models); this.effort = effortOf(this.o.current, models);
     this.localDraft = this.o.local?.active ?? null;
-    this.source = this.localDraft ? "local-speech" : models.find((m) => m.id === this.draft)?.provider_id ??
-      (this.draft.startsWith("cli:") ? this.draft.split(":").slice(0, 2).join(":") : this.draft.startsWith("@") ? this.draft.slice(1).split(":")[0] : "openrouter");
+    // the list opens where the chosen model is; under an inheritance lead, where the model it stands for is
+    const shown = this.inherits() ? this.effortModel()?.id ?? this.draft : this.draft;
+    this.source = this.localDraft ? "local-speech" : models.find((m) => m.id === shown)?.provider_id ??
+      (shown.startsWith("cli:") ? shown.split(":").slice(0, 2).join(":") : shown.startsWith("@") ? shown.slice(1).split(":")[0] : "openrouter");
     this.query = query; this.maker = ""; this.sort = "name";
     this.show();
   }
@@ -712,10 +720,10 @@ class MountedPicker implements ModelPicker {
       } else listEl.innerHTML = listHTML(list, this.draft, pickerModels(this.o), !!this.o.onFavorite);
       if (!list.rows.length) listEl.innerHTML = `<p class="mc-empty">${esc(t(this.o.loading ? "common.loading" : "chooser.empty"))}</p>`;
     }
-    const model = pickerModels(this.o).find((m) => m.id === this.draft);
-    const supported = this.o.separateEffort ? [] : model?.reasoning_efforts ?? [];
-    const levels = source.models.some((m) => m.id === model?.id) ? supported : [];
-    if (!supported.includes(this.effort)) this.effort = model?.default_effort ?? supported[0] ?? "";
+    const model = this.effortModel();
+    const supported = model?.reasoning_efforts ?? [];
+    const levels = this.inherits() || source.models.some((m) => m.id === model?.id) ? supported : [];
+    if (!supported.includes(this.effort)) this.effort = (this.o.defaultEffort && supported.includes(this.o.defaultEffort) ? this.o.defaultEffort : model?.default_effort) ?? supported[0] ?? "";
     const efforts = this.dialog!.el.querySelector(".mc-effort")!;
     efforts.innerHTML = levels.length ? `<span>${esc(t("chooser.effort"))}</span><div class="mc-segments" role="group" aria-label="${esc(t("chooser.effort"))}">${levels.map((level) => `<button type="button" class="btn sm" data-effort="${esc(level)}" aria-pressed="${this.effort === level}">${esc(effortText(level))}</button>`).join("")}</div>` : "";
     this.paintFooter();
@@ -728,7 +736,8 @@ class MountedPicker implements ModelPicker {
     const lead = this.o.lead?.id === this.draft;
     const name = local ? localModel?.title : lead ? this.o.lead?.name : model?.name;
     const modelSource = local ? t("picker.tabLocal") : model ? connectionName(model) : "";
-    this.dialog.el.querySelector(".mc-selection")!.textContent = name ? `${t("chooser.selection")}${name} · ${modelSource}${!local && !this.o.separateEffort && model?.reasoning_efforts?.length && this.effort ? ` · ${t("chooser.effort")} ${effortText(this.effort)}` : ""}` : "";
+    const efforts = local ? [] : this.effortModel()?.reasoning_efforts ?? [];
+    this.dialog.el.querySelector(".mc-selection")!.textContent = name ? `${t("chooser.selection")}${name}${modelSource ? ` · ${modelSource}` : ""}${efforts.includes(this.effort) ? ` · ${t("chooser.effort")} ${effortText(this.effort)}` : ""}` : "";
     const available = model && usableFor(model, this.o.role);
     const use = this.dialog.el.querySelector<HTMLButtonElement>('[data-dlg="use"]')!;
     use.textContent = t(local && localModel && !localModel.ready ? "chooser.downloadUse" : "chooser.use");
@@ -782,8 +791,15 @@ class MountedPicker implements ModelPicker {
       this.o.onUseLocal?.(this.localDraft); return;
     }
     const model = pickerModels(this.o).find((m) => m.id === this.draft);
-    const ref = this.o.separateEffort ? this.draft : model?.effort_models?.[this.effort] ??
-      (model?.reasoning_efforts?.includes(this.effort) ? `${this.draft}?effort=${this.effort}` : this.draft);
+    const effort = this.effortModel()?.reasoning_efforts?.includes(this.effort) ? this.effort : "";
+    const ref = model?.effort_models?.[effort] ?? (effort ? `${this.draft}?effort=${effort}` : this.draft);
     this.close(); if (ref !== this.o.current || this.o.local?.active) this.o.onChoose(ref);
+  }
+  /** Whether the inheritance lead is chosen, for a picker whose lead stands for another model (快速提問's 「與回答相同」). */
+  private inherits(): boolean { return !!this.o.inheritFrom && this.draft === this.o.lead?.id; }
+  /** The model whose effort row the list shows: the one chosen, or the one the chosen lead stands for. */
+  private effortModel(): CatalogModel | undefined {
+    const id = this.inherits() ? concreteCurrent({ ...this.o, current: this.o.inheritFrom! }) : this.draft;
+    return pickerModels(this.o).find((m) => m.id === id);
   }
 }

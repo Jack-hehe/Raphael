@@ -38,7 +38,7 @@ import {
 } from "../languages";
 import { createHotkeyRecording } from "../hotkey-recording";
 import { isTopLayer, registerDismissal } from "../dismissals";
-import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, withFavorite } from "../model-picker";
+import { type ModelPicker, type ModelPickerLook, type PickerRole, mountModelPicker, replacementNotices, splitEffort, withFavorite } from "../model-picker";
 import { createServices } from "../services";
 import { createCliBrains } from "../cli-brains";
 import { createProviders } from "../providers";
@@ -68,9 +68,8 @@ import {
   APPEARANCES,
   HOTKEY_ROWS,
   agentCity,
+  quickModels,
   quickPickerLook,
-  quickEffortChoices,
-  quickEffort,
   WORKER_COST_CAPS,
   workerCostCap,
   MODEL_ROWS,
@@ -305,8 +304,6 @@ export function createSettings(app: AppContext): SettingsPage {
     const v = view();
     const d = v.device;
     switch (k) {
-      case "quick-effort":
-        return { choices: quickEffortChoices(v), current: quickEffort(v), pick: value => void changeBrain("quick_effort", value) };
       case "mic": {
         const anchor = el.querySelector<HTMLElement>('.sel[data-k="mic"]');
         return {
@@ -862,7 +859,10 @@ export function createSettings(app: AppContext): SettingsPage {
     if (quick) pickers.set("quick", mountModelPicker(quick, {
       ...quickPickerLook(v),
       onSources: () => openPane("models", "models"),
-      onChoose: (id) => void changeBrain("quick_model", id.split("?effort=")[0]),
+      onChoose: (id) => {
+        const chosen = splitEffort(id, quickModels(view()));
+        void changeBrain("quick_model", chosen.model).then(() => chosen.effort ? changeBrain("quick_effort", chosen.effort) : undefined);
+      },
       onFavorite: (id, on) => void changeFavorite("answer", id, on),
       onCliAction: (id) => {
         const button = document.createElement("button"); button.dataset.cli = id;

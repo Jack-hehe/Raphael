@@ -333,34 +333,19 @@ export const quickModels = (v: SettingsView) => [
     v.providers?.providers.find(p => p.id === m.provider_id)?.enabled !== false) : []),
   ...cliModels(v.cliBrains?.clis ?? []),
 ];
+/**
+ * 快速提問's picker: the same as the answer model's, its effort inside the list. The core keeps the quick model and
+ * its effort apart (`quick_model`, `quick_effort`), so the picker is handed both as one ref and the page splits the
+ * choice again (`splitEffort`); under 「與回答相同」 the effort row is the answer model's.
+ */
 export const quickPickerLook = (v: SettingsView): ModelPickerLook => ({
   ...modelPickerLook(v, "answer"), key: "quick-model", label: t("conversations.quick"),
-  current: v.brain?.quick_model ?? "", inheritFrom: agentModel(v), separateEffort: true,
+  current: `${v.brain?.quick_model ?? ""}?effort=${v.brain?.quick_effort ?? "low"}`, inheritFrom: agentModel(v), defaultEffort: "low",
   lead: { id: "", name: t("services.sameAsAnswer") },
 });
-export const quickEffortChoices = (v: SettingsView): Choice[] => {
-  const base = (v.brain?.quick_model || agentModel(v)).split("?effort=")[0];
-  const models = quickModels(v);
-  const model = models.find(m => m.id === base || Object.values(m.effort_models ?? {}).includes(base)) ??
-    models.find(m => m.provider_id === base && m.is_default);
-  const keys = { none: "chooser.none", minimal: "chooser.minimal", low: "chooser.low", medium: "chooser.medium", high: "chooser.high", xhigh: "chooser.xhigh", max: "chooser.max" } as const;
-  const levels = model?.reasoning_efforts ?? (base.startsWith("cli:") ? [] :
-    model && "capabilities" in model && !(model as import("../types").CatalogModel).capabilities.reasoning ? [] : ["none", "low", "medium", "high"]);
-  return levels.map(value => ({ value, label: value in keys ? t(keys[value as keyof typeof keys]) : value }));
-};
-export const quickEffort = (v: SettingsView): string => {
-  const choices = quickEffortChoices(v);
-  const saved = v.brain?.quick_effort ?? "low";
-  return choices.some(c => c.value === saved) ? saved : choices.find(c => c.value === "low")?.value ?? choices[0]?.value ?? "none";
-};
-const quickRow = (v: SettingsView): string => {
-  const efforts = quickEffortChoices(v);
-  const disabled = v.brain === null ? " disabled" : "";
-  return row(t("conversations.quick"), `<span class="models-purpose-note">${esc(t("models.quickNote"))}</span>${priceSpan(v, "quick-model", "price num")}`, `<div class="quick-model-controls">` +
-    modelPickerHTML(quickPickerLook(v)) + `<label class="quick-effort"><span>${esc(t("chooser.effort"))}</span>` +
-    sel(efforts.length ? efforts : [{ value: "none", label: t("chooser.none") }], quickEffort(v), t("chooser.effort"),
-      ` data-k="quick-effort"${disabled || (!efforts.length ? " disabled" : "")}`) + `</label></div>`, { cls: "row-model", attrs: ' data-row="quick-model"' });
-};
+const quickRow = (v: SettingsView): string =>
+  row(t("conversations.quick"), `<span class="models-purpose-note">${esc(t("models.quickNote"))}</span>${priceSpan(v, "quick-model", "price num")}`,
+    modelPickerHTML(quickPickerLook(v)), { cls: "row-model", attrs: ' data-row="quick-model"' });
 export const agentCity = (v: SettingsView): string => v.brain?.agent_city ?? "";
 /** What one background task may spend, as the value of its dropdown (the core's default is 0.2). */
 export const workerCostCap = (v: SettingsView): string => String(v.brain?.worker_cost_cap_usd ?? 0.2);

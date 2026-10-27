@@ -430,10 +430,6 @@ kbd { display: inline-flex; align-items: center; justify-content: center; min-wi
 .row-shortcut .caps { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--h-ctl); }
 /* A model: its dropdown is wider for the models' names; the price of what is chosen is under its name. */
 .slist .row-model .ctl .sel { width: 272px; }
-.quick-model-controls { display: grid; justify-items: end; gap: var(--sp-2); width: 272px; max-width: 100%; }
-.quick-model-controls .mp-slot { width: 100%; }
-.quick-effort { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); width: 100%; color: var(--text-2); font-size: var(--fs-sm); }
-.slist .row-model .quick-effort .sel { width: 136px; }
 /* The key: how OpenRouter took it, then what came of the latest check. */
 .row-key .d { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) 0; }
 .status-more { color: var(--text-3); font-size: var(--fs-sm); }
