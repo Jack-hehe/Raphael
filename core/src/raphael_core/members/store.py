@@ -107,6 +107,8 @@ class Member:
     ask_before_members: bool = False
     pinned: bool = False
     hidden: bool = False
+    # Writes mail as a draft for the owner to edit and send, unless they turned it off (`agent.drafts`).
+    draft_first: bool = True
 
     def speaker(self) -> Speaker:
         """The member as the assistant takes it (`agent.speaker.Speaker`)."""
@@ -120,6 +122,7 @@ class Member:
             blurb=self.blurb,
             reply_style=self.reply_style,
             ask_before_members=self.ask_before_members,
+            draft_first=self.draft_first,
             tools=None if self.tools is None else frozenset(self.tools),
         )
 
@@ -309,12 +312,12 @@ PROFILE_FIELDS: dict[str, Callable[[Any], Any]] = {
     "blurb": lambda value: _text(value, "blurb", 200),
     "reply_style": _reply_style,
     "voice": _voice,
-    **{name: _boolean for name in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden")},
+    **{name: _boolean for name in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden", "draft_first")},
 }
 
 _MEMBER_COLUMNS = (
     "id, name, role, instructions, avatar, group_id, model, position, created_at_ms, tools, personality,"
-    " blurb, reply_style, voice, read_aloud, notify, ask_before_members, pinned, hidden"
+    " blurb, reply_style, voice, read_aloud, notify, ask_before_members, pinned, hidden, draft_first"
 )
 _ROUTINE_COLUMNS = (
     "id, member_id, title, prompt, schedule, enabled, last_run_ms, next_run_ms, created_at_ms"
@@ -333,7 +336,7 @@ _MEMBER_FIELDS: dict[str, Callable[[Any], Any]] = {
 def _member(row: sqlite3.Row) -> Member:
     data = dict(row)
     data["tools"] = _tools_of(data.get("tools"))
-    for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden"):
+    for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden", "draft_first"):
         data[field] = bool(data[field])
     return Member(**data)
 

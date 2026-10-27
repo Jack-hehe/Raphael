@@ -149,6 +149,25 @@ test("editing saves reply style, blurb and permission through the footer", async
   expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ reply_style: 'conversational', blurb: 'A useful teammate', ask_before_members: true }));
 });
 
+test("a member writes mail as a draft for the owner to send unless the owner turns that off, and it is saved with the rest", async () => {
+  const update = vi.fn(async () => true);
+  const dialog = openEditMemberDialog(host({ update, taken: ['Mia'] }), member, "soul");
+  click(dialog.el, '#mp-tab-permissions');
+  const draft = dialog.el.querySelector<HTMLElement>('[data-dlg="draft"]')!;
+  expect(draft.getAttribute("role")).toBe("switch");
+  expect(draft.getAttribute("aria-checked")).toBe("true");
+  click(dialog.el, '[data-dlg="save"]'); await flush();
+  expect(update).toHaveBeenLastCalledWith(7, expect.objectContaining({ draft_first: true }));
+  click(dialog.el, '[data-dlg="draft"]');
+  expect(dialog.el.querySelector('[data-dlg="draft"]')!.getAttribute("aria-checked")).toBe("false");
+  click(dialog.el, '[data-dlg="save"]'); await flush();
+  expect(update).toHaveBeenLastCalledWith(7, expect.objectContaining({ draft_first: false }));
+  // A member that was set not to starts with the switch off.
+  const off = openEditMemberDialog(host({ update, taken: ['Mia'] }), { ...member, draft_first: false }, "soul");
+  click(off.el, '#mp-tab-permissions');
+  expect(off.el.querySelector('[data-dlg="draft"]')!.getAttribute("aria-checked")).toBe("false");
+});
+
 test("resource editor updates existing skills and edits command fields without resetting them", async () => {
   vi.mocked(api.membersSkillsList).mockResolvedValue({ skills: [{ id: 4, name: 'Research', description: 'Sources', enabled: true, source: 'owner/repo' }] });
   vi.mocked(api.membersCommandsList).mockResolvedValue({ commands: [{ id: 6, name: 'review', description: 'Review code', template: 'Review {input}' }] });

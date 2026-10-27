@@ -8,6 +8,7 @@ from .team_admin import DEFINITIONS as ADMIN_TOOLS, TIERS as ADMIN_TIERS
 
 CONNECT_APP = "connect_app"
 REQUEST_SECRET = "request_secret"
+EMAIL_DRAFT = "email_draft"
 
 
 class HarnessToolError(Exception):
@@ -34,6 +35,20 @@ DEFINITIONS = {
     "computer": definition("Operate the computer for the owner at the keyboard, using the guarded desktop loop and its permission questions. For an explicitly requested desktop task only; prefer showing web content in this chat. When the task reaches a sign-in, a password or a payment it is the owner's to do: a card in this chat hands the computer over, this call returns at once saying it is paused, and the task carries on by itself, once, when the owner gives the computer back. Then end your turn with one short sentence, and never claim the task's result before it is done.", {"request": {"type": "string"}}, ["request"]),
     CONNECT_APP: definition("Show the owner a card in this chat to connect an app this request needs that is not connected, or whose sign-in expired (see the apps in the TeamContextSnapshot). The owner connects from the card; then this request resumes by itself, once, with the app's tools. After calling it, end your turn with one short sentence, and never claim the app's data before it is connected.", {"app": {"type": "string", "enum": list(APPS)}}, ["app"]),
     REQUEST_SECRET: definition("Show the owner a card in this chat to save a key or token that a connection needs and does not have: a tool of it failed with missing_secret, or its state in the TeamContextSnapshot is needs_secret. Give the connection's id or name as listed there, and the secret's name only when it declares several. The owner types the key into the card and it goes straight to the secure vault: you never see it. Then this request resumes by itself, once, with the connection's tools. After calling it, end your turn with one short sentence, and never claim the connection's data before the key is saved.", {"connection": {"type": "string"}, "secret": {"type": "string"}}, ["connection"]),
+    EMAIL_DRAFT: definition(
+        "Write an email for the owner to review: it is shown in this chat as an editable card, and only the owner sends it (the card's 傳送), once, "
+        "after they have edited whatever they want. You cannot send it and must not call a tool that sends mail yourself; never say it was sent. "
+        "Give the recipients (to, and cc if any), the subject and the whole body in the owner's language. Give via only to name which connected mail app "
+        "sends it. Give hand_to (a colleague's name) when the owner wants that colleague to send it: the owner is then asked whether the colleague may "
+        "send it, and on yes the same draft appears in the colleague's chat; handing it over never sends it. Give revise as true to update the draft "
+        "still waiting in this chat instead of writing another. After calling it, end your turn with one short sentence.",
+        {"to": {"type": "string", "description": "Recipient addresses, separated by commas."},
+         "cc": {"type": "string", "description": "Copied addresses, separated by commas."},
+         "subject": {"type": "string"}, "body": {"type": "string"},
+         "via": {"type": "string", "description": "The connected mail app that sends it, as the TeamContextSnapshot lists it."},
+         "hand_to": {"type": "string", "description": "The name of the colleague who may send it."},
+         "revise": {"type": "boolean"}},
+        ["to", "subject", "body"]),
 }
 for name, command in COMMANDS.items():
     if name == "open":
@@ -45,7 +60,7 @@ for name, command in COMMANDS.items():
         properties, required = {}, []
     DEFINITIONS[name] = definition(command.guidance + " Only for an owner at this computer. Open a browser only when explicitly asked to open it.", properties, required)
 
-TIERS = {name: Tier.T0 if name in ("show", "routine_list", "computer", CONNECT_APP, REQUEST_SECRET) else Tier.T1 for name in DEFINITIONS if name not in COMMANDS}
+TIERS = {name: Tier.T0 if name in ("show", "routine_list", "computer", CONNECT_APP, REQUEST_SECRET, EMAIL_DRAFT) else Tier.T1 for name in DEFINITIONS if name not in COMMANDS}
 ROUTINE_TOOLS = frozenset(name for name in DEFINITIONS if name.startswith("routine_"))
 DEFINITIONS.update(ADMIN_TOOLS)
 TIERS.update(ADMIN_TIERS)

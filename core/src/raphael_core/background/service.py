@@ -35,8 +35,9 @@ time that was left. The conversation, the call and its arguments stay in memory 
   task goes on from where it paused, with its own time that was left (the time it waited is not
   the task's). A no queues it the same way, with the call not made and the model told so, so that
   it can report what it did do;
-- nobody answering within 24 hours ends the task politely (state "cancelled", reason "expired"),
-  with nothing more spent. A task that waited when the core ended is interrupted, like one that
+- nobody answering within about ten minutes (`policy.UNATTENDED_WAIT_S`) ends the task politely (state
+  "cancelled", reason "expired"), with nothing more spent and nothing the question was about done; a yes
+  that comes after that finds nothing. A task that waited when the core ended is interrupted, like one that
   ran, and its question is cancelled.
 
 A paused task does not hold the worker: the tasks behind it run meanwhile.
@@ -93,7 +94,7 @@ from ..agent.persona import (
     worker_system_prompt,
 )
 from ..agent.plugins import preview
-from ..agent.policy import Action, Approval, Confirmations, Outcome, Pending
+from ..agent.policy import UNATTENDED_WAIT_S, Action, Approval, Confirmations, Outcome, Pending
 from ..agent.safety import asked_with
 from ..agent.speaker import MAX_DEPTH, RAPHAEL, Speaker
 from ..agent.team import CONSULTED, Team, handoff_refused, team_tools_for, roster_prompt
@@ -126,8 +127,9 @@ CONTEXT_TURNS = 3
 # The core waits this much longer than the task's own time, and the start of the worker
 # (`WorkerHost.start_s`), for the worker to say it is done.
 TIME_NET_S = 20.0
-# A question of the background waits this long for the owner, then the task ends without its call.
-QUESTION_WAIT_S = 24 * 3600.0
+# A question of the background waits this long for the owner, then the task ends without its call: nobody
+# sits at it, so it is the wait of any unattended question (`policy.UNATTENDED_WAIT_S`, about ten minutes).
+QUESTION_WAIT_S = UNATTENDED_WAIT_S
 QUESTION_WAIT_MS = round(QUESTION_WAIT_S * 1000)
 # Where the only yes to a question of the background may come from: the app at this computer.
 AT_THIS_COMPUTER = "app"

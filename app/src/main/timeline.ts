@@ -3,6 +3,8 @@ import { computerCardsHTML, computerResumedLineHTML } from "./computer-card";
 import { connectorCardsHTML, resumedLineHTML } from "./connector-card";
 import { NAME, eventLineHTML } from "./event-line";
 import { handoffLineHTML } from "./handoff-line";
+import { mailCardsHTML, mailHandedLinesHTML } from "./mail-card";
+import { permissionCardsHTML } from "./permission-card";
 import { secretCardsHTML, secretResumedLineHTML } from "./secret-card";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
@@ -500,8 +502,10 @@ export interface TurnLook {
   query?: string;
   /** The name of member `id` (0 is Raphael), for the lines of colleague events. */
   memberName?: (id: number) => string;
-  /** The small face of member `id` on those lines (Raphael's bare emblem for 0). */
-  memberFace?: (id: number) => string;
+  /** The small face of member `id` on those lines (Raphael's bare emblem for 0), at `size` px where the line wants another. */
+  memberFace?: (id: number, size?: number) => string;
+  /** Whether the window can answer the question of permission card `id` now (it holds that question and is not answering it). */
+  answerable?: (cardId: string) => boolean;
 }
 
 /**
@@ -791,7 +795,8 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     : "";
   const regenerate = !live && said && turn.id === look.regenerateTurnId;
   // A turn without reply messages answers in its text: a question spoken to Raphael with public progress has no other.
-  const textAnswer = turn.status === "confirm" || settledDraft || !turn.text.trim()
+  // A draft handed to this chat (`route` "draft") is a card, and what it is told is for the model, not for the page.
+  const textAnswer = turn.status === "confirm" || settledDraft || turn.route === "draft" || !turn.text.trim()
     ? "" : messageBlockHTML(turn, "reply", turn.text, turn.created_at_ms, query, state, true, regenerate);
   return (
     `<li class="tn" data-id="${id}" data-status="${esc(turn.status)}"${live ? ' data-live="true"' : ""}>` +
@@ -803,7 +808,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
         bubbleHTML(said ? messageHTML(turn.question.trim(), query) : "", turn.attachments, turn.quote) + messageActionsHTML(turn.created_at_ms, false, live || turn.status === "confirm" || turn.task?.state === "waiting" ? "cancel" : "edit") + `</div>` +
         `</div>`
       : "") +
-    turnEventsHTML(turn, look, said) +
+    turnEventsHTML(turn, look, said) + mailHandedLinesHTML(turn, look) +
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
@@ -811,6 +816,7 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
       : workSectionHTML(turn, state, query) + textAnswer) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     connectorCardsHTML(turn) + secretCardsHTML(turn) + computerCardsHTML(turn) +
+    permissionCardsHTML(turn, look.answerable) + mailCardsHTML(turn, look) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
     (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +

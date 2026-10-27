@@ -967,5 +967,126 @@ export function checkRendered(name) {
     }
     return { check: name, state: card.dataset.cardState, words: state };
   }
+  if (name === "local-permission-card" || name === "draft-preference-ask-first") {
+    // A permission card (permission-card.ts) is a connector card with a second row for its answers, below the turn that asked.
+    // The question it follows is answered there, once: the gold card stays away.
+    const waiting = name === "local-permission-card";
+    const cards = [...document.querySelectorAll('.permission-card')].filter(visible);
+    require(cards.length === 1, `one permission card is visible, found ${cards.length}`);
+    const [card] = cards, box = card.getBoundingClientRect(), column = card.closest('.ra-body').getBoundingClientRect();
+    require(box.left >= column.left - 1 && box.right <= column.right + 1, "R-UI-29: the card fits the reply column");
+    require(box.width >= Math.min(300, column.width) - 1, `the card keeps a card's width, not a chip's (${Math.round(box.width)}px)`);
+    const mark = card.querySelector('.mono'), markStyle = getComputedStyle(mark);
+    require(visible(mark) && mark.querySelector('svg.logo path'), "R-UI-34: the service's own drawn mark");
+    require(markStyle.backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(markStyle.borderTopWidth) === 0, "R-UI-34: the mark is bare, on no tile");
+    const buttons = [...card.querySelectorAll('button')].filter(visible);
+    for (const button of buttons) {
+      const inside = button.getBoundingClientRect();
+      require(inside.left >= box.left && inside.right <= box.right && inside.bottom <= box.bottom + 1, "R-UI-25: the answer is inside its card");
+      require(button.classList.contains('btn') && parseFloat(getComputedStyle(button).borderTopWidth) > 0, "R-UI-17/18: a text answer is a framed button");
+      require(!button.disabled, "the answers can be pressed");
+    }
+    const answers = buttons.map(button => button.textContent.trim()).join("|");
+    require(answers === (waiting ? "拒絕|一律允許|允許一次" : "拒絕|允許一次"), `the card answers ${waiting ? "three ways" : "two ways, with no 一律允許 where a rule asks first"}: ${answers}`);
+    require(buttons.at(-1).classList.contains('pri') && buttons.slice(0, -1).every(button => !button.classList.contains('pri')), "R-UI-27: the primary answer is the last");
+    require(card.querySelector('.cc-name').textContent === "Gmail", "it names the service that asks");
+    require(card.dataset.cardState === "pending" && card.querySelector('.cc-ask').textContent.trim() === "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+      "it says the exact action in plain words");
+    const gold = document.querySelector('.ask-card');
+    require(!gold || !visible(gold), "the question is answered by the card, once: the gold card stays away");
+    require(!window.__look.calls.some(call => call.command === "agent_question_answer"), "nothing was answered yet");
+    if (waiting) require(!card.querySelector('.cc-hint'), "no rule had it asked: there is no hint");
+    else {
+      const hint = card.querySelector('.cc-hint');
+      require(visible(hint) && hint.textContent.trim() === "此操作符合安全規則「寄信前先問」。", "it says which of the owner's rules had it asked");
+      require(![...document.querySelectorAll('.mail-card')].some(visible), "a member that writes no draft first asks the owner: there is no draft card");
+    }
+    plainWords();
+    return { check: name, answers };
+  }
+  if (name === "member-draft-switch") {
+    // The preference to write mail as a draft first is a switch beside the one that asks before contacting colleagues.
+    const toggle = document.querySelector('.mb-dialog [data-dlg="draft"]');
+    require(visible(toggle) && toggle.getAttribute('role') === 'switch' && toggle.classList.contains('tg'), "the draft preference is a real switch");
+    require(toggle.getAttribute('aria-checked') === 'false', "this member was set to send mail itself, so the switch is off");
+    const row = toggle.closest('.mp-resource');
+    require(row.querySelector('b').textContent === "先擬成草稿，由我寄出", `the switch says what it does: ${row.querySelector('b').textContent}`);
+    require(row.querySelector('p').textContent.includes("由你按「傳送」才會寄出"), "its line says that only 傳送 sends");
+    require(document.querySelectorAll('.mb-dialog .mp-resource [role="switch"]').length === 2, "it stands beside the one that asks before contacting colleagues");
+    return { check: name };
+  }
+  if (name === "mail-handed-first" || name.startsWith("email-draft-")) {
+    // An email card (mail-card.ts): who sends it and to whom, the subject and the body, with 捨棄 and 傳送. Only 傳送 sends,
+    // and these scenes never press it: editing, discarding and handing over send nothing.
+    const draftCalls = window.__look.calls.filter(call => String(call.method ?? "").startsWith("integrations.draft_"));
+    require(window.__look.sent.length === 0 && !draftCalls.some(call => call.method === "integrations.draft_send"), "nothing was sent");
+    const first = "a".repeat(64), second = "b".repeat(63) + "2", third = "b".repeat(63) + "3";
+    if (name === "mail-handed-first") {
+      const [line] = eventLines(1);
+      require(line.textContent === "已轉交給 小森", `the first chat keeps one line naming the colleague: ${line.textContent}`);
+      require(visible(line.querySelector('.av, svg, .mono')), "the colleague's face stands before the name");
+      require(!document.querySelector('.mail-card, .mail-offer'), "the card and its choice are not in this chat any more");
+      const handed = draftCalls.filter(call => call.method === "integrations.draft_handover");
+      require(handed.length === 1 && handed[0].params.choice === "yes" && handed[0].params.id === "mail-1", "the owner's yes reached the core once");
+      require(draftCalls.length === 1, "handing over saved and sent nothing");
+      return { check: name, words: line.textContent };
+    }
+    if (name === "email-draft-discard") {
+      const done = [...document.querySelectorAll('.mail-done')].filter(visible);
+      require(done.length === 1 && done[0].dataset.mailState === "discarded", "the discarded draft is one quiet line");
+      require(done[0].querySelector('.cc-state').textContent.trim() === "已捨棄，沒有寄出任何東西", "it says nothing was sent");
+      require(!document.querySelector('.mail-card') && ![...done[0].querySelectorAll('input, textarea, button')].length, "no field or action is left");
+      require(draftCalls.length === 1 && draftCalls[0].method === "integrations.draft_discard" && draftCalls[0].params.id === "mail-1", "捨棄 reached the core once and nothing else did");
+      const box = done[0].getBoundingClientRect(), column = done[0].closest('.ra-body').getBoundingClientRect();
+      require(box.left >= column.left - 1 && box.right <= column.right + 1, "R-UI-29: the line fits the reply column");
+      return { check: name };
+    }
+    const cards = [...document.querySelectorAll('.mail-card')].filter(visible);
+    require(cards.length === 1, `one email card is visible, found ${cards.length}`);
+    const [card] = cards, box = card.getBoundingClientRect(), column = card.closest('.ra-body').getBoundingClientRect();
+    require(box.left >= column.left - 1 && box.right <= column.right + 1, "R-UI-29: the card fits the reply column");
+    require(box.width >= Math.min(360, column.width) - 1, `the card keeps a card's width, not a chip's (${Math.round(box.width)}px)`);
+    require(card.scrollWidth <= card.clientWidth + 1 && document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1, "nothing scrolls sideways");
+    const head = card.querySelector('.mail-head .mono');
+    require(visible(head) && head.querySelector('svg.logo path'), "R-UI-34: the sending app's own drawn mark");
+    require(getComputedStyle(head).backgroundColor === 'rgba(0, 0, 0, 0)' && parseFloat(getComputedStyle(head).borderTopWidth) === 0, "R-UI-34: the mark is bare, on no tile");
+    require(!card.querySelector('select'), "no native select: the sender is a dropdown");
+    const labels = [...card.querySelectorAll('.mail-k')].filter(visible);
+    require(labels.map(label => label.textContent).join("|") === "寄件者|收件者|副本|主旨", `the rows read 寄件者, 收件者, 副本, 主旨: ${labels.map(label => label.textContent)}`);
+    const sender = card.querySelector('.mail-row .sel'), inputs = [...card.querySelectorAll('.mail-in')].filter(visible);
+    require(visible(sender) && sender.dataset.act === "mail-from" && sender.textContent.trim() === "Gmail", "the sender is a dropdown showing Gmail");
+    require(inputs.length === 3 && [sender, ...inputs].every(control => Math.abs(control.getBoundingClientRect().left - sender.getBoundingClientRect().left) <= 1), "the controls of the rows line up");
+    require(labels.every(label => Math.abs(label.getBoundingClientRect().left - labels[0].getBoundingClientRect().left) <= 1), "the labels line up");
+    const body = card.querySelector('.mail-body');
+    require(visible(body) && body.getBoundingClientRect().height >= 100 && body.getBoundingClientRect().right <= box.right, "the body is a field that can be read");
+    const buttons = [...card.querySelectorAll('.mail-actions button')].filter(visible);
+    for (const button of buttons) {
+      const inside = button.getBoundingClientRect();
+      require(inside.left >= box.left && inside.right <= box.right && inside.bottom <= box.bottom + 1, "R-UI-25: the action is inside its card");
+      require(button.classList.contains('btn') && parseFloat(getComputedStyle(button).borderTopWidth) > 0 && !button.disabled, "R-UI-17/18: a text action is a framed button that can be pressed");
+    }
+    require(buttons.map(button => button.textContent.trim()).join("|") === "捨棄|傳送" && buttons[1].classList.contains('pri') && !buttons[0].classList.contains('pri'), "R-UI-27: 捨棄 then the primary 傳送");
+    require(!card.closest('.tn').querySelector('.event-line, .mail-offer'), "no other line or choice is in this turn");
+    if (name === "email-draft-edit") {
+      const value = field => card.querySelector(`[data-mail-field="${field}"]`).value;
+      require(value("to") === "mei@example.com" && value("cc") === "boss@example.com", "the recipients are what the owner typed");
+      require(value("subject") === "回覆：週四下午三點的會議（改期確認）" && value("body").startsWith("小美，您好："), "the subject is what the owner typed and the body is kept");
+      require(card.querySelector('.mail-ver').textContent === "第 3 版" && card.dataset.version === "3" && card.dataset.digest === third, "each edit made a new version with a new digest");
+      const saves = draftCalls.filter(call => call.method === "integrations.draft_save");
+      require(saves.length === 2 && draftCalls.length === 2, "two edits made two saves and nothing else");
+      require(saves[0].params.digest === first && saves[1].params.digest === second, "each save is on the digest the version before came back with");
+      require(saves[1].params.cc === "boss@example.com" && saves[1].params.subject === "回覆：週四下午三點的會議（改期確認）" && saves[1].params.via === "mcp:gmail/send_email", "a save carries every field as the owner sees it");
+      return { check: name, version: card.dataset.version };
+    }
+    // email-draft-handed-off: the colleague's chat holds the same version, editable, and says whose draft it is.
+    require(name === "email-draft-handed-off", `no expectation for ${name}`);
+    require(card.dataset.mailState === "draft" && card.dataset.version === "1" && card.dataset.digest === first, "it is the same version, with the same digest");
+    require(card.querySelector('.mail-by').textContent === "來自 小晴 的草稿", "it says whose draft it is");
+    require(![...card.querySelectorAll('input, textarea')].some(field => field.disabled) && !document.querySelector('.mail-offer, .event-line'), "it is editable, and asks nothing more");
+    require(!document.body.innerText.includes("交給你") && !card.closest('.tn').querySelector('.owner-message'), "what the carrier turn is told is not shown, and no bubble is made of it");
+    const handed = draftCalls.filter(call => call.method === "integrations.draft_handover");
+    require(handed.length === 1 && handed[0].params.choice === "yes" && draftCalls.length === 1, "handing over was answered once, and nothing was saved");
+    return { check: name, version: card.dataset.version };
+  }
   throw new Error(`Unknown rendered check: ${name}`);
 }

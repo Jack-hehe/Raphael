@@ -49,6 +49,14 @@
         "secure_save"
       ]
     },
+    "raphael/core/email_draft": {
+      "scenario_ids": [
+        "S05.draft-handoff"
+      ],
+      "expected_assertions": [
+        "editable_email"
+      ]
+    },
     "raphael/core/computer_act": {
       "scenario_ids": [
         "S21.computer.act"

@@ -5,7 +5,9 @@
 Named conversations per member; new/rename/delete; public work/event chips; answers,
 attachments, reply quoting, message actions, search and composer menus; connector cards for an app a
 task needs, and the one resume of that task (see Connecting an app from the chat below); a secret card for a key a
-connection needs and a computer card for the owner's turn at a sign-in (see Handing a key or the computer to the owner below).
+connection needs and a computer card for the owner's turn at a sign-in (see Handing a key or the computer to the owner below);
+a permission card for an action that needs the owner's yes and an editable email card for a draft a member wrote (see Asking
+the owner's yes and writing mail for them below).
 A member's main conversation lists what colleagues asked or handed it where each came, as one closed
 centred line; previews, search, unread state, other conversations and every model read exclude those
 exchanges, and room turns. Room answers stay in their room/thread and have no shortcut into private history.
@@ -215,8 +217,7 @@ computer stays the owner's), and carries on with the same task, repeating nothin
 resumes once in its thread, opening with 電腦 已交還控制，繼續原本的工作. 停止 (`integrations.card_stop`), Stop, a newer
 computer task, the time (30 minutes) and closing end the run; a replayed 我完成了, the app closing or the core
 restarting (the card is 連線中斷) never resume it or give control back by themselves. Spoken, quick and room runs keep
-the hand-off line. A step that needs a yes after the owner gave the computer back is not taken (an approval in the chat
-is P08c).
+the hand-off line. A step that needs a yes after the owner gave the computer back asks in a permission card (below).
 
 ```powershell
 npm run look -- chat-secret-masked chat-secret-saved-not-resumed chat-computer-takeover chat-human-control chat-handback --theme both --width 1120,720,1920x1080
@@ -227,8 +228,65 @@ cards' states as the core does and receives the key in `integrations.card_save` 
 and every call for it). They cannot prove the vault, a sign-in or a desktop. Core tests (`core/tests/test_secret_cards.py`,
 `core/tests/computer/test_handback*.py`) and Guardian `S15.secret` and `S15.computer` run the production cards, a recorded
 MCP server that opens only to the saved key and a fake desktop whose page asks for a sign-in, on both brain paths.
-`S15.permission` (P08c) has no driver yet, so S15 stays open. A real key and a real sign-in stay owner-approved native
+`S15.permission` (below) is the third half of S15. A real key and a real sign-in stay owner-approved native
 smokes: type a test key into the card, read the connection's result, and sign in on an isolated test account.
+
+## Asking the owner's yes and writing mail for them (P08c)
+
+**The permission card.** When the gate says an action needs the owner's yes (a connection's tool that changes something
+while 先詢問 is on or a rule of theirs says to ask first, the first use of an app on the computer, a step on it that sends,
+deletes or buys), a private chat typed at this computer shows a card in that turn as well as the overlay's question: the
+service (its own mark, or the computer's), the exact action in plain words as the question asks it, which of the owner's
+rules had it asked, and 拒絕, 一律允許 and the primary 允許一次. It is a connector card with a second row for its answers.
+The question is the one `agent.confirm` has always answered (the shell holds it); the card follows it
+(`agent.permissions`) and the gold card stays away while a card waits on that question, so it is answered once. A
+call that cannot be undone (T3) keeps the gold card that is held to confirm. 一律允許 keeps a narrow rule for that one
+tool (`safety_rules.scope`, Always) and is offered only where it can take effect: an owner's Ask first always wins
+over an Always, so where a rule asks the card names the rule and offers no 一律允許, and a rule of the owner's that is
+Never refuses the call without a card. A yes is bound to the digest of the action asked about: changed inputs, a replay,
+a card of another action, a restart and time never use an old approval. A question someone sits at lives 30 seconds; the
+question of a task that waits unattended (the run that carries on after the owner gave the computer back, a background
+task) lives about ten minutes, and the former answers through `integrations.card_allow`, `card_always` and `card_deny`
+with the card's digest. A no is for the whole request: the tool is not tried again, no other tool of a connection that
+changes something is tried in its place, and the computer and the CLI's own permission question are refused after it,
+on the API loop, on the CLI brain's MCP path, on the computer run and in the background worker alike (Guardian
+`S15.permission`). Rooms, exchanges between members, quick questions, spoken requests and messages from a phone get no card.
+
+**The email card.** A member that writes an email does not send it: `email_draft` puts a draft in the owner's chat with
+寄件者 (a dropdown of the connections that send mail), 收件者, 副本, 主旨 and the body, all editable, and 捨棄 and the
+primary 傳送. Every edit is saved as a new version with a new digest on top of the digest the card holds
+(`integrations.draft_save`, in order, each on the digest the one before came back with); 傳送 first saves what is
+typed, then sends the digest of that version and nothing else (`integrations.draft_send`): once (a single conditional
+claim), through the one gate with the owner's click as the yes, a rule of the owner's that is Never still refusing
+it; an old digest, a replay and a double click send nothing, and a send that failed is not tried again by itself (an
+edit makes a version that can go). 捨棄 touches nothing outside. A member can offer the draft to a colleague with a
+choice card (「這封回信可以交給{name}寄嗎？」, 不用 or 可以); on yes the first chat keeps one centred line
+(已轉交給 ◎ {name}) and the same version, with its digest, is an editable card in the colleague's private chat
+(a `draft` turn that shows no words of its own; the card says whose draft it is); handing over never sends. A member's
+profile (Permissions) has a switch for writing mail as a draft first, on by default: while it is on, a fast-tier
+request cannot send mail with a connection's tool and is told to write the draft; when it is off the member sends
+through the gate like any tool, and a rule of the owner's that asks first has the question asked (the permission card
+names the rule). A routine or a background task keeps sending through the gate. Rooms, exchanges, quick questions,
+spoken requests and messages from a phone are told to write it in the member's private chat and get no draft.
+
+```powershell
+npm run look -- local-permission-card draft-preference-ask-first email-draft-edit email-draft-discard email-draft-handed-off --theme both --width 1120,720,1920x1080
+```
+
+`local-permission-card` shows Raphael's chat with a pending card for a Gmail send (three answers, the primary last, the
+gold card away). `draft-preference-ask-first` first opens 小晴's profile to check the draft switch is a real switch and
+off, then shows the card her rule has asked for: it names the rule and has no 一律允許, and there is no draft card.
+`email-draft-edit` types in the copy and the subject (two saves, the second on the digest the first came back with,
+the card at 第 3 版 holding the newest digest); `email-draft-discard` presses 捨棄 (one quiet line, nothing saved or
+sent); `email-draft-handed-off` answers 可以 on the choice card (one centred 已轉交給 小森 line in 小晴's chat), then
+opens 小森's chat: the same version, editable, with 來自 小晴 的草稿. None of them presses 傳送, and the checks require
+that nothing was sent. The IPC fixture (`permissionCard`, `memberDraftFirst`, `mailDraft`, `mailOffer`) reports the
+states and the digests as the core does and keeps no mail. Rendered scenes cannot prove the gate, the shell's
+question or a real send: core tests (`core/tests/agent/test_permission_cards.py`, `test_drafts.py`,
+`test_draft_tool.py`, `core/tests/computer/test_handback_permission.py`) and Guardian `S15.permission` and
+`S05.draft-handoff` run the production cards, gates and the recorded connector on both brain paths with every send
+recorded and none real. `S05.gmail` (P08d) keeps the parent S05 open. A real mailbox stays an owner-approved native
+smoke.
 
 ## P04 task lifecycle
 

@@ -327,7 +327,7 @@ SCHEMA_V27 = {
         "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
     ],
 }
-LATEST = 37
+LATEST = 38
 
 
 def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
@@ -423,6 +423,29 @@ SCHEMA_V37 = {**SCHEMA_V36, "secret_cards": [
     "language TEXT NOT NULL", "state TEXT NOT NULL", "error TEXT NOT NULL DEFAULT ''",
     "note TEXT NOT NULL DEFAULT ''", "done TEXT NOT NULL DEFAULT '[]'", "created_at_ms INTEGER NOT NULL",
     "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL", "returned_at_ms INTEGER"]}
+# Schema v38: a narrow rule's scope, a member's draft-first preference, the permission card of a chat and its
+# email drafts with their versions.
+SCHEMA_V38 = {**SCHEMA_V37,
+    "safety_rules": [*SCHEMA_V37["safety_rules"], "scope TEXT NOT NULL DEFAULT ''"],
+    "members": [*SCHEMA_V37["members"], "draft_first INTEGER NOT NULL DEFAULT 1"],
+    "permission_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "member_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "source TEXT NOT NULL", "kind TEXT NOT NULL", "service TEXT NOT NULL DEFAULT ''", "tool TEXT NOT NULL DEFAULT ''",
+    "summary TEXT NOT NULL", "reason TEXT NOT NULL DEFAULT ''", "digest TEXT NOT NULL", "always INTEGER NOT NULL DEFAULT 0",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL",
+    "expires_at_ms INTEGER NOT NULL"],
+    "email_drafts": [
+    "id TEXT PK", "author_id INTEGER NOT NULL", "holder_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "turn_id INTEGER NOT NULL", "origin_turn_id INTEGER NOT NULL", "language TEXT NOT NULL", "state TEXT NOT NULL",
+    "version INTEGER NOT NULL", "digest TEXT NOT NULL", "send_via TEXT NOT NULL DEFAULT ''", "to_addr TEXT NOT NULL DEFAULT ''",
+    "cc_addr TEXT NOT NULL DEFAULT ''", "subject TEXT NOT NULL DEFAULT ''", "body TEXT NOT NULL DEFAULT ''",
+    "offer_to INTEGER", "offer_state TEXT NOT NULL DEFAULT ''", "error TEXT NOT NULL DEFAULT ''",
+    "sent_digest TEXT NOT NULL DEFAULT ''", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL",
+    "sent_at_ms INTEGER"],
+    "email_draft_versions": [
+    "draft_id TEXT PK NOT NULL", "version INTEGER PK NOT NULL", "digest TEXT NOT NULL", "send_via TEXT NOT NULL DEFAULT ''",
+    "to_addr TEXT NOT NULL DEFAULT ''", "cc_addr TEXT NOT NULL DEFAULT ''", "subject TEXT NOT NULL DEFAULT ''",
+    "body TEXT NOT NULL DEFAULT ''", "by_owner INTEGER NOT NULL DEFAULT 0", "at_ms INTEGER NOT NULL"]}
 
 
 def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
@@ -468,7 +491,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V37) | FTS_SHADOWS | SEQUENCE
+    assert schema_names(conn, "table") == set(SCHEMA_V38) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -482,7 +505,7 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V37.items():
+    for table, columns in SCHEMA_V38.items():
         if table != "agent_turns_fts":
             assert describe_columns(conn, table) == columns
     assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [

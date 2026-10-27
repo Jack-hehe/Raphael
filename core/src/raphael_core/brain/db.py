@@ -931,6 +931,89 @@ END;
 PRAGMA user_version = 37;
 COMMIT;
 """
+# The owner's approval and the mail they send from a chat (`agent.permissions`, `agent.drafts`).
+# - A narrow rule of Always (`safety_rules.scope`) covers one tool; the rules in the owner's words keep "".
+# - A permission card is the owner's yes or no to one action in a typed private chat, bound to the
+#   digest of that action (`policy.action_digest`). It names the service and the tool and says the
+#   action in plain words; it keeps no argument beyond that line.
+# - An email draft is an artifact the owner edits in a chat and sends once: its head holds the current
+#   version, `email_draft_versions` every version with the digest that a send is bound to. A draft is
+#   shown on the turn of the chat that holds it (`turn_id`); one handed to a colleague moves there.
+# - `members.draft_first`: the member writes mail as a draft for the owner to send, not as a send.
+_MIGRATIONS[38] = """
+BEGIN;
+ALTER TABLE safety_rules ADD COLUMN scope TEXT NOT NULL DEFAULT '';
+ALTER TABLE members ADD COLUMN draft_first INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE permission_cards (
+    id TEXT PRIMARY KEY,
+    turn_id INTEGER NOT NULL,
+    member_id INTEGER NOT NULL,
+    conversation_id INTEGER,
+    source TEXT NOT NULL CHECK(source IN ('ask','run')),
+    kind TEXT NOT NULL CHECK(kind IN ('tool','app','step')),
+    service TEXT NOT NULL DEFAULT '',
+    tool TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    digest TEXT NOT NULL,
+    always INTEGER NOT NULL DEFAULT 0,
+    language TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','allowed','always','denied','expired','cancelled')),
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER NOT NULL
+);
+CREATE INDEX permission_cards_by_turn ON permission_cards(turn_id);
+CREATE TABLE email_drafts (
+    id TEXT PRIMARY KEY,
+    author_id INTEGER NOT NULL,
+    holder_id INTEGER NOT NULL,
+    conversation_id INTEGER,
+    turn_id INTEGER NOT NULL,
+    origin_turn_id INTEGER NOT NULL,
+    language TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('draft','sending','sent','failed','discarded')),
+    version INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    send_via TEXT NOT NULL DEFAULT '',
+    to_addr TEXT NOT NULL DEFAULT '',
+    cc_addr TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    offer_to INTEGER,
+    offer_state TEXT NOT NULL DEFAULT '' CHECK(offer_state IN ('','pending','declined')),
+    error TEXT NOT NULL DEFAULT '',
+    sent_digest TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    sent_at_ms INTEGER
+);
+CREATE INDEX email_drafts_by_turn ON email_drafts(turn_id);
+CREATE INDEX email_drafts_by_origin ON email_drafts(origin_turn_id);
+CREATE TABLE email_draft_versions (
+    draft_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    digest TEXT NOT NULL,
+    send_via TEXT NOT NULL DEFAULT '',
+    to_addr TEXT NOT NULL DEFAULT '',
+    cc_addr TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    body TEXT NOT NULL DEFAULT '',
+    by_owner INTEGER NOT NULL DEFAULT 0,
+    at_ms INTEGER NOT NULL,
+    PRIMARY KEY(draft_id, version)
+);
+CREATE TRIGGER clear_permission_cards AFTER DELETE ON agent_turns BEGIN
+  DELETE FROM permission_cards WHERE turn_id=OLD.id;
+END;
+CREATE TRIGGER clear_email_drafts AFTER DELETE ON agent_turns BEGIN
+  DELETE FROM email_draft_versions WHERE draft_id IN
+    (SELECT id FROM email_drafts WHERE turn_id=OLD.id OR origin_turn_id=OLD.id);
+  DELETE FROM email_drafts WHERE turn_id=OLD.id OR origin_turn_id=OLD.id;
+END;
+PRAGMA user_version = 38;
+COMMIT;
+"""
 LATEST_VERSION = max(_MIGRATIONS)
 
 

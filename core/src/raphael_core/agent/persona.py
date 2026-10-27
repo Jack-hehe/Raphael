@@ -157,7 +157,7 @@ class Phrases:
     # once, when the app is not in front. `{member}` is the member whose thread holds the question.
     worker_waiting: str
     worker_waiting_self: str  # ... the question is Raphael's own
-    worker_expired: str  # nobody answered in 24 hours: the task ended without that action
+    worker_expired: str  # nobody answered in about ten minutes: the task ended without that action
 
 
 # Each phrase states the fact and, for a refusal, the reason or the one thing to do next, in the
@@ -232,7 +232,7 @@ PHRASES: dict[str, Phrases] = {
         rule_unchecked="無法比對安全規則。",
         worker_waiting="{member} 等你處理。",
         worker_waiting_self="有一件事等你處理。",
-        worker_expired="一天內未獲回應。任務已結束，該操作未執行。",
+        worker_expired="十分鐘內未獲回應。任務已結束，該操作未執行。",
     ),
     "en": Phrases(
         unclear="The instruction could not be recognized. Please repeat it.",
@@ -321,7 +321,7 @@ PHRASES: dict[str, Phrases] = {
         rule_unchecked="The safety rules could not be checked.",
         worker_waiting="{member} is waiting for you.",
         worker_waiting_self="Something is waiting for you.",
-        worker_expired="No answer came within a day. The task ended without that action.",
+        worker_expired="No answer came within ten minutes. The task ended without that action.",
     ),
     "ja": Phrases(
         unclear="指示を認識できませんでした。もう一度お願いします。",
@@ -390,7 +390,7 @@ PHRASES: dict[str, Phrases] = {
         rule_unchecked="安全ルールを照合できませんでした。",
         worker_waiting="{member}があなたの対応を待っています。",
         worker_waiting_self="あなたの対応を待っている件があります。",
-        worker_expired="一日以内に応答がなかったため、その操作をせずにタスクを終えました。",
+        worker_expired="10分以内に応答がなかったため、その操作をせずにタスクを終えました。",
     ),
 }
 

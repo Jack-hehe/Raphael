@@ -33,10 +33,12 @@ class RaphaelMcp:
     async def __aexit__(self, *exc):
         self.closed = True
         self.server.close()
-        await self.server.wait_closed()
+        # A call waiting at an owner's question is cancelled first: since Python 3.12 wait_closed() waits for every open
+        # connection, so a call left waiting would hold the end of the turn for as long as the question was allowed to live.
         for task in list(self._tasks):
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        await self.server.wait_closed()
         self.token = ""
 
     async def _connection(self, reader, writer):

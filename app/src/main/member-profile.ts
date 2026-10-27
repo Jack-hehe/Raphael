@@ -52,6 +52,7 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
   const draft = emptyProfileDraft();
   const voice = { voice: member?.voice ?? "", read_aloud: member?.read_aloud ?? false, notify: member?.notify ?? false };
   let ask = member?.ask_before_members ?? false;
+  let draftFirst = member?.draft_first ?? true;
   let reply = member?.reply_style ?? "full";
   let memories: MemoryItem[] = [];
   let routines: Routine[] = [];
@@ -78,6 +79,7 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
       else if (act === "female" || act === "male") { nameInput.value = randomMemberName(act, host.taken); drawFace(); }
       else if (act === "reply") openMenu(target, [{ value: "full", label: t("members.profile.full") }, { value: "conversational", label: t("members.profile.conversational") }], reply, value => { reply = value as typeof reply; drawReply(); });
       else if (act === "ask") { ask = !ask; target.setAttribute("aria-checked", String(ask)); }
+      else if (act === "draft") { draftFirst = !draftFirst; target.setAttribute("aria-checked", String(draftFirst)); }
       else if (act === "memory-add") void addMemory();
       else if (act === "memory-menu") openActions(target, [{ id: "delete", label: t("members.profile.delete"), icon: "trash" }], () => void resourceAction(async () => {
         const index = Number(target.dataset.index);
@@ -126,7 +128,8 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
     if (key === "skills") return `<div class="mp-resources"></div>`;
     if (key === "memory") return `<section class="mp-card"><h3>${esc(t("members.profile.memory"))}</h3><div class="mp-memory-list"></div><div class="mp-add mp-card-add">${field("mp-memory", t("members.profile.remember"), "", 1200)}${btn(esc(t("members.profile.add")), "sm", ' data-dlg="memory-add"')}</div></section>`;
     if (key === "routines") return `<section class="mp-card"><div class="mp-card-head"><h3>${esc(t("members.profile.routines"))}</h3>${btn(esc(t("members.routineAdd")), "sm", ' data-dlg="routine-add"')}</div><div class="mp-routine-list"></div></section>`;
-    if (key === "permissions") return `<section class="mp-card"><h3>${esc(t("members.profile.permissions"))}</h3><div class="mp-resource"><div><b>${esc(t("members.profile.ask"))}</b><p>${esc(t("members.profile.askHint"))}</p></div>${tg(ask, t("members.profile.ask"), ' data-dlg="ask"')}</div></section>`;
+    if (key === "permissions") return `<section class="mp-card"><h3>${esc(t("members.profile.permissions"))}</h3><div class="mp-resource"><div><b>${esc(t("members.profile.ask"))}</b><p>${esc(t("members.profile.askHint"))}</p></div>${tg(ask, t("members.profile.ask"), ' data-dlg="ask"')}</div>` +
+      `<div class="mp-resource"><div><b>${esc(t("members.profile.draft"))}</b><p>${esc(t("members.profile.draftHint"))}</p></div>${tg(draftFirst, t("members.profile.draft"), ' data-dlg="draft"')}</div></section>`;
     return `<div class="mp-voice"></div>`;
   }
   function drawFace(): void {
@@ -257,7 +260,7 @@ export function openMemberProfile(host: MemberProfileHost, member?: Member, init
     if (!name || isMemberNameTaken(name, host.taken.filter(taken => taken.toLocaleLowerCase() !== member?.name.toLocaleLowerCase()))) {
       selectTab("identity"); nameInput.focus(); toaster.info(name ? t("members.nameTaken", { p0: name }) : t("members.nameEmpty")); return;
     }
-    const fields: NewMember = { name, role: cleanName(value("mb-new-role")), blurb: cleanName(value("mp-blurb")), personality: value("mb-new-personality").trim(), instructions: value("mb-new-instr").trim(), group_id: groupId, reply_style: reply, ask_before_members: ask, ...voice, ...(avatar ? { avatar } : {}) };
+    const fields: NewMember = { name, role: cleanName(value("mb-new-role")), blurb: cleanName(value("mp-blurb")), personality: value("mb-new-personality").trim(), instructions: value("mb-new-instr").trim(), group_id: groupId, reply_style: reply, ask_before_members: ask, draft_first: draftFirst, ...voice, ...(avatar ? { avatar } : {}) };
     busy = true; setBusy();
     try {
       if (member) {

@@ -848,7 +848,7 @@ describe("a new member", () => {
   test("is made in the language of the window and opened; the routine the core offers is asked, 加入 makes it", async () => {
     vi.useFakeTimers();
     await create(OFFER);
-    expect(api.membersCreate).toHaveBeenCalledWith({ name: "進度官", role: "", personality: "", instructions: "", group_id: null, ui_language: "zh-TW", blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false });
+    expect(api.membersCreate).toHaveBeenCalledWith({ name: "進度官", role: "", personality: "", instructions: "", group_id: null, ui_language: "zh-TW", blurb: "", reply_style: "full", voice: "", read_aloud: false, notify: false, ask_before_members: false, draft_first: true });
     expect($(".mb-pill-t").textContent).toBe("進度官");
     expect(api.routinesCreate).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(10);

@@ -76,16 +76,24 @@ def cells(registry=(), catalog=(), *, servers=()):
         SCENARIOS[13].assertions, 'P08a', 'connect-gmail'))
     result.append(ScenarioCell('S14.instagram', 'Connect Instagram in chat (P08d scope)', SCENARIOS[13].prompt,
         SCENARIOS[13].assertions, 'P08d'))
-    # S15's halves: a key saved in a card and the owner's turn at the computer (P08b). The local permission card
-    # (P08c) keeps the parent open until it has a driver.
+    # S05's halves: the draft of a mail edited, handed to a colleague and sent once on the generic send path, every send
+    # recorded and never real (P08c), and Gmail's own draft and send (P08d), which keeps the parent open until it has a driver.
+    result.append(ScenarioCell('S05.draft-handoff', 'Email draft hand-off (P08c scope)',
+        '請信件助理擬一封回信給本次代號的信箱，說明週四下午三點可以開會，擬好後交給行銷寄出。',
+        ('editable_email', 'version_bound_send', 'cancel_zero_send', 'one_receipt', 'handoff_never_sends'), 'P08c', 'draft-handoff'))
+    result.append(ScenarioCell('S05.gmail', 'Gmail draft and send (P08d scope)', SCENARIOS[4].prompt,
+        SCENARIOS[4].assertions, 'P08d'))
+    # S15's halves: a key saved in a card and the owner's turn at the computer (P08b), and the permission card of an
+    # action that needs the owner's yes (P08c).
     result.append(ScenarioCell('S15.secret', 'Secret saved in chat (P08b scope)',
         '請用天氣服務查明天台北的預報，告訴我服務回傳的預報代號。',
         ('secure_save', 'no_secret_transcript', 'done_once', 'stop'), 'P08b', 'secret-card'))
     result.append(ScenarioCell('S15.computer', 'Sign in on the computer in chat (P08b scope)',
         '請在電腦上的瀏覽器看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。',
         ('human_lease', 'done_once', 'stop'), 'P08b', 'computer-card'))
-    result.append(ScenarioCell('S15.permission', 'Local permission card (P08c scope)', SCENARIOS[14].prompt,
-        SCENARIOS[14].assertions, 'P08c'))
+    result.append(ScenarioCell('S15.permission', 'Permission card (P08c scope)', '請用 Guardian 寄出測試信。',
+        ('permission_card', 'digest_bound', 'deny_zero', 'no_bypass', 'once', 'always_narrow', 'ask_first_wins', 'expiry'),
+        'P08c', 'permission-card'))
     for kind in ("missing-connection", "missing-permission"):
         result.append(ScenarioCell("S17." + kind, kind,
                                   "請用 Guardian 服務讀取測試信件；如果無法讀取，用一句話說明所缺的連接或權限，不能宣稱完成。",

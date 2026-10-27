@@ -37,13 +37,26 @@ asked for count as `ask`: when the rules cannot be read, Raphael asks.
 
 **Combining** (`combine`, then `needs_yes`):
 
-- any matching `deny`: the action is refused, and Raphael says which rule forbids it;
-- otherwise any matching `ask`: the owner is asked YES or NO before it runs;
-- otherwise any matching `allow`: it runs without a question *from a rule*. An `allow` never takes
-  away a question or a refusal that is built in: the tiers T2 and T3, the questions of a run on the
+- any matching `deny` (Never): the action is refused, and Raphael says which rule forbids it;
+- otherwise any matching `ask` (Ask first): the owner is asked YES or NO before it runs. Ask first
+  always wins over Always, whichever of the two the owner wrote and however they were made;
+- otherwise any matching `allow` (Always): it runs without a question *from a rule*. An `allow` never
+  takes away a question or a refusal that is built in: the tier T3, the questions of a run on the
   desktop (sending, deleting, buying, the first use of an app), the hand-overs of passwords and
-  payments, and the refusals. The built-in checks always apply; the rules can only add to them;
+  payments, and the refusals. The built-in checks always apply; the rules can only add to them.
+  One kind of `allow` goes further, and only that kind: the narrow rule that the owner's own click on
+  「一律允許」 of an approval card makes (below). It also waives the questions of the tier T2 and of the
+  owner's global 先詢問 switch, for that tool alone;
 - no rule matches: as without rules.
+
+**Narrow rules.** A card that asks about a tool of a connection offers 「一律允許」 when it can take effect.
+Pressing it stores a rule whose `scope` is that tool (`narrow_scope`: `tool:<key>`), in the owner's words
+「服務：工具」, with the verdict `allow`. Such a rule is matched by its scope alone, with no call to the
+judge, so it covers that tool and nothing else, in every conversation and for every member. The owner
+sees it in the list of rules like any other, and can change its verdict there (Never or Ask first, which
+then apply to that tool by the same deterministic match) or delete it. It is never offered, and so never
+made, where it could not take effect: when a rule asks, when the judge could not be asked, for a tool
+that cannot be undone (T3) and for what is built in.
 
 Nothing here logs an action, its arguments or a rule: only counts, the verdict and timings.
 """
@@ -98,16 +111,19 @@ class Rule:
     action: str  # the owner's own words, one line
     verdict: str  # one of VERDICTS
     position: int
+    scope: str = ""  # the kind of action a rule made from a card covers (`narrow_scope`); "" for the owner's words
 
 
 @dataclass(frozen=True)
 class Proposed:
     """An action as the judge is shown it: the name of its tool, what the tool does, and a short
-    summary of what it is given. Never logged."""
+    summary of what it is given. `scope` is the kind of action it is (`narrow_scope`), by which the
+    narrow rules match it. Never logged."""
 
     tool: str
     description: str = ""
     summary: str = ""
+    scope: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,15 +131,25 @@ class Screening:
     """What the rules say of an action. `verdict` is RUN, ASK or DENY; `rule` is the owner's words
     of the rule that decided it (the first in the list that matched with that verdict), None when
     none did; `unchecked` is a judge that failed (the verdict is then ASK); `allowed` is an action
-    an `allow` rule matched."""
+    an `allow` rule matched; `narrow` is one that a narrow rule of its own kind allows, with no rule
+    asking or forbidding it (`needs_yes` lets it past the questions of T2 and of the global switch);
+    `switch` is a question that only the owner's global 先詢問 switch asks (no rule did)."""
 
     verdict: str = RUN
     rule: str | None = None
     unchecked: bool = False
     allowed: bool = False
+    narrow: bool = False
+    switch: bool = False
 
 
 PASS = Screening()
+
+
+def narrow_scope(tool_key: str) -> str:
+    """The kind of action a narrow rule covers for the tool `tool_key` (a plugin's tool key, or the name
+    of one of Raphael's own tools): that tool, and nothing else."""
+    return "tool:" + tool_key
 
 
 def summarize(arguments: Mapping[str, Any] | None) -> str:
@@ -147,28 +173,46 @@ def combine(rules: Sequence[Rule], matched: frozenset[int] | None) -> Screening:
         first = next((rule for rule in hits if rule.verdict == verdict), None)
         if first is not None:
             return Screening(verdict, first.action)
-    first = next((rule for rule in hits if rule.verdict == ALLOW), None)
-    if first is not None:
-        return Screening(RUN, first.action, allowed=True)
+    allows = [rule for rule in hits if rule.verdict == ALLOW]
+    if allows:
+        # A narrow rule (made from a card) is the owner's own word for that very tool; the others are
+        # words a judge matched, which waive no question that is built in.
+        narrow = next((rule for rule in allows if rule.scope), None)
+        first = narrow or allows[0]
+        return Screening(RUN, first.action, allowed=True, narrow=narrow is not None)
     return PASS
 
 
-def needs_yes(builtin_ask: bool, screening: Screening) -> bool:
+def needs_yes(builtin_ask: bool, screening: Screening, *, firm: bool = False) -> bool:
     """Whether the owner is asked before an action that the rules did not refuse: when the built-in
     checks ask (`builtin_ask`: a tier of T2 or more, a step that sends, deletes or buys...), whatever
-    the rules say, or when a rule asks. An `allow` waives the rules' own questions only."""
-    return builtin_ask or screening.verdict == ASK
+    the rules say, or when a rule asks. An `allow` waives the rules' own questions only, but for a
+    narrow rule of the action's own kind (`Screening.narrow`), which also waives a question that is
+    not `firm`: the tier T2's, and the global switch's. A `firm` question (T3, a step on the desktop that
+    sends, deletes or buys, a hand-over) is never waived."""
+    if screening.verdict == ASK:
+        return True
+    if builtin_ask and screening.narrow and not firm:
+        return False
+    return builtin_ask
+
+
+def rule_lead(language: str, screening: Screening) -> str:
+    """The sentence that says why a rule had a question asked: the rule's words (`rule_matched`), or
+    that the rules could not be checked (`rule_unchecked`); "" for a question no rule asked."""
+    if screening.unchecked:
+        return phrase(language, "rule_unchecked")
+    if screening.verdict == ASK and screening.rule:
+        return phrase(language, "rule_matched", rule=screening.rule)
+    return ""
 
 
 def asked_with(language: str, screening: Screening, question: str) -> str:
     """`question` as Raphael asks it when a safety rule had it asked: after the sentence that names
     the rule (`rule_matched`), or says the rules could not be checked (`rule_unchecked`); as it is
     for a question that is asked anyway. English puts a space between the two sentences."""
-    if screening.unchecked:
-        lead = phrase(language, "rule_unchecked")
-    elif screening.verdict == ASK and screening.rule:
-        lead = phrase(language, "rule_matched", rule=screening.rule)
-    else:
+    lead = rule_lead(language, screening)
+    if not lead:
         return question
     return f"{lead} {question}" if language == "en" else f"{lead}{question}"
 
@@ -205,9 +249,25 @@ class SafetyRules:
 
     def rules(self) -> list[Rule]:
         rows = self._conn.execute(
-            "SELECT id, action, verdict, position FROM safety_rules ORDER BY position, id"
+            "SELECT id, action, verdict, position, scope FROM safety_rules ORDER BY position, id"
         )
         return [Rule(**dict(row)) for row in rows]
+
+    def scoped(self, scope: str) -> list[Rule]:
+        """The narrow rules of one kind of action (`narrow_scope`), in their order. None for ""."""
+        if not scope:
+            return []
+        rows = self._conn.execute(
+            "SELECT id, action, verdict, position, scope FROM safety_rules WHERE scope = ? ORDER BY position, id",
+            (scope,),
+        )
+        return [Rule(**dict(row)) for row in rows]
+
+    def always_allows(self, scope: str) -> bool:
+        """Whether the owner has said Always for this kind of action and nothing narrower says
+        otherwise: a narrow rule of `allow`, and none of `ask` or `deny`, for `scope`."""
+        verdicts = {rule.verdict for rule in self.scoped(scope)}
+        return ALLOW in verdicts and not verdicts & {ASK, DENY}
 
     def ensure_seeded(self, language: str) -> None:
         """Put the three rules of the first run there, in `language`, unless that was done once."""
@@ -230,7 +290,7 @@ class SafetyRules:
 
     def get(self, rule_id: int) -> Rule | None:
         row = self._conn.execute(
-            "SELECT id, action, verdict, position FROM safety_rules WHERE id = ?", (rule_id,)
+            "SELECT id, action, verdict, position, scope FROM safety_rules WHERE id = ?", (rule_id,)
         ).fetchone()
         return None if row is None else Rule(**dict(row))
 
@@ -275,6 +335,40 @@ class SafetyRules:
         assert cursor.lastrowid is not None
         rule = self.get(cursor.lastrowid)
         assert rule is not None
+        return rule
+
+    def always(self, scope: str, words: str, language: str) -> Rule:
+        """The narrow rule of Always for the kind of action `scope`, in the owner's words `words` (a
+        service and a tool): made the first time, and the one that is there after. A rule of the
+        scope that is not an Always (the owner changed it to Ask first or Never in Settings) is not
+        loosened here: it is returned as it is. The first run's three rules are put there first, so
+        they never appear after this one."""
+        if not scope:
+            raise ValueError("a narrow rule needs a scope")
+        self.ensure_seeded(language)
+        found = self.scoped(scope)
+        if found:
+            return found[0]
+        rules = self.rules()
+        if len(rules) >= MAX_RULES:
+            raise RpcError(INVALID_PARAMS, "Invalid params: there are too many rules", {"kind": "too_many"})
+        base = _one_line(words)[:ACTION_MAX] or scope[:ACTION_MAX]
+        action, number = base, 1
+        taken = {rule.action.casefold() for rule in rules}
+        while action.casefold() in taken:
+            number += 1
+            suffix = f" ({number})"
+            action = base[: ACTION_MAX - len(suffix)] + suffix
+        with self._conn:
+            (last,) = self._conn.execute("SELECT COALESCE(MAX(position), 0) FROM safety_rules").fetchone()
+            cursor = self._conn.execute(
+                "INSERT INTO safety_rules (action, verdict, position, scope) VALUES (?, ?, ?, ?)",
+                (action, ALLOW, last + 1, scope),
+            )
+        assert cursor.lastrowid is not None
+        rule = self.get(cursor.lastrowid)
+        assert rule is not None
+        logger.info("A narrow Always rule was made")
         return rule
 
     def update(self, rule_id: int, *, action: Any = None, verdict: Any = None) -> Rule:
@@ -432,7 +526,9 @@ class SafetyGuard:
 
     async def screen(self, proposed: Proposed, *, language: str, ledger: Ledger) -> Screening:
         """What the owner's rules say of `proposed`: PASS with no rules (and no call), else the
-        judge's verdict (`combine`). Never raises but for a cancellation."""
+        verdict of the narrow rules that match its kind of action (by `scope`, with no call) and of
+        the judge for the rules in the owner's words (`combine`). A narrow rule of Never settles it
+        without a call. Never raises but for a cancellation."""
         began = time.perf_counter()
         try:
             self.rules.ensure_seeded(language)
@@ -442,8 +538,18 @@ class SafetyGuard:
             return Screening(ASK, None, unchecked=True)
         if not rules:
             return PASS
+        narrow = frozenset(rule.id for rule in rules if rule.scope and rule.scope == proposed.scope)
+        if narrow:
+            settled = combine(rules, narrow)
+            if settled.verdict == DENY:
+                return settled
+        worded = [rule for rule in rules if not rule.scope]
         spent = ledger.total
-        matched = await self.judge.matching(proposed, rules, ledger)
+        if worded:
+            judged = await self.judge.matching(proposed, worded, ledger)
+            matched = None if judged is None else judged | narrow
+        else:
+            matched = narrow
         screening = combine(rules, matched)
         logger.info(
             "Safety check: verdict=%s rules=%d matched=%s ms=%d cost=%.5f",
