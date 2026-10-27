@@ -40,6 +40,16 @@ class Conversations:
         ).fetchone()
         if row is not None:
             return row[0]
+        # A deleted default hands over to the member's latest conversation; an empty new one would look as if
+        # the delete had not happened.
+        row = self.conn.execute(
+            "SELECT id FROM conversations WHERE member_id = ? AND kind = 'standard'"
+            " ORDER BY updated_at_ms DESC, id DESC LIMIT 1", (member_id,),
+        ).fetchone()
+        if row is not None:
+            with self.conn:
+                self.conn.execute("UPDATE conversations SET is_default = 1 WHERE id = ?", (row[0],))
+            return row[0]
         return self.create(member_id, default=True)["id"]
 
     def resolve(self, member_id: int, conversation_id: int | None = None) -> int:

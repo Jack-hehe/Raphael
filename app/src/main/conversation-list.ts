@@ -93,6 +93,7 @@ export function mountConversationList(host: HTMLElement, options: { memberId: nu
         else void confirmDelete(conversationTitle(c)).then(async yes => {
           if (!yes) return;
           await api.core("conversations.delete", { id: c.id }); conversationChange(options.memberId);
+          toaster.info(t("members.deleted", { p0: conversationTitle(c) }));
         }).catch(error => toaster.info(describeError(error)));
       });
       document.querySelector('[data-pick="delete"]')?.classList.add("danger");

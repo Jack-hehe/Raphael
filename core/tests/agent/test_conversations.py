@@ -39,6 +39,19 @@ async def test_rename_search_delete_and_default_entry(make_rig):
     assert replacement["id"] != default["id"]
 
 
+async def test_deleting_the_default_hands_over_to_the_latest_conversation_instead_of_a_new_one(make_rig):
+    rig = make_rig()
+    default = (await rig.call("conversations.list", {"member_id": 0}))["conversations"][0]
+    older = (await rig.call("conversations.create", {"member_id": 0}))["conversation"]
+    latest = (await rig.call("conversations.create", {"member_id": 0}))["conversation"]
+    await rig.call("conversations.delete", {"id": default["id"]})
+    listed = [c for c in (await rig.call("conversations.list", {"member_id": 0}))["conversations"] if c["kind"] == "standard"]
+    assert sorted(c["id"] for c in listed) == sorted([older["id"], latest["id"]])
+    assert [c["id"] for c in listed if c["is_default"]] == [latest["id"]]
+    turn_id = rig.history.add(session_id="voice", question="after", route="answer", prefix="", text="ok", status="done")
+    assert rig.history.get(turn_id).conversation_id == latest["id"]
+
+
 @pytest.mark.parametrize("conversation_id", [True, -1, "1", 999999])
 async def test_invalid_conversation_never_runs_a_model(make_rig, conversation_id):
     rig = make_rig()

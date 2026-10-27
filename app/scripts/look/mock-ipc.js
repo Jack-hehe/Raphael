@@ -173,6 +173,15 @@ export function installMock(fixture, config = {}, target = window) {
   const unsupported = name => { const message = `Unmocked IPC: ${name}`; state.errors.push(message); throw new Error(message); };
   const notify = (type, extra = {}) => { setTimeout(() => state.emit({ type, ...extra }), 0); };
   const byMember = (items, p) => items.filter(item => item.member_id === (p.member_id ?? 0));
+  // As the core's Conversations.main: a member always has a main conversation; when it is deleted the latest one takes
+  // over, and a new one is made only when none is left.
+  const mainConversation = member => {
+    const own = data.conversations.filter(item => item.member_id === member && item.kind !== "quick");
+    if (own.some(item => item.is_default)) return;
+    const latest = [...own].sort((a, b) => b.updated_at_ms - a.updated_at_ms || b.id - a.id)[0];
+    if (latest) latest.is_default = true;
+    else data.conversations.push({ id: nextId(data.conversations), member_id: member, title: "", is_default: true, kind: "standard", created_at_ms: data.now, updated_at_ms: data.now });
+  };
   const update = (items, id, patch) => {
     const item = items.find(item => item.id === id);
     if (!item) throw new Error(`Fixture item not found: ${id}`);
@@ -292,10 +301,10 @@ export function installMock(fixture, config = {}, target = window) {
       case "groups.create": { const group = { ...p, id: nextId(data.groups), position: data.groups.length, sources: [] }; data.groups.push(group); notify("MembersChanged", { member_id: 0 }); return { group }; }
       case "groups.update": { const group = update(data.groups, p.id, p); notify("MembersChanged", { member_id: 0 }); return { group }; }
       case "groups.delete": data.groups = data.groups.filter(item => item.id !== p.id); notify("MembersChanged", { member_id: 0 }); return { deleted: true };
-      case "conversations.list": return { conversations: byMember(data.conversations, p) };
-      case "conversations.create": { const conversation = { id: nextId(data.conversations), member_id: p.member_id ?? 0, title: p.title ?? "", is_default: false, created_at_ms: data.now, updated_at_ms: data.now }; data.conversations.push(conversation); return { conversation }; }
+      case "conversations.list": mainConversation(p.member_id ?? 0); return { conversations: byMember(data.conversations, p) };
+      case "conversations.create": { mainConversation(p.member_id ?? 0); const conversation = { id: nextId(data.conversations), member_id: p.member_id ?? 0, title: p.title ?? "", is_default: false, kind: "standard", created_at_ms: data.now, updated_at_ms: data.now }; data.conversations.push(conversation); return { conversation }; }
       case "conversations.rename": update(data.conversations, p.id, { title: p.title }); return {};
-      case "conversations.delete": data.conversations = data.conversations.filter(item => item.id !== p.id); return { deleted: true };
+      case "conversations.delete": { const gone = data.conversations.find(item => item.id === p.id); data.conversations = data.conversations.filter(item => item.id !== p.id); if (gone) mainConversation(gone.member_id); return { deleted: 1 }; }
       case "agent.history.list": {
         // As the core lists them: a member's main conversation also holds what colleagues asked it.
         const main = data.conversations.find(c => c.member_id === (p.member_id ?? 0) && c.is_default)?.id;

@@ -61,5 +61,6 @@ test("rename saves the selected row and delete waits for confirmation", async ()
   expect(core).not.toHaveBeenCalledWith("conversations.delete", expect.anything());
   document.querySelector<HTMLButtonElement>('[data-dlg="delete"]')!.click(); await flush();
   expect(core).toHaveBeenCalledWith("conversations.delete", { id: 2 });
+  expect(document.querySelector(".toasts")?.textContent).toContain("已刪除「Cobalt notes」");
   list.destroy();
 });
