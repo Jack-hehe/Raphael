@@ -46,14 +46,21 @@ complete its login in the browser, then return to 已連結.
 npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-connecting --theme both --width 1120,720,1920x1080
 npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
 npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
-npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
+npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connections-app-switch connector-many-tools connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
 ```
 
 The last command is the apps and skills set (`scenes/apps.mjs`). Each scene enters
 through the sidebar's 連結應用程式; `apps-count` compares the badge, the tab's
 number, the rows and the roster, `apps-unreadable` checks that a core that cannot
-list the apps leaves 「—」 and no number in all of them, `connector-tools` checks N/M
-against the switches and that the actions sit flush at the dialog's edge, and
+list the apps leaves 「—」 and no number in all of them. An app has one switch, in
+its row and its dialog (owner, 2026-10-27: 「一次全部開啟或一次關掉」, never tool by
+tool): on is the app and every tool on, mixed is on with some tools off, and a press
+on mixed or off turns every tool on, a press on all-on turns the app off.
+`app-switch-all` drives GitHub with 18 of 46 tools off through mixed → all on → off →
+all on and fails if any tool was switched one by one. `connector-folded` checks that a
+dialog shows one folded N/M line, no switch per tool and no scroll; `connector-tools`
+unfolds it and checks N/M against the switches and that the actions sit flush at the
+dialog's edge, and
 `skill-page` checks the action order and that the document is whole and starts at its first line. Also run `home` (the sidebar entry on the wide
 and compact layouts) and the `plugins-*` scenes above for regressions.
 

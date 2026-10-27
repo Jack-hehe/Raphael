@@ -929,8 +929,6 @@ export const ja = {
   "conn.noTools": "ツールをまだ読み込んでいません。「ツールを再読み込み」を押してください。",
   "conn.group.write": "変更する",
   "conn.group.read": "読み取りのみ",
-  "conn.groupSwitch.write": "変更するツールすべて",
-  "conn.groupSwitch.read": "読み取り専用のツールすべて",
   "conn.refresh": "ツールを再読み込み",
   "conn.refreshing": "読み込み中…",
   "conn.refreshed": "ツールを再読み込みしました",

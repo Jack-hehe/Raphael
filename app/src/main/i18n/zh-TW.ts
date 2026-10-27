@@ -928,8 +928,6 @@ export const zhTW = {
   "conn.noTools": "還沒有讀到工具。按「重新讀取工具」。",
   "conn.group.write": "會改動",
   "conn.group.read": "只讀取",
-  "conn.groupSwitch.write": "全部會改動的工具",
-  "conn.groupSwitch.read": "全部只讀取的工具",
   "conn.refresh": "重新讀取工具",
   "conn.refreshing": "讀取中…",
   "conn.refreshed": "已重新讀取工具",

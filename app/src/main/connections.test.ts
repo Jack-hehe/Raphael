@@ -153,7 +153,7 @@ describe("已安裝", () => {
     expect(notion).toContain('<span class="nm">Notion</span>');
     expect(notion).toContain('<span class="ds">Notion的一句話</span>');
     expect(notion).toContain('class="logo"');
-    expect(notion).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
+    expect(notion).toMatch(/class="tg" role="checkbox" aria-checked="mixed" aria-label="開啟 Notion" data-conn="enable" data-id="ab12"/);
     // the chevron is a picture of where the row goes, not a second button
     expect(notion).toMatch(/<span class="chev" aria-hidden="true"><svg/);
     expect(notion.match(/<button/g)).toHaveLength(2);
@@ -166,8 +166,14 @@ describe("已安裝", () => {
     expect(remote).toContain('class="ds">https://example.com/mcp</span>');
   });
 
-  test("the switch is the whole service's and shows it off", () => {
-    expect(connectionsHTML(view({ groups: [{ ...notes, enabled: false, status: "disabled" }] }))).toContain('aria-checked="false"');
+  test("the switch is the whole service's: off when it is off, on when every tool is on, mixed when some are off", () => {
+    expect(connectionsHTML(view({ groups: [{ ...notes, enabled: false, status: "disabled" }] }))).toMatch(/aria-checked="false" aria-label="開啟 Notion"/);
+    expect(connectionsHTML(view({ groups: [notes] }))).toMatch(/aria-checked="mixed" aria-label="開啟 Notion"/);
+    const allOn: ConnectionGroup = { ...notes, tools: notes.tools.map((x) => ({ ...x, enabled: true })) };
+    expect(connectionsHTML(view({ groups: [allOn] }))).toMatch(/aria-checked="true" aria-label="開啟 Notion"/);
+    // a managed service that has not listed its tools is mixed by what it keeps off
+    const managed: ConnectionGroup = { ...allOn, source: "composio", tools: [], disabled_tools: ["NOTION_DELETE"] };
+    expect(connectionsHTML(view({ groups: [managed] }))).toMatch(/aria-checked="mixed" aria-label="開啟 Notion"/);
   });
 
   test("says what is wrong with a service in its line; the way to sign in again is in its dialog", () => {
@@ -350,62 +356,32 @@ describe("the dialog of a connected service", () => {
   test("has the mark, the switch, a close button, the name, what it is and the count of its tools", () => {
     const d = dialog(installedPage("ab12"));
     expect(d).toMatch(/class="mono xl logo-mono"/);
-    expect(d).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
+    expect(d).toMatch(/role="checkbox" aria-checked="mixed" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
     expect(d).toMatch(/<button type="button" class="btn icon" aria-label="關閉" title="關閉" data-conn="close"/);
     expect(d).toContain("Notion的說明");
     // how many of its tools are on, of all it has: Delete page is off
     expect(d).toContain("已開啟 2/3 個工具（2 個會改動、1 個只讀取）");
   });
 
-  test("groups tools inline under write and read headings with individual switches", () => {
-    const d = dialog(installedPage("ab12"));
-    expect(d).toContain('class="cs-plugin-tools"');
-    expect(d.match(/data-conn="tool"/g)).toHaveLength(3);
-    expect(d).toContain(">Create page<");
-    expect(d).toContain(">Search<");
-    expect(d).not.toContain('data-conn="tools"');
-    expect(dialog(installedPage("cu1")).match(/data-conn="tool"/g)).toHaveLength(1);
-  });
-
-  test("a row of tools opens them in the dialog: back, the kind and its count, a switch for them all, then a switch each", () => {
-    const write = dialog(installedPage("ab12", { toolsKind: "write" }));
-    expect(write).toMatch(/aria-label="返回"[^>]*data-conn="tools-back"/);
-    expect(write).toContain('<h2 class="cs-dlg-name" id="cs-dlg-title">會改動<em class="num">2</em></h2>');
-    expect(write).toContain(">Create page<");
-    expect(write).toContain(">Delete page<");
-    expect(write).not.toContain(">Search<");
-    expect(write).not.toContain("個工具（");
-    expect(write).toContain('data-stagger="tools:write"');
-    expect(write).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
-    const read = dialog(installedPage("ab12", { toolsKind: "read" }));
-    expect(read).toContain(">Search<");
-    expect(read).toContain('title="search"'); // the raw name stays in the tooltip
-    expect(read.match(/data-conn="tool"/g)).toHaveLength(1);
-    // a kind the service has no tools of shows the summary
-    expect(dialog(installedPage("cu1", { toolsKind: "write" }))).toContain("已開啟 1/1 個工具");
-  });
-
-  test("the switch for a whole list is on, mixed or off, a real control with a name of its own", () => {
-    // Notion has two write tools, one on and one off: mixed; its only read tool is on
-    expect(installedPage("ab12", { toolsKind: "write" })).toMatch(
-      /<button type="button" class="tg" role="checkbox" aria-checked="mixed" aria-label="全部會改動的工具" data-conn="group" data-id="ab12" data-kind="write" data-k="cs-group"><\/button>/,
-    );
-    expect(installedPage("ab12", { toolsKind: "read" })).toMatch(/role="checkbox" aria-checked="true" aria-label="全部只讀取的工具" data-conn="group" data-id="ab12" data-kind="read"/);
-    const allOff = { ...notes, tools: notes.tools.map((x) => ({ ...x, enabled: false })) };
-    expect(installedPage("ab12", { groups: [allOff, custom], toolsKind: "write" })).toMatch(/aria-checked="false" aria-label="全部會改動的工具"/);
-    expect(installedPage("ab12", { toolsKind: "write", busy: new Set(["ab12"]) })).toMatch(/data-conn="group"[^>]* disabled/);
+  test("its tools are one folded line, which unfolds into them under write and read headings, a switch each", () => {
+    const folded = dialog(installedPage("ab12"));
+    expect(folded).toMatch(/data-conn="tool-list" aria-expanded="false" data-k="cs-count"/);
+    expect(folded).not.toContain('data-conn="tool"');
+    expect(folded).not.toContain('class="cs-plugin-tools"');
+    const open = dialog(installedPage("ab12", { toolsOpen: true }));
+    expect(open).toMatch(/data-conn="tool-list" aria-expanded="true" data-k="cs-count"/);
+    expect(open.match(/data-conn="tool"/g)).toHaveLength(3);
+    expect(open).toContain(">Create page<");
+    expect(open).toContain(">Search<");
+    expect(open).toContain('title="search"'); // the raw name stays in the tooltip
+    expect(open).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
+    expect(dialog(installedPage("cu1", { toolsOpen: true })).match(/data-conn="tool"/g)).toHaveLength(1);
     // no button holds another control
-    expect(installedPage("ab12", { toolsKind: "write" })).not.toMatch(/<button(?:(?!<\/button>).)*<button/s);
+    expect(open).not.toMatch(/<button(?:(?!<\/button>).)*<button/s);
   });
 
-  test("names the group switches in the language of the window", () => {
-    setLocale("en");
-    expect(installedPage("ab12", { toolsKind: "write" })).toContain('aria-label="All tools that change things"');
-    expect(installedPage("ab12", { toolsKind: "read" })).toContain('aria-label="All read-only tools"');
-    setLocale("ja");
-    expect(installedPage("ab12", { toolsKind: "write" })).toContain('aria-label="変更するツールすべて"');
-    expect(installedPage("ab12", { toolsKind: "read" })).toContain('aria-label="読み取り専用のツールすべて"');
-  });
+
+
 
   test("the store service's primary try button is localized in a Chinese window", () => {
     expect(dialog(installedPage("ab12"))).toMatch(/<button type="button" class="btn pri" data-conn="try" data-id="ab12" data-k="cs-try">試用<\/button>/);
@@ -457,7 +433,7 @@ describe("the dialog of a connected service", () => {
   });
 
   test("has no levels, no review step and no word about pending tools", () => {
-    for (const html of [installedPage("ab12", { toolsKind: "write" }), installedPage("ab12"), connectionsHTML(view()), storePage("linear")]) {
+    for (const html of [installedPage("ab12", { toolsOpen: true }), installedPage("ab12"), connectionsHTML(view()), storePage("linear")]) {
       expect(html).not.toMatch(/T[0-3]\b|決定權限|先問我|按住確認|待決定|conn-tier|conn-draft|conn-all|review/);
     }
   });
@@ -465,7 +441,7 @@ describe("the dialog of a connected service", () => {
   test("a server that changed its tools shows them all the same, new ones on", () => {
     const grown: ConnectionGroup = { ...notes, tools: [...notes.tools, { name: "fresh", description: "New.", enabled: true, kind: "read" }], tool_count: 4, read_count: 2, enabled_count: 3 };
     expect(installedPage("ab12", { groups: [grown] })).toContain("已開啟 3/4 個工具（2 個會改動、2 個只讀取）"); // Delete page is still off
-    const html = installedPage("ab12", { groups: [grown], toolsKind: "read" });
+    const html = installedPage("ab12", { groups: [grown], toolsOpen: true });
     expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 Fresh"/);
     expect(html).not.toMatch(/>新<|待決定/);
   });
@@ -659,8 +635,7 @@ describe("the rules for this tab", () => {
     connectionsHTML(view({ tab: "store" })),
     connectionsHTML(view({ tab: "store", login: { target: "linear", name: "Linear" } })),
     installedPage("ab12", { confirmingDisconnect: "ab12", auditOpen: true }),
-    installedPage("ab12", { toolsKind: "write" }),
-    installedPage("ab12", { toolsKind: "read" }),
+    installedPage("ab12", { toolsOpen: true }),
     installedPage("ab12", { groups: [{ ...notes, status: "error", error: "auth" }] }),
     storePage("linear", { loginError: { target: "linear", kind: "denied" } }),
     connectionsHTML(view({ form: form({ pairLines: "TOKEN=" }) })),
@@ -687,7 +662,7 @@ describe("the rules for this tab", () => {
   });
 
   test("the icon-only buttons (close, back) are named in their label and tooltip", () => {
-    for (const html of [installedPage("ab12"), installedPage("ab12", { toolsKind: "write" })]) {
+    for (const html of [installedPage("ab12"), installedPage("ab12", { toolsOpen: true })]) {
       for (const tag of html.match(/<button[^>]*class="btn icon"[^>]*>/g)!) expect(tag).toMatch(/aria-label="[^"]+" title="[^"]+"/);
     }
   });
@@ -873,36 +848,39 @@ describe("what the tab does", () => {
     expect(c.view().tab).toBe("installed");
   });
 
-  test("a group switch sets every tool of its list in one call: all off when all are on, all on otherwise", async () => {
+  test("a service's one switch: mixed or off turns it and every tool of it on, all on turns it off", async () => {
     api.integrationsSetToolsEnabled.mockResolvedValue({});
     const c = createConnections(host);
     await c.load();
-    // the write list is mixed (one on, one off): turns all on
-    c.click(button("group", { id: "ab12", kind: "write" }));
+    // Notion is on with Delete page off: every tool goes on, and the service stays on
+    c.click(button("enable", { id: "ab12" }));
     await settle();
-    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["create_page", "delete_page"], true);
-    // the read list is all on: turns all off
-    c.click(button("group", { id: "ab12", kind: "read" }));
+    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["search", "create_page", "delete_page"], true);
+    expect(api.integrationsSetEnabled).not.toHaveBeenCalled();
+    // Files is on with its only tool on: the service goes off, its tools as they were
+    c.click(button("enable", { id: "cu1" }));
     await settle();
-    expect(api.integrationsSetToolsEnabled).toHaveBeenLastCalledWith("ab12", ["search"], false);
+    expect(api.integrationsSetEnabled).toHaveBeenLastCalledWith("cu1", false);
+    expect(api.integrationsSetToolsEnabled).toHaveBeenCalledTimes(1);
     expect(api.integrationsSetToolEnabled).not.toHaveBeenCalled();
   });
 
-  test("the dialog opens a list of tools and goes back to its summary, and unfolds the latest actions", async () => {
+  test("the dialog unfolds its list of tools and folds it again, and unfolds the latest actions", async () => {
     const c = createConnections(host);
     await c.load();
     c.click(button("open", { id: "ab12" }));
-    expect(c.view()).toMatchObject({ toolsKind: null, auditOpen: false });
-    c.click(button("tools", { kind: "read" }));
-    expect(c.view().toolsKind).toBe("read");
-    c.click(button("tools-back"));
-    expect(c.view().toolsKind).toBeNull();
+    expect(c.view()).toMatchObject({ toolsOpen: false, auditOpen: false });
+    c.click(button("tool-list"));
+    expect(c.view().toolsOpen).toBe(true);
+    c.click(button("tool-list"));
+    expect(c.view().toolsOpen).toBe(false);
+    c.click(button("tool-list"));
     c.click(button("audit"));
     expect(c.view().auditOpen).toBe(true);
-    // opening it again starts at the summary, folded
+    // opening it again starts folded
     c.click(button("close"));
     c.click(button("open", { id: "ab12" }));
-    expect(c.view()).toMatchObject({ open: { tab: "installed", id: "ab12" }, toolsKind: null, auditOpen: false });
+    expect(c.view()).toMatchObject({ open: { tab: "installed", id: "ab12" }, toolsOpen: false, auditOpen: false });
   });
 
   test("the dialog controller closes with its X or Escape and leaves raw backdrop targets to shared gesture handling", async () => {
@@ -953,9 +931,9 @@ describe("what the tab does", () => {
   test("switches a service on or off, a tool on or off, and reads its tools again", async () => {
     const c = createConnections(host);
     await c.load();
-    c.click(button("enable", { id: "ab12" }));
+    c.click(button("enable", { id: "cu1" }));
     await settle();
-    expect(api.integrationsSetEnabled).toHaveBeenCalledWith("ab12", false);
+    expect(api.integrationsSetEnabled).toHaveBeenCalledWith("cu1", false);
     c.click(button("tool", { id: "ab12", tool: "delete_page" }));
     await settle();
     expect(api.integrationsSetToolEnabled).toHaveBeenLastCalledWith("ab12", "delete_page", true);
@@ -1235,7 +1213,7 @@ describe("what the tab does", () => {
     c.input(input("conn-name", "Half"));
     c.input(input("conn-pairs", "TOKEN=TOPSECRET"));
     c.reset();
-    expect(c.view()).toMatchObject({ tab: "installed", open: null, toolsKind: null, auditOpen: false, form: null, confirmingDisconnect: null, search: "" });
+    expect(c.view()).toMatchObject({ tab: "installed", open: null, toolsOpen: false, auditOpen: false, form: null, confirmingDisconnect: null, search: "" });
     expect(c.view().login).not.toBeNull();
     expect(JSON.stringify(c.view())).not.toContain("TOPSECRET");
   });

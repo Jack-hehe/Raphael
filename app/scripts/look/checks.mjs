@@ -690,6 +690,24 @@ export function checkRendered(name) {
       return { check: name, state: roster.inventory_state };
     });
   }
+  if (name === "app-switch-all") {
+    const calls = window.__look.calls.filter(call => call.method?.startsWith("integrations.set_") && call.params?.id === "github").map(call => call.params);
+    const server = window.__look.data.servers.find(item => item.id === "github");
+    require(calls[0]?.tools?.length === 46 && calls[0].enabled === true, "the first press turns all 46 tools on at once");
+    require(calls.some(call => call.enabled === false && !call.tools), "a press on an app that is all on turns the app off");
+    require(server.enabled && server.tools.every(tool => tool.enabled), "the last press leaves the app and every tool on");
+    require(!window.__look.calls.some(call => call.method === "integrations.set_tool_enabled"), "no tool was switched one by one");
+    return { check: name, calls: calls.length };
+  }
+  if (name === "connector-folded") {
+    const dialog = document.querySelector(".modal-scrim .cs-dialog");
+    require(visible(dialog) && dialog.querySelectorAll('[data-conn="enable"]').length === 1, "the app's dialog has its one switch");
+    require(dialog.querySelector('[data-conn="enable"]').getAttribute("aria-checked") === "mixed", "its switch says some tools are off");
+    require(!dialog.querySelector('[data-conn="tool"]'), "no switch for each tool until the line is unfolded");
+    require(dialog.querySelector('[data-k="cs-count"]')?.textContent.includes("28/46"), "one line says how many of its tools are on");
+    require(dialog.scrollHeight <= dialog.clientHeight + 1, "the dialog fits without scrolling");
+    return { check: name };
+  }
   if (name === "connector-tools") {
     // An app's page: the account it is signed in with, N of its M tools on with a switch for each, and its actions flush with the dialog's edge.
     const dialog = document.querySelector(".modal-scrim .cs-dialog"), switches = [...(dialog?.querySelectorAll('[data-conn="tool"]') ?? [])];

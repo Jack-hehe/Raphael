@@ -929,8 +929,6 @@ export const en = {
   "conn.noTools": "No tools read yet. Press Reload tools.",
   "conn.group.write": "Write",
   "conn.group.read": "Read",
-  "conn.groupSwitch.write": "All tools that change things",
-  "conn.groupSwitch.read": "All read-only tools",
   "conn.refresh": "Reload tools",
   "conn.refreshing": "Reading…",
   "conn.refreshed": "Tools reloaded",

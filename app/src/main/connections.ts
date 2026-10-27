@@ -104,8 +104,8 @@ export interface ConnectionsView {
   search: string;
   /** What is open: the dialog of a connected service over the list, or the page of a store entry in its place. */
   open: { tab: Tab; id: string } | null;
-  /** In the dialog of a service, the list of tools that is shown in place of its summary. */
-  toolsKind: ToolKind | null;
+  /** The dialog's list of tools is unfolded. */
+  toolsOpen: boolean;
   /** The dialog's latest actions are unfolded. */
   auditOpen: boolean;
   /** The service whose 「中斷連線」 was pressed once. */
@@ -132,7 +132,7 @@ export const emptyConnectionsView = (): ConnectionsView => ({
   tab: "installed",
   search: "",
   open: null,
-  toolsKind: null,
+  toolsOpen: false,
   auditOpen: false,
   confirmingDisconnect: null,
   busy: new Set(),
@@ -270,6 +270,19 @@ function barHTML(v: ConnectionsView): string {
 
 // ---------- 已安裝: one list, a row for each service ----------
 
+/** Whether a service that is on has tools turned off (a managed service may not have listed its tools yet). */
+const someToolsOff = (g: ConnectionGroup): boolean => g.tools.some((tool) => !tool.enabled) || (!!g.source && (g.disabled_tools?.length ?? 0) > 0);
+
+/**
+ * A service's one switch, in its row and its dialog: on is the service and every tool of it on, off is the service
+ * off; on with some tools off is mixed, and a press turns them all on. A checkbox role, not a switch: only that one
+ * has a mixed state.
+ */
+function serviceSwitch(g: ConnectionGroup, attrs: string): string {
+  const state = !g.enabled ? "false" : someToolsOff(g) ? "mixed" : "true";
+  return `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t("conn.switch", { p0: g.name }))}"${attrs}></button>`;
+}
+
 /**
  * A row of the list. The row itself opens the dialog (a click on its chevron, or anywhere but the
  * switch); its name is a real button for the keyboard; the switch is the whole service's.
@@ -284,7 +297,7 @@ function itemHTML(g: ConnectionGroup, v: ConnectionsView): string {
       "cs-open",
       ` data-conn="open" data-id="${id}" data-k="cs-open:${id}" aria-haspopup="dialog" title="${esc(t("conn.open", { p0: g.name }))}"`,
     ) +
-    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable" data-id="${id}" data-k="cs-enable:${id}"${busy ? " disabled" : ""}`) +
+    serviceSwitch(g, ` data-conn="enable" data-id="${id}" data-k="cs-enable:${id}"${busy ? " disabled" : ""}`) +
     `<span class="chev" aria-hidden="true">${ico("right")}</span></div>`
   );
 }
@@ -420,7 +433,7 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const loggingIn = v.login?.target === g.id;
   const head =
     `<div class="cs-dlg-head">${groupIcon(g, v, "xl")}<span class="sp"></span>` +
-    tg(g.enabled, t("conn.switch", { p0: g.name }), ` data-conn="enable"${id} data-k="cs-dlg-enable"${busy ? " disabled" : ""}`) +
+    serviceSwitch(g, ` data-conn="enable"${id} data-k="cs-dlg-enable"${busy ? " disabled" : ""}`) +
     iconButton("more", t("mcp.actions"), ` data-conn="server-menu"${id} aria-haspopup="menu"${busy ? " disabled" : ""}`) +
     closeButton() +
     `</div><h2 class="cs-dlg-name" id="cs-dlg-title">${esc(g.name)}</h2>`;
@@ -440,13 +453,16 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
       ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.error", { p0: failureText(g.error) }))}</span></div>`
       : "";
   const kinds = (["write", "read"] as const).filter((kind) => g.tools.some((tool) => tool.kind === kind));
-  // How many of its tools can be called: the ones that are on, of all it has (the owner switches each one below).
+  // How many of its tools can be called, of all it has: one folded line; the service's switch turns them all on or off.
   const on = g.tools.filter((tool) => tool.enabled).length;
   const tools = g.tools_state === "loading" ? `<p role="status">${esc(t("conn.loading"))}</p>`
     : g.tools_state === "failed" ? `<div class="note" role="alert">${esc(t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="refresh"${id}`)}</div>`
     : g.tools.length
-    ? `<p class="cs-count" data-k="cs-count">${esc(t("conn.tools.enabled", { p0: on, p1: g.tools.length, p2: g.write_count, p3: g.read_count }))}</p>` +
-      `<div class="cs-plugin-tools">${kinds.map(kind => `<section><h3>${esc(kindName(kind))}</h3><div class="cs-tool-list">${g.tools.filter(tool => tool.kind === kind).map(tool => toolRow(g, tool, busy)).join("")}</div></section>`).join("")}</div>`
+    ? `<div class="cs-grp cs-tools">` +
+      btn(`<span class="gt">${esc(t("conn.tools.enabled", { p0: on, p1: g.tools.length, p2: g.write_count, p3: g.read_count }))}</span>${ico(v.toolsOpen ? "down" : "right")}`,
+        "gr", ` data-conn="tool-list" aria-expanded="${v.toolsOpen}" data-k="cs-count"`) +
+      (v.toolsOpen ? `<div class="cs-plugin-tools">${kinds.map(kind => `<section><h3>${esc(kindName(kind))}</h3><div class="cs-tool-list">${g.tools.filter(tool => tool.kind === kind).map(tool => toolRow(g, tool, busy)).join("")}</div></section>`).join("")}</div>` : "") +
+      `</div>`
     : `<p class="cs-count conn-empty">${esc(t("conn.noTools"))}</p>`;
   const example = examplePrompt(entry);
   const acts = actionRow({
@@ -461,30 +477,13 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
   return head + about + meta + accountsHTML(g) + alert + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
 }
 
-/** The dialog's second view: the tools of one kind, each with its switch, and one switch for them all. */
-function toolsViewHTML(g: ConnectionGroup, kind: ToolKind, v: ConnectionsView): string {
-  const tools = g.tools.filter((tool) => tool.kind === kind);
-  const busy = v.busy.has(g.id);
-  const on = tools.filter((tool) => tool.enabled).length;
-  const state = on === tools.length ? "true" : on === 0 ? "false" : "mixed";
-  const head =
-    `<div class="cs-dlg-head sub">` +
-    iconButton("left", t("conn.back"), ' data-conn="tools-back" data-k="cs-back"') +
-    `<h2 class="cs-dlg-name" id="cs-dlg-title">${esc(kindName(kind))}<em class="num">${tools.length}</em></h2>` +
-    // a checkbox role, not a switch: only that one has a "mixed" state
-    `<button type="button" class="tg" role="checkbox" aria-checked="${state}" aria-label="${esc(t(kind === "write" ? "conn.groupSwitch.write" : "conn.groupSwitch.read"))}" data-conn="group" data-id="${esc(g.id)}" data-kind="${kind}" data-k="cs-group"${busy ? " disabled" : ""}></button>` +
-    closeButton() +
-    `</div>`;
-  return head + `<div class="cs-tool-list" data-stagger="tools:${kind}">${tools.map((tool) => toolRow(g, tool, busy)).join("")}</div>`;
-}
-
 /**
  * The dialog of a connected service, over the settings with the page under it dimmed. It grows in
  * when it opens (`data-dialog`, ui.ts `swapHTML`), not each time it is drawn again; a click on the
  * dimmed part closes it, as Esc and its × do.
  */
 function dialogHTML(g: ConnectionGroup, v: ConnectionsView): string {
-  const inner = v.toolsKind && g.tools.some((tool) => tool.kind === v.toolsKind) ? toolsViewHTML(g, v.toolsKind, v) : summaryHTML(g, v);
+  const inner = summaryHTML(g, v);
   return (
     `<div class="cs-scrim" data-conn="scrim" data-dialog="${esc(g.id)}">` +
     `<div class="cs-dialog" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>${inner}</div></div>`
@@ -719,7 +718,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let tab: Tab = "installed";
   let search = "";
   let open: ConnectionsView["open"] = null;
-  let toolsKind: ToolKind | null = null;
+  let toolsOpen = false;
   let auditOpen = false;
   let confirming: string | null = null;
   let confirmTimer: ReturnType<typeof setTimeout> | undefined;
@@ -754,7 +753,7 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   const view = (): ConnectionsView => ({
     configured, categories, category, nextCursor, keyBusy, keyError,
-    groups, catalog, inventory, skills, skill, audit, tab, search, open, toolsKind, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
+    groups, catalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -888,7 +887,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   /** Opens the dialog of a connected service, at its summary, with the focus in it. */
   function openDialog(id: string): void {
     open = { tab: "installed", id };
-    toolsKind = null;
+    toolsOpen = false;
     auditOpen = false;
     clearTimeout(confirmTimer);
     confirming = null;
@@ -924,7 +923,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       closing = false;
       if (open?.tab !== "installed" || open.id !== id) return;
       open = null;
-      toolsKind = null;
+      toolsOpen = false;
       auditOpen = false;
       clearTimeout(confirmTimer);
       confirming = null;
@@ -1201,19 +1200,11 @@ export function createConnections(host: ConnectionsHost): Connections {
       case "close":
         closeDialog();
         break;
-      case "tools": {
-        toolsKind = button.dataset.kind === "read" ? "read" : "write";
+      case "tool-list":
+        toolsOpen = !toolsOpen;
         redraw();
-        focusOn("#cs-dialog");
+        focusOn('[data-k="cs-count"]');
         break;
-      }
-      case "tools-back": {
-        const kind = toolsKind;
-        toolsKind = null;
-        redraw();
-        focusOn(`[data-k="cs-kind:${kind}"]`);
-        break;
-      }
       case "audit":
         auditOpen = !auditOpen;
         redraw();
@@ -1240,8 +1231,16 @@ export function createConnections(host: ConnectionsHost): Connections {
         redraw();
         break;
       case "enable": {
+        // all on turns the service off; off or mixed turns it and every tool of it on
         const group = groupById(id);
-        if (group) void act(id, async () => void (await (group.source ? api.connectorsSetTools(id, { enabled: !group.enabled }) : api.integrationsSetEnabled(id, !group.enabled))));
+        const on = !!group && !(group.enabled && !someToolsOff(group));
+        if (group) void act(id, async () => {
+          if (group.source) await api.connectorsSetTools(id, on ? { enabled: true, disabled_tools: [] } : { enabled: false });
+          else {
+            if (on && group.tools.some((tool) => !tool.enabled)) await api.integrationsSetToolsEnabled(id, group.tools.map((tool) => tool.name), true);
+            if (group.enabled !== on) await api.integrationsSetEnabled(id, on);
+          }
+        });
         break;
       }
       case "tool": {
@@ -1253,21 +1252,6 @@ export function createConnections(host: ConnectionsHost): Connections {
             if (tool.enabled) disabled.add(tool.name); else disabled.delete(tool.name);
             await api.connectorsSetTools(id, { disabled_tools: [...disabled] });
           } else await api.integrationsSetToolEnabled(id, tool.name, !tool.enabled);
-        });
-        break;
-      }
-      case "group": {
-        const kind = button.dataset.kind === "read" ? "read" : "write";
-        const tools = groupById(id)?.tools.filter((x) => x.kind === kind) ?? [];
-        // all on turns all off; off or mixed turns all on
-        if (tools.length) void act(id, async () => {
-          const group = groupById(id)!;
-          const on = !tools.every(t => t.enabled);
-          if (group.source) {
-            const disabled = new Set(group.disabled_tools ?? []);
-            for (const tool of tools) { if (on) disabled.delete(tool.name); else disabled.add(tool.name); }
-            await api.connectorsSetTools(id, { disabled_tools: [...disabled] });
-          } else await api.integrationsSetToolsEnabled(id, tools.map(t => t.name), on);
         });
         break;
       }
@@ -1434,7 +1418,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     form = null;
     open = null;
     skill = null; // a document that was being edited is dropped with the page
-    toolsKind = null;
+    toolsOpen = false;
     auditOpen = false;
     closing = false;
     search = "";

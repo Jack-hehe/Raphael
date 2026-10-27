@@ -23,6 +23,15 @@ const notionTools = [
 const connector = (id, over) => ({ id, kind: "composio", name: "", description: "", logo: "", status: "ACTIVE", enabled: true, enabled_tools: [], disabled_tools: [], accounts: [{ id: `ca_${id}`, status: "ACTIVE" }], ...over });
 const notion = over => connector("composio:notion", { name: "Notion", description: "搜尋筆記、整理頁面與專案資料", enabled_tools: notionTools.map(item => item.slug), ...over });
 const google = { ...base.managedConnectors.find(item => item.id === "google"), accounts: [{ id: "me", status: "ACTIVE" }] };
+// The owner's case (10/27): a server of many tools, some of them off.
+const manyTools = (id, name, count, off) => {
+  const writes = Math.ceil(count / 3);
+  return { ...base.servers[1], id, name, enabled: true, status: "ready", auth: "oauth", url: `https://${id}.example.test/mcp`, headers: [],
+    tool_count: count, enabled_count: count - off, write_count: writes, read_count: count - writes,
+    tools: Array.from({ length: count }, (_, i) => ({ name: `${id}_tool_${i + 1}`, description: `${name} 的第 ${i + 1} 個工具`, enabled: i >= off, kind: i < writes ? "write" : "read" })) };
+};
+const github = manyTools("github", "GitHub", 46, 18);
+const appSwitch = state => wait(`[data-conn="enable"][data-id="github"][aria-checked="${state}"]`);
 
 const skillDoc = (name, description, body) => `---\nname: ${name}\ndescription: ${description}\n---\n${body}`;
 const weekly = skillDoc("weekly-summary", "每週五整理本週的研究重點，用三段話寫成摘要", "# 每週摘要\n\n1. 先寫結論，一句話。\n2. 列出三個重點，每個重點附上來源。\n3. 最後寫下下週要做的事。\n");
@@ -50,8 +59,15 @@ export default [
   scene("connected-apps-unreadable", "A core that cannot list the apps: the sidebar and the tab say 「—」 and give no number, and the apps stay one list", [
     ...open, wait('[data-k="cs-open:composio:notion"]'), check("apps-unreadable"),
   ], { inventoryUnreadable: true, managedConnectors: [notion(), google], servers: base.servers.slice(0, 1), skills }),
-  scene("connector-account-tools", "An app's detail: its accounts, how many of its tools are on (9/9), a switch for each tool, sign in again and uninstall", [
-    ...open, click('[data-conn="open"][data-id="composio:notion"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"),
+  scene("connections-app-switch", "One switch per app (owner, 10/27): GitHub with 18 of its 46 tools off is mixed; a press turns every tool on, the next turns the app off, the next all on again", [
+    ...open, appSwitch("mixed"), click('[data-conn="enable"][data-id="github"]'), appSwitch("true"),
+    click('[data-conn="enable"][data-id="github"]'), appSwitch("false"), click('[data-conn="enable"][data-id="github"]'), appSwitch("true"), check("app-switch-all"),
+  ], { servers: [github, ...base.servers] }),
+  scene("connector-many-tools", "An app of many tools: its dialog has the one switch and one folded line for its 46 tools, not a switch for each", [
+    ...open, click('[data-conn="open"][data-id="github"]'), wait('[data-conn="tool-list"][aria-expanded="false"]'), check("connector-folded"),
+  ], { servers: [github, ...base.servers] }),
+  scene("connector-account-tools", "An app's detail: its accounts, how many of its tools are on (9/9), unfolded into a switch for each tool, sign in again and uninstall", [
+    ...open, click('[data-conn="open"][data-id="composio:notion"]'), click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"),
   ], {
     managedConnectors: [notion({ accounts: [{ id: "ca_work", status: "ACTIVE" }, { id: "ca_old", status: "EXPIRED" }] }), google],
     pluginTools: { ...base.pluginTools, "composio:notion": notionTools },
