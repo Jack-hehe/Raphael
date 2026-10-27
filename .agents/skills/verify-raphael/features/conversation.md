@@ -107,7 +107,9 @@ The room handoff scenes in [Team and rooms](team-and-rooms.md) cover the shared 
 private and room result destinations are also checked by offline core tests.
 
 Every private/API/CLI/member turn receives the current public TeamContextSnapshot with self,
-count, stable IDs, roles, primary/chief and secret-free app connection states. Meeting requests
+count, stable IDs, roles, primary/chief and secret-free app connection states. The primary is the owner's chosen primary contact (see [Members](members.md): Raphael
+until another is chosen), read from that snapshot fresh on every turn: the primary is told it hands work it is given to the colleague it belongs to with the one hand-off
+(S03.primary-dispatch), another member forwards work that is not its own to that colleague or, when it cannot tell whose it is, to the primary, and Raphael alone administers the team. Meeting requests
 use room_meeting; one centred grey line with the group icon, outside Raphael's message, opens the room, and quick ask_member answers are
 folded into the requesting assistant reply. Room history remains outside private turns.
 

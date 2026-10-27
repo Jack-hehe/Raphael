@@ -770,9 +770,87 @@ export function checkRendered(name) {
       require(visible(column.querySelector('.mb-dot.is-wait')), "waiting dot survives collapse");
     } else {
       require(rows[0].querySelector('.av').getBoundingClientRect().width >= 64, "expanded Raphael emblem retains its original size");
-      require(!rows[0].querySelector('.mb-pin, time, .mb-row-p'), "Raphael retains the original emblem and name only");
+      require(!rows[0].querySelector('.mb-pin, time, .mb-row-p'), "Raphael retains the original emblem and name only, and the star while he is the primary contact");
     }
     return { check: name, collapsed, width: column.getBoundingClientRect().width, members: rows.length };
+  }
+  // The primary contact (P15b): a star on one face at a time, kept apart from the crown of the chief of staff in a room.
+  if (name === "primary-picker" || name === "primary-set" || name === "primary-room-chief") {
+    const data = window.__look.data, calls = window.__look.calls;
+    const sets = calls.filter(call => call.method === "members.set_primary");
+    const column = document.querySelector('.mb-col');
+    // The star sits at the corner of the face it marks, inside its row, and clear of the name beside or under it.
+    const onFace = row => {
+      const star = row.querySelector('.mb-star'), face = row.querySelector('.av'), at = row.getBoundingClientRect();
+      const s = star.getBoundingClientRect(), f = face.getBoundingClientRect();
+      require(s.width >= 16 && s.height >= 16 && Math.abs(s.width - s.height) < 1, "the star is a round mark of its own");
+      require(s.left < f.right && s.right > f.left && s.top < f.bottom && s.bottom > f.top, "the star touches its face");
+      require(s.left >= at.left - 1 && s.right <= at.right + 1 && s.top >= at.top - 1 && s.bottom <= at.bottom + 1, "the star stays inside its row");
+      const text = row.querySelector('.mb-row-main, b');
+      if (text && visible(text) && !column.classList.contains('is-collapsed')) {
+        const t = text.getBoundingClientRect();
+        require(s.right <= t.left + 1 || s.bottom <= t.top + 1, "the star does not cover the name");
+      }
+      return { size: s.width, color: getComputedStyle(star).backgroundColor };
+    };
+    const starred = () => [...document.querySelectorAll('.mb-col .mb-star')].map(star => star.closest('[data-member]').dataset.member);
+    if (name === "primary-picker") {
+      const dialog = document.querySelector('.mb-dialog.mb-primary-picker');
+      require(visible(dialog), "the picker window is open");
+      require(dialog.querySelector('h2').textContent === "選擇主要成員", "it is titled 選擇主要成員");
+      const choices = [...dialog.querySelectorAll('[role="radio"]')];
+      require(choices.length >= 3 && choices.every(button => button.tagName === 'BUTTON' && visible(button)), "the members are real buttons");
+      require(!dialog.querySelector('select, input[type=radio], input[type=checkbox]'), "no native controls");
+      require(data.primaryId === 1 && choices.some(button => button.dataset.id === '0') && !choices.some(button => button.dataset.id === '1'), "小晴 is the primary now and is not offered, and Raphael can be chosen again");
+      const picked = choices.filter(button => button.getAttribute('aria-checked') === 'true');
+      require(picked.length === 1 && visible(picked[0].querySelector('svg.i')), "one member is chosen, and it carries a check");
+      const set = dialog.querySelector('[data-dlg="set"]'), actions = [...dialog.querySelectorAll('.mb-dlg-act .btn')];
+      require(!set.disabled && set.classList.contains('pri'), "設為主要 is the enabled primary action");
+      require(actions.at(-1) === set && actions.at(-2)?.dataset.dlg === 'cancel', "the primary action is rightmost and 取消 is just left of it");
+      const box = dialog.getBoundingClientRect();
+      require(box.left >= 0 && box.right <= innerWidth && box.top >= 0 && box.bottom <= innerHeight, "the window is inside the viewport");
+      for (const button of choices) {
+        const b = button.getBoundingClientRect();
+        require(b.left >= box.left && b.right <= box.right && b.height >= 40, `${button.textContent.trim()} is a whole row inside the window`);
+      }
+      require(sets.length === 0 && data.primaryId === 1, "nothing is set before 設為主要 is pressed");
+      return { check: name, choices: choices.length, picked: picked[0].dataset.id };
+    }
+    if (name === "primary-set") {
+      require(sets.length === 1 && sets[0].params.id === 1 && data.primaryId === 1, "one boundary call chose 小晴 and nothing else");
+      require(!document.querySelector('.mb-dialog'), "the window closed");
+      require(!calls.some(call => /^(rooms|routines|worker|agent)\./.test(call.method ?? '') && /(update|create|delete|rerun|cancel|ask|stop)/.test(call.method)), "no room, routine, task or conversation was touched");
+      let size = null;
+      if (visible(column)) {
+        require(starred().join() === '1', `only 小晴 wears the star in the column, found ${starred().join()}`);
+        size = onFace(column.querySelector('[data-member="1"]'));
+        require(!column.querySelector('[data-member="0"] .mb-star'), "Raphael has no star now");
+        require(column.querySelector('[data-member="0"]').textContent.trim() === '拉斐爾' || column.classList.contains('is-collapsed'), "Raphael is still first, with his name");
+      }
+      const details = document.querySelector('.mb-det');
+      require(visible(details) && details.querySelectorAll('.mb-star').length === 1, "the details of the member wear the star too");
+      const face = details.querySelector('.mb-who-face'), badge = face.querySelector('.mb-star');
+      require(visible(badge) && !badge.closest('button') && badge.getAttribute('aria-label') === '主要聯絡人', "the details' star is a named mark beside the picture button");
+      const f = face.querySelector('.av').getBoundingClientRect(), s = badge.getBoundingClientRect();
+      require(s.left < f.right && s.right > f.left && s.top < f.bottom && s.bottom > f.top, "the details' star touches the face");
+      return { check: name, column: visible(column), size };
+    }
+    require(data.primaryId === 1 && sets.length === 0, "the primary contact is 小晴 from the start, and nothing changes it here");
+    const room = data.rooms[0], faces = [...document.querySelectorAll('.au-room-heading .au-room-participant')];
+    require(room.member_ids.includes(0) && faces.length === room.member_ids.length, "the header names every member of the room, Raphael included");
+    const crowned = faces.filter(face => face.querySelector('.au-room-crown'));
+    require(crowned.length === 1 && crowned[0].dataset.tooltip.startsWith('拉斐爾'), "the crown is Raphael's alone: he is the chief of staff, not the primary contact");
+    const card = document.querySelector('.au-room-wrapup');
+    require(visible(card) && card.querySelector('.au-room-author')?.textContent === '拉斐爾', "Raphael writes the wrap-up");
+    require(document.querySelectorAll('.au-room-wrapup').length === 1 && (document.querySelector('.au-room-thread .tn:last-child .au-room-wrapup') || document.querySelector('.au-room-thread .tn:last-child.au-room-wrapup')), "the room ends with its one wrap-up");
+    let size = null;
+    if (visible(column) && !column.classList.contains('is-collapsed')) {
+      require(starred().join() === '1', `only 小晴 wears the star beside the room list, found ${starred().join()}`);
+      size = onFace(column.querySelector('[data-member="1"]'));
+    } else if (visible(column)) {
+      require(starred().join() === '1', "the strip marks 小晴 alone");
+    }
+    return { check: name, crowned: crowned[0].dataset.tooltip, column: visible(column), size };
   }
   if (name === "usage-allowance-link") {
     const heading = document.querySelector(".run-allowance h3");

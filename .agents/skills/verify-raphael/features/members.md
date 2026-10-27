@@ -5,6 +5,7 @@
 Remembered member-column collapse, original Raphael emblem, identity/personality, profile editing, avatar selection, memory, routines, skills,
 commands and voice settings, and the Permissions tab's two switches: ask before contacting colleagues, and write mail as a draft for the owner to send
 (`draft_first`, on by default; see the P08c section of [Conversation](conversation.md)). Members have independent conversations.
+The owner's primary contact (P15b-1, the last section) wears a star in the sidebar and in its details.
 
 ## How to get to it (user POV)
 
@@ -98,6 +99,36 @@ waiting on, after 30, 60, 120 and 240 s); quick questions and turns that already
 acted end at once with a specific rate-limit message, and a background task keeps that message
 with the reason `cli_rate_limited`. Offline proof: core/tests/agent/test_cli_brains.py,
 core/tests/background/test_room_cli.py and core/tests/members/test_cli_brains.py.
+
+## The primary contact (P15b-1)
+
+The owner chooses which member is their primary contact, the Bot that new work is brought to and that hands it to the colleague it belongs to.
+Raphael is the primary until another is chosen, and exactly one is at a time. Choosing is 設為主要 in a member's menu (the row's more button
+or a right click): it opens 「選擇主要成員」, a list of real buttons (Raphael and the other visible members, not the primary now) with the member whose menu
+it was chosen already, 取消 and the primary 設為主要. The primary wears a round star at the corner of its face in the column, the face strip and the details.
+Raphael's row has no menu, so he is chosen again from another member's menu. Raphael stays the chief of staff, in every room and the one wrap-up, whoever
+the primary is: nothing about rooms, tasks, exchanges or conversations changes when the primary does.
+
+```powershell
+npm run look -- primary-contact-picker primary-contact-set --theme both --width 1120,720,1920x1080
+npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded details raphael-details --theme both --width 1120,720,1920x1080
+```
+
+`primary-contact-picker` opens the window from 小森's menu while 小晴 is the primary (fixture key `primaryMember`) and checks the title, that
+the members are buttons of one radio group with no native control, that 小晴 is not offered and Raphael is, one choice with its check, 取消 just left
+of the primary 設為主要, and that nothing was set yet. `primary-contact-set` chooses 小晴 and presses 設為主要: one `members.set_primary` call, the star on
+her row (and no longer on Raphael's) and on the face in her details, and no room, routine, task or conversation call. The scenes of the
+column and the details show Raphael's star while he is the primary. The IPC double keeps `primaryId` as the core keeps the flag: the list's
+`team_context.primary_id` says it, a hidden or deleted primary is Raphael again, and a hidden member cannot be chosen.
+
+The core keeps the flag on the member's row (schema v39, a unique index) and the roster is the one place it is read from: the snapshot's `primary_id`
+(and `chief_id`, always 0) is in its revision, and every prompt (an API turn, a resumed CLI thread's per-turn team block, a background task or
+routine, each room turn) is built from it fresh. Offline proof: core/tests/members/test_primary.py (one at a time and its persistence, hide and delete hand it
+back to Raphael, nothing else changes, each room keeps Raphael and concludes once whenever the primary changes, a roster that kept the old one
+is told apart on each path), core/tests/background/test_primary.py, and Guardian S02 (every Bot names the new primary and Raphael as the chief after the
+owner changes it; a brain that keeps the old one, never says it or mixes the two up fails on both brain paths), S03.primary-dispatch (the primary hands
+the work to 信件助理 itself) and S07.meeting (held with a primary that is not Raphael). Live brains and the native shell (the persisted choice
+after a relaunch, the allowlisted `members.set_primary`) need their own acceptance.
 
 ## Editable proposals and first Bot setup (P05/P05a)
 
