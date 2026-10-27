@@ -11,6 +11,7 @@ from ..integrations.config import ServerConfig, tool_record
 from ..integrations.oauth import open_in_browser
 from ..integrations.toolsets import tool_kind
 from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
+from .apps import APPS
 from .composio import KEY, ComposioClient, segment, trusted_url
 from .google import PREFIX, READ_TOOLS, TOOLS, GoogleClient, permitted, scopes_for
 from .http import ConnectorFailure
@@ -520,6 +521,27 @@ class ConnectorsService:
                         and permitted(name, entry.granted_scopes, entry.draft_only)
                         and permitted(name, scopes_for(entry.gmail, entry.calendar), entry.draft_only))
         return False
+
+    def ready_tools_of(self, entry: Connector) -> list[str]:
+        """The tools of one connector that a call can reach now: those the gate itself lets through
+        (`tool_available`, `allow_call`) when the connector is signed in, on, and its server is on. The count
+        of the owner's apps (`integrations.inventory`) and the cards of a chat both use this."""
+        server = self.hub._config.get(GOOGLE_SERVER if entry.kind == "google" else COMPOSIO_SERVER)
+        if server is None or not server.enabled:
+            return []
+        if entry.kind == "google":
+            return [name for name in TOOLS if self.tool_available(GOOGLE_SERVER, name)]
+        if entry.status != "ACTIVE" or not entry.enabled or not self.tool_available(COMPOSIO_SERVER, META_EXECUTE):
+            return []
+        return [name for name in entry.enabled_tools if name not in entry.disabled_tools]
+
+    @staticmethod
+    def services_of(entry: Connector, ready: list[str]) -> list[str]:
+        """The apps a connector reaches now, by the ids a Composio toolkit and the cards share: a toolkit is
+        its own slug, the owner's Google is each product whose tools can be called."""
+        if entry.kind == "google":
+            return [app.id for app in APPS.values() if any(name.startswith(app.prefix) for name in ready)]
+        return [entry.id.removeprefix("composio:")]
 
     def tier(self, server_id, name):
         if server_id == COMPOSIO_SERVER:

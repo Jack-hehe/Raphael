@@ -35,7 +35,7 @@ from ..protocol import RpcError, invalid_params
 from .apps import APPS, App
 from .composio import KEY
 from .google import PREFIX
-from .service import COMPOSIO_SERVER, GOOGLE_SERVER, META_EXECUTE
+from .service import GOOGLE_SERVER
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +194,10 @@ class ConnectorCards:
             google = [name for name in app.google_tools if self._connectors.tool_available(GOOGLE_SERVER, name)]
             if app.reads and set(app.reads) <= set(google):
                 return google
+            # The same test the count of the owner's apps makes (`ConnectorsService.ready_tools_of`).
             entry = self._connectors.store.connectors.get("composio:" + app.composio)
-            if (entry is not None and entry.status == "ACTIVE" and entry.enabled and entry.enabled_tools
-                    and self._connectors.tool_available(COMPOSIO_SERVER, META_EXECUTE)):
-                return list(entry.enabled_tools)
+            if entry is not None and (ready := self._connectors.ready_tools_of(entry)):
+                return ready
         except Exception as exc:
             logger.warning("Could not read an app's connection: %s", type(exc).__name__)
         return []

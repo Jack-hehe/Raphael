@@ -159,6 +159,12 @@ describe("rendered look checks", () => {
     window.document.querySelector("#offscreen").getBoundingClientRect = () => ({ left: 10, top: 200, right: 100, bottom: 230, width: 90, height: 30 });
     expect(auditDocument(window.document, { width: 1120, height: 900 }).rawMarkdown).toEqual([]);
   });
+  it("permits Markdown inside an editor field but still rejects it in the text beside the field", () => {
+    const window = new Window();
+    window.document.body.innerHTML = '<textarea id="skill-text">---\nname: weekly\n---\n# Weekly\n\n- [ ] one\n**bold**</textarea><p>## Heading</p>';
+    for (const element of window.document.querySelectorAll("*")) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 100, bottom: 40, width: 90, height: 30 });
+    expect(auditDocument(window.document, { width: 1120, height: 900 }).rawMarkdown.map(item => item.text)).toEqual(["## Heading"]);
+  });
   it("does not translate user-entered textarea data but still audits its UI attributes", () => {
     const window = new Window();
     window.document.body.innerHTML = '<textarea placeholder="Message">C:/Work/Team notes</textarea><textarea aria-label="名稱">User supplied text</textarea>';

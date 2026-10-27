@@ -15,6 +15,9 @@ reports belong in Reports.
 Launch the app, complete onboarding, click Home (first in the rail), or click the
 Raphael brand. A report opens its member's conversation at that exact turn;
 routines open Automations. Spend and allowance buttons open Usage, and the dictation card icon opens Dictation. The Today icon and timeline items open the calendar. The status report keeps Raphael's emblem visible.
+The bottom of the sidebar holds 連結應用程式, above Settings, with the number of connected apps
+(a badge on its icon in the 拉斐爾 page's rail and in the sidebar at 880px and narrower); it opens
+Settings > Connections (see [Connections and MCP](connections-mcp.md)).
 
 ## Driving it with look
 
@@ -28,6 +31,8 @@ Inspect every contact sheet and the full-size home/report images. The home-720
 scene scrolls to the lower usage and dictation area at all three widths. The home-report
 assertion checks member history, conversation 11, around_id 2 and the rendered turn.
 The after-onboarding scene also asserts that Home is selected and first in the rail.
+Every home scene's `home-overview` check also asserts that each page is named on one line in the
+sidebar; at 720px 連結應用程式 shows its number as a badge on its icon so that its name fits.
 
 Timeline actions keep visible token-based frames (R-UI-18), including calendar events.
 

@@ -2,12 +2,28 @@
 
 ## Sub-features
 
-Settings > Connections contains one installed list for Composio toolkits, private
-Google and custom MCP servers. Every row has a bare service mark (or a generic plug),
-name, one-line description, service switch and detail chevron. Managed bridge
+Settings > Connections contains one connected view (the tab 已連結) for Composio
+toolkits, private Google, custom MCP servers and the members' private skills. Every
+row has a bare service mark (or a generic plug, or the member's face for a skill),
+name, one-line description, switch and detail chevron. Managed bridge
 servers are not duplicate rows. Tool switches are grouped by write/read in the
 detail. Disconnect lives in the detail overflow with a second-press confirmation.
 Custom MCP add/edit/test, command/HTTP, JSON paste and local discovery stay reachable.
+
+The rows sit under three headings: 應用程式 (their tools can be called now), 尚未連結
+(waiting for sign-in, failed, a duplicate of another connection, all tools off or
+unreadable, each with its reason) and 私人技能. An app is connected only when its tools
+can be called now, and the core defines that once (`integrations/inventory.py`); the
+sidebar's 連結應用程式 entry (a badge on its icon in the rail and the narrow sidebar), the tab's number, the rows
+under 應用程式 and the roster every model is given (`TeamContextSnapshot.connected`)
+all show that one count. An unreadable inventory shows 「—」 instead of a number (the
+entry's accessible name says it cannot be read), and an app whose state cannot be read
+says 「無法讀取」 on its row.
+An app's detail shows its account(s) by status, `已開啟 N/M 個工具` with a switch per
+tool, signing in again and, in the overflow, disconnect. A private skill's page shows
+its name, who has it, its description (when it is used), a switch, the whole
+SKILL.md as editable text and 刪除技能. Sharing an app or a skill is not offered
+until members can share across users (P13).
 
 The Store uses connectors.catalog and connectors.categories, shared search/dropdown,
 paged cards, browser sign-in progress and already-added state. A missing Composio key
@@ -18,10 +34,11 @@ and does not prove remote image availability.
 
 ## How to get to it (user POV)
 
-Open Settings > Connections. Use Installed to open a service detail, change its
-switches or open its overflow. Add offers custom command/URL, pasted JSON and import.
+Press 連結應用程式 at the bottom of the sidebar (the plug with a count at the bottom
+of the rail), or open Settings > Connections. Use 已連結 to open a service
+detail or a private skill, change their switches or open an overflow. Add offers custom command/URL, pasted JSON and import.
 Use Store to save a Composio project key, filter the catalog and Add a service;
-complete its login in the browser, then return to Installed.
+complete its login in the browser, then return to 已連結.
 
 ## Driving it with look
 
@@ -29,7 +46,16 @@ complete its login in the browser, then return to Installed.
 npm run look -- plugins-installed plugins-detail plugins-store plugins-store-category plugins-store-key plugins-connecting --theme both --width 1120,720,1920x1080
 npm run look -- connections connections-hover server-menu connections-add-menu connections-command connections-test connections-url connections-edit connections-delete --theme both --width 1120,720,1920x1080
 npm run look -- connections-paste connections-paste-preview connections-discover connections-empty connections-discover-empty --theme both --width 1120,720,1920x1080
+npm run look -- connect-apps-categories connected-apps-skills connected-apps-unreadable connector-account-tools connector-uninstalled skill-private-detail --theme both --width 1120,720,1920x1080
 ```
+
+The last command is the apps and skills set (`scenes/apps.mjs`). Each scene enters
+through the sidebar's 連結應用程式; `apps-count` compares the badge, the tab's
+number, the rows and the roster, `apps-unreadable` checks that a core that cannot
+list the apps leaves 「—」 and no number in all of them, `connector-tools` checks N/M
+against the switches and that the actions sit flush at the dialog's edge, and
+`skill-page` checks the action order and that the document is whole and starts at its first line. Also run `home` (the sidebar entry on the wide
+and compact layouts) and the `plugins-*` scenes above for regressions.
 
 Inspect every contact sheet and detail/store/key/menu full-size image, especially
 720px scrolling, ellipsized descriptions and overflow confirmation. Browser scenes
@@ -53,6 +79,20 @@ catalog entries in browser evidence are synthetic. Browser network is blocked ou
 the owned Vite origin. These scenes cannot prove OAuth, OS credential persistence,
 remote logo hosting, provider schemas, account expiry/revocation or actual tools.
 
+The count is the core's, never the page's: `integrations.inventory` returns it with each
+app's state, `connections()` carries the same states, and a change of either notifies
+`integrations.changed` (a failure that appears or recovers, a connection added or
+removed, a switch). A tool switched off or an app disconnected leaves the offered tools of both
+brains at once and the gate refuses it too, also when the owner had said 一律允許 (the
+narrow rule `tool:<key>` never revives it; the rule itself stays listed in Settings).
+The account is shown by status only (「帳號 N」, 「你的 Google 帳號」, 「已登入」) because the core
+keeps no name or address for one. A skill's trigger is its description plus its switch;
+deleting it, or turning it off, removes it from the prompt and from `skill_read`.
+`members.skills.read` is in the shell's method allowlist (`commands.rs`), covered by its
+unit test and compiled only in CI. Fixture connections and skills are synthetic; the
+IPC double computes the inventory from them as the core does, so a scene cannot prove
+that the core's real states (a provider's account status, a failing server) map the same way.
+
 A chat's secret card (see [Conversation](conversation.md)) fills a secret a connection already declares: it writes the same
 vault slot `integrations.add` and `integrations.update` do (`<server>:header:<name>` or `<server>:env:<name>`), never any
 other name, so Composio's project key, Google's client and the model keys are out of its reach.
@@ -73,6 +113,13 @@ and Calendar tool switches and revocation. Home calendar reads only through the
 enabled private calendar_list_events tool. From a chat, ask for a nonce mail, connect from its Gmail card,
 cancel once, finish once and reconnect once; only that task resumes and reads the mail. Test a custom local MCP server with
 add/test/edit/paste/discover, a harmless call and removal; stop only that test server.
+
+Count the connected apps by hand against the sidebar: connect one, let a sign-in expire, add
+the same service twice and uninstall one, and watch the number follow each time; ask a CLI
+and an API brain how many apps are connected. Switch a tool off, start a new turn and a
+running one, and confirm neither brain offers or runs it; do the same after uninstalling,
+once with 一律允許 chosen earlier. Edit a private skill's document, ask for what its
+description names and see it used; delete it and see that it is not.
 
 ## UI audit regression coverage
 

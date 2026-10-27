@@ -5,7 +5,7 @@ request both themes; local UI handoffs select affected scenes at 720/1120/1920x1
 Reserve the full scene matrix for integration/release acceptance, CI, explicit
 requests or genuinely app-wide changes. Shared components select representative
 affected consumers rather than unrelated features. Scene definitions in `app/scripts/look/scenes/`
-are the executable source: 257 scenes, 1542 combinations across both themes and
+are the executable source: 263 scenes, 1578 combinations across both themes and
 1120, 720 and 1920x1080. Explicit viewport heights use the shared `options.heights`
 parser; a plain width retains the default 900px height. Native journeys cover
 behavior the fixture cannot prove.
@@ -19,7 +19,7 @@ behavior the fixture cannot prove.
 | [Team and rooms](team-and-rooms.md) | Grouped board, member navigation, rooms and mentions |
 | [Dictation](dictation.md) | Overview, history, dictionary, shortcuts, microphone and paste |
 | [Settings and appearance](settings-appearance.md) | Profile/preferences, skins, languages, models and app information |
-| [Connections and MCP](connections-mcp.md) | Unified plugins, managed store, MCP setup/discovery and Home's private Google calendar read |
+| [Connections and MCP](connections-mcp.md) | Connected apps and their count, the sidebar's connected-apps entry, an app's accounts and tools, members' private skills, managed store, MCP setup/discovery and Home's private Google calendar read |
 | [Usage](usage.md) | Spend overview, grouping, CSV and CLI allowances |
 | [Onboarding](onboarding.md) | First launch, first Bot choices and confirmed profile |
 

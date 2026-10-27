@@ -843,8 +843,20 @@ export interface TeamContextSnapshot {
   schema_version: number; revision: string; self_id: number; count: number;
   primary_id: number; chief_id: number; inventory_state: string; room_member_ids: number[] | null;
   members: { id: number; name: string; role: string; blurb: string }[];
-  apps: { id: string; name: string; enabled: boolean; state: string }[];
+  /** The apps of the owner, as `integrations.inventory` lists them: the roster, the sidebar and the connections page read one inventory. */
+  apps: InventoryApp[];
+  /** The apps whose tools can be called now; null while the inventory is not complete. */
+  connected: number | null;
 }
+
+/** Why an app is, or is not, one of the connected ones (`core/integrations/inventory.py`). */
+export type AppState = "ready" | "duplicate" | "disabled" | "no_tools" | "needs_sign_in" | "needs_secret" | "error" | "unchecked" | "unknown";
+
+/** One app of the owner's inventory: only its name, its state and how many of its tools can be called now. */
+export interface InventoryApp { id: string; name: string; enabled: boolean; state: AppState; tools: number; connected: boolean }
+
+/** `integrations.inventory`: the owner's apps and how many are connected (`count` is null unless `state` is `complete`). */
+export interface AppsInventory { state: "complete" | "partial" | "unknown"; count: number | null; apps: InventoryApp[] }
 
 /** What `members.create` takes (`ui_language` names the language of the routine it may offer). */
 export interface NewMember {
@@ -1042,6 +1054,8 @@ export interface ConnectionGroup {
   source?: "composio" | "google";
   description?: string;
   logo?: string;
+  /** The accounts a managed service is signed in with, by their status (`ACTIVE`, `EXPIRED`, ...): never an account's name or id. */
+  accounts?: { status: string }[];
   disabled_tools?: string[];
   tools_state?: "loading" | "failed" | "ready";
   result_size_limit?: number;

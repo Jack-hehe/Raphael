@@ -37,6 +37,13 @@ def claims_on(reply, app):
                for line in reply.splitlines() if app in line)
 
 
+def stated_connected(reply):
+    """The number of connected apps a reply states in the form the roster question asks for (「已連結應用程式：N 個」);
+    None when it states none."""
+    found = re.search(r'已連結應用程式[：:]\s*[*_`]*(\d+)', reply)
+    return int(found.group(1)) if found else None
+
+
 def checked(server):
     """A fixture connection as a connection the owner added is: its tools were listed then, so the roster calls it
     ready. Live, a never-checked Guardian with tools made a wrap-up say there was no tool to read the mail with."""
@@ -80,6 +87,12 @@ class RecordingConnector:
                    "received_at": time.monotonic(), "gate_passed": True}
         self.receipts.append(receipt)
         return CallOutcome('test_mode: true; receipt: ' + receipt["receipt_id"] + '; nonce: ' + self.nonce, False)
+
+    def invalidate(self, *args):
+        """The owner uninstalled a connection or changed it: nothing is held here, but a production connector behind
+        this one drops what it holds."""
+        if self.production is not None:
+            self.production.invalidate(*args)
 
     async def aclose(self):
         pass
@@ -599,7 +612,8 @@ class RpcDriver:
                 self.app.integrations._config.remove('guardian-mail')
             for member in [0,*ids]:
                 authority = self.app.members.team_context(member, 'zh-TW')
-                result = await self.ask('請根據 TeamContextSnapshot 列出全員名字與原文角色、團隊總人數、主要窗口、幕僚長及應用程式連線狀態；不要輸出 JSON。', member=member)
+                result = await self.ask('請根據 TeamContextSnapshot 列出全員名字與原文角色、團隊總人數、主要窗口、幕僚長及應用程式連線狀態，'
+                                        '並用「已連結應用程式：N 個」的格式寫出已連結的數量；不要輸出 JSON。', member=member)
                 turns = (await self.app.call('agent.history.list', {'member_id':member}))['turns']
                 latest = max(turns, key=lambda turn: turn['id']) if turns else {}
                 reply = '\n'.join(m['text'] for m in latest.get('messages', []) if m['kind']=='reply') or result.get('text','')
@@ -611,6 +625,14 @@ class RpcDriver:
                     reasons.append('roster_primary_or_chief_missing')
                 if refresh and claims_on(reply, 'Guardian'):
                     reasons.append('roster_disconnected_app_stale')
+                # The number of connected apps is the roster's own (the one the sidebar and the page show), not a count of
+                # the apps listed: after the owner uninstalls one it goes down with it. No number is owed while it is unknown.
+                if authority['connected'] is not None:
+                    stated = stated_connected(reply)
+                    if stated is None:
+                        reasons.append('roster_connected_count_missing')
+                    elif stated != authority['connected']:
+                        reasons.append('roster_connected_count_stale')
         return reasons, result
 
     async def settled(self):

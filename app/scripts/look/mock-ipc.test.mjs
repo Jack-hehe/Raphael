@@ -178,3 +178,70 @@ describe("shared look IPC boundary", () => {
     expect((await first.__TAURI_INTERNALS__.invoke("device_settings_get")).ui_language).toBe("ja");
   });
 });
+
+describe("the apps and the private skills at the IPC boundary", () => {
+  const ask = (target, method, params = {}) => target.__TAURI_INTERNALS__.invoke("core_call", { method, params });
+  const toolkit = (slug, over = {}) => ({ id: `composio:${slug}`, kind: "composio", name: slug, status: "ACTIVE", enabled: true, enabled_tools: [`${slug}_one`, `${slug}_two`], disabled_tools: [], accounts: [{ id: `ca_${slug}`, status: "ACTIVE" }], ...over });
+  const google = { id: "google", kind: "google", status: "ACTIVE", enabled: true, enabled_tools: ["gmail_list_messages", "calendar_list_events"], disabled_tools: [] };
+
+  it("counts the apps whose tools can be called now and lists the others with their state, as the core's inventory does", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { servers: [], managedConnectors: [
+      toolkit("notion"), toolkit("slack", { status: "INITIALIZING" }), toolkit("linear", { status: "FAILED" }), toolkit("trello", { enabled: false }),
+      toolkit("jira", { disabled_tools: ["jira_one", "jira_two"] }), google, toolkit("gmail"), toolkit("googlecalendar"),
+    ] } }, target);
+    const inventory = await ask(target, "integrations.inventory");
+    expect(Object.fromEntries(inventory.apps.map(app => [app.id, app.state]))).toEqual({
+      "composio:notion": "ready", "composio:slack": "needs_sign_in", "composio:linear": "error", "composio:trello": "disabled", "composio:jira": "no_tools",
+      google: "ready", "composio:gmail": "duplicate", "composio:googlecalendar": "duplicate" });
+    expect([inventory.state, inventory.count]).toEqual(["complete", 2]);
+    expect(inventory.apps.filter(app => app.connected).map(app => app.id)).toEqual(["composio:notion", "google"]);
+  });
+
+  it("gives the roster of a model the same inventory and the same count as the sidebar and the page", async () => {
+    const target = {};
+    installMock(fixture, {}, target);
+    const inventory = await ask(target, "integrations.inventory");
+    const { team_context } = await ask(target, "members.list");
+    expect([team_context.inventory_state, team_context.connected, team_context.apps]).toEqual(["complete", inventory.count, inventory.apps]);
+    // and it moves as the core moves it: an uninstall, a tool switched off, an app switched off
+    await ask(target, "connectors.disconnect", { id: "composio:notion" });
+    expect((await ask(target, "integrations.inventory")).count).toBe(inventory.count - 1);
+    await ask(target, "connectors.set_tools", { id: "google", enabled: false });
+    const after = await ask(target, "integrations.inventory");
+    expect(after.count).toBe(inventory.count - 2);
+    expect((await ask(target, "members.list")).team_context.connected).toBe(after.count);
+  });
+
+  it("is an inventory that cannot be read when the scene says so", async () => {
+    const target = {};
+    installMock(fixture, { fixture: { inventoryUnreadable: true } }, target);
+    expect(await ask(target, "integrations.inventory")).toEqual({ state: "unknown", count: null, apps: [] });
+    const { team_context } = await ask(target, "members.list");
+    expect([team_context.inventory_state, team_context.connected]).toEqual(["unknown", null]);
+  });
+
+  it("reads, edits, switches and deletes a skill of a member as the core does, and refuses a document it cannot keep", async () => {
+    const target = {};
+    const skill = (id, name, over = {}) => ({ id, member_id: 1, name, description: `Use for ${name}`, enabled: true, source: "owner/repo", ...over });
+    const state = installMock(fixture, { fixture: { skills: [skill(7, "summary"), skill(8, "notes", { text: "---\nname: notes\ndescription: Use for notes\n---\nBody" })] } }, target);
+    const list = async () => (await ask(target, "members.skills.list", { member_id: 1 })).skills;
+    expect((await list()).map(item => Object.keys(item).includes("text"))).toEqual([false, false]); // the list holds no document
+    const read = await ask(target, "members.skills.read", { member_id: 1, id: 7 });
+    expect(read.text).toBe("---\nname: summary\ndescription: Use for summary\n---\n");
+    expect(read.skill).toMatchObject({ id: 7, name: "summary" });
+    const edited = "---\nname: summaries\ndescription: Use for a summary of a thread\n---\nStart with the verdict.";
+    const answered = await ask(target, "members.skills.update", { member_id: 1, id: 7, text: edited });
+    expect(answered.skill).toMatchObject({ name: "summaries", description: "Use for a summary of a thread", enabled: true });
+    expect((await ask(target, "members.skills.read", { member_id: 1, id: 7 })).text).toBe(edited);
+    for (const [text, message] of [["no frontmatter", "name must not be empty"], ["---\nname: x\n---\n", "description must not be empty"],
+      ["---\nname: Notes\ndescription: Use\n---\n", "a skill with that name already exists"]])
+      await expect(ask(target, "members.skills.update", { member_id: 1, id: 7, text })).rejects.toThrow(message);
+    expect((await ask(target, "members.skills.read", { member_id: 1, id: 7 })).text).toBe(edited); // refused: nothing changed
+    expect((await ask(target, "members.skills.update", { member_id: 1, id: 8, enabled: false })).skill.enabled).toBe(false);
+    await expect(ask(target, "members.skills.read", { member_id: 2, id: 7 })).rejects.toThrow("no such member skill");
+    expect(await ask(target, "members.skills.delete", { member_id: 1, id: 7 })).toEqual({ deleted: true });
+    expect((await list()).map(item => item.id)).toEqual([8]);
+    expect(state.errors).toEqual([]);
+  });
+});

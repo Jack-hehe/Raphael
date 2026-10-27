@@ -36,7 +36,9 @@ export function auditDocument(doc = document, viewport = { width: innerWidth, he
   };
   const outsideViewport = [], horizontalOverflow = [], missingI18nKeys = [], nativeControls = [], invalidDurations = [], mixedLanguage = [], rawMarkdown = [], productRules = [];
   const markdownPattern = /(?:^|\r?\n)[\t ]*(?:#{1,6}(?:[\t ]|$)|-\s+\[[ xX]\])|\*\*[^*\r\n]+\*\*|`{3,}/;
+  // A textarea holds the document its owner is editing (a private skill's SKILL.md), so Markdown there is data, not unrendered copy.
   const checkMarkdown = element => {
+    if (element.matches("textarea")) return;
     for (const node of element.childNodes) if (node.nodeType === 3 && markdownPattern.test(node.textContent))
       rawMarkdown.push({ ...describe(element), text: node.textContent.trim().slice(0, 200) });
   };

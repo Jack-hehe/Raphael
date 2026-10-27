@@ -1,10 +1,16 @@
-// One installed list joins managed toolkits, private Google and custom MCP servers.
-// Details group tool switches by write/read; removal stays in the overflow menu.
-// The store uses the managed catalog, shared category dropdown and browser login.
+// One connected view joins managed toolkits, private Google, custom MCP servers and the members' private skills:
+// the apps that can be called now first (their number is the core's, the one the sidebar and every model's roster
+// show), then the ones that cannot, and the skills. Details group tool switches by write/read and say how many are
+// on; removal stays in the overflow menu. The store uses the managed catalog, shared category dropdown and browser login.
 // Existing custom MCP setup and device reauthentication stay available.
 // Secrets go directly to the core vault and never enter the render snapshot.
 
 import * as api from "./api";
+import { type InventoryView, appOf, countText, isConnected, whyNot } from "./apps-inventory";
+import {
+  type SkillItem, type SkillPage, loadSkillItems, sameSkill, skillChanged, skillDialogHTML, skillErrorText, skillPage, skillsSectionHTML,
+} from "./connection-skills";
+import { confirmDelete } from "./member-dialogs";
 import { managedGroup, pluginLogoURL, pluginTool, storePlugin, type ManagedConnector } from "./plugins-data";
 import { openMcpImport } from "./mcp-import";
 import { isTopLayer, registerDismissal } from "./dismissals";
@@ -86,6 +92,12 @@ export interface ConnectionsView {
   groups: ConnectionGroup[] | "loading" | "failed";
   /** The store, the same way. */
   catalog: StoreService[] | "loading" | "failed";
+  /** The owner's apps as the core counts them: the number beside 「已連結」 is its count, the one of the sidebar and the roster. */
+  inventory: InventoryView;
+  /** The private skills of the members, beside the apps. */
+  skills: SkillItem[] | "loading" | "failed";
+  /** The page of a skill that is open over the list. */
+  skill: SkillPage | null;
   audit: AuditEntry[];
   tab: Tab;
   /** What was typed in the search box. */
@@ -113,6 +125,9 @@ export const emptyConnectionsView = (): ConnectionsView => ({
   configured: null, categories: [], category: "", nextCursor: null, keyBusy: false, keyError: false,
   groups: "loading",
   catalog: "loading",
+  inventory: "loading",
+  skills: "loading",
+  skill: null,
   audit: [],
   tab: "installed",
   search: "",
@@ -221,6 +236,10 @@ function lineOf(g: ConnectionGroup, v: ConnectionsView): string {
   if (needsLogin(g)) return st("err", t("conn.status.relogin"));
   if (g.status === "error") return st("err", t("conn.status.error", { p0: failureText(g.error) }));
   if (g.status === "unchecked") return esc(t("conn.status.unchecked"));
+  // On and well, and still not one of the connected apps: a second way to an app that is counted, or every tool off.
+  const state = appOf(v.inventory, g.id)?.state;
+  const why = state ? whyNot(state) : null;
+  if (why) return st(why === "conn.state.unknown" ? "warn" : "idle", tr(why));
   const entry = entryOf(g, v);
   return esc(g.description || (entry ? words(entry.summary) : where(g)));
 }
@@ -238,9 +257,10 @@ export const connectionsAddHTML = (): string =>
   `<span>${esc(t("conn.addMenu"))}</span>${ico("down")}</button>`;
 
 function barHTML(v: ConnectionsView): string {
-  const installed = Array.isArray(v.groups) ? v.groups.length : 0;
+  // 「已連結」 counts the apps whose tools can be called now, as the core counts them (the sidebar's number and the roster's): not the rows below it.
+  const installed = countText(v.inventory);
   const store = Array.isArray(v.catalog) ? v.catalog.length : 0;
-  const tab = (id: Tab, label: string, count: number) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
+  const tab = (id: Tab, label: string, count: number | string) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
   return (
     `<div class="cs-bar">` +
     tabs([tab("installed", t("conn.tab.installed"), installed), tab("store", t("conn.tab.store"), store)], v.tab, { label: t("conn.tabs"), kind: "nav", plain: true }) +
@@ -269,13 +289,32 @@ function itemHTML(g: ConnectionGroup, v: ConnectionsView): string {
   );
 }
 
+/** The private skills the search leaves: none while they are read, and the failure to read them is told where they would be. */
+function skillItems(v: ConnectionsView): SkillItem[] {
+  return Array.isArray(v.skills) ? v.skills.filter(({ member, skill }) => matches(v.search, skill.name, skill.description, member.name)) : [];
+}
+
 function installedHTML(v: ConnectionsView): string {
   if (v.groups === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
   if (v.groups === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-connections"')}</div>`;
   const shown = v.groups.filter((g) => matches(v.search, g.name, g.description ?? "", entryOf(g, v) ? words(entryOf(g, v)!.summary) : where(g)));
-  if (!v.groups.length) return `<p class="cs-none">${esc(t("conn.emptyInstalled"))}</p>`;
-  if (!shown.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
-  return `<div class="cs-list" data-stagger="installed">${shown.map((g) => itemHTML(g, v)).join("")}</div>`;
+  const skills = skillItems(v);
+  const skillsFailed = v.skills === "failed";
+  if (!v.groups.length && !skillsFailed && !(Array.isArray(v.skills) && v.skills.length)) return `<p class="cs-none">${esc(t("conn.emptyInstalled"))}</p>`;
+  if (!shown.length && !skills.length && !skillsFailed) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
+  // The apps that can be called now first, then the ones that cannot (waiting for a sign-in, failed, off, a second way to an app already
+  // counted): each still has its switch and its dialog. While the inventory is not read, or cannot be, they are one list as before.
+  const counted = shown.filter((g) => isConnected(v.inventory, g.id) !== false);
+  const others = shown.filter((g) => isConnected(v.inventory, g.id) === false);
+  const list = (groups: ConnectionGroup[], key: string): string => `<div class="cs-list" data-stagger="${key}">${groups.map((g) => itemHTML(g, v)).join("")}</div>`;
+  const named = others.length > 0 || skills.length > 0 || skillsFailed;
+  const section = (title: string, body: string): string => `<section class="cs-sec"><h2>${esc(title)}</h2>${body}</section>`;
+  return (
+    (counted.length ? (named ? section(t("conn.apps"), list(counted, "installed")) : list(counted, "installed")) : "") +
+    (others.length ? section(t("conn.notConnected"), list(others, "installed-not")) : "") +
+    (skills.length ? skillsSectionHTML(skills) : "") +
+    (skillsFailed ? `<section class="cs-sec"><h2>${esc(t("conn.skills"))}</h2><div class="alert core-note">${st("err", t("conn.skills.failed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-skills"')}</div></section>` : "")
+  );
 }
 
 // ---------- the dialog of a connected service ----------
@@ -343,6 +382,36 @@ function auditHTML(v: ConnectionsView, server: string): string {
   return `<div class="cs-grp cs-audit">${head}<div class="audit">${rows.join("")}<p class="foot">${esc(t("conn.audit.foot"))}</p></div></div>`;
 }
 
+/** What a managed account's status says, in words: Composio's own names for the states of a sign-in. */
+const ACCOUNT_STATUS: Record<string, { kind: "ok" | "warn" | "err" | "idle"; key: MessageKey }> = {
+  ACTIVE: { kind: "ok", key: "conn.acct.active" },
+  INITIALIZING: { kind: "warn", key: "conn.acct.waiting" },
+  INITIATED: { kind: "warn", key: "conn.acct.waiting" },
+  EXPIRED: { kind: "err", key: "conn.acct.expired" },
+  REVOKED: { kind: "err", key: "conn.acct.revoked" },
+  FAILED: { kind: "err", key: "conn.acct.failed" },
+  INACTIVE: { kind: "idle", key: "conn.acct.inactive" },
+};
+const accountStatus = (status: string): { kind: "ok" | "warn" | "err" | "idle"; text: string } => {
+  const known = ACCOUNT_STATUS[status] ?? ACCOUNT_STATUS.INACTIVE!;
+  return { kind: known.kind, text: tr(known.key) };
+};
+
+/**
+ * The account(s) a service is signed in with, by status only (the core keeps no name or address of an account in what it lists):
+ * a row for each account of a managed service (two when one was signed in again and the first has not gone), the owner's own Google as
+ * one, and a signed-in server as one. A server that needs no sign-in has none.
+ */
+function accountsHTML(g: ConnectionGroup): string {
+  const rows: { label: string; kind: "ok" | "warn" | "err" | "idle"; text: string }[] =
+    g.source === "composio" ? (g.accounts ?? []).map((account, n) => ({ label: t("conn.accountN", { p0: n + 1 }), ...accountStatus(account.status) }))
+    : g.source === "google" ? [{ label: t("conn.googleAccount"), ...accountStatus(g.accounts?.[0]?.status ?? (g.status === "ready" ? "ACTIVE" : "INACTIVE")) }]
+    : g.auth !== "none" ? [{ label: t("conn.account"), ...(needsLogin(g) ? { kind: "err" as const, text: t("conn.status.relogin") } : { kind: "ok" as const, text: t("conn.signedIn") }) }]
+    : [];
+  if (!rows.length) return "";
+  return `<div class="cs-accts">${rows.map((r) => `<div class="cs-acct">${ico("person")}<span class="nm">${esc(r.label)}</span>${st(r.kind, r.text)}</div>`).join("")}</div>`;
+}
+
 /** The dialog's first view: what the service is and holds, what to try, and the rarer actions. */
 function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
   const busy = v.busy.has(g.id);
@@ -371,10 +440,12 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
       ? `<div class="ca-alert">${ico("info")}<span class="msg">${esc(t("conn.status.error", { p0: failureText(g.error) }))}</span></div>`
       : "";
   const kinds = (["write", "read"] as const).filter((kind) => g.tools.some((tool) => tool.kind === kind));
+  // How many of its tools can be called: the ones that are on, of all it has (the owner switches each one below).
+  const on = g.tools.filter((tool) => tool.enabled).length;
   const tools = g.tools_state === "loading" ? `<p role="status">${esc(t("conn.loading"))}</p>`
     : g.tools_state === "failed" ? `<div class="note" role="alert">${esc(t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="refresh"${id}`)}</div>`
     : g.tools.length
-    ? `<p class="cs-count">${esc(t("conn.tools.summary", { p0: g.tool_count, p1: g.write_count, p2: g.read_count }))}</p>` +
+    ? `<p class="cs-count" data-k="cs-count">${esc(t("conn.tools.enabled", { p0: on, p1: g.tools.length, p2: g.write_count, p3: g.read_count }))}</p>` +
       `<div class="cs-plugin-tools">${kinds.map(kind => `<section><h3>${esc(kindName(kind))}</h3><div class="cs-tool-list">${g.tools.filter(tool => tool.kind === kind).map(tool => toolRow(g, tool, busy)).join("")}</div></section>`).join("")}</div>`
     : `<p class="cs-count conn-empty">${esc(t("conn.noTools"))}</p>`;
   const example = examplePrompt(entry);
@@ -387,7 +458,7 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
     btn(esc(busy ? t("conn.refreshing") : t("conn.refresh")), "sm", ` data-conn="refresh"${id} data-k="cs-refresh"${busy ? " disabled" : ""}`) +
     (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "sm", ` data-conn="open-grants"${id}`) : ""),
   });
-  return head + about + meta + alert + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
+  return head + about + meta + accountsHTML(g) + alert + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
 }
 
 /** The dialog's second view: the tools of one kind, each with its switch, and one switch for them all. */
@@ -451,9 +522,14 @@ function storeHTML(v: ConnectionsView): string {
     actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div>`;
   if (v.catalog === "loading") return `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
   if (v.catalog === "failed") return `<div class="alert core-note">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ' data-conn="retry-store"')}</div>`;
-  if (v.configured) return `<div class="cs-grid" data-stagger="plugins-store">${v.catalog.map(s => cardHTML(s, v)).join("")}</div>` +
-    (!v.catalog.length ? `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` : "") +
-    (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "");
+  if (v.configured) {
+    const grid = `<div class="cs-grid" data-stagger="plugins-store">${v.catalog.map(s => cardHTML(s, v)).join("")}</div>`;
+    // Browsing rather than searching or choosing a category: the apps people connect most come first, as 「為你推薦」, each with its add button.
+    const browsing = !v.search.trim() && !v.category && v.catalog.length > 0;
+    return (browsing ? `<section class="cs-sec"><h2>${esc(t("conn.recommended"))}</h2>${grid}</section>` : grid) +
+      (!v.catalog.length ? `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` : "") +
+      (v.nextCursor ? actionRow({ primary: { label: esc(t("plugins.more")), attrs: ' data-conn="load-more"' } }) : "");
+  }
   const found = v.catalog.filter((s) => matches(v.search, s.name, s.publisher, words(s.summary)));
   if (!found.length) return `<p class="cs-none">${esc(t("conn.noMatch"))}</p>`;
   const section = (key: string, title: string, list: StoreService[]): string =>
@@ -564,8 +640,22 @@ export function connectionsHTML(v: ConnectionsView): string {
   const g = openGroup(v);
   // A device login started from a service's dialog shows its code there instead.
   const device = g && v.login?.target === g.id ? "" : deviceHTML(v);
-  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (g ? dialogHTML(g, v) : "");
+  const skill = openSkill(v);
+  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
 }
+
+/** The skill whose page is open, if it is still there. */
+const openSkill = (v: ConnectionsView): { item: SkillItem; page: SkillPage } | undefined => {
+  const page = v.skill;
+  const item = page && Array.isArray(v.skills) ? v.skills.find((each) => sameSkill(each, page.memberId, page.id)) : undefined;
+  return page && item ? { item, page } : undefined;
+};
+
+/** The page of a skill over the tab, in the dialog an app has (wider: it holds a document). */
+const skillScrimHTML = (item: SkillItem, page: SkillPage): string =>
+  `<div class="cs-scrim" data-conn="scrim" data-dialog="skill:${item.member.id}:${item.skill.id}">` +
+  `<div class="cs-dialog wide" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>` +
+  skillDialogHTML(item, page, closeButton(), btn(esc(t("plugins.retry")), "sm", ' data-conn="skill-retry"')) + `</div></div>`;
 
 // ---------- doing ----------
 
@@ -621,6 +711,10 @@ export function createConnections(host: ConnectionsHost): Connections {
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let groups: ConnectionsView["groups"] = "loading";
   let catalog: ConnectionsView["catalog"] = "loading";
+  let inventory: InventoryView = "loading";
+  let skills: ConnectionsView["skills"] = "loading";
+  let skill: SkillPage | null = null;
+  let skillLoads = 0;
   let audit: AuditEntry[] = [];
   let tab: Tab = "installed";
   let search = "";
@@ -640,17 +734,27 @@ export function createConnections(host: ConnectionsHost): Connections {
   let closing = false;
   let stopOutside: (() => void) | null = null;
 
+  /** A dialog is over the list: an app's, or a skill's. */
+  const dialogOpen = (): boolean => open?.tab === "installed" || skill !== null;
+
   const redraw = (): void => {
+    // The page is drawn again whole: the document that is being edited keeps its caret, its selection and its scroll.
+    const area = typeof document !== "undefined" ? document.querySelector<HTMLTextAreaElement>("#skill-text") : null;
+    const kept = area && document.activeElement === area ? { start: area.selectionStart, end: area.selectionEnd, top: area.scrollTop } : null;
     if (host.visible()) host.redraw();
-    if (open?.tab === "installed" && !stopOutside && typeof document !== "undefined") {
+    if (kept) {
+      const next = document.querySelector<HTMLTextAreaElement>("#skill-text");
+      if (next) { next.focus(); next.setSelectionRange(kept.start, kept.end); next.scrollTop = kept.top; }
+    }
+    if (dialogOpen() && !stopOutside && typeof document !== "undefined") {
       const root = host.root ?? document.querySelector("#cs-dialog")?.parentElement?.parentElement;
       if (root) stopOutside = registerDismissal(() => root.querySelector<HTMLElement>("#cs-dialog"), closeDialog);
-    } else if (open?.tab !== "installed") { stopOutside?.(); stopOutside = null; }
+    } else if (!dialogOpen()) { stopOutside?.(); stopOutside = null; }
   };
 
   const view = (): ConnectionsView => ({
     configured, categories, category, nextCursor, keyBusy, keyError,
-    groups, catalog, audit, tab, search, open, toolsKind, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
+    groups, catalog, inventory, skills, skill, audit, tab, search, open, toolsKind, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -663,10 +767,12 @@ export function createConnections(host: ConnectionsHost): Connections {
   const groupById = (id: string): ConnectionGroup | undefined => (Array.isArray(groups) ? groups.find((g) => g.id === id) : undefined);
   const entryById = (id: string): StoreService | undefined => (Array.isArray(catalog) ? catalog.find((s) => s.id === id) : undefined);
 
-  async function load(): Promise<void> {
+  async function load(withSkills = true): Promise<void> {
     const mine = ++loads;
-    const [list, status, recent] = await Promise.allSettled([api.toolsetsList(), api.connectorsStatus(), api.integrationsAudit(AUDIT_READ)]);
+    const [list, status, recent, counted] = await Promise.allSettled([api.toolsetsList(), api.connectorsStatus(), api.integrationsAudit(AUDIT_READ), api.integrationsInventory()]);
     if (mine !== loads) return;
+    // The count is the core's, read with the list it counts: both say the same moment.
+    inventory = counted.status === "fulfilled" ? counted.value : "failed";
     if (status.status === "fulfilled") {
       configured = status.value.composio_configured;
       managed = status.value.connectors;
@@ -689,7 +795,24 @@ export function createConnections(host: ConnectionsHost): Connections {
       if (!groups.length) tab = "store";
     }
     redraw();
+    if (withSkills) void loadSkills();
     if (configured && status.status === "fulfilled" && !Array.isArray(catalog)) await loadCatalog();
+  }
+
+  /** The private skills of the members: read again whenever the list is, and when a skill is changed anywhere (`MembersChanged`). */
+  async function loadSkills(): Promise<void> {
+    const mine = ++skillLoads;
+    try {
+      const items = await loadSkillItems();
+      if (mine !== skillLoads) return;
+      skills = items;
+    } catch {
+      if (mine !== skillLoads) return;
+      if (!Array.isArray(skills)) skills = "failed";
+    }
+    // the page that is open belongs to a skill that is gone (deleted elsewhere): back to the list
+    if (skill && Array.isArray(skills) && !skills.some((item) => sameSkill(item, skill!.memberId, skill!.id))) skill = null;
+    redraw();
   }
 
   async function loadCatalog(append = false): Promise<void> {
@@ -758,7 +881,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       toaster.info(describeError(err));
     }
     busy.delete(id);
-    await load();
+    await load(false);
     if (open?.id === id) await loadTools(id);
   }
 
@@ -779,7 +902,21 @@ export function createConnections(host: ConnectionsHost): Connections {
    * focus goes back to the row it was opened from.
    */
   function closeDialog(): void {
-    if (!open || open.tab !== "installed" || closing) return;
+    if (closing) return;
+    if (skill && open?.tab !== "installed") {
+      // The page of a skill goes the same way: the document that was being edited is dropped with it.
+      const page = skill;
+      closing = true;
+      leave(typeof document !== "undefined" ? document.querySelector<HTMLElement>(".cs-scrim") : null, DIALOG_OUT_MS, () => {
+        closing = false;
+        if (skill !== page) return;
+        skill = null;
+        redraw();
+        focusOn(`[data-k="cs-skill:${page.memberId}:${page.id}"]`);
+      });
+      return;
+    }
+    if (!open || open.tab !== "installed") return;
     const id = open.id;
     closing = true;
     const scrim = typeof document !== "undefined" ? document.querySelector<HTMLElement>(".cs-scrim") : null;
@@ -794,6 +931,83 @@ export function createConnections(host: ConnectionsHost): Connections {
       redraw();
       focusOn(`[data-k="cs-open:${typeof CSS !== "undefined" ? CSS.escape(id) : id}"]`);
     });
+  }
+
+  // ---------- the private skills ----------
+
+  const skillOf = (memberId: number, id: number): SkillItem | undefined =>
+    Array.isArray(skills) ? skills.find((each) => sameSkill(each, memberId, id)) : undefined;
+
+  /** Opens the page of a skill, with the focus in it; its document is read for it. */
+  function openSkillPage(memberId: number, id: number): void {
+    skill = skillPage(memberId, id);
+    redraw();
+    focusOn("#cs-dialog");
+    void readSkill();
+  }
+
+  async function readSkill(): Promise<void> {
+    const page = skill;
+    if (!page) return;
+    page.state = "loading";
+    page.error = null;
+    redraw();
+    try {
+      const { text } = await api.membersSkillsRead(page.memberId, page.id);
+      if (skill !== page) return;
+      page.saved = page.draft = text;
+      page.state = "ready";
+    } catch {
+      if (skill !== page) return;
+      page.state = "failed";
+    }
+    redraw();
+  }
+
+  /** Keeps the edited document. The name and the line under it follow it, so the skills are read again. */
+  async function saveSkill(): Promise<void> {
+    const page = skill;
+    if (!page || page.busy || !skillChanged(page)) return;
+    page.busy = true;
+    page.error = null;
+    redraw();
+    try {
+      await api.membersSkillsEdit(page.memberId, page.id, page.draft);
+      if (skill === page) page.saved = page.draft = page.draft.replace(/\r\n/g, "\n");
+      toaster.info(t("conn.skill.saved"));
+    } catch (err) {
+      if (skill === page) page.error = skillErrorText(err);
+    }
+    if (skill === page) page.busy = false;
+    redraw();
+    await loadSkills();
+  }
+
+  /** The owner asks to delete a skill: after the shared question, it and its trigger are gone. */
+  async function deleteSkill(memberId: number, id: number): Promise<void> {
+    const item = skillOf(memberId, id);
+    if (!item || !(await confirmDelete(item.skill.name))) return;
+    try {
+      await api.membersSkillsDelete(memberId, id);
+      toaster.info(t("conn.skill.deleted", { p0: item.skill.name }));
+    } catch (err) {
+      toaster.info(describeError(err));
+      return;
+    }
+    skill = null;
+    await loadSkills();
+  }
+
+  /** The switch of a skill: on, the member is told when to use it; off, it is not. */
+  async function toggleSkill(memberId: number, id: number): Promise<void> {
+    const item = skillOf(memberId, id);
+    if (!item) return;
+    try {
+      await api.membersSkillsUpdate(memberId, id, !item.skill.enabled);
+    } catch (err) {
+      toaster.info(describeError(err));
+    }
+    await loadSkills();
   }
 
   function disconnect(id: string): void {
@@ -845,11 +1059,13 @@ export function createConnections(host: ConnectionsHost): Connections {
       loginError = { target: key, kind: result.error ?? "error" };
       toaster.info(t("plugins.connectFailed"));
     }
-    await load();
+    await load(false);
   }
 
   function followEvent(event: MainEvent): void {
-    if (event.type === "ConnectionsChanged" && host.visible()) { void load(); return; }
+    if (event.type === "ConnectionsChanged" && host.visible()) { void load(false); return; }
+    // a skill was imported, switched, edited or deleted, in the member's own tab or by Raphael: the list follows it
+    if (event.type === "MembersChanged" && host.visible()) { void loadSkills(); return; }
     if (event.type !== "DeviceCode" || !login) return;
     device = { catalog_id: event.catalog_id, user_code: event.user_code, verification_uri: event.verification_uri };
     redraw();
@@ -899,14 +1115,14 @@ export function createConnections(host: ConnectionsHost): Connections {
       form = null; // the values were sent to the core's vault: nothing of them stays here
       tab = "installed";
       toaster.info(t("conn.connected", { p0: request.name }));
-      await load();
+      await load(false);
       return;
     } catch (err) {
       f.busy = false;
       const text = describeError(err);
       f.error = () => text;
     }
-    await load();
+    await load(false);
     redraw();
   }
 
@@ -1094,6 +1310,12 @@ export function createConnections(host: ConnectionsHost): Connections {
         void connectCustom();
         break;
       case "save-key": void saveKey(); break;
+      case "skill-open": openSkillPage(Number(button.dataset.member), Number(id)); break;
+      case "skill-enable": void toggleSkill(Number(button.dataset.member), Number(id)); break;
+      case "skill-save": void saveSkill(); break;
+      case "skill-delete": void deleteSkill(Number(button.dataset.member), Number(id)); break;
+      case "skill-retry": void readSkill(); break;
+      case "retry-skills": void loadSkills(); break;
       case "retry-connections": void load(); break;
       case "retry-store": void (configured ? loadCatalog() : load()); break;
       case "load-more": void loadCatalog(true); break;
@@ -1114,6 +1336,16 @@ export function createConnections(host: ConnectionsHost): Connections {
       return true;
     }
     if (el.id === "conn-key") return true;
+    if (el.id === "skill-text") {
+      // The document is edited in place: only the button that keeps it changes, so that the caret stays where it is.
+      if (skill?.state === "ready") {
+        skill.draft = el.value;
+        skill.error = null;
+        const save = typeof document !== "undefined" ? document.querySelector<HTMLButtonElement>('[data-conn="skill-save"]') : null;
+        if (save) save.disabled = !skillChanged(skill) || skill.busy;
+      }
+      return true;
+    }
     if (!form || !el.id.startsWith("conn-")) return false;
     switch (el.id) {
       case "conn-pairs": form.pairLines = el.value; break;
@@ -1140,7 +1372,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (e.key === "Enter" && (e.target as HTMLElement)?.id === "conn-key") { e.preventDefault(); void saveKey(); return true; }
     const panel = typeof document !== "undefined" ? (host.root ?? document).querySelector<HTMLElement>("#cs-dialog") : null;
     if (e.key === "Escape" && panel && !isTopLayer(panel)) return false;
-    if (e.key === "Escape" && open?.tab === "installed" && !e.defaultPrevented) {
+    if (e.key === "Escape" && dialogOpen() && !e.defaultPrevented) {
       e.preventDefault();
       closeDialog();
       return true;
@@ -1163,7 +1395,7 @@ export function createConnections(host: ConnectionsHost): Connections {
           choices: [{ value: "custom", label: t("mcp.add") }, { value: "paste", label: t("mcp.paste") }, { value: "import", label: t("mcp.fromApps") }],
           current: "", // nothing is checked: it is an act, not a state
           pick: (value) => {
-            if (value === "paste" || value === "import") { openMcpImport(value === "import", () => void load()); return; }
+            if (value === "paste" || value === "import") { openMcpImport(value === "import", () => void load(false)); return; }
             if (value !== "custom" || form?.busy) return;
             open = null;
             form = emptyForm();
@@ -1201,6 +1433,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     confirming = null;
     form = null;
     open = null;
+    skill = null; // a document that was being edited is dropped with the page
     toolsKind = null;
     auditOpen = false;
     closing = false;

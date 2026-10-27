@@ -2,6 +2,7 @@ export const click = selector => ({ action: "click", selector });
 export const hover = selector => ({ action: "hover", selector });
 export const type = (selector, text) => ({ action: "type", selector, text });
 export const wait = selector => ({ action: "wait", selector });
+export const waitGone = selector => ({ action: "wait-gone", selector });
 export const check = name => ({ action: "check", name });
 export const key = value => ({ action: "key", key: value });
 export const scroll = selector => ({ action: "scroll", selector });

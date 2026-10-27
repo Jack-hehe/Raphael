@@ -51,6 +51,8 @@
 .cs-scrim.leaving > .cs-dialog { animation: dialog-out 0.14s ease-in forwards; }
 .cs-dialog { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--sp-3); width: min(440px, 100%); max-height: 100%; overflow-x: hidden; overflow-y: auto; padding: var(--sp-4); border-radius: var(--r-lg); background: var(--panel); box-shadow: var(--pop); }
 .cs-dialog:focus { outline: none; }
+/* The sticky actions also cover the dialog's bottom padding, so a long list of tools scrolls under them and not through the gap beneath. */
+.cs-dialog > .action-row.is-sticky { bottom: calc(var(--sp-4) * -1); margin-bottom: calc(var(--sp-4) * -1); padding-bottom: calc(var(--sp-3) + var(--sp-4)); }
 .cs-dlg-head { display: flex; align-items: center; gap: var(--sp-2); }
 .cs-dlg-head .sp { flex: 1; }
 .cs-dlg-head .tg { margin-right: var(--sp-1); }
@@ -91,6 +93,21 @@
 .cs-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-4); margin-top: var(--sp-3); font-size: var(--fs-2xs); color: var(--text-3); }
 .cs-meta > span { display: inline-flex; align-items: center; gap: var(--sp-1); min-width: 0; overflow-wrap: anywhere; }
 .cs-key { color: var(--text-2); }
+
+/* The account(s) a service is signed in with, by status only: a row each, the name on the left and the state on the right */
+.cs-accts { display: grid; grid-template-columns: minmax(0, 1fr); }
+.cs-acct { display: flex; align-items: center; gap: var(--sp-2); min-height: 34px; padding: 0 var(--sp-1); font-size: var(--fs-xs); }
+.cs-acct > .i { flex: none; color: var(--text-3); }
+.cs-acct .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); }
+.cs-acct .st { flex: none; font-size: var(--fs-xs); }
+.cs-acct + .cs-acct { border-top: 1px solid var(--line); }
+
+/* The page of a skill is the dialog of an app, wider for the document it holds */
+.cs-dialog.wide { width: min(640px, 100%); }
+.cs-field { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.cs-field > .flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+/* The document is a textarea with the field's look; the field's own padding and height (one line) yield to these, hence the longer selector. */
+.cs-field > .cs-skill-text { display: block; width: 100%; height: auto; min-height: 320px; padding: var(--sp-3); resize: vertical; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: var(--fs-xs); line-height: 1.55; white-space: pre-wrap; }
 
 /* A notice that something waits for the user */
 .ca-alert { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-3); border-radius: var(--r-lg); background: var(--warn-soft); border: 1px solid var(--warn-edge); font-size: var(--fs-sm); }

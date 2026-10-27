@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { setLocale } from "./i18n";
-import type { AuditEntry, ConnectionGroup, StoreService } from "./types";
+import type { SkillItem } from "./connection-skills";
+import type { AppsInventory, AuditEntry, ConnectionGroup, InventoryApp, StoreService } from "./types";
 
 const api = vi.hoisted(() => ({
   connectorsStatus: vi.fn(), connectorsCatalog: vi.fn(), connectorsCategories: vi.fn(), connectorsTools: vi.fn(),
@@ -18,9 +19,12 @@ const api = vi.hoisted(() => ({
   integrationsDisconnect: vi.fn(),
   integrationsSetToolEnabled: vi.fn(),
   integrationsSetToolsEnabled: vi.fn(),
+  integrationsInventory: vi.fn(),
+  membersList: vi.fn(), membersSkillsList: vi.fn(), membersSkillsRead: vi.fn(), membersSkillsEdit: vi.fn(), membersSkillsUpdate: vi.fn(), membersSkillsDelete: vi.fn(),
 }));
 vi.mock("./api", () => api);
 vi.mock("./ui", async (original) => ({ ...(await original<typeof import("./ui")>()), toaster: { info: vi.fn() } }));
+vi.mock("./member-dialogs", async (original) => ({ ...(await original<typeof import("./member-dialogs")>()), confirmDelete: vi.fn(async () => true) }));
 
 import {
   type ConnectionForm,
@@ -73,9 +77,17 @@ const custom: ConnectionGroup = {
 };
 const GROUPS = [notes, custom];
 const AUDIT: AuditEntry[] = [{ id: 1, at_ms: NOW - 60_000, server: "Notion", tool: "create_page", approver: "auto", outcome: "ok" }];
+/** What the core counts of the two services above: both can be called now. */
+const app = (id: string, name: string, over: Partial<InventoryApp> = {}): InventoryApp => ({ id, name, enabled: true, state: "ready", tools: 2, connected: true, ...over });
+const inventoryOf = (apps: InventoryApp[]): AppsInventory => ({ state: "complete", count: apps.filter((a) => a.connected).length, apps });
+const INVENTORY = inventoryOf([app("ab12", "Notion"), app("cu1", "Files", { tools: 1 })]);
+const SKILLS: SkillItem[] = [
+  { member: { id: 1, name: "Ada" }, skill: { id: 7, name: "summary-style", description: "Use when the owner asks for a summary", enabled: true, source: "owner/repo" } },
+  { member: { id: 2, name: "Ben" }, skill: { id: 8, name: "meeting-notes", description: "Use after a meeting to list owners", enabled: false, source: "owner/notes" } },
+];
 
 const view = (over: Partial<ConnectionsView> = {}): ConnectionsView => ({
-  ...emptyConnectionsView(), groups: GROUPS, catalog: CATALOG, audit: AUDIT, now: NOW, ...over,
+  ...emptyConnectionsView(), groups: GROUPS, catalog: CATALOG, inventory: INVENTORY, skills: [], audit: AUDIT, now: NOW, ...over,
 });
 const form = (over: Partial<ConnectionForm> = {}): ConnectionForm => ({
   type: "stdio", name: "", command: "", args: "", url: "", pairLines: "", busy: false, error: null, ...over,
@@ -94,12 +106,24 @@ describe("the two views", () => {
     const bar = html.slice(html.indexOf('class="cs-bar"'), html.indexOf("data-cs-body"));
     expect(bar).toContain('class="tabs plain"');
     expect(bar).toContain('role="tablist"');
-    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已安裝<span class="n">2<\/span>/);
+    expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="true"[^>]*data-id="installed"[^>]*>已連結<span class="n">2<\/span>/);
     expect(bar).toMatch(/<button[^>]*class="tab"[^>]*role="tab"[^>]*aria-selected="false"[^>]*data-id="store"[^>]*>商店<span class="n">4<\/span>/);
     expect(bar).toContain('id="conn-search"');
     expect(connectionsHTML(view({ tab: "store" }))).toMatch(/aria-selected="true"[^>]*data-id="store"/);
     // nothing connected yet still says so: 0
-    expect(connectionsHTML(view({ groups: [] }))).toMatch(/data-id="installed"[^>]*>已安裝<span class="n">0<\/span>/);
+    expect(connectionsHTML(view({ groups: [], inventory: inventoryOf([]) }))).toMatch(/data-id="installed"[^>]*>已連結<span class="n">0<\/span>/);
+  });
+
+  test("the number beside 已連結 is the core's count, not the rows: an app that waits, failed or duplicates another is a row and no count", () => {
+    const waiting: ConnectionGroup = { ...notes, id: "w1", name: "Slack", status: "error", error: "auth" };
+    const inventory = inventoryOf([app("ab12", "Notion"), app("cu1", "Files", { tools: 1 }), app("w1", "Slack", { state: "needs_sign_in", connected: false, tools: 0 })]);
+    const html = connectionsHTML(view({ groups: [...GROUPS, waiting], inventory }));
+    expect(html).toMatch(/data-id="installed"[^>]*>已連結<span class="n">2<\/span>/);
+    expect(html.match(/data-conn="open" data-id=/g)!.length / 2).toBe(3); // each row names its id twice: the row and its button
+    // while it is read there is no number, and when it cannot be read the tab says so instead of showing one
+    expect(connectionsHTML(view({ inventory: "loading" }))).toMatch(/data-id="installed"[^>]*>已連結<\/button>/);
+    expect(connectionsHTML(view({ inventory: "failed" }))).toMatch(/data-id="installed"[^>]*>已連結<span class="n">—<\/span>/);
+    expect(connectionsHTML(view({ inventory: { state: "partial", count: null, apps: INVENTORY.apps } }))).toMatch(/data-id="installed"[^>]*>已連結<span class="n">—<\/span>/);
   });
 
   test("the menu that adds a server of the user's own is a dropdown, beside the tab's name (settings-view.ts puts it there)", () => {
@@ -174,6 +198,144 @@ describe("已安裝", () => {
   });
 });
 
+describe("the apps that cannot be called, and the private skills", () => {
+  const slack: ConnectionGroup = { ...notes, id: "w1", name: "Slack", status: "error", error: "auth", description: "Slack的一句話" };
+  const twin: ConnectionGroup = { ...notes, id: "d1", name: "Notion 2", description: "Notion again" };
+  const empty: ConnectionGroup = { ...custom, id: "e1", name: "Empty" };
+  const off: ConnectionGroup = { ...custom, id: "o1", name: "Notes", enabled: false, status: "disabled", env: [], args: ["-y", "notes"] };
+  const inventory = inventoryOf([
+    app("ab12", "Notion"), app("cu1", "Files", { tools: 1 }), app("w1", "Slack", { state: "needs_sign_in", connected: false, tools: 0 }),
+    app("d1", "Notion 2", { state: "duplicate", connected: false }), app("e1", "Empty", { state: "no_tools", connected: false, tools: 0 }),
+    app("o1", "Notes", { state: "disabled", enabled: false, connected: false, tools: 0 }),
+  ]);
+  const all = view({ groups: [notes, custom, slack, twin, empty, off], inventory });
+
+  test("the apps that can be called now come first; the others follow under their own heading, each with its switch and its dialog", () => {
+    const html = bodyHTML(all);
+    const [now, later] = html.split(`<h2>${"尚未連結"}</h2>`);
+    expect(now).toContain("<h2>應用程式</h2>");
+    expect([...now!.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Notion", "Files"]);
+    expect([...later!.matchAll(/class="nm">([^<]+)</g)].map((m) => m[1])).toEqual(["Slack", "Notion 2", "Empty", "Notes"]);
+    expect(later).toContain('data-stagger="installed-not"');
+    // why each one is not one of the connected: a sign-in is waited for, a second way to an app that is counted, every tool off
+    expect(later).toContain("需要重新登入");
+    expect(later).toContain("與另一個連線重複");
+    expect(later).toContain("工具已全部關閉");
+    // one that is switched off says it with its switch, and keeps the words it always had
+    expect(later).toContain("npx -y notes");
+    expect(later).toMatch(/aria-checked="false" aria-label="開啟 Notes"/);
+    expect(later!.match(/data-conn="enable"/g)).toHaveLength(4);
+    // with nothing to separate there is no heading: the list of apps is what it was
+    expect(bodyHTML(view())).not.toContain("<h2>");
+  });
+
+  test("while the count is not read, or cannot be, the apps are one list as before", () => {
+    for (const inv of ["loading", "failed"] as const) {
+      const html = bodyHTML(view({ groups: [notes, slack], inventory: inv }));
+      expect(html.match(/class="cs-list"/g)).toHaveLength(1);
+      expect(html).not.toContain("尚未連結");
+    }
+  });
+
+  test("an inventory that is not whole says which app it could not read, and counts none of them", () => {
+    const partial = { state: "partial" as const, count: null, apps: [app("ab12", "Notion", { state: "unknown", connected: false, tools: 0 })] };
+    const html = connectionsHTML(view({ groups: [notes], inventory: partial }));
+    expect(html).toMatch(/data-id="installed"[^>]*>已連結<span class="n">—<\/span>/);
+    expect(html).toContain("無法讀取");
+  });
+
+  test("the skills are under their own heading, a row each: the member's face, the name, who and when, a switch and a chevron", () => {
+    const html = bodyHTML(view({ skills: SKILLS }));
+    expect(html).toContain("<h2>應用程式</h2>"); // the apps need a name once there is another list
+    const skills = html.slice(html.indexOf("<h2>私人技能</h2>"));
+    expect(skills).toContain('data-stagger="skills"');
+    const rows = skills.split('<div class="cs-item cs-skill"').slice(1);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatch(/^ data-conn="skill-open" data-member="1" data-id="7">/);
+    expect(rows[0]).toMatch(/<button type="button" class="btn cs-open" data-conn="skill-open" data-member="1" data-id="7" data-k="cs-skill:1:7" aria-haspopup="dialog" title="查看技能 summary-style">/);
+    expect(rows[0]).toContain('<span class="nm">summary-style</span>');
+    expect(rows[0]).toContain('<span class="ds">Ada · Use when the owner asks for a summary</span>');
+    expect(rows[0]).toContain('class="av mb-av');
+    expect(rows[0]).toMatch(/class="tg" role="switch" aria-checked="true" aria-label="開啟技能 summary-style" data-conn="skill-enable" data-member="1" data-id="7"/);
+    expect(rows[1]).toMatch(/aria-checked="false" aria-label="開啟技能 meeting-notes"/);
+    expect(rows[0]!.match(/<button/g)).toHaveLength(2); // the row's name and the switch: no button in a button
+    expect(rows[0]).toMatch(/<span class="chev" aria-hidden="true"><svg/);
+  });
+
+  test("a search finds a skill by its name, its words and its member; a skill that cannot be read is told where it would be", () => {
+    expect(bodyHTML(view({ skills: SKILLS, search: "meeting" }))).toContain("meeting-notes");
+    expect(bodyHTML(view({ skills: SKILLS, search: "meeting" }))).not.toContain("summary-style");
+    expect(bodyHTML(view({ skills: SKILLS, search: "Ada" }))).toContain("summary-style");
+    expect(bodyHTML(view({ groups: [], skills: SKILLS }))).toContain("summary-style"); // skills alone are no empty page
+    const failed = bodyHTML(view({ skills: "failed" }));
+    expect(failed).toContain("無法讀取技能。");
+    expect(failed).toContain('data-conn="retry-skills"');
+    expect(bodyHTML(view({ groups: [], skills: [] }))).toContain("尚無連線");
+  });
+
+  test("the page of a skill is the dialog of an app: its name, who has it and when it is used, its instructions and 刪除技能 on the left", () => {
+    const document = "---\nname: summary-style\ndescription: Use when the owner asks for a summary\n---\nStart <b>with</b> the verdict.";
+    const page = { memberId: 1, id: 7, saved: document, draft: document, state: "ready" as const, busy: false, error: null };
+    const html = connectionsHTML(view({ skills: SKILLS, skill: page }));
+    const d = html.slice(html.indexOf('<div class="cs-scrim"'));
+    expect(d).toContain('<div class="cs-scrim" data-conn="scrim" data-dialog="skill:1:7">');
+    expect(d).toContain('<div class="cs-dialog wide" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>');
+    expect(d).toContain('<h2 class="cs-dlg-name" id="cs-dlg-title">summary-style</h2>');
+    expect(d).toContain('<p class="cs-desc">Ada · Use when the owner asks for a summary</p>');
+    expect(d).toMatch(/role="switch" aria-checked="true" aria-label="開啟技能 summary-style" data-conn="skill-enable" data-member="1" data-id="7" data-k="cs-skill-dlg-enable"/);
+    expect(d).toMatch(/<button type="button" class="btn icon" aria-label="關閉" title="關閉" data-conn="close"/);
+    // the document is the text of the field, written out as text: nothing in it is markup
+    expect(d).toMatch(/<textarea id="skill-text" class="field cs-skill-text" rows="14" spellcheck="false" data-k="cs-skill-text">---\nname: summary-style/);
+    expect(d).toContain("Start &lt;b&gt;with&lt;/b&gt; the verdict.");
+    // the action row: delete on the left (the destructive one first), save the primary one; nothing to save until it changes
+    const acts = d.slice(d.indexOf('class="action-row cs-acts is-sticky"'));
+    expect(acts.indexOf('data-conn="skill-delete"')).toBeLessThan(acts.indexOf('data-conn="skill-save"'));
+    expect(acts).toContain('<span class="action-destructive"><button type="button" class="btn danger" data-conn="skill-delete"');
+    expect(acts).toMatch(/class="btn pri" data-conn="skill-save" data-member="1" data-id="7" data-k="cs-skill-save" disabled>儲存</);
+    const edited = connectionsHTML(view({ skills: SKILLS, skill: { ...page, draft: document + "\nMore." } }));
+    expect(edited).toMatch(/class="btn pri" data-conn="skill-save" data-member="1" data-id="7" data-k="cs-skill-save">儲存</);
+    expect(edited).not.toMatch(/data-k="cs-skill-save" disabled/);
+    // it is on top of the list, which stays under it; no other dialog is drawn
+    expect(html).toContain("data-cs-body");
+    expect(d.match(/role="dialog"/g)).toHaveLength(1);
+  });
+
+  test("a refusal is said under the document in the words of the window; the document is waited for, or cannot be had", () => {
+    const base = { memberId: 1, id: 7, saved: "a", draft: "a", state: "ready" as const, busy: false, error: null };
+    const refused = connectionsHTML(view({ skills: SKILLS, skill: { ...base, error: "這位成員已有同名的技能。" } }));
+    expect(refused).toMatch(/<div class="note" role="alert">.*這位成員已有同名的技能。/);
+    const busy = connectionsHTML(view({ skills: SKILLS, skill: { ...base, draft: "b", busy: true } }));
+    expect(busy).toMatch(/<textarea[^>]* disabled>/);
+    expect(busy).toMatch(/data-conn="skill-delete"[^>]* disabled/);
+    expect(connectionsHTML(view({ skills: SKILLS, skill: { ...base, state: "loading", saved: null } }))).toContain("讀取中");
+    const failed = connectionsHTML(view({ skills: SKILLS, skill: { ...base, state: "failed", saved: null } }));
+    expect(failed).toContain("無法讀取這個技能。");
+    expect(failed).toContain('data-conn="skill-retry"');
+    expect(failed).not.toContain("<textarea");
+  });
+
+  test("a page whose skill is gone is the list alone", () => {
+    const html = connectionsHTML(view({ skills: [], skill: { memberId: 1, id: 7, saved: "a", draft: "a", state: "ready", busy: false, error: null } }));
+    expect(html).toContain("data-cs-body");
+    expect(html).not.toContain("cs-scrim");
+  });
+
+  test("the dialog of an app says its account: a row for each account of a managed one, the owner's own Google, a signed-in server", () => {
+    const managed: ConnectionGroup = { ...notes, source: "composio", accounts: [{ status: "ACTIVE" }, { status: "EXPIRED" }] };
+    const d = installedPage("ab12", { groups: [managed, custom] }).split('<div class="cs-scrim"')[1]!;
+    expect(d).toMatch(/<div class="cs-acct">.*帳號 1<\/span><span class="st"><span class="dot ok"><\/span>已連結<\/span><\/div><div class="cs-acct">.*帳號 2<\/span><span class="st err"><span class="dot err"><\/span>已過期/);
+    const google: ConnectionGroup = { ...notes, id: "google", source: "google", accounts: [{ status: "ACTIVE" }] };
+    expect(installedPage("google", { groups: [google] })).toContain("你的 Google 帳號");
+    // never an account's name or address: the core does not give one, and the page invents none
+    expect(d).not.toMatch(/@|\bca_/);
+    // a server that is signed in to has one row; one that needs no login has none
+    expect(installedPage("ab12", { groups: [notes] }).split('<div class="cs-scrim"')[1]).toContain("已登入");
+    expect(installedPage("cu1")).not.toContain('class="cs-acct"');
+    // after it signs in again the old account may still be there: both are told, and the app is still one
+    expect(installedPage("ab12", { groups: [{ ...managed, status: "error", error: "auth" }] })).toContain("需要重新登入");
+  });
+});
+
 describe("the dialog of a connected service", () => {
   const dialog = (html: string): string => html.slice(html.indexOf('<div class="cs-scrim"'));
 
@@ -191,7 +353,8 @@ describe("the dialog of a connected service", () => {
     expect(d).toMatch(/role="switch" aria-checked="true" aria-label="開啟 Notion" data-conn="enable" data-id="ab12" data-k="cs-dlg-enable"/);
     expect(d).toMatch(/<button type="button" class="btn icon" aria-label="關閉" title="關閉" data-conn="close"/);
     expect(d).toContain("Notion的說明");
-    expect(d).toContain("共 3 個工具（2 個會改動、1 個只讀取）");
+    // how many of its tools are on, of all it has: Delete page is off
+    expect(d).toContain("已開啟 2/3 個工具（2 個會改動、1 個只讀取）");
   });
 
   test("groups tools inline under write and read headings with individual switches", () => {
@@ -211,7 +374,7 @@ describe("the dialog of a connected service", () => {
     expect(write).toContain(">Create page<");
     expect(write).toContain(">Delete page<");
     expect(write).not.toContain(">Search<");
-    expect(write).not.toContain("共 3 個工具");
+    expect(write).not.toContain("個工具（");
     expect(write).toContain('data-stagger="tools:write"');
     expect(write).toMatch(/aria-checked="false" aria-label="開啟工具 Delete page" data-conn="tool" data-id="ab12" data-tool="delete_page"/);
     const read = dialog(installedPage("ab12", { toolsKind: "read" }));
@@ -219,7 +382,7 @@ describe("the dialog of a connected service", () => {
     expect(read).toContain('title="search"'); // the raw name stays in the tooltip
     expect(read.match(/data-conn="tool"/g)).toHaveLength(1);
     // a kind the service has no tools of shows the summary
-    expect(dialog(installedPage("cu1", { toolsKind: "write" }))).toContain("共 1 個工具");
+    expect(dialog(installedPage("cu1", { toolsKind: "write" }))).toContain("已開啟 1/1 個工具");
   });
 
   test("the switch for a whole list is on, mixed or off, a real control with a name of its own", () => {
@@ -301,7 +464,7 @@ describe("the dialog of a connected service", () => {
 
   test("a server that changed its tools shows them all the same, new ones on", () => {
     const grown: ConnectionGroup = { ...notes, tools: [...notes.tools, { name: "fresh", description: "New.", enabled: true, kind: "read" }], tool_count: 4, read_count: 2, enabled_count: 3 };
-    expect(installedPage("ab12", { groups: [grown] })).toContain("共 4 個工具（2 個會改動、2 個只讀取）");
+    expect(installedPage("ab12", { groups: [grown] })).toContain("已開啟 3/4 個工具（2 個會改動、2 個只讀取）"); // Delete page is still off
     const html = installedPage("ab12", { groups: [grown], toolsKind: "read" });
     expect(html).toMatch(/aria-checked="true" aria-label="開啟工具 Fresh"/);
     expect(html).not.toMatch(/>新<|待決定/);
@@ -313,7 +476,7 @@ describe("the dialog of a connected service", () => {
     expect(d).not.toContain("由 ");
     expect(d).toContain("npx");
     expect(d).toContain("API_KEY");
-    expect(d).toContain("共 1 個工具（0 個會改動、1 個只讀取）");
+    expect(d).toContain("已開啟 1/1 個工具（0 個會改動、1 個只讀取）");
   });
 
   test("tools not read yet say how to read them", () => {
@@ -480,8 +643,19 @@ describe("the form that connects a server of the user's own", () => {
 });
 
 describe("the rules for this tab", () => {
+  // Slack waits for its sign-in (two accounts, one expired); the skills of two members are beside the apps
+  const slack: ConnectionGroup = { ...notes, id: "w1", name: "Slack", source: "composio", status: "error", error: "auth", accounts: [{ status: "EXPIRED" }, { status: "ACTIVE" }] };
+  const more = {
+    groups: [...GROUPS, slack],
+    inventory: inventoryOf([app("ab12", "Notion"), app("cu1", "Files", { tools: 1 }), app("w1", "Slack", { state: "needs_sign_in", connected: false, tools: 0 })]),
+    skills: SKILLS,
+  };
+  const document = "---\nname: summary-style\ndescription: Use when the owner asks for a summary\n---\nStart with the verdict.";
   const pages = (): string[] => [
     connectionsHTML(view()),
+    connectionsHTML(view(more)),
+    installedPage("w1", more),
+    connectionsHTML(view({ ...more, skill: { memberId: 1, id: 7, saved: document, draft: document + " Edited.", state: "ready", busy: false, error: null } })),
     connectionsHTML(view({ tab: "store" })),
     connectionsHTML(view({ tab: "store", login: { target: "linear", name: "Linear" } })),
     installedPage("ab12", { confirmingDisconnect: "ab12", auditOpen: true }),
@@ -496,7 +670,7 @@ describe("the rules for this tab", () => {
     const all = pages().join("");
     // A row of the list and the dimmed part around a dialog take a click too, each beside a real
     // button that does the same (the row's name, the dialog's ×).
-    const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="(\w+)"/g)].filter((m) => !(m[1] === "div" && (m[2] === "open" || m[2] === "scrim"))).map((m) => m[1]);
+    const acts = [...all.matchAll(/<(\w+)[^>]*data-conn="([\w-]+)"/g)].filter((m) => !(m[1] === "div" && ["open", "skill-open", "scrim"].includes(m[2]!))).map((m) => m[1]);
     expect(acts.length).toBeGreaterThan(30);
     expect(new Set(acts)).toEqual(new Set(["button"]));
     for (const tag of all.match(/<button[^>]*>/g)!) expect(tag).toMatch(/class="(btn[ "]|sel[ "]|tg|tab")/);
@@ -521,20 +695,27 @@ describe("the rules for this tab", () => {
   test.each(["en", "ja"] as const)("is in one language at a time (%s)", (locale) => {
     setLocale(locale);
     const all = pages().join("");
-    for (const zh of ["已安裝", "商店", "加入", "中斷連線", "熱門", "只讀取", "會改動", "請在瀏覽器登入", "重新登入", "重新讀取工具", "最近的動作", "沒有符合"]) expect(all).not.toContain(zh);
+    for (const zh of ["已安裝", "已連結", "商店", "加入", "中斷連線", "熱門", "只讀取", "會改動", "請在瀏覽器登入", "重新登入", "重新讀取工具", "最近的動作", "沒有符合", "技能", "尚未連結", "帳號"]) expect(all).not.toContain(zh);
     if (locale === "en") {
       // what the service itself says (here the fake store's own words) is the catalog's, in English
       expect(all).toContain("Installed");
+      expect(all).toContain(">Connected<");
       expect(all).toContain("Sign in in your browser…");
-      expect(all).toContain("Contains 3 tools (2 write, 1 read)");
+      expect(all).toContain("2/3 tools on (2 write, 1 read)");
       expect(all).toContain("Tell Linear one");
       expect(all).toContain(">Try it<");
+      expect(all).toContain("Private skills");
+      expect(all).toContain("Not connected");
+      expect(all).toContain("Account 1");
       expect(all).not.toMatch(CJK);
     } else {
-      expect(all).toContain("インストール済み");
+      expect(all).toContain("接続済み");
       expect(all).toContain("ブラウザでログインしてください…");
       expect(all).toContain("Linearに一");
-      expect(all).not.toMatch(/Installed|Popular|Sign in|Contains|Recent actions|Disconnect/);
+      expect(all).toContain("プライベートスキル");
+      expect(all).toContain("未接続");
+      expect(all).toContain("アカウント 1");
+      expect(all).not.toMatch(/Installed|Popular|Sign in|Contains|Recent actions|Disconnect|Private skills|Not connected|Account/);
       expect(all).not.toContain("跟");
     }
   });
@@ -560,6 +741,9 @@ describe("what the tab does", () => {
     api.connectorsCategories.mockResolvedValue({ items: [] });
     api.integrationsCatalog.mockResolvedValue({ services: CATALOG });
     api.integrationsAudit.mockResolvedValue({ entries: AUDIT });
+    api.integrationsInventory.mockResolvedValue(INVENTORY);
+    api.membersList.mockResolvedValue({ members: [{ id: 0, name: "拉斐爾" }, { id: 1, name: "Ada" }, { id: 2, name: "Ben" }], groups: [] });
+    api.membersSkillsList.mockImplementation(async (id: number) => ({ skills: SKILLS.filter((item) => item.member.id === id).map((item) => item.skill) }));
     for (const name of ["integrationsRefresh", "integrationsSetEnabled", "integrationsSetToolEnabled"] as const) api[name].mockResolvedValue({});
     api.integrationsDisconnect.mockResolvedValue({ removed: true, revoked: true });
     api.integrationsConnectCancel.mockResolvedValue({ cancelled: true });
@@ -567,14 +751,54 @@ describe("what the tab does", () => {
     host.tryPrompt.mockReset();
   });
 
-  test("reads the services, the store and the latest actions, and starts on 已安裝", async () => {
+  test("reads the services, the store, the latest actions and the core's count, and starts on 已連結", async () => {
     const c = createConnections(host);
     expect(c.view().groups).toBe("loading");
+    expect(c.view().inventory).toBe("loading");
     await c.load();
     expect(c.view().groups).toEqual(GROUPS);
     expect((c.view().catalog as StoreService[]).map(s => s.id)).toEqual(CATALOG.map(s => s.id));
     expect(c.view().audit).toEqual(AUDIT);
+    expect(c.view().inventory).toEqual(INVENTORY);
     expect(c.view().tab).toBe("installed");
+  });
+
+  test("the count is the core's: read with the services, unknown when it cannot be read, and read again by every change", async () => {
+    api.integrationsInventory.mockRejectedValueOnce("down");
+    const c = createConnections(host);
+    await c.load();
+    expect(c.view().inventory).toBe("failed");
+    expect(c.view().groups).toEqual(GROUPS); // the list is there; only the number is not
+    await c.load();
+    expect(c.view().inventory).toEqual(INVENTORY);
+    // a switch, a sign-in, an uninstall: the services and the count are read again together
+    api.integrationsInventory.mockResolvedValue(inventoryOf([app("cu1", "Files", { tools: 1 })]));
+    c.followEvent({ type: "ConnectionsChanged" });
+    await settle();
+    expect((c.view().inventory as AppsInventory).count).toBe(1);
+  });
+
+  test("reads the private skills of every member but Raphael, and again when a skill changes anywhere", async () => {
+    const c = createConnections(host);
+    expect(c.view().skills).toBe("loading");
+    await c.load();
+    await settle();
+    expect(api.membersSkillsList.mock.calls.map(([id]) => id)).toEqual([1, 2]); // Raphael has none to ask for
+    expect((c.view().skills as SkillItem[]).map((item) => [item.member.name, item.skill.name])).toEqual([["Ada", "summary-style"], ["Ben", "meeting-notes"]]);
+    api.membersSkillsList.mockResolvedValue({ skills: [] });
+    c.followEvent({ type: "MembersChanged" });
+    await settle();
+    expect(c.view().skills).toEqual([]);
+    // a skill list that cannot be read is told where the skills would be, and keeps the old ones when a later read fails
+    api.membersList.mockRejectedValueOnce("down");
+    c.followEvent({ type: "MembersChanged" });
+    await settle();
+    expect(c.view().skills).toEqual([]);
+    const fresh = createConnections(host);
+    api.membersList.mockRejectedValueOnce("down");
+    await fresh.load();
+    await settle();
+    expect(fresh.view().skills).toBe("failed");
   });
 
   test("edits a custom server with blank existing secrets, tests without saving, then persists the draft", async () => {
@@ -778,6 +1002,150 @@ describe("what the tab does", () => {
     await settle();
     expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
     expect(lastToast()).toBe("已重新登入 Notion");
+  });
+
+  describe("a private skill", () => {
+    const DOC = "---\nname: summary-style\ndescription: Use when the owner asks for a summary\n---\nStart with the verdict.";
+    const open = async () => {
+      api.membersSkillsRead.mockResolvedValue({ skill: SKILLS[0]!.skill, text: DOC });
+      const c = createConnections(host);
+      await c.load();
+      await settle();
+      c.click(button("skill-open", { member: "1", id: "7" }));
+      return c;
+    };
+
+    test("opens with its document read, and the page is the one skill of that member", async () => {
+      const c = createConnections(host);
+      await c.load();
+      await settle();
+      let release!: (answer: { skill: unknown; text: string }) => void;
+      api.membersSkillsRead.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+      c.click(button("skill-open", { member: "1", id: "7" }));
+      expect(c.view().skill).toMatchObject({ memberId: 1, id: 7, state: "loading", saved: null });
+      release({ skill: SKILLS[0]!.skill, text: DOC });
+      await settle();
+      expect(api.membersSkillsRead).toHaveBeenCalledWith(1, 7);
+      expect(c.view().skill).toMatchObject({ state: "ready", saved: DOC, draft: DOC, busy: false, error: null });
+      expect(c.view().open).toBeNull(); // the page of a skill is not the dialog of an app
+      api.membersSkillsRead.mockRejectedValueOnce("gone");
+      c.click(button("skill-retry"));
+      await settle();
+      expect(c.view().skill!.state).toBe("failed");
+    });
+
+    test("is edited where it stands (no page drawn again) and kept as typed; the name and the words follow the document", async () => {
+      const c = await open();
+      await settle();
+      const save = { disabled: true };
+      vi.stubGlobal("document", { querySelector: () => save });
+      try {
+        expect(c.input(input("skill-text", DOC))).toBe(true);
+        expect(save.disabled).toBe(true); // nothing changed: nothing to keep
+        host.redraw.mockReset();
+        expect(c.input(input("skill-text", DOC.replace("verdict", "answer")))).toBe(true);
+        expect(save.disabled).toBe(false);
+        expect(host.redraw).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      const edited = DOC.replace("verdict", "answer");
+      api.membersSkillsEdit.mockResolvedValue({ skill: { ...SKILLS[0]!.skill, name: "answer-style" } });
+      api.membersSkillsList.mockImplementation(async (id: number) => ({ skills: id === 1 ? [{ ...SKILLS[0]!.skill, name: "answer-style" }] : [SKILLS[1]!.skill] }));
+      c.click(button("skill-save", { member: "1", id: "7" }));
+      await settle();
+      expect(api.membersSkillsEdit).toHaveBeenCalledWith(1, 7, edited);
+      expect(c.view().skill).toMatchObject({ saved: edited, draft: edited, busy: false, error: null });
+      expect(lastToast()).toBe("已儲存技能");
+      expect((c.view().skills as SkillItem[]).map((item) => item.skill.name)).toEqual(["answer-style", "meeting-notes"]);
+      // saving what was saved is nothing
+      c.click(button("skill-save", { member: "1", id: "7" }));
+      await settle();
+      expect(api.membersSkillsEdit).toHaveBeenCalledTimes(1);
+    });
+
+    test("a document the core refuses stays as it was typed, with the reason in the words of the window", async () => {
+      const c = await open();
+      await settle();
+      c.input(input("skill-text", "no frontmatter"));
+      const refusals: [string, string][] = [
+        ["[-32602] Invalid params: a skill with that name already exists", "這位成員已有同名的技能。"],
+        ["[-32602] Invalid params: name must not be empty", "文件開頭要有 name 與 description。"],
+        ["[-32602] Invalid params: skill document is too large", "文件太大。"],
+        ["[-32602] Invalid params: skill must be a UTF-8 Markdown document", "技能必須是 UTF-8 的 Markdown 文件。"],
+      ];
+      for (const [message, words] of refusals) {
+        api.membersSkillsEdit.mockRejectedValueOnce(message);
+        c.click(button("skill-save", { member: "1", id: "7" }));
+        await settle();
+        expect(c.view().skill).toMatchObject({ draft: "no frontmatter", saved: DOC, busy: false, error: words });
+      }
+      c.input(input("skill-text", "no frontmatter!")); // typing again takes the refusal away
+      expect(c.view().skill!.error).toBeNull();
+    });
+
+    test("is switched on or off from its row, and the list follows", async () => {
+      const c = await open();
+      await settle();
+      api.membersSkillsUpdate.mockResolvedValue({});
+      api.membersSkillsList.mockImplementation(async (id: number) => ({ skills: id === 1 ? [{ ...SKILLS[0]!.skill, enabled: false }] : [SKILLS[1]!.skill] }));
+      c.click(button("skill-enable", { member: "1", id: "7" }));
+      await settle();
+      expect(api.membersSkillsUpdate).toHaveBeenCalledWith(1, 7, false);
+      expect((c.view().skills as SkillItem[])[0]!.skill.enabled).toBe(false);
+      api.membersSkillsUpdate.mockRejectedValueOnce("[-32602] Invalid params: no such member skill");
+      c.click(button("skill-enable", { member: "1", id: "7" }));
+      await settle();
+      expect(lastToast()).toContain("no such member skill");
+    });
+
+    test("is deleted only after the owner agrees, and the page goes with it", async () => {
+      const { confirmDelete } = await import("./member-dialogs");
+      const c = await open();
+      await settle();
+      vi.mocked(confirmDelete).mockResolvedValueOnce(false);
+      c.click(button("skill-delete", { member: "1", id: "7" }));
+      await settle();
+      expect(api.membersSkillsDelete).not.toHaveBeenCalled();
+      expect(c.view().skill).not.toBeNull();
+      api.membersSkillsDelete.mockResolvedValue({ deleted: true });
+      api.membersSkillsList.mockImplementation(async (id: number) => ({ skills: id === 2 ? [SKILLS[1]!.skill] : [] }));
+      vi.mocked(confirmDelete).mockResolvedValueOnce(true);
+      c.click(button("skill-delete", { member: "1", id: "7" }));
+      await settle();
+      expect(confirmDelete).toHaveBeenLastCalledWith("summary-style");
+      expect(api.membersSkillsDelete).toHaveBeenCalledWith(1, 7);
+      expect(c.view().skill).toBeNull();
+      expect((c.view().skills as SkillItem[]).map((item) => item.skill.name)).toEqual(["meeting-notes"]);
+      expect(lastToast()).toBe("已刪除技能 summary-style");
+    });
+
+    test("closes with its X or Escape and drops what was typed; a page whose skill was deleted elsewhere closes by itself", async () => {
+      const c = await open();
+      await settle();
+      c.input(input("skill-text", "half typed"));
+      c.click(button("close"));
+      expect(c.view().skill).toBeNull();
+      c.click(button("skill-open", { member: "1", id: "7" }));
+      await settle();
+      expect(c.view().skill).toMatchObject({ saved: DOC, draft: DOC }); // the document is read again: nothing typed stays
+      const esc = key("Escape");
+      expect(c.key(esc)).toBe(true);
+      expect(c.view().skill).toBeNull();
+      c.click(button("skill-open", { member: "1", id: "7" }));
+      await settle();
+      api.membersSkillsList.mockResolvedValue({ skills: [] });
+      c.followEvent({ type: "MembersChanged" });
+      await settle();
+      expect(c.view().skill).toBeNull();
+      // leaving the tab drops the page too
+      api.membersSkillsList.mockImplementation(async (id: number) => ({ skills: SKILLS.filter((item) => item.member.id === id).map((item) => item.skill) }));
+      await c.load();
+      await settle();
+      c.click(button("skill-open", { member: "2", id: "8" }));
+      c.reset();
+      expect(c.view().skill).toBeNull();
+    });
   });
 
   describe("a server of the user's own", () => {

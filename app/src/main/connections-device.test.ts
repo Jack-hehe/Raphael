@@ -10,6 +10,9 @@ const api = vi.hoisted(() => ({
   integrationsConnect: vi.fn(),
   integrationsConnectCancel: vi.fn(),
   integrationsDisconnect: vi.fn(),
+  integrationsInventory: vi.fn(),
+  membersList: vi.fn(),
+  membersSkillsList: vi.fn(),
   openLink: vi.fn(),
 }));
 vi.mock("./api", () => api);
@@ -54,6 +57,9 @@ beforeEach(() => {
   api.connectorsStatus.mockResolvedValue({ connectors: [], composio_configured: false });
   api.integrationsCatalog.mockResolvedValue({ services: [github] });
   api.integrationsAudit.mockResolvedValue({ entries: [] });
+  api.integrationsInventory.mockResolvedValue({ state: "complete", count: 0, apps: [] });
+  api.membersList.mockResolvedValue({ members: [], groups: [] });
+  api.membersSkillsList.mockResolvedValue({ skills: [] });
   api.integrationsConnectCancel.mockResolvedValue({ cancelled: true });
   api.openLink.mockResolvedValue(undefined);
 });

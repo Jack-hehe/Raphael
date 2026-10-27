@@ -149,7 +149,8 @@ export function sel(options: Choice[], current: string, label: string, attrs = "
 export interface TabItem {
   id: string;
   label: string;
-  count?: number;
+  /** A number beside the name; text for what is not a number yet (「—」: it cannot be known), none for an empty string. */
+  count?: number | string;
   /** Extra attributes for the tab's button, with a leading space. */
   attrs?: string;
 }
@@ -166,7 +167,8 @@ export function tabs(items: TabItem[], selected: string, o: { label: string; kin
   const one = (it: TabItem): string => {
     const on = it.id === selected;
     const state = nav ? `role="tab" aria-selected="${on}"` : `aria-pressed="${on}"`;
-    const n = it.count !== undefined && (it.count > 0 || o.plain) ? `<span class="n">${it.count}</span>` : "";
+    const shown = typeof it.count === "string" ? it.count !== "" : it.count !== undefined && (it.count > 0 || o.plain);
+    const n = shown ? `<span class="n">${esc(it.count)}</span>` : "";
     return `<button type="button" class="tab" ${state}${it.attrs ?? ""}>${esc(it.label)}${n}</button>`;
   };
   const cls = nav ? `tabs ${o.plain ? "plain" : "switch"}${o.fill ? " fill" : ""}` : "tabs seg";
