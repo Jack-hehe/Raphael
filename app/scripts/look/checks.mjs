@@ -786,7 +786,7 @@ export function checkRendered(name) {
     require(window.__look.calls.every(call => call.method !== "members.set_primary"), "opening the menu sets nothing");
     return { check: name, items: picks.length };
   }
-  if (name === "primary-picker" || name === "primary-set" || name === "primary-room-chief") {
+  if (name === "primary-picker" || name === "primary-set" || name === "primary-room-chief" || name === "primary-strip") {
     const data = window.__look.data, calls = window.__look.calls;
     const sets = calls.filter(call => call.method === "members.set_primary");
     const column = document.querySelector('.mb-col');
@@ -847,6 +847,15 @@ export function checkRendered(name) {
       return { check: name, column: visible(column), size };
     }
     require(data.primaryId === 1 && sets.length === 0, "the primary contact is 小晴 from the start, and nothing changes it here");
+    if (name === "primary-strip") {
+      require(column.classList.contains('is-collapsed') && Math.abs(column.getBoundingClientRect().width - 56) < 1, "the face strip is collapsed");
+      require(starred().join() === '1', `only 小晴 wears the star on the strip, found ${starred().join()}`);
+      const row = column.querySelector('[data-member="1"]'), tip = document.querySelector('.message-tooltip:not([hidden])');
+      require(row.dataset.tooltip === row.getAttribute('aria-label') && row.dataset.tooltip.includes(' · '), "its name and tooltip say it is the primary contact too");
+      require(visible(tip) && tip.textContent.trim() === row.dataset.tooltip, "the hover tooltip says so");
+      require(column.querySelector('[data-member="0"]').dataset.tooltip === column.querySelector('[data-member="0"]').getAttribute('aria-label') && !column.querySelector('[data-member="0"]').dataset.tooltip.includes(' · '), "Raphael's face keeps his name alone");
+      return { check: name, size: onFace(row) };
+    }
     const room = data.rooms[0], faces = [...document.querySelectorAll('.au-room-heading .au-room-participant')];
     require(room.member_ids.includes(0) && faces.length === room.member_ids.length, "the header names every member of the room, Raphael included");
     const crowned = faces.filter(face => face.querySelector('.au-room-crown'));

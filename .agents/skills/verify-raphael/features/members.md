@@ -112,14 +112,14 @@ either (the video and the spec say nothing about them): the 拉斐爾 page still
 him first; the owner reaches the primary by selecting its row, and it is the other Bots and the brains that route new work to it.
 
 ```powershell
-npm run look -- primary-contact-menu primary-contact-picker primary-contact-set --theme both --width 1120,720,1920x1080
+npm run look -- primary-contact-menu primary-contact-picker primary-contact-set primary-contact-strip --theme both --width 1120,720,1920x1080
 npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded details raphael-details --theme both --width 1120,720,1920x1080
 ```
 
 `primary-contact-menu` opens 小森's menu and checks that 設為主要, with the star icon, is one item right after 移到分組. `primary-contact-picker` opens the window from it while 小晴 is the primary (fixture key `primaryMember`) and checks the title, that
 the members are buttons of one radio group with no native control, that 小晴 is not offered and Raphael is, one choice with its check, 取消 just left
 of the primary 設為主要, and that nothing was set yet. `primary-contact-set` chooses 小晴 and presses 設為主要: one `members.set_primary` call, the star on
-her row (and no longer on Raphael's) and on the face in her details, and no room, routine, task or conversation call. The scenes of the
+her row (and no longer on Raphael's) and on the face in her details, and no room, routine, task or conversation call. `primary-contact-strip` collapses the column with 小晴 as the primary: the star is on her face alone and her name and tooltip say 「小晴 · 主要聯絡人」. The scenes of the
 column and the details show Raphael's star while he is the primary. The IPC double keeps `primaryId` as the core keeps the flag: the list's
 `team_context.primary_id` says it, a hidden or deleted primary is Raphael again, and a hidden member cannot be chosen.
 
