@@ -1,4 +1,4 @@
-import { scene, click, hover, type, wait, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
+import { scene, click, hover, type, wait, waitGone, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
 
 const details = [member(1), { action: "open-details" }, check("member-details")];
 const composer = [click(".cmp-attach"), wait("#app-popover")];
@@ -134,6 +134,18 @@ export default [
   scene("row-menu", "Conversation actions in the details panel", [...details, click(".mb-det [data-conversation-more]"), wait("#app-popover [data-pick]")]),
   ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog"), ...(action === "delete" ? [check("delete-confirmation")] : [])])),
   scene("new-conversation", "Create a conversation", [...details, click(".mb-det [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
+  // The owner's flows of 2026-10-27, each to its end in the real page.
+  scene("member-delete", "A member is deleted from its ⋯ menu after the confirmation: its row leaves and a notice says so", [
+    { action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), click('#app-popover [data-pick="delete"]'), wait(".mb-dialog"),
+    click('.mb-dialog [data-dlg="delete"]'), waitGone('.mb-col [data-member="2"]'), wait(".toast"), check("member-deleted")]),
+  scene("sidebar-new-conversation", "新對話 in the sidebar's ＋ makes a new conversation with the picked member and opens it, twice, so also from that member's empty one", [
+    { action: "member-column", collapsed: false },
+    ...[1, 2].flatMap(() => [click('.mb-col [data-col="add"]'), click('#app-popover [data-pick="conversation"]'), type("[data-chat-search]", "小晴"),
+      click('[data-dlg="conversation"]'), waitGone(".mb-chat-picker"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
+    check("conversation-made")]),
+  scene("conversation-delete-main", "Deleting Raphael's main conversation: its row leaves, the latest one takes over, and no empty 新對話 takes its place", [
+    { action: "open-details" }, click('.mb-det [data-conversation-more="1"]'), click('#app-popover [data-pick="delete"]'), wait(".mb-dialog"),
+    click('.mb-dialog [data-dlg="delete"]'), waitGone('.mb-det [data-conversation-open="1"]'), wait(".toast"), check("conversation-deleted")]),
   scene("details", "Title opens member details", [...details, { action: "icon-interactions", selector: '.mb-det [data-det="close"]' }]),
   scene("raphael-details", "Title opens Raphael details", [{ action: "open-details" }, check("member-details")]),
   scene("details-closed", "Title closes details after expanding the member column", [{ action: "member-column", collapsed: false }, ...details, click(".conversation-trigger"), wait('.conversation-trigger[aria-expanded="false"]')]),

@@ -137,6 +137,28 @@ export function checkRendered(name) {
     require(last.bottom <= answer.top, "events stand between the owner's words and Raphael's answer");
     return { check: name, lines };
   }
+  if (name === "member-deleted") {
+    require(window.__look.calls.some(call => call.method === "members.delete" && call.params?.id === 2), "the core is asked to delete that member");
+    require(!window.__look.data.members.some(item => item.id === 2) && !document.querySelector('[data-member="2"]'), "the member is gone from the team and the list");
+    require(document.querySelector(".toast")?.textContent.includes("已刪除「小森」"), "a notice names who was deleted");
+    return { check: name };
+  }
+  if (name === "conversation-made") {
+    const made = window.__look.calls.filter(call => call.method === "conversations.create").map(call => call.params?.member_id);
+    require(made.length === 2 && made.every(id => id === 1), "each 新對話 makes a conversation with the picked member, also from its empty one");
+    const latest = Math.max(...window.__look.data.conversations.filter(item => item.member_id === 1).map(item => item.id));
+    require(window.__look.calls.filter(call => call.method === "agent.history.list").at(-1)?.params?.conversation_id === latest, "the newest conversation is the one open");
+    require(document.querySelector(".conversation-caption")?.textContent === "新對話", "the open conversation is the new one");
+    return { check: name, made };
+  }
+  if (name === "conversation-deleted") {
+    const rows = [...document.querySelectorAll(".mb-det [data-conversation-open]")].map(row => row.textContent);
+    require(!rows.some(text => text.includes("這週的研究與安排")), "the deleted conversation is gone");
+    require(!rows.some(text => text.includes("新對話")), "no empty 新對話 takes its place");
+    require(window.__look.data.conversations.filter(item => item.member_id === 0 && item.is_default).length === 1, "another conversation became the main one");
+    require(document.querySelector(".toast")?.textContent.includes("已刪除「這週的研究與安排」"), "a notice names what was deleted");
+    return { check: name, rows };
+  }
   if (name === "work-dots") {
     const dots = [...document.querySelectorAll('.work-section.is-live .work-toggle .think i')].filter(visible);
     require(dots.length === 3, "the live work row shows its three dots");

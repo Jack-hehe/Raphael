@@ -23,7 +23,16 @@ complete flow for creation changes.
 npm run look -- members-expanded members-collapsed members-collapsed-hover members-reexpanded --theme both --width 1120,720,1920x1080
 npm run look -- details member-avatar member-edit details-memory details-routines details-skills details-commands details-voice --theme both --width 1120,720,1920x1080
 npm run look -- team-new-menu member-text --theme both --width 1120,720,1920x1080
+npm run look -- member-delete sidebar-new-conversation conversation-delete-main --theme both --width 1120,720,1920x1080
 ```
+
+The last command walks the owner's flows of 2026-10-27 to their end: `member-delete`
+deletes 小森 from the row's ⋯ menu after the confirmation (the menu had lost 刪除 on
+10/24); `sidebar-new-conversation` presses 新對話 in the sidebar's ＋ twice for 小晴,
+the second time from the empty conversation the first made, and each press must make a
+conversation; `conversation-delete-main` deletes Raphael's main conversation, and the
+latest one must take over with no empty 新對話 in its place (the look mock keeps the main
+conversation as the core's `Conversations.main` does).
 
 Keep details/resource-pane/avatar-menu/edit-dialog PNGs; check layering, focus and
 scroll access. Current scenes open editing but do not save. For creation work extend
