@@ -666,6 +666,9 @@ mod tests {
 
     #[test]
     fn committed_chinese_and_japanese_text_is_read_from_the_same_terminal_field() {
+        // One Han character changed is a whole word only by the Windows zh-TW word breaker; a
+        // machine without it (the CI runner) fails closed and learns nothing (`cjk_words`).
+        let segmented = super::super::cjk_words::word_ranges("拉斐爾在臺北").is_some();
         for (old, new) in [("拉菲爾", "拉斐爾"), ("ラファエル", "ラフィエル")] {
             let pasted = format!("今天請用{old}來整理昨天的會議紀錄並且寄給大家確認。");
             let fixed = pasted.replace(old, new);
@@ -674,7 +677,13 @@ mod tests {
                 tracker.observe_input(&format!("> {fixed}"), true),
                 TerminalDecision::Continue
             );
-            assert_eq!(tracker.corrections()[0].word, new);
+            let learned: Vec<String> = tracker.corrections().into_iter().map(|c| c.word).collect();
+            let expected = if new == "拉斐爾" && !segmented {
+                vec![]
+            } else {
+                vec![new.to_owned()]
+            };
+            assert_eq!(learned, expected, "{old} -> {new}");
         }
     }
 
