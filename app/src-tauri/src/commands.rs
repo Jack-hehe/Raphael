@@ -2635,6 +2635,7 @@ mod tests {
             "integrations.set_tool_enabled",
             "integrations.set_tools_enabled",
             "integrations.audit",
+            "integrations.inventory",
             "toolsets.list",
             "worker.cancel",
             "worker.rerun",
