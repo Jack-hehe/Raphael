@@ -473,9 +473,14 @@ export function createAgent(app: AppContext): Page {
   let outgoing: Outgoing[] = [];
   let sent = 0;
   /** A spoken question's recipient and history boundary stay fixed across thread changes. */
-  let hearing: { since: number; after: number; member: number } | null = null;
+  let hearing: { since: number; after: number | null; member: number } | null = null;
   /** Ends `hearing` at `HEARING_MAX_MS` when neither its turn nor any other word of the core comes. */
   let hearingTimer: ReturnType<typeof setTimeout> | undefined;
+  const stoppingComposerTasks = new Set<string>();
+  /** The native voice key names quick for Raphael and the main conversation for a member. */
+  const voiceConversationId = (member: number): number | undefined =>
+    conversationCache.get(member)?.find(c => member === RAPHAEL_ID ? c.kind === "quick" : c.is_default)?.id;
+  const hearingBelongs = (): boolean => hearing !== null && hearing.member === memberId() && conversationId() === voiceConversationId(hearing.member);
   /** Draft file bytes, kept in memory until the request is sent. */
   let files: ComposerFile[] = [];
   let fileIds = 0;
@@ -534,7 +539,7 @@ export function createAgent(app: AppContext): Page {
   const atBottom = (): boolean => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= BOTTOM_SLACK_PX;
   const newestId = (): number => turns.reduce((max, turn) => Math.max(max, turn.id), 0);
   const isEmpty = (): boolean =>
-    turns.length === 0 && !outgoing.some(belongs) && hearing?.member !== memberId();
+    turns.length === 0 && !outgoing.some(belongs) && !hearingBelongs();
 
   const look = (): TurnLook => {
     const latest = turns.filter(turn => turn.question.trim() && sourceOf(turn) !== "routine" && sourceOf(turn) !== "member" && turn.route !== "exchange" && (turn.text.trim() || turn.messages?.some(m => m.kind === "reply"))).reduce((id, turn) => Math.max(id, turn.id), 0);
@@ -582,7 +587,7 @@ export function createAgent(app: AppContext): Page {
    * Raphael's or the member's. Every thread's voice button is the gold emblem (拉斐爾大師), never a picture.
    */
   function drawFaces(): void {
-    voiceButton.innerHTML = avatarHTML({ size: 32, avatar: null });
+    drawComposerTask();
     if (inRaphael()) {
       askFace.innerHTML = avatarHTML({ size: 30 });
       hero.innerHTML = avatarHTML({ size: 132, loop: true });
@@ -695,10 +700,7 @@ export function createAgent(app: AppContext): Page {
   /** The composer or, while Raphael asks, the card in its place; under the thread, or under Raphael on the empty page. */
   function drawDock(): void {
     selectQuestion();
-    const active = outgoing.some(belongs) || own().some(turn=>turn.status==="running" || turn.status==="confirm" || isLive(turn.task) || turn.task?.state==="waiting");
-    voiceButton.innerHTML = avatarHTML({size:32,avatar:null});
-    voiceButton.setAttribute("aria-label",t("agent.voice"));
-    drawTaskSlot(composer, active ? question ? "waiting" : outgoing.some(belongs) ? "ack" : "running" : "idle");
+    drawComposerTask();
     firstBot.sync(inRaphael() && members.member().profile_ready === false && isEmpty() && !question && !pending);
     hero.hidden = hi.hidden = !firstBot.el.hidden;
     const home = empty.hidden ? dock : slot;
@@ -760,7 +762,7 @@ export function createAgent(app: AppContext): Page {
     );
     if (!(searching && query.trim() !== "")) {
       for (const sent of outgoing) if (belongs(sent)) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
-      if (hearing?.member === memberId()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
+      if (hearingBelongs()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
     }
     return out;
   }
@@ -996,7 +998,8 @@ export function createAgent(app: AppContext): Page {
     outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
     if (
       hearing &&
-      ((hearing.member === current && turns.some((turn) => turn.id > hearing!.after && sourceOf(turn) === VOICE)) ||
+      ((hearingBelongs() && turns.some((turn) => sourceOf(turn) === VOICE &&
+        (hearing!.after === null ? turn.created_at_ms >= hearing!.since : turn.id > hearing!.after))) ||
         Date.now() - hearing.since > HEARING_MAX_MS)
     ) {
       stopHearing();
@@ -1010,7 +1013,7 @@ export function createAgent(app: AppContext): Page {
    * load would come to settle it.
    */
   function startHearing(member: number): void {
-    hearing = { since: Date.now(), after: listeningAfter, member };
+    hearing = { since: Date.now(), after: listeningKnown ? listeningAfter : null, member };
     clearTimeout(hearingTimer);
     hearingTimer = setTimeout(() => {
       hearingTimer = undefined;
@@ -1185,6 +1188,11 @@ export function createAgent(app: AppContext): Page {
   let listening = false;
   let voiceMember = RAPHAEL_ID;
   let listeningAfter = 0;
+  let listeningKnown = false;
+  function rememberVoiceBoundary(member: number): void {
+    listeningKnown = member === memberId() && conversationId() === voiceConversationId(member);
+    listeningAfter = newestId();
+  }
   let pressedMember = RAPHAEL_ID;
   const sendVoice = (edge: "down" | "up", member: number): Promise<void> =>
     member === RAPHAEL_ID ? api.agentVoice(edge) : api.agentVoice(edge, member);
@@ -1202,7 +1210,7 @@ export function createAgent(app: AppContext): Page {
     const starting = !listening;
     if (starting) {
       voiceMember = pressedMember;
-      listeningAfter = newestId();
+      rememberVoiceBoundary(pressedMember);
     }
     if (voiceMember === memberId()) voice.up();
     if (starting) {
@@ -1697,13 +1705,37 @@ export function createAgent(app: AppContext): Page {
     if (memberId() === member && attachmentEpoch === epoch) restoreDraft({ ...draft, replacing: source.turn.id });
   }
 
+  /** The displayed slot and its action always refer to the same reply in this conversation. */
+  function composerTask() {
+    const member = memberId();
+    const sent = [...outgoing].reverse().find(belongs);
+    if (sent) return { key: `request:${sent.requestId}`, state: "ack" as const, stop: () => api.agentStop(sent.requestId, member) };
+    const turn = [...own()].reverse().find(turn => turn.status === "running" || turn.status === "confirm" || isLive(turn.task) || turn.task?.state === "waiting");
+    const task = turn?.task;
+    if (task && (isLive(task) || task.state === "waiting")) return { key: `task:${task.id}`, state: "running" as const, stop: () => api.workerCancel(task.id) };
+    if (turn?.session_id) return { key: `request:${turn.session_id}`, state: "running" as const, stop: () => api.agentStop(turn.session_id!, member) };
+    // Before agent.turn exists, the native controller alone owns transcription/routing and its session.
+    if (hearingBelongs()) return { key: `voice:${hearing!.since}`, state: "ack" as const, stop: () => api.cancelSession() };
+    return null;
+  }
+
+  function drawComposerTask(): void {
+    const task = composerTask();
+    voiceButton.innerHTML = avatarHTML({ size: 32, avatar: null });
+    voiceButton.setAttribute("aria-label", t("agent.voice"));
+    voiceButton.disabled = false;
+    if (task) { voice.drop(); voiceButton.classList.remove("vm-away"); }
+    drawTaskSlot(composer, task ? question ? "waiting" : task.state : "idle", task !== null && stoppingComposerTasks.has(task.key));
+  }
+
   async function stopComposerTask(): Promise<void> {
-    const task=own().find(turn=>isLive(turn.task)||turn.task?.state==="waiting")?.task;
-    if(task){await api.workerCancel(task.id);void load(false);return;}
-    const turn=own().find(turn=>turn.status==="running" || turn.status==="confirm");
-    const request=outgoing.find(belongs)?.requestId ?? turn?.session_id;
-    if(request)await api.agentStop(request,memberId());
-    void load(false);
+    const task = composerTask();
+    if (!task || stoppingComposerTasks.has(task.key)) return;
+    stoppingComposerTasks.add(task.key);
+    drawComposerTask();
+    try { await task.stop(); }
+    finally { stoppingComposerTasks.delete(task.key); drawComposerTask(); }
+    if (visible) void load(false);
   }
 
   async function cancelMessage(control?: HTMLElement): Promise<void> {
@@ -2096,14 +2128,14 @@ export function createAgent(app: AppContext): Page {
     } else if (event.type === "Dictation" && event.agent) {
       if (event.phase === "listening") {
         const member = event.member_id ?? RAPHAEL_ID;
-        if (!listening || voiceMember !== member) listeningAfter = newestId();
+        if (!listening || voiceMember !== member) rememberVoiceBoundary(member);
         voiceMember = member;
         listening = true;
         if (visible && !question && voiceMember === memberId()) voice.up();
       } else {
         if (event.phase === "processing") {
           const member = event.member_id ?? RAPHAEL_ID;
-          if (!listening || voiceMember !== member) listeningAfter = newestId();
+          if (!listening || voiceMember !== member) rememberVoiceBoundary(member);
           voiceMember = member;
         }
         listening = false;
