@@ -374,9 +374,12 @@ class EmailDrafts:
 
     def views(self, turn_ids: Iterable[int]) -> dict[int, list[dict]]:
         """What each turn shows of the drafts: the full card, or for the first chat of a draft handed to a colleague its line."""
+        found = self.store.shown_in(turn_ids)
+        if not found:
+            return {}  # most pages of a chat have no draft: the connections are not listed for them
         senders = [{"key": tool.key, "name": tool.server} for tool in self.senders()]
         shown: dict[int, list[dict]] = {}
-        for turn_id, drafts in self.store.shown_in(turn_ids).items():
+        for turn_id, drafts in found.items():
             for draft in drafts:
                 if draft.turn_id == turn_id:
                     shown.setdefault(turn_id, []).append(self._card(draft, senders))
