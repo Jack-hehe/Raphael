@@ -93,6 +93,11 @@ export async function run(options) {
           };
           window.addEventListener("unhandledrejection", event => { window.__look.errors.push(`Unhandled rejection: ${String(event.reason)}`); });
         }, fixture.now);
+        // One browser profile serves the whole run: a scene starts from the storage its own steps make, never from
+        // what an earlier scene left there (a collapsed member column hid the rooms of the scene after it).
+        const storage = await page.createCDPSession();
+        await storage.send("Storage.clearDataForOrigin", { origin, storageTypes: "local_storage,session_storage" });
+        await storage.detach();
         await page.goto(`${origin}/${scene.entry ?? ""}`, { waitUntil: "networkidle0", timeout: 20000 });
         await page.waitForSelector(scene.entry === "overlay.html" ? "#progress:not([hidden])" : scene.fixture.onboarding ? '#ob:not([hidden]) [data-ob="next"]' : '.page-home:not([hidden]) .ho-hero', { visible: true, timeout: 10000 });
         // Existing conversation journeys enter through the real rail after the home is ready.
