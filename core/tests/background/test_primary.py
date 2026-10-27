@@ -18,7 +18,7 @@ def told(system):
 
 @pytest.mark.parametrize("selected,expected", [
     ("teacher", ["hand it to the primary contact", "ask_member"]),
-    ("coach", ["That is you", "hand such requests to him"]),
+    ("coach", ["That is you", "hand such a request to him"]),
     ("raphael", ["conclude each one and alone administer the team"]),
 ])
 async def test_a_task_is_told_who_the_primary_contact_is_and_what_that_makes_of_it(make_rig, conn, tmp_path, selected, expected):

@@ -237,17 +237,18 @@ def primary_contact_prompt(context: dict, speaker: Speaker) -> str:
     if speaker.id == primary["id"] and speaker.is_raphael:
         return text + " That is you."
     if speaker.id == primary["id"]:
-        return text + (" That is you: the owner brings new work to you first. When it belongs to a colleague (the roles "
-                       "are above), hand it over with the handoff tool and tell the owner who has it; do only your own "
-                       "work yourself. Raphael alone administers the team (members, groups, meetings): hand such "
-                       "requests to him.")
+        return text + (" That is you: the owner brings new work to you first. When the owner gives you work in your own chat "
+                       "that belongs to a colleague (the roles are above), hand it over with the handoff tool and tell the "
+                       "owner who has it; do only your own work yourself. Raphael alone administers the team (members, "
+                       "groups, meetings): hand such a request to him, or tell the owner to ask him.")
     if speaker.is_raphael:
         return text + (f" {dispatch} You keep the chief of staff's duties: you are in every room, conclude each one "
                        "and alone administer the team. Work for you reaches you as a hand-off, like any colleague's.")
-    return text + (f" {dispatch} When the owner asks you to get something done by a colleague, or work is not yours to "
-                   "do, hand it to the colleague it belongs to with the handoff tool (a question for a colleague is "
-                   "ask_member); if you cannot tell whose it is, hand it to the primary contact. Raphael alone "
-                   "administers the team (members, groups, meetings).")
+    return text + (f" {dispatch} When the owner asks you in your own chat to get something done by a colleague, or gives "
+                   "you work that is not yours to do, hand it to the colleague it belongs to with the handoff tool (a "
+                   "question for a colleague is ask_member); if you cannot tell whose it is, hand it to the primary "
+                   "contact. Raphael alone administers the team (members, groups, meetings): hand such a request to him, "
+                   "or tell the owner to ask him.")
 
 
 def roster_prompt(team: Team | None, speaker: Speaker, language: str) -> str:

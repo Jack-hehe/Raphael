@@ -276,7 +276,7 @@ async def test_the_roster_names_the_primary_to_each_kind_of_speaker(rig):
     for text in (for_alice, for_bob, for_raphael):
         assert text.startswith('"Alice" (id %d).' % alice) and "chief of staff whoever the primary contact is" in text
     # the primary dispatches what it is given and sends administration to Raphael
-    assert "That is you" in for_alice and "handoff" in for_alice and "hand such requests to him" in for_alice
+    assert "That is you" in for_alice and "handoff" in for_alice and "hand such a request to him, or tell the owner to ask him" in for_alice
     # another member forwards work to the colleague it belongs to, and what it cannot place to the primary
     assert "That is you" not in for_bob and "hand it to the primary contact" in for_bob and "ask_member" in for_bob
     # Raphael keeps the chief of staff's duties and the administration
