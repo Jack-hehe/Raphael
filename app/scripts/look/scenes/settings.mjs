@@ -33,7 +33,7 @@ export default [
   scene("skins", "Skin preview hover", [...settings("appearance"), hover('[data-skin-choice="paper"]')]),
   ...["default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"].map(skin => scene(`skin-${skin}`, `${skin} appearance previews`, [...settings("appearance"), click(`[data-skin-choice="${skin}"]`)])),
   scene("plugins-installed", "Unified managed, private Google and custom MCP plugins", [...connections, wait('[data-conn="open"][data-id="composio:notion"]')]),
-  scene("plugins-detail", "Managed tools grouped by write and read", [...connections, click('[data-conn="open"][data-id="composio:notion"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]')]),
+  scene("plugins-detail", "Managed tools grouped by write and read", [...connections, click('[data-conn="open"][data-id="composio:notion"]'), click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]')]),
   scene("plugins-store", "Built-in services followed by deduplicated Composio apps", [...store, wait('.cs-composio-section .cs-card'), check("plugins-store"), check("plugins-store-rows"), check("plugins-store-groups")], { pluginsMany: true }),
   scene("plugins-store-category", "Filter the complete grouped catalog locally, then open its category menu", [
     ...store, wait('.cs-composio-section .cs-card'), check("plugins-store-groups"),
