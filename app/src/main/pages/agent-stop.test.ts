@@ -93,6 +93,50 @@ test("a typed request remains stoppable before the CLI's first turn and through 
   expect(api.agentVoice).not.toHaveBeenCalled();
 });
 
+test("a pending request uses the live work line and keeps its seconds through the running announcement", async () => {
+  api.agentAskText.mockReturnValue(new Promise(() => {})); mount(); await flush();
+  $<HTMLTextAreaElement>(".cmp-input").value = "Please prepare the report";
+  $(".composer").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  const pending = $(".is-pending .work-section.is-live");
+  expect(pending).not.toBeNull();
+  expect(pending.textContent).toBe("思考中…· 0 秒");
+  expect(pending.querySelectorAll(".think i")).toHaveLength(3);
+  expect(pending.querySelector("button, [data-act], .work-chevron, .work-body")).toBeNull();
+  expect(document.querySelector(".ans.thinking")).toBeNull();
+  await vi.advanceTimersByTimeAsync(3000);
+  expect($(".is-pending .work-time").textContent).toBe("· 3 秒");
+  turns = [live({ session_id: api.agentAskText.mock.lastCall![3].requestId })];
+  await refresh({ type: "AgentTurn", turn_id: 11, member_id: 0 });
+  expect(document.querySelector(".is-pending")).toBeNull();
+  expect($('[data-thinking-turn="11"] .work-time').textContent).toBe("· 3 秒");
+  await vi.advanceTimersByTimeAsync(1000);
+  expect($('[data-thinking-turn="11"] .work-time').textContent).toBe("· 4 秒");
+  await refresh({ type: "AgentTurn", turn_id: 11, member_id: 0 });
+  expect($('[data-thinking-turn="11"] .work-time').textContent).toBe("· 5 秒");
+});
+
+test("a spoken pending request keeps its clock when its running turn arrives", async () => {
+  mount(); await flush(); await choose(0, 4);
+  emit({ type: "Dictation", phase: "processing", agent: true, member_id: 0 });
+  await vi.advanceTimersByTimeAsync(3000);
+  expect($(".is-pending .work-time")?.textContent).toBe("· 3 秒");
+  turns = [live({ conversation_id: 4, source: "voice" })];
+  await refresh({ type: "AgentTurn", turn_id: 11, member_id: 0 });
+  expect($('[data-thinking-turn="11"] .work-time').textContent).toBe("· 3 秒");
+});
+
+test("a finished paced reply keeps its settled work chip without a second waiting style", async () => {
+  turns = [live()]; mount(); await flush();
+  turns = [live({ status: "done", messages: [
+    { seq: 1, kind: "reply", text: "First answer", at_ms: Date.now() },
+    { seq: 2, kind: "reply", text: "The next answer is still being revealed", at_ms: Date.now() },
+  ] })];
+  await refresh({ type: "AgentTurn", turn_id: 11, member_id: 0 });
+  expect(document.body.textContent).not.toContain("The next answer");
+  expect(document.querySelector(".ans.thinking, .work-section.is-live")).toBeNull();
+  expect($(".work-toggle")?.textContent).toContain("已處理 0 秒");
+});
+
 test.each([[0, 4], [3, 31]])("voice processing for member %s is stoppable before any turn is announced", async (member, conversation) => {
   mount(); await flush(); await choose(member, conversation);
   emit({ type: "Dictation", phase: "listening", agent: true, member_id: member });

@@ -63,6 +63,12 @@ describe("rendered look checks", () => {
     for (const element of window.document.querySelectorAll('*')) element.getBoundingClientRect = () => ({ left: 10, top: 10, right: 110, bottom: 40, width: 100, height: 30 });
     return { window, audit: () => auditDocument(window.document, { width: 1120, height: 900 }, []) };
   };
+  it("rejects a second dots style in the conversation", () => {
+    const { window, audit } = productAudit('<section class="page-agent"><p class="ans thinking"><span class="think"></span></p></section>');
+    expect(audit().productRules).toContainEqual(expect.objectContaining({ rule: 'R-UI-38', reason: 'Conversation waiting must use the shared work line' }));
+    window.document.querySelector('.ans').remove();
+    expect(audit().productRules).toEqual([]);
+  });
   it("checks visible primary calendar choices without counting the hidden responsive copy", () => {
     const window = new Window();
     window.document.body.innerHTML = '<aside hidden><button data-drag-member="0"></button><button data-drag-member="1"></button></aside><div><button data-drag-member="1"></button><button data-drag-member="0"></button></div>';

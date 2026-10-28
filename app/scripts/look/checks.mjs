@@ -184,10 +184,13 @@ export function checkRendered(name) {
     require(document.querySelector(".toast")?.textContent.includes("已刪除「這週的研究與安排」"), "a notice names what was deleted");
     return { check: name, rows };
   }
-  if (name === "work-dots") {
-    const dots = [...document.querySelectorAll('.work-section.is-live .work-toggle .think i')].filter(visible);
+  if (name === "work-dots" || name === "pending-work") {
+    const section = document.querySelector(`${name === "pending-work" ? '.tn.is-pending ' : ''}.work-section.is-live`);
+    require(visible(section), "the live work line is visible");
+    require(!document.querySelector('.page-agent .ans.thinking'), "the conversation never shows a second dots style");
+    const dots = [...section.querySelectorAll('.work-toggle .think i')].filter(visible);
     require(dots.length === 3, "the live work row shows its three dots");
-    require(dots.some(dot => getComputedStyle(dot).animationPlayState === "paused" && getComputedStyle(dot).transform !== "none"), "the dots are held mid-bounce");
+    if (name === "work-dots") require(dots.some(dot => getComputedStyle(dot).animationPlayState === "paused" && getComputedStyle(dot).transform !== "none"), "the dots are held mid-bounce");
     for (const dot of dots) {
       const box = dot.getBoundingClientRect();
       for (let parent = dot.parentElement; parent && !parent.matches('.work-section'); parent = parent.parentElement) {
@@ -196,8 +199,10 @@ export function checkRendered(name) {
         require(box.top >= edge.top - 0.5 && box.bottom <= edge.bottom + 0.5, "a moving dot is never cut off by the row around it");
       }
     }
-    const row = document.querySelector('.work-section.is-live .work-toggle')?.textContent ?? "";
+    const row = section.querySelector('.work-toggle')?.textContent ?? "";
     require(row.includes("思考中") && !row.includes("處理中"), "a reply that has just started says once what is happening");
+    require(/^· \d+ 秒$/.test(section.querySelector('.work-time')?.textContent ?? ""), "the live line includes elapsed seconds");
+    if (name === "pending-work") require(!section.querySelector('button, [data-act], .work-chevron, .work-body'), "pending work has nothing empty to expand");
     return { check: name, row };
   }
   if (name === "conversation-running") {
