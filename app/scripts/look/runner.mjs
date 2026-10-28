@@ -107,7 +107,17 @@ export async function run(options) {
           await page.waitForSelector('.page-agent:not([hidden]) .conversation-trigger', { visible: true, timeout: 10000 });
         }
         for (const step of scene.steps) {
-          const assertion = await perform(page, step);
+          const trace = process.env.LOOK_TRACE === "1" && step.measure
+            ? `${scene.name}-${theme}-${width}-${step.measure.name}.trace.json` : null;
+          if (trace) await page.tracing.start({ path: join(directory, trace), categories: ["devtools.timeline", "blink.user_timing", "v8.execute", "disabled-by-default-v8.cpu_profiler"] });
+          let assertion;
+          try { assertion = await perform(page, step); }
+          finally {
+            if (trace) {
+              await page.tracing.stop();
+              (result.traces ??= []).push(trace);
+            }
+          }
           if (assertion?.check) (result.assertions ??= []).push(assertion);
         }
         await page.evaluate(async () => { await document.fonts.ready; await Promise.all([...document.images].map(image => image.decode().catch(() => {}))); });

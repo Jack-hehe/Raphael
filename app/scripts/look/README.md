@@ -32,6 +32,11 @@ in `report.json`. The Store's configured scenes use 360 extra synthetic apps fro
 `pluginCatalogLoad` with the `pluginsMany` variant, then measure opening and searching
 the complete grouped list. This is offline browser timing, not provider/native timing.
 
+Set `LOOK_TRACE=1` to save a Chrome performance trace for each measured interaction
+beside the report (including failed budget assertions). `look-paint-start` and
+`look-paint-end` delimit the measured interval; trace filenames are listed per result.
+Tracing is optional diagnostic overhead and does not change the 250 ms budget.
+
 Look needs an installed Edge/Chrome and the pinned **puppeteer-core@25.13.0** devDependency.
 It never downloads a browser or installs packages. Preserve the package/lockfile pin.
 `LOOK_BROWSER` optionally selects an executable. Node 22 or later is required.

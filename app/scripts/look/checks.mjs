@@ -1166,6 +1166,22 @@ export function checkRendered(name) {
     require(document.querySelector('[data-run-act="show-allowance"]'), "subscription exclusion links to allowances");
     return { check: name, bill: bill.textContent, sidebar: sidebar.textContent };
   }
+  if (name === "plugins-store-scrolled") {
+    const row = document.querySelector('.cs-composio-category:last-child .cs-card:last-child');
+    require(row?.textContent.includes('360'), "scrolling reaches the last app without fetching or pagination");
+    const box = row.getBoundingClientRect();
+    const main = row.querySelector('.cs-main'), add = row.querySelector('[data-conn="join"]');
+    const mainBox = main.getBoundingClientRect(), addBox = add.getBoundingClientRect();
+    const mark = row.querySelector('.ic').getBoundingClientRect();
+    require(box.top >= 0 && box.bottom <= window.innerHeight, "the last row scrolls fully into view");
+    require(mainBox.width > 0 && mainBox.height >= 62 && addBox.width > 0 && mark.width > 0, "deferred contents lay out their mark, text and Add action on arrival");
+    require(mainBox.right <= addBox.left && addBox.right <= box.right, "the last row keeps its inline action without overlap");
+    return { check: name, height: box.height, id: main.dataset.id };
+  }
+  if (name === "plugins-store-last-detail") {
+    require(document.querySelector('.cs-page h2')?.textContent.includes('360'), "the last app opens its own detail after scrolling");
+    return { check: name };
+  }
   if (["plugins-store-groups", "plugins-store-search", "plugins-store-category"].includes(name)) {
     const groups = [...document.querySelectorAll('.cs-composio-category')];
     const rows = [...document.querySelectorAll('.cs-composio-section .cs-card')];

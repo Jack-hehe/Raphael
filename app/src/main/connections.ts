@@ -260,10 +260,10 @@ export const connectionsAddHTML = (): string =>
   `<button type="button" class="sel cs-add" aria-haspopup="menu" aria-expanded="false" data-k="conn-add">` +
   `<span>${esc(t("conn.addMenu"))}</span>${ico("down")}</button>`;
 
-function barHTML(v: ConnectionsView): string {
+function barHTML(v: ConnectionsView, entries: StoreEntries): string {
   // 「已連結」 counts the apps whose tools can be called now, as the core counts them (the sidebar's number and the roster's): not the rows below it.
   const installed = countText(v.inventory);
-  const store = storeEntries(v).length;
+  const store = entries.count;
   const tab = (id: Tab, label: string, count: number | string) => ({ id, label, count, attrs: ` data-conn="tab" data-id="${id}" data-k="conn-tab:${id}"` });
   return (
     `<div class="cs-bar">` +
@@ -539,9 +539,18 @@ function uniqueComposio(v: ConnectionsView): StoreService[] {
   });
 }
 
-function storeEntries(v: ConnectionsView): StoreService[] {
-  return [...(Array.isArray(v.catalog) ? v.catalog : []), ...uniqueComposio(v).filter(s => !v.category || s.category === v.category)]
-    .filter(s => matches(v.search, s.name, s.publisher, words(s.summary)));
+interface StoreEntries {
+  builtin: StoreService[];
+  managed: StoreService[];
+  count: number;
+}
+
+/** One filtered snapshot supplies both the rows and their tab count. */
+function storeEntries(v: ConnectionsView): StoreEntries {
+  const found = (s: StoreService): boolean => matches(v.search, s.name, s.publisher, words(s.summary));
+  const builtin = (Array.isArray(v.catalog) ? v.catalog : []).filter(found);
+  const managed = uniqueComposio(v).filter(s => (!v.category || s.category === v.category) && found(s));
+  return { builtin, managed, count: builtin.length + managed.length };
 }
 
 const composioMark = (): string => `<span class="cs-icon md cs-composio-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h6v10H4zM14 7h6v10h-6zM10 10h4m-4 4h4"/></svg></span>`;
@@ -555,18 +564,18 @@ function keyDialogHTML(v: ConnectionsView): string {
     actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div></div></div>`;
 }
 
-function storeHTML(v: ConnectionsView): string {
+function storeHTML(v: ConnectionsView, entries: StoreEntries = storeEntries(v)): string {
   const section = (key: string, title: string, list: StoreService[]): string =>
     list.length ? `<section class="cs-sec"><h2>${esc(title)}</h2><div class="cs-grid" data-stagger="store:${key}">${list.map(s => cardHTML(s, v)).join("")}</div></section>` : "";
   const retry = (action: string): string => `<div class="alert core-note" role="alert">${st("err", t("conn.loadFailed"))}${btn(esc(t("plugins.retry")), "sm", ` data-conn="${action}"`)}</div>`;
   const loading = `<p class="settings-loading" role="status">${esc(t("conn.loading"))}</p>`;
-  const found = Array.isArray(v.catalog) ? v.catalog.filter(s => matches(v.search, s.name, s.publisher, words(s.summary))) : [];
+  const found = entries.builtin;
   const popular = v.search.trim() ? [] : found.filter(s => s.popular);
   const rest = found.filter(s => !popular.includes(s)).sort((a, b) => a.name.localeCompare(b.name));
   let html = v.catalog === "loading" ? loading : v.catalog === "failed" ? retry("retry-builtin-store")
     : section("hot", t("conn.hot"), popular) + section("all", t("conn.all"), rest);
   if (v.configured) {
-    const managed = uniqueComposio(v).filter(s => (!v.category || s.category === v.category) && matches(v.search, s.name, s.publisher, words(s.summary)));
+    const managed = entries.managed;
     // Provider order is preserved; each app belongs to its first category only.
     const grouped = new Map<string, StoreService[]>(v.categories.map(c => [c.value, []]));
     for (const item of managed) {
@@ -581,7 +590,7 @@ function storeHTML(v: ConnectionsView): string {
   } else if (v.configured === false) {
     html += `<div class="cs-composio-setup">${composioMark()}<span>${esc(t("plugins.moreApps"))}</span>${btn(esc(t("plugins.configure")), "sm", ' data-conn="configure-composio"')}</div>`;
   }
-  if (Array.isArray(v.catalog) && !storeEntries(v).length && !v.configured) html = `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` + html;
+  if (Array.isArray(v.catalog) && !entries.count && !v.configured) html = `<p class="cs-none">${esc(t("conn.noMatch"))}</p>` + html;
   return html;
 }
 
@@ -667,8 +676,8 @@ function deviceHTML(v: ConnectionsView): string {
 // ---------- the tab ----------
 
 /** What is under the bar: the list, or the store. */
-export function bodyHTML(v: ConnectionsView): string {
-  return v.tab === "installed" ? installedHTML(v) : storeHTML(v);
+export function bodyHTML(v: ConnectionsView, entries?: StoreEntries): string {
+  return v.tab === "installed" ? installedHTML(v) : storeHTML(v, entries);
 }
 
 /** The connected service whose dialog is open, if it is still there. */
@@ -686,7 +695,8 @@ export function connectionsHTML(v: ConnectionsView): string {
   // A device login started from a service's dialog shows its code there instead.
   const device = g && v.login?.target === g.id ? "" : deviceHTML(v);
   const skill = openSkill(v);
-  return `<div class="cs">${device}${barHTML(v)}<div class="cs-body" data-cs-body>${bodyHTML(v)}</div></div>` + (v.keyOpen ? keyDialogHTML(v) : g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
+  const entries = storeEntries(v);
+  return `<div class="cs">${device}${barHTML(v, entries)}<div class="cs-body" data-cs-body>${bodyHTML(v, entries)}</div></div>` + (v.keyOpen ? keyDialogHTML(v) : g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
 }
 
 /** The skill whose page is open, if it is still there. */
@@ -806,10 +816,12 @@ export function createConnections(host: ConnectionsHost): Connections {
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
   function repaintBody(): void {
     const body = typeof document !== "undefined" ? document.querySelector<HTMLElement>("[data-cs-body]") : null;
-    if (body && host.visible()) body.innerHTML = bodyHTML(view());
+    const current = view();
+    const entries = storeEntries(current);
+    if (body && host.visible()) body.innerHTML = bodyHTML(current, entries);
     else redraw();
     const count = typeof document !== "undefined" ? (host.root ?? document).querySelector('[data-k="conn-tab:store"] .n') : null;
-    if (count) count.textContent = String(storeEntries(view()).length);
+    if (count) count.textContent = String(entries.count);
   }
 
   const groupById = (id: string): ConnectionGroup | undefined => (Array.isArray(groups) ? groups.find((g) => g.id === id) : undefined);
@@ -867,8 +879,8 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (!configured) return;
     const mine = ++catalogLoads;
     const before = Array.isArray(composioCatalog) ? composioCatalog : null;
-    if (!before) composioCatalog = "loading";
-    repaintBody();
+    // A refresh keeps the existing rows; drawing them again before its reply forces extra layout.
+    if (!before) { composioCatalog = "loading"; repaintBody(); }
     try {
       const result = await api.connectorsCatalog();
       if (mine !== catalogLoads) return;

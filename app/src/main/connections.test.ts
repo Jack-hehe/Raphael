@@ -483,6 +483,15 @@ describe("the dialog of a connected service", () => {
 describe("商店", () => {
   const html = connectionsHTML(view({ tab: "store" }));
 
+  test("the rows and their count share one pass over the managed catalog", () => {
+    const composioCatalog = [service("slack", "Slack", { source: "composio" })];
+    const filter = vi.spyOn(composioCatalog, "filter");
+    const out = connectionsHTML(view({ tab: "store", configured: true, composioCatalog }));
+    expect(out).toContain('data-k="cs-store:slack"');
+    expect(out).toMatch(/data-id="store"[^>]*>商店<span class="n">5<\/span>/);
+    expect(filter).toHaveBeenCalledTimes(1);
+  });
+
   test("has 熱門, then 全部 for the rest, as two columns of cards whose rows come in once", () => {
     expect(html).toContain("<h2>熱門</h2>");
     expect(html).toContain("<h2>全部</h2>");
@@ -850,6 +859,23 @@ describe("what the tab does", () => {
     api.toolsetsList.mockResolvedValue({ groups: [custom] });
     await c.load();
     expect(c.view().open).toBeNull();
+  });
+
+  test("opening a loaded store draws its snapshot once while its refresh is pending", async () => {
+    const c = createConnections(host);
+    await c.load();
+    await settle();
+    const catalog = c.view().composioCatalog;
+    let reply!: (value: { categories: []; items: [] }) => void;
+    api.connectorsCatalog.mockReturnValueOnce(new Promise(resolve => { reply = resolve; }));
+    host.redraw.mockClear();
+    c.click(button("tab", { id: "store" }));
+    expect(c.view().composioCatalog).toBe(catalog);
+    expect(host.redraw).toHaveBeenCalledTimes(1);
+    reply({ categories: [], items: [] });
+    await settle();
+    expect(c.view().composioCatalog).toEqual([]);
+    expect(host.redraw).toHaveBeenCalledTimes(2);
   });
 
   test("a store page opens the dialog of the service it was added as, over 已安裝", async () => {

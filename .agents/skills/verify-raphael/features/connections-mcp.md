@@ -94,8 +94,14 @@ and 367 total rows. They check complete grouping, provider category order, local
 search for the last entry and the category dropdown. The shared driver's optional
 measure field records real click/input-to-next-painted-frame durations, with a
 250 ms budget for opening and searching the large list; it excludes automation
-transport time. Rendering builds one string and replaces the body once, with no
-per-row layout reads. These measurements concern this offline browser fixture;
+transport time. Each render shares one filtered catalog snapshot between its rows
+and count. A refresh retains the existing rows until the reply, without a redundant
+pending-state redraw. Off-screen managed row contents use browser content visibility
+with a 64px intrinsic height; every app remains in its original grid and category.
+`plugins-store` scrolls to app 360, checks the row layout and opens its detail,
+then returns to the top; search and the category journey still cover the full list.
+Use `LOOK_TRACE=1` with the shared look command to retain per-interaction Chrome
+traces, including budget failures. These measurements concern this offline browser fixture;
 they do not establish live provider or native timing. Unit tests cover source
 failures, local search/count, category isolation and late replies after reset.
 Core tests cover cursor paging, concurrent cache reads, one-hour expiry, atomic

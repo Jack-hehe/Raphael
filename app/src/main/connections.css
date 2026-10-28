@@ -138,6 +138,8 @@
 .cs-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-2) var(--sp-3); }
 .cs-card { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; min-height: 64px; padding-right: var(--sp-3); border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; }
 .cs-card:hover { background: var(--hover); }
+/* Keep every app in the grid while deferring off-screen row contents to the browser. */
+.cs-composio-category .cs-card { content-visibility: auto; contain-intrinsic-block-size: auto 64px; }
 .cs-card .btn.cs-main { flex: 1; min-width: 0; justify-content: flex-start; gap: var(--sp-3); align-self: stretch; min-height: 62px; padding: var(--sp-2) var(--sp-1) var(--sp-2) var(--sp-3); border: 0; border-radius: var(--r-lg); background: transparent; text-align: left; white-space: normal; }
 .cs-card .btn.cs-main:hover:not(:disabled), .cs-card .btn.cs-main:active:not(:disabled) { background: transparent; }
 .cs-card .btn.cs-main:focus-visible { outline: none; }

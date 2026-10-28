@@ -46,7 +46,12 @@ export async function perform(page, step) {
         if (!event.target.closest(selector)) return;
         document.removeEventListener(action === "type" ? "input" : "click", capture, true);
         const start = performance.now();
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(performance.now() - start)));
+        performance.mark("look-paint-start");
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const duration = performance.now() - start;
+          performance.mark("look-paint-end");
+          resolve(duration);
+        }));
       }, true);
     });
   }, step);
