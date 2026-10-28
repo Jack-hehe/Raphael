@@ -68,16 +68,16 @@ export default [
     click('.cs-dialog [data-conn="kind"][data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="true"]'),
     click('.cs-dialog [data-conn="kind"][data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="true"]'),
     click('.cs-dialog [data-conn="kind"][data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="false"]'),
-    check("connector-folded"), check("connections-binary"),
+    check("connector-folded"), check("connections-binary"), check("connections-dialog-actions"),
   ], { servers: [github, ...base.servers] }),
   scene("connector-account-tools", "A managed app's read and write switches update whole kinds and keep the per-tool list available", [
     ...open, click('[data-conn="open"][data-id="composio:notion"]'), wait('.cs-dialog [data-conn="kind"]'),
-    click('.cs-dialog [data-conn="relogin"]'), wait('.toast'), check("connector-link-refused"),
+    click('.cs-dialog [data-conn="relogin"]'), wait('.cs-dialog .note[role="alert"]'), check("connector-link-refused"), check("connections-dialog-actions"),
     click('.cs-dialog [data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="false"]'), check("connections-binary"),
     click('.cs-dialog [data-kind="write"]'), wait('.cs-dialog [data-kind="write"][aria-checked="true"]'),
     click('.cs-dialog [data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="false"]'),
     click('.cs-dialog [data-kind="read"]'), wait('.cs-dialog [data-kind="read"][aria-checked="true"]'),
-    click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"), check("connections-binary"),
+    click('[data-conn="tool-list"]'), wait('[data-conn="tool"][data-tool="NOTION_SEARCH"]'), wait(".cs-acct"), check("connector-tools"), check("connections-binary"), check("connections-dialog-actions"),
   ], {
     connectorLinkRefused: true,
     managedConnectors: [notion({ accounts: [{ id: "ca_work", status: "ACTIVE" }, { id: "ca_old", status: "EXPIRED" }] }), google],
@@ -93,6 +93,6 @@ export default [
   scene("skill-private-detail", "A private skill's page: its name, who has it and when it is used, a switch, its instructions as Markdown to edit, keep, and delete", [
     ...open, click('[data-k="cs-skill:1:7"]'), wait("#skill-text"),
     type("#skill-text", weekly.replace("3. 最後寫下下週要做的事。", "3. 最後寫下下週要做的事，並標出需要主人決定的。")),
-    click('[data-conn="skill-save"]'), wait(".toast"), check("skill-page"),
+    click('[data-conn="skill-save"]'), wait('.cs-dialog [data-cs-notice][role="status"]'), check("skill-page"), check("connections-dialog-actions"),
   ], { skills }),
 ];

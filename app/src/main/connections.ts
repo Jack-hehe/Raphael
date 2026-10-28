@@ -116,8 +116,10 @@ export interface ConnectionsView {
   login: Login | null;
   /** The code to type, while a device login waits for it. */
   device: DeviceCode | null;
-  /** What went wrong with the latest login, for the page of the entry it was for. */
+  /** What went wrong with the latest login, for its store page or connected-app dialog. */
   loginError: { target: string; kind: string } | null;
+  /** Feedback stays inside the open dialog, clear of its actions. */
+  dialogNotice: { text: string; kind: "ok" | "err" } | null;
   form: ConnectionForm | null;
   now: number;
 }
@@ -141,6 +143,7 @@ export const emptyConnectionsView = (): ConnectionsView => ({
   login: null,
   device: null,
   loginError: null,
+  dialogNotice: null,
   form: null,
   now: Date.now(),
 });
@@ -188,6 +191,12 @@ function loginFailure(kind: string): string {
   if (kind === "timeout") return t("conn.loginFail.timeout");
   return t("conn.loginFail.other", { p0: failureText(kind) });
 }
+
+const loginErrorHTML = (v: ConnectionsView, target: string): string =>
+  v.loginError?.target === target ? `<div class="note" role="alert">${st("err", loginFailure(v.loginError.kind))}</div>` : "";
+
+const dialogNoticeHTML = (v: ConnectionsView): string => v.dialogNotice
+  ? `<div class="note" role="${v.dialogNotice.kind === "err" ? "alert" : "status"}" data-cs-notice>${st(v.dialogNotice.kind, v.dialogNotice.text)}</div>` : "";
 
 // ---------- what the services are ----------
 
@@ -475,7 +484,7 @@ function summaryHTML(g: ConnectionGroup, v: ConnectionsView): string {
     btn(esc(busy ? t("conn.refreshing") : t("conn.refresh")), "sm", ` data-conn="refresh"${id} data-k="cs-refresh"${busy ? " disabled" : ""}`) +
     (g.auth === "device" && g.catalog_id && GRANTS_URL[g.catalog_id] ? btn(esc(t("conn.revokeOpen", { p0: g.name })), "sm", ` data-conn="open-grants"${id}`) : ""),
   });
-  return head + about + meta + accountsHTML(g) + alert + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
+  return head + about + meta + accountsHTML(g) + alert + loginErrorHTML(v, g.id) + dialogNoticeHTML(v) + (loggingIn ? deviceHTML(v) : "") + tools + auditHTML(v, g.name) + acts;
 }
 
 /**
@@ -560,7 +569,7 @@ function keyDialogHTML(v: ConnectionsView): string {
     `<div class="cs-dlg-head">${composioMark()}<h2 class="cs-dlg-name" id="cs-dlg-title">Composio</h2><span class="sp"></span>${closeButton()}</div>` +
     `<div class="cs-key-form"><label for="conn-key">${esc(t("plugins.keyPrompt"))}</label>` +
     `<input class="field" type="password" id="conn-key" autocomplete="new-password" spellcheck="false"${v.keyBusy ? " disabled" : ""}${v.keyError ? ' aria-invalid="true" aria-describedby="conn-key-error"' : ""}>` +
-    (v.keyError ? `<p id="conn-key-error" role="alert">${esc(keyErrorMessage(v.keyError))}</p>` : "") +
+    (v.keyError ? `<p id="conn-key-error" role="alert">${esc(keyErrorMessage(v.keyError))}</p>` : "") + dialogNoticeHTML(v) +
     actionRow({ primary: { label: esc(t("plugins.saveKey")), attrs: ` data-conn="save-key"${v.keyBusy ? " disabled" : ""}` } }) + `</div></div></div>`;
 }
 
@@ -604,7 +613,7 @@ function storePageHTML(s: StoreService, v: ConnectionsView): string {
     : here
       ? `<span class="cs-wait" role="status">${esc(t(s.auth === "none" ? "conn.connecting" : "conn.loggingIn"))}</span>` + btn(esc(t("conn.cancel")), "", ` data-conn="cancel-login"${s.source ? " disabled" : ""}`)
       : btn(`${ico("plus")}${esc(t("conn.join"))}`, "pri", ` data-conn="join" data-id="${esc(s.id)}"${v.login || s.can_connect === false ? " disabled" : ""}`);
-  const failed = v.loginError?.target === s.id ? `<div class="note" role="alert">${st("err", loginFailure(v.loginError.kind))}</div>` : "";
+  const failed = loginErrorHTML(v, s.id);
   const examples = (s.examples[getLocale()] ?? s.examples.en ?? []).map((text) => `<li>${ico("chat")}<span>${esc(text)}</span></li>`).join("");
   return (
     backHTML() +
@@ -696,7 +705,7 @@ export function connectionsHTML(v: ConnectionsView): string {
   const device = g && v.login?.target === g.id ? "" : deviceHTML(v);
   const skill = openSkill(v);
   const entries = storeEntries(v);
-  return `<div class="cs">${device}${barHTML(v, entries)}<div class="cs-body" data-cs-body>${bodyHTML(v, entries)}</div></div>` + (v.keyOpen ? keyDialogHTML(v) : g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page) : "");
+  return `<div class="cs">${device}${barHTML(v, entries)}<div class="cs-body" data-cs-body>${bodyHTML(v, entries)}</div></div>` + (v.keyOpen ? keyDialogHTML(v) : g ? dialogHTML(g, v) : skill ? skillScrimHTML(skill.item, skill.page, dialogNoticeHTML(v)) : "");
 }
 
 /** The skill whose page is open, if it is still there. */
@@ -707,10 +716,10 @@ const openSkill = (v: ConnectionsView): { item: SkillItem; page: SkillPage } | u
 };
 
 /** The page of a skill over the tab, in the dialog an app has (wider: it holds a document). */
-const skillScrimHTML = (item: SkillItem, page: SkillPage): string =>
+const skillScrimHTML = (item: SkillItem, page: SkillPage, notice: string): string =>
   `<div class="cs-scrim" data-conn="scrim" data-dialog="skill:${item.member.id}:${item.skill.id}">` +
   `<div class="cs-dialog wide" id="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="cs-dlg-title" tabindex="-1" data-trap>` +
-  skillDialogHTML(item, page, closeButton(), btn(esc(t("plugins.retry")), "sm", ' data-conn="skill-retry"')) + `</div></div>`;
+  skillDialogHTML(item, page, closeButton(), btn(esc(t("plugins.retry")), "sm", ' data-conn="skill-retry"'), notice) + `</div></div>`;
 
 // ---------- doing ----------
 
@@ -783,6 +792,7 @@ export function createConnections(host: ConnectionsHost): Connections {
   let login: Login | null = null;
   let device: DeviceCode | null = null;
   let loginError: ConnectionsView["loginError"] = null;
+  let dialogNotice: ConnectionsView["dialogNotice"] = null;
   let form: ConnectionForm | null = null;
   let loads = 0;
   let firstLoad = true;
@@ -808,9 +818,15 @@ export function createConnections(host: ConnectionsHost): Connections {
     } else if (!dialogOpen()) { stopOutside?.(); stopOutside = null; }
   };
 
+  /** Connection actions report inside the active dialog instead of covering its footer. */
+  const notify = (text: string, kind: "ok" | "err" = "ok"): void => {
+    if (dialogOpen()) { dialogNotice = { text, kind }; redraw(); }
+    else toaster.info(text);
+  };
+
   const view = (): ConnectionsView => ({
     configured, categories, category, keyOpen, keyBusy, keyError,
-    groups, catalog, composioCatalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, form, now: Date.now(),
+    groups, catalog, composioCatalog, inventory, skills, skill, audit, tab, search, open, toolsOpen, auditOpen, confirmingDisconnect: confirming, busy, login, device, loginError, dialogNotice, form, now: Date.now(),
   });
 
   /** Draws only what is under the bar (the search box keeps its focus and its input method). */
@@ -940,7 +956,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     try {
       await work();
     } catch (err) {
-      toaster.info(describeError(err));
+      notify(describeError(err), "err");
     }
     busy.delete(id);
     await load(false);
@@ -950,6 +966,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   /** Opens the dialog of a connected service, at its summary, with the focus in it. */
   function openDialog(id: string): void {
     open = { tab: "installed", id };
+    loginError = null;
+    dialogNotice = null;
     toolsOpen = false;
     auditOpen = false;
     clearTimeout(confirmTimer);
@@ -965,6 +983,8 @@ export function createConnections(host: ConnectionsHost): Connections {
    */
   function closeDialog(): void {
     if (closing) return;
+    loginError = null;
+    dialogNotice = null;
     if (keyOpen) {
       keyOpen = false; keyError = ""; keySaves++; keyBusy = false;
       redraw(); focusOn('[data-conn="configure-composio"]'); return;
@@ -1006,6 +1026,7 @@ export function createConnections(host: ConnectionsHost): Connections {
 
   /** Opens the page of a skill, with the focus in it; its document is read for it. */
   function openSkillPage(memberId: number, id: number): void {
+    dialogNotice = null;
     skill = skillPage(memberId, id);
     redraw();
     focusOn("#cs-dialog");
@@ -1036,11 +1057,12 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (!page || page.busy || !skillChanged(page)) return;
     page.busy = true;
     page.error = null;
+    dialogNotice = null;
     redraw();
     try {
       await api.membersSkillsEdit(page.memberId, page.id, page.draft);
       if (skill === page) page.saved = page.draft = page.draft.replace(/\r\n/g, "\n");
-      toaster.info(t("conn.skill.saved"));
+      notify(t("conn.skill.saved"));
     } catch (err) {
       if (skill === page) page.error = skillErrorText(err);
     }
@@ -1055,12 +1077,13 @@ export function createConnections(host: ConnectionsHost): Connections {
     if (!item || !(await confirmDelete(item.skill.name))) return;
     try {
       await api.membersSkillsDelete(memberId, id);
-      toaster.info(t("conn.skill.deleted", { p0: item.skill.name }));
+      skill = null;
+      dialogNotice = null;
+      notify(t("conn.skill.deleted", { p0: item.skill.name }));
     } catch (err) {
-      toaster.info(describeError(err));
+      notify(describeError(err), "err");
       return;
     }
-    skill = null;
     await loadSkills();
   }
 
@@ -1071,7 +1094,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     try {
       await api.membersSkillsUpdate(memberId, id, !item.skill.enabled);
     } catch (err) {
-      toaster.info(describeError(err));
+      notify(describeError(err), "err");
     }
     await loadSkills();
   }
@@ -1093,7 +1116,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       if (group?.source) await api.connectorsDisconnect(id);
       else await api.integrationsDisconnect(id);
       if (open?.id === id) open = null;
-      if (group) toaster.info(t(group.auth !== "none" ? "conn.disconnectedLogin" : "conn.disconnected", { p0: group.name }));
+      if (group) notify(t(group.auth !== "none" ? "conn.disconnectedLogin" : "conn.disconnected", { p0: group.name }));
     });
   }
 
@@ -1101,6 +1124,8 @@ export function createConnections(host: ConnectionsHost): Connections {
   async function signIn(target: { catalog_id: string } | { id: string }, name: string, again: boolean): Promise<void> {
     if (login) return;
     const key = "catalog_id" in target ? target.catalog_id : target.id;
+    const fromDialog = open?.tab === "installed" && open.id === key ? open : null;
+    dialogNotice = null;
     login = { target: key, name };
     loginError = null;
     redraw();
@@ -1116,14 +1141,16 @@ export function createConnections(host: ConnectionsHost): Connections {
     login = null;
     device = null;
     if (result.connected) {
-      toaster.info(t(again ? "conn.relogged" : "conn.connected", { p0: name }));
+      loginError = null;
+      if (!fromDialog || open === fromDialog || !dialogOpen()) notify(t(again ? "conn.relogged" : "conn.connected", { p0: name }));
       if (!again) {
         tab = "installed";
         open = null;
       }
     } else if (result.error !== "cancelled") {
-      loginError = { target: key, kind: result.error ?? "error" };
-      toaster.info(result.error === "toolkit_not_allowed" ? failureText(result.error) : t("plugins.connectFailed"));
+      // Closing or replacing a dialog discards its pending failure as well as its visible one.
+      if (!fromDialog || (open === fromDialog && !closing)) loginError = { target: key, kind: result.error ?? "error" };
+      if (!fromDialog) notify(result.error === "toolkit_not_allowed" ? failureText(result.error) : t("plugins.connectFailed"), "err");
     }
     await load(false);
   }
@@ -1145,7 +1172,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       await copyText(d.user_code);
       await api.openLink(d.verification_uri);
     } catch (err) {
-      toaster.info(describeError(err));
+      notify(describeError(err), "err");
     }
   }
 
@@ -1180,7 +1207,7 @@ export function createConnections(host: ConnectionsHost): Connections {
       else await api.integrationsAdd(request);
       form = null; // the values were sent to the core's vault: nothing of them stays here
       tab = "installed";
-      toaster.info(t("conn.connected", { p0: request.name }));
+      notify(t("conn.connected", { p0: request.name }));
       await load(false);
       return;
     } catch (err) {
@@ -1212,6 +1239,8 @@ export function createConnections(host: ConnectionsHost): Connections {
     open = null;
     search = "";
     tab = next;
+    dialogNotice = null;
+    loginError = null;
     redraw();
     if (tab === "store" && configured) void loadCatalog();
   }
@@ -1243,7 +1272,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         break;
       }
       case "test-server":
-        void api.integrationsTest({ id }).then(result => toaster.info(result.ok ? t("mcp.testOk") + ` (${result.tools.length})` : t("mcp.testFailed") + `: ${result.error ?? ""}`), error => toaster.info(describeError(error)));
+        void api.integrationsTest({ id }).then(result => notify(result.ok ? t("mcp.testOk") + ` (${result.tools.length})` : t("mcp.testFailed") + `: ${result.error ?? ""}`, result.ok ? "ok" : "err"), error => notify(describeError(error), "err"));
         break;
       case "edit-server": {
         const group = groupById(id);
@@ -1334,7 +1363,7 @@ export function createConnections(host: ConnectionsHost): Connections {
         if (groupById(id)?.source) { void loadTools(id); break; }
         void act(id, async () => {
           await api.integrationsRefresh(id);
-          toaster.info(t("conn.refreshed"));
+          notify(t("conn.refreshed"));
         });
         break;
       case "disconnect":
@@ -1355,12 +1384,12 @@ export function createConnections(host: ConnectionsHost): Connections {
         break;
       case "open-grants": {
         const url = GRANTS_URL[groupById(id)?.catalog_id ?? ""];
-        if (url) void api.openLink(url).catch((err) => toaster.info(describeError(err)));
+        if (url) void api.openLink(url).catch((err) => notify(describeError(err), "err"));
         break;
       }
       case "cancel-login":
         if (login && (entryById(login.target)?.source || groupById(login.target)?.source)) break;
-        void api.integrationsConnectCancel().catch((err) => toaster.info(describeError(err)));
+        void api.integrationsConnectCancel().catch((err) => notify(describeError(err), "err"));
         break;
       case "form-cancel":
         form = null; // an unsent value is dropped with the form
@@ -1496,6 +1525,7 @@ export function createConnections(host: ConnectionsHost): Connections {
     search = "";
     tab = "installed";
     loginError = null;
+    dialogNotice = null;
     // the code stays: the login still waits for it in the core, which does not send it again
     loads++;
   }

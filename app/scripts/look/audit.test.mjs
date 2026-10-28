@@ -6,6 +6,24 @@ import { scenes } from "./scenes/index.mjs";
 import { LATIN_NAMES } from "./runner.mjs";
 
 describe("rendered look checks", () => {
+  it("checks every dialog footer button and accepts hits on its children", () => {
+    const win = new Window();
+    win.document.body.innerHTML = '<div class="cs-scrim"><div class="cs-dialog"><div class="action-row"><button><span>Retry</span></button><button>Done</button></div></div></div><div class="toast">Saved</div>';
+    const buttons = [...win.document.querySelectorAll('button')];
+    win.document.querySelector('.cs-dialog').getBoundingClientRect = () => ({ width: 400, height: 300 });
+    buttons.forEach((button, i) => { button.getBoundingClientRect = () => ({ left: 20 + i * 100, top: 200, width: 80, height: 32 }); });
+    win.document.elementFromPoint = vi.fn(x => x < 100 ? buttons[0].firstElementChild : buttons[1]);
+    vi.stubGlobal('document', win.document);
+    try {
+      expect(checkRendered('connections-dialog-actions')).toEqual({ check: 'connections-dialog-actions', buttons: 2 });
+      expect(win.document.elementFromPoint.mock.calls).toEqual([[60, 216], [160, 216]]);
+      win.document.elementFromPoint = x => x < 100 ? buttons[0] : win.document.querySelector('.toast');
+      expect(() => checkRendered('connections-dialog-actions')).toThrow('footer action "Done" is covered');
+      win.document.elementFromPoint = () => win.document.querySelector('.toast');
+      expect(() => checkRendered('connections-dialog-actions')).toThrow('footer action "Retry" is covered');
+    } finally { vi.unstubAllGlobals(); win.happyDOM.abort(); }
+  });
+
   it("rejects a mixed connection switch while allowing binary permissions", () => {
     const win = new Window(), previous = { window: globalThis.window, document: globalThis.document };
     try {

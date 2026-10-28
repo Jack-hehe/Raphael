@@ -1026,7 +1026,8 @@ describe("what the tab does", () => {
     expect(api.integrationsConnect).toHaveBeenCalledWith({ id: "ab12" });
     await settle();
     expect(c.view().open).toEqual({ tab: "installed", id: "ab12" });
-    expect(lastToast()).toBe("已重新登入 Notion");
+    expect(c.view().dialogNotice).toEqual({ text: "已重新登入 Notion", kind: "ok" });
+    expect(toaster.info).not.toHaveBeenCalled();
   });
 
   describe("a private skill", () => {
@@ -1081,7 +1082,8 @@ describe("what the tab does", () => {
       await settle();
       expect(api.membersSkillsEdit).toHaveBeenCalledWith(1, 7, edited);
       expect(c.view().skill).toMatchObject({ saved: edited, draft: edited, busy: false, error: null });
-      expect(lastToast()).toBe("已儲存技能");
+      expect(c.view().dialogNotice).toEqual({ text: "已儲存技能", kind: "ok" });
+      expect(toaster.info).not.toHaveBeenCalled();
       expect((c.view().skills as SkillItem[]).map((item) => item.skill.name)).toEqual(["answer-style", "meeting-notes"]);
       // saving what was saved is nothing
       c.click(button("skill-save", { member: "1", id: "7" }));
@@ -1121,7 +1123,8 @@ describe("what the tab does", () => {
       api.membersSkillsUpdate.mockRejectedValueOnce("[-32602] Invalid params: no such member skill");
       c.click(button("skill-enable", { member: "1", id: "7" }));
       await settle();
-      expect(lastToast()).toContain("no such member skill");
+      expect(c.view().dialogNotice?.text).toContain("no such member skill");
+      expect(toaster.info).not.toHaveBeenCalled();
     });
 
     test("is deleted only after the owner agrees, and the page goes with it", async () => {

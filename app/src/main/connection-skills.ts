@@ -71,7 +71,7 @@ export const skillChanged = (page: SkillPage): boolean => page.state === "ready"
  * name says who has it and when it is used (its description, which the document's first lines hold); the instructions are the whole
  * document. 「刪除技能」 is the destructive action on the left, 「儲存」 the primary one.
  */
-export function skillDialogHTML(item: SkillItem, page: SkillPage, closeButton: string, retry: string): string {
+export function skillDialogHTML(item: SkillItem, page: SkillPage, closeButton: string, retry: string, notice = ""): string {
   const { member, skill } = item;
   const ids = ` data-member="${member.id}" data-id="${skill.id}"`;
   const head =
@@ -89,7 +89,7 @@ export function skillDialogHTML(item: SkillItem, page: SkillPage, closeButton: s
     destructive: { label: esc(t("conn.skill.delete")), attrs: ` data-conn="skill-delete"${ids} data-k="cs-skill-delete"${page.busy ? " disabled" : ""}` },
     primary: { label: esc(t("conn.skill.save")), attrs: ` data-conn="skill-save"${ids} data-k="cs-skill-save"${skillChanged(page) && !page.busy ? "" : " disabled"}` },
   });
-  return head + body + acts;
+  return head + body + notice + acts;
 }
 
 /** What a refusal of the core says of a document, in the words of the window; any other failure as it is described elsewhere. */

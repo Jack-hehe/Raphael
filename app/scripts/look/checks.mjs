@@ -894,6 +894,17 @@ export function checkRendered(name) {
       return { check: name, state: roster.inventory_state };
     });
   }
+  if (name === "connections-dialog-actions") {
+    const dialog = document.querySelector('.cs-scrim .cs-dialog');
+    const buttons = [...(dialog?.querySelectorAll('.action-row button') ?? [])];
+    require(visible(dialog) && buttons.length > 0, "the dialog has footer actions");
+    for (const button of buttons) {
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      require(box.width > 0 && box.height > 0 && (hit === button || button.contains(hit)), `footer action "${button.textContent.trim()}" is covered by a toast or another element`);
+    }
+    return { check: name, buttons: buttons.length };
+  }
   if (name === "connections-binary") {
     const controls = [...document.querySelectorAll('.cs [aria-checked], .cs-scrim [aria-checked]')];
     require(controls.length > 0, "connections has switches");
@@ -901,7 +912,8 @@ export function checkRendered(name) {
     return { check: name, switches: controls.length };
   }
   if (name === "connector-link-refused") {
-    require([...document.querySelectorAll('.toast')].some(node => node.textContent.includes('Composio 尚未允許這個應用程式登入，請重試連結。')), "a toolkit refusal has dedicated actionable copy");
+    require(document.querySelector('.cs-dialog .note[role="alert"]')?.textContent.includes('Composio 尚未允許這個應用程式登入，請重試連結。'), "a toolkit refusal has dedicated actionable copy inside the app dialog");
+    require(![...document.querySelectorAll('.toast')].some(node => node.textContent.includes('Composio 尚未允許')), "the sign-in refusal never covers the dialog as a toast");
     require(window.__look.calls.some(call => call.method === 'connectors.connect' && call.params.toolkit === 'notion'), "the real managed sign-in boundary was used");
     require(!document.body.textContent.includes('ToolRouterV2_ToolkitNotAllowed'), "provider error slugs never reach the interface");
     return { check: name };
@@ -953,6 +965,8 @@ export function checkRendered(name) {
     const box = text.getBoundingClientRect(), frame = dialog.getBoundingClientRect();
     require(box.left >= frame.left && box.right <= frame.right, "the document sits inside its dialog");
     require(text.scrollWidth <= text.clientWidth + 1, "the document does not scroll sideways");
+    require(dialog.querySelector('[data-cs-notice][role="status"]')?.textContent.includes('已儲存技能'), "save feedback stays inside the skill dialog");
+    require(![...document.querySelectorAll('.toast')].some(node => node.textContent.includes('已儲存技能')), "skill saving never covers the dialog as a toast");
     require(text.scrollTop === 0, `the document starts at its first line, not ${text.scrollTop}px down (${text.clientHeight}px box, ${text.scrollHeight}px of text)`);
     return { check: name, rows: text.rows, chars: text.value.length, box: text.clientHeight, text: text.scrollHeight };
   }

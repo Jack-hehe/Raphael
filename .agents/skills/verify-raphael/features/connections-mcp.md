@@ -229,3 +229,29 @@ opens that menu at the pointer (測試, 編輯伺服器, 刪除; 中斷連線), 
 ```powershell
 npm run look -- context-menu-connection context-menu-cli-account --theme both --width 1120,720,1920x1080
 ```
+
+## Dialog feedback and unobstructed actions
+
+A failed sign-in or re-link started in an app dialog uses the Store's same localized
+loginFailure copy in a note with role=alert after the account rows. It does not
+raise a toast. Retry, close and success clear the error; a pending failure from a
+closed or replaced dialog is discarded. Other connections-owned feedback raised
+while an app, skill or project-key dialog is open stays inside that dialog:
+re-login success, skill save/toggle/delete errors, tool/app operation errors,
+custom server test/refresh and device/browser/cancellation errors. Skill save uses
+role=status immediately before its actions. Successful removal closes its dialog
+before showing the usual list-level toast.
+
+The selected regression matrix for this change is:
+
+~~~powershell
+npm run look -- connector-account-tools connector-many-tools connections-app-switch plugins-detail plugins-store plugins-store-category plugins-store-key skill-private-detail connector-uninstalled --theme both --width 1120,720,1920x1080
+~~~
+
+connector-account-tools checks the refusal inline with no refusal toast, then
+connections-dialog-actions calls elementFromPoint at EVERY footer button centre
+and requires the button or its child. It checks both the folded and expanded tool
+states. connector-many-tools and skill-private-detail run the same footer check;
+the skill scene also checks inline save feedback without a save toast. Happy-dom
+tests cover refusal/denial/timeout/network copy, retry/success/close, stale replies
+after reopening, skill save feedback and the footer check's covered-button failure.
