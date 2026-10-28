@@ -98,6 +98,16 @@ Record unexercised native steps as unverified.
 - A failure seen twice becomes a lint/test rule. Keep regression tests alongside
   the shared runner. DOM tests are not browser/layout evidence.
 
+## Consistency gate
+
+The last check before any hand-off, done by whoever hands over, never delegated to
+the implementer's report or passing tests. For every kind of element the change
+touches (button, switch, chip, notice, waiting line, dialog, card, menu), find the
+same kind elsewhere in the app and put the full-size images side by side at the same
+theme and width. They must share component, words, icon, size, position and states.
+A difference is a defect unless the feature doc says why. Record the pairs compared
+and what differed. A difference found twice becomes a look check in `checks.mjs`.
+
 ## Cleanup
 
 The CLI closes only its own browser and Vite server in `finally`. Check the final
