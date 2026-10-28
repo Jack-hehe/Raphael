@@ -1,0 +1,373 @@
+{
+  "version": 1,
+  "tools": {
+    "raphael/core/handoff": {
+      "scenario_ids": ["S03.immediate-start", "S08.immediate-start"],
+      "expected_assertions": ["immediate_start"]
+    },
+    "raphael/core/room_meeting": {
+      "scenario_ids": ["S07.meeting", "S21.meetings.create-reuse"],
+      "expected_assertions": ["production_state"]
+    },
+    "raphael/core/approve": {
+      "scenario_ids": [
+        "S21.settings-quick.approve"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/ask_member": {
+      "scenario_ids": [
+        "S21.meetings.consult"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/computer": {
+      "scenario_ids": [
+        "S21.computer.operate"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/connect_app": {
+      "scenario_ids": [
+        "S14.gmail"
+      ],
+      "expected_assertions": [
+        "connector_card"
+      ]
+    },
+    "raphael/core/request_secret": {
+      "scenario_ids": [
+        "S15.secret"
+      ],
+      "expected_assertions": [
+        "secure_save"
+      ]
+    },
+    "raphael/core/email_draft": {
+      "scenario_ids": [
+        "S05.draft-handoff"
+      ],
+      "expected_assertions": [
+        "editable_email"
+      ]
+    },
+    "raphael/core/computer_act": {
+      "scenario_ids": [
+        "S21.computer.act"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/computer_apps": {
+      "scenario_ids": [
+        "S21.computer.apps"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/computer_hand_over": {
+      "scenario_ids": [
+        "S21.computer.hand-over"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/computer_look": {
+      "scenario_ids": [
+        "S21.computer.look"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/computer_open": {
+      "scenario_ids": [
+        "S21.computer.open"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/copy_text": {
+      "scenario_ids": [
+        "S21.commands.copy_text"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/create_member": {
+      "scenario_ids": [
+        "S21.members-groups.draft-confirm"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/find_tools": {
+      "scenario_ids": [
+        "S18.catalog-unavailable"
+      ],
+      "expected_assertions": [
+        "complete_catalog"
+      ]
+    },
+    "raphael/core/group_create": {
+      "scenario_ids": [
+        "S21.members-groups.draft-confirm"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/group_rename": {
+      "scenario_ids": [
+        "S21.members-groups.rename"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/history_search": {
+      "scenario_ids": [
+        "S21.memory.history-search"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/local_time": {
+      "scenario_ids": [
+        "S21.web-open.local-time"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/lock_screen": {
+      "scenario_ids": [
+        "S21.commands.lock_screen"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/media_next": {
+      "scenario_ids": [
+        "S21.commands.media_next"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/media_play_pause": {
+      "scenario_ids": [
+        "S21.commands.media_play_pause"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/media_previous": {
+      "scenario_ids": [
+        "S21.commands.media_previous"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/member_command_save": {
+      "scenario_ids": [
+        "S21.members-groups.command-save"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/member_create": {
+      "scenario_ids": [
+        "S21.members-groups.draft-confirm"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/member_delete": {
+      "scenario_ids": [
+        "S21.members-groups.delete"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/member_skill_import": {
+      "scenario_ids": [
+        "S21.members-groups.skill-import"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/member_update": {
+      "scenario_ids": [
+        "S21.members-groups.rename"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/memory_delete": {
+      "scenario_ids": [
+        "S21.memory.forget"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/memory_read": {
+      "scenario_ids": [
+        "S21.memory.show"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/memory_write": {
+      "scenario_ids": [
+        "S21.memory.save-global"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/open": {
+      "scenario_ids": [
+        "S21.web-open.url"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/read_attachment": {
+      "scenario_ids": [
+        "S21.files.attachment-inventory"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/routine_create": {
+      "scenario_ids": [
+        "S21.routines.create"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/routine_delete": {
+      "scenario_ids": [
+        "S21.routines.delete"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/routine_list": {
+      "scenario_ids": [
+        "S21.routines.list"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/routine_update": {
+      "scenario_ids": [
+        "S21.routines.edit"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/show": {
+      "scenario_ids": [
+        "S21.web-open.show"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/skill_read": {
+      "scenario_ids": [
+        "S21.skills.read"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/team_overview": {
+      "scenario_ids": [
+        "S21.members-groups.overview"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/volume_down": {
+      "scenario_ids": [
+        "S21.commands.volume_down"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/volume_mute": {
+      "scenario_ids": [
+        "S21.commands.volume_mute"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/volume_up": {
+      "scenario_ids": [
+        "S21.commands.volume_up"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/weather": {
+      "scenario_ids": [
+        "S21.web-open.weather"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/web_read": {
+      "scenario_ids": [
+        "S21.web-open.read"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    },
+    "raphael/core/web_search": {
+      "scenario_ids": [
+        "S21.web-open.search"
+      ],
+      "expected_assertions": [
+        "production_state"
+      ]
+    }
+  }
+}

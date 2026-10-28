@@ -1,7 +1,8 @@
 //! Settings that belong to this computer: the hotkeys (dictation, pasting the last dictation and
 //! asking Raphael) and how the dictation key works (press to start and again to stop, or hold
 //! while talking), the microphone, how the emblem looks, the theme, interface language,
-//! autostart, and whether the first-run guide has been done.
+//! autostart, whether the first-run guide has been done, and the apps Raphael may always operate
+//! (`computer_apps`, the 「一律允許」 of the question about an app).
 //!
 //! They live in `device.json` in Raphael's data folder (`%APPDATA%\Raphael`, or the folder named
 //! by `RAPHAEL_DATA_DIR`, like the core's database). The settings of the brain (monthly limit,
@@ -85,6 +86,36 @@ impl DictationMode {
     }
 }
 
+/// The most apps the always-allowed list keeps.
+pub const COMPUTER_APPS_MAX: usize = 200;
+
+/// An app Raphael may always operate, without asking first: its executable, as a file name in
+/// lower case (`excel.exe`), which is what is checked, and the name it goes by (`Microsoft
+/// Excel`), which the settings page shows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputerApp {
+    pub exe: String,
+    pub name: String,
+}
+
+impl ComputerApp {
+    /// Whether the entry is one the app can keep: an executable's file name in lower case, of
+    /// the characters such names have, and a name of one line, neither too long.
+    pub fn is_valid(&self) -> bool {
+        let exe = &self.exe;
+        let exe_ok = (5..=128).contains(&exe.len())
+            && exe.ends_with(".exe")
+            && exe
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || " ._()-".contains(c))
+            && !exe.starts_with(['.', ' ', '-']);
+        let name_ok = !self.name.trim().is_empty()
+            && self.name.chars().count() <= 80
+            && !self.name.chars().any(char::is_control);
+        exe_ok && name_ok
+    }
+}
+
 /// The settings in `device.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -110,6 +141,8 @@ pub struct DeviceSettings {
     pub autostart: bool,
     /// The first-run guide has been done.
     pub onboarded: bool,
+    /// The apps Raphael may operate without asking first, each once.
+    pub computer_apps: Vec<ComputerApp>,
 }
 
 impl Default for DeviceSettings {
@@ -127,16 +160,18 @@ impl Default for DeviceSettings {
             ui_language: "zh-TW".to_owned(),
             autostart: true,
             onboarded: false,
+            computer_apps: Vec::new(),
         }
     }
 }
 
 impl DeviceSettings {
-    /// Reads `path`. A missing file gives the defaults. A file that cannot be understood is
+    /// Reads `path`. A missing file gives the defaults. A file that is not a JSON object is
     /// renamed to `device.json.bad` (so that it is not lost) and the defaults are used. A file
-    /// that is understood but holds a value that could not be set (an emblem size that does not
-    /// exist, a key combination that is no good, a dictation mode or interface language that is
-    /// not offered) gets the default for that one value.
+    /// that is one but holds a value that could not be set (one that another version of the app
+    /// wrote, a value of the wrong type, an emblem size that does not exist, a key combination
+    /// that is no good, an interface language that is not offered) gets the default for that one
+    /// value.
     pub fn load(path: &Path) -> DeviceSettings {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -187,6 +222,7 @@ impl DeviceSettings {
                 "ui_language" => next.ui_language = parse_value(name, value)?,
                 "autostart" => next.autostart = parse_value(name, value)?,
                 "onboarded" => next.onboarded = parse_value(name, value)?,
+                "computer_apps" => next.computer_apps = parse_value(name, value)?,
                 other => return Err(format!("unknown setting \"{other}\"")),
             }
         }
@@ -237,6 +273,7 @@ impl DeviceSettings {
         if self.microphone.as_deref() == Some("") {
             return Err("microphone must be a name, or null for the default one".to_owned());
         }
+        check_computer_apps(&self.computer_apps)?;
         check_keys("快捷鍵", &self.dictation_keys)?;
         check_keys("貼上上一次聽寫的快捷鍵", &self.paste_last_keys)?;
         check_keys("問拉斐爾的快捷鍵", &self.agent_keys)?;
@@ -267,6 +304,19 @@ impl DeviceSettings {
         if self.microphone.as_deref() == Some("") {
             self.microphone = None;
         }
+        if let Err(err) = check_computer_apps(&self.computer_apps) {
+            log::warn!("device settings: {err}");
+            let mut kept: Vec<ComputerApp> = Vec::new();
+            for app in std::mem::take(&mut self.computer_apps) {
+                if app.is_valid()
+                    && kept.len() < COMPUTER_APPS_MAX
+                    && !kept.iter().any(|known| known.exe == app.exe)
+                {
+                    kept.push(app);
+                }
+            }
+            self.computer_apps = kept;
+        }
         if let Err(err) = check_keys("dictation_keys", &self.dictation_keys) {
             log::warn!("device settings: {err}");
             self.dictation_keys = default.dictation_keys.clone();
@@ -294,28 +344,28 @@ impl DeviceSettings {
     }
 }
 
-/// The settings in `text`. A `dictation_mode` that is not `"toggle"` or `"hold"` (a mode that a
-/// newer version of the app wrote, a typo, a value of the wrong type) is left out first, so that
-/// the default takes its place and the rest of the file is kept. A `ui_language` of the wrong
-/// type is treated the same way; unsupported strings are handled by `repair`. (The other enums
-/// are strict: an unknown value there makes the whole file unreadable.)
+/// The settings in `text`. Every build on the computer (an older release, a newer one, a
+/// development build) reads and writes the same file, so a field may hold a value this build
+/// does not know: a subtitle mode, theme or dictation mode added or removed by another version,
+/// or a value of the wrong type. Such a field is left out, so that it gets its default and the
+/// rest of the file is kept; fields this build does not know at all are ignored. Values of the
+/// right type that are not offered (an interface language, an emblem size, a key combination)
+/// are handled by `repair`. Only text that is not a JSON object fails.
 fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
     let mut value: Value = serde_json::from_str(text)?;
-    if let Some(mode) = value.get("dictation_mode")
-        && serde_json::from_value::<DictationMode>(mode.clone()).is_err()
-    {
-        log::warn!("device settings: dictation mode {mode} is not offered");
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("dictation_mode");
-        }
-    }
-    if let Some(language) = value.get("ui_language")
-        && !language.is_string()
-    {
-        log::warn!("device settings: interface language {language} must be a string");
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("ui_language");
-        }
+    if let Some(fields) = value.as_object_mut() {
+        fields.retain(|name, field| {
+            // The field on its own, with the defaults for the rest: whether this build can read
+            // it does not depend on any other field.
+            let alone = Value::Object(serde_json::Map::from_iter([(name.clone(), field.clone())]));
+            let fits = serde_json::from_value::<DeviceSettings>(alone).is_ok();
+            if !fits {
+                log::warn!(
+                    "device settings: {name} = {field} is not understood; it gets the default"
+                );
+            }
+            fits
+        });
     }
     serde_json::from_value(value)
 }
@@ -323,6 +373,24 @@ fn parse_settings(text: &str) -> Result<DeviceSettings, serde_json::Error> {
 /// One field of a patch as the type it is stored as.
 fn parse_value<T: DeserializeOwned>(name: &str, value: &Value) -> Result<T, String> {
     serde_json::from_value(value.clone()).map_err(|err| format!("bad value for \"{name}\": {err}"))
+}
+
+/// Whether `apps` can be the always-allowed list: each entry valid, none twice, not too many.
+fn check_computer_apps(apps: &[ComputerApp]) -> Result<(), String> {
+    if apps.len() > COMPUTER_APPS_MAX {
+        return Err(format!(
+            "computer_apps holds at most {COMPUTER_APPS_MAX} apps"
+        ));
+    }
+    for (index, app) in apps.iter().enumerate() {
+        if !app.is_valid() {
+            return Err("computer_apps holds an app that cannot be kept".to_owned());
+        }
+        if apps[..index].iter().any(|known| known.exe == app.exe) {
+            return Err("computer_apps holds the same app twice".to_owned());
+        }
+    }
+    Ok(())
 }
 
 /// Renames the file that could not be understood, so that it is not overwritten and lost.
@@ -552,6 +620,62 @@ mod tests {
     }
 
     #[test]
+    fn the_always_allowed_apps_are_kept_by_executable_and_checked() {
+        let mut s = DeviceSettings::default();
+        assert!(s.computer_apps.is_empty());
+        let excel = json!({"exe": "excel.exe", "name": "Microsoft Excel"});
+        s.apply_patch(&json!({"computer_apps": [excel]})).unwrap();
+        assert_eq!(
+            s.computer_apps,
+            [ComputerApp {
+                exe: "excel.exe".into(),
+                name: "Microsoft Excel".into()
+            }]
+        );
+        for bad in [
+            json!([{"exe": "EXCEL.EXE", "name": "x"}]),
+            json!([{"exe": "excel", "name": "x"}]),
+            json!([{"exe": "..\\x.exe", "name": "x"}]),
+            json!([{"exe": "excel.exe", "name": ""}]),
+            json!([{"exe": "excel.exe", "name": "a\nb"}]),
+            json!([{"exe": "excel.exe", "name": "a"}, {"exe": "excel.exe", "name": "b"}]),
+            json!([{"exe": "excel.exe"}]),
+            json!("excel.exe"),
+        ] {
+            assert!(
+                s.apply_patch(&json!({ "computer_apps": bad })).is_err(),
+                "{bad}"
+            );
+        }
+        // nothing changed by a patch that failed
+        assert_eq!(s.computer_apps.len(), 1);
+        s.apply_patch(&json!({"computer_apps": []})).unwrap();
+        assert!(s.computer_apps.is_empty());
+    }
+
+    #[test]
+    fn a_file_with_bad_always_allowed_apps_keeps_the_good_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        std::fs::write(
+            &path,
+            r#"{"computer_apps": [{"exe": "calc.exe", "name": "Calculator"}, {"exe": "BAD", "name": "x"}, {"exe": "calc.exe", "name": "again"}]}"#,
+        )
+        .unwrap();
+        let loaded = DeviceSettings::load(&path);
+        assert_eq!(
+            loaded.computer_apps,
+            [ComputerApp {
+                exe: "calc.exe".into(),
+                name: "Calculator".into()
+            }]
+        );
+        // a file from before the list has none
+        std::fs::write(&path, r#"{"onboarded": true}"#).unwrap();
+        assert!(DeviceSettings::load(&path).computer_apps.is_empty());
+    }
+
+    #[test]
     fn json_uses_snake_case_names() {
         let s = DeviceSettings {
             subtitles: Subtitles::Off,
@@ -573,6 +697,7 @@ mod tests {
                 "ui_language": "zh-TW",
                 "autostart": true,
                 "onboarded": false,
+                "computer_apps": [],
             })
         );
         for (value, text) in [(Subtitles::On, "on"), (Subtitles::Off, "off")] {
@@ -923,12 +1048,57 @@ mod tests {
     }
 
     #[test]
-    fn a_value_of_the_wrong_type_sets_the_file_aside() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, r#"{"subtitles": "loud"}"#).unwrap();
-        assert_eq!(DeviceSettings::load(&path), DeviceSettings::default());
-        assert!(dir.path().join("device.json.bad").exists());
+    fn a_value_another_version_wrote_defaults_only_that_field() {
+        // Every build on a computer reads the same file, and one may have written a value that
+        // another does not know (an older build reads "on" for the subtitles of a newer one).
+        for (field, unknown) in [
+            ("subtitles", json!("loud")),
+            ("subtitles", json!(1)),
+            ("appearance", json!("sepia")),
+            ("appearance", json!(null)),
+            ("emblem_size", json!("large")),
+            ("emblem_size", json!(-1)),
+            ("autostart", json!("yes")),
+            ("onboarded", json!(1)),
+            ("microphone", json!(7)),
+            ("dictation_keys", json!("AltRight")),
+            ("paste_last_keys", json!([1, 2])),
+            ("agent_keys", json!({"key": "Space"})),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(FILE_NAME);
+            let mut stored = json!({
+                "dictation_keys": ["F9"],
+                "dictation_mode": "hold",
+                "paste_last_keys": ["F10"],
+                "agent_keys": ["F11"],
+                "microphone": "USB mic",
+                "emblem_size": 194,
+                "subtitles": "off",
+                "appearance": "dark",
+                "ui_language": "ja",
+                "autostart": false,
+                "onboarded": true,
+                "computer_apps": [{"exe": "calc.exe", "name": "Calculator"}],
+                "a_setting_of_a_newer_version": {"anything": true},
+            });
+            stored[field] = unknown.clone();
+            std::fs::write(&path, stored.to_string()).unwrap();
+
+            let loaded = serde_json::to_value(DeviceSettings::load(&path)).unwrap();
+            let default = serde_json::to_value(DeviceSettings::default()).unwrap();
+            assert_eq!(loaded[field], default[field], "{field} = {unknown}");
+            for (name, value) in loaded.as_object().unwrap() {
+                if name != field {
+                    assert_eq!(value, &stored[name], "{field} = {unknown}: {name} is kept");
+                }
+            }
+            assert!(
+                path.exists(),
+                "{field} = {unknown}: the file is not set aside"
+            );
+            assert!(!dir.path().join("device.json.bad").exists());
+        }
     }
 
     #[test]

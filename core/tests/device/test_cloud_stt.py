@@ -8,6 +8,9 @@ import base64
 import concurrent.futures
 import io
 import logging
+import subprocess
+import sys
+import threading
 import wave
 
 import numpy as np
@@ -15,7 +18,13 @@ import pytest
 
 from raphael_core.device import cloud_stt
 from raphael_core.device.cloud_stt import CloudSttEngine, encode_wav
-from raphael_core.protocol import BUDGET_EXCEEDED, INTERNAL_ERROR, NOT_CONFIGURED, RpcError
+from raphael_core.protocol import (
+    BUDGET_EXCEEDED,
+    INTERNAL_ERROR,
+    NO_LOCAL_MODEL,
+    NOT_CONFIGURED,
+    RpcError,
+)
 
 RATE = 16_000
 
@@ -57,11 +66,124 @@ class Local:
         return "本機聽到的"
 
 
-def engine(brain, local=None, warned=None):
+def engine(brain, local=None, warned=None, slept=None):
     local = local or Local()
+    slept = [] if slept is None else slept
     return CloudSttEngine(
-        brain, fallback=lambda: local, warned=set() if warned is None else warned
+        brain,
+        fallback=lambda: local,
+        warned=set() if warned is None else warned,
+        sleep=slept.append,
     ), local
+
+
+class Refusals(Brain):
+    """A brain that raises each of `errors` in turn, then answers."""
+
+    def __init__(self, *errors):
+        super().__init__()
+        self.errors = list(errors)
+
+    def __call__(self, method, params, timeout):
+        self.calls.append((method, params, timeout))
+        if self.errors:
+            raise self.errors.pop(0)
+        return self.reply
+
+
+def no_local_model():
+    raise RpcError(NO_LOCAL_MODEL, "There is no local speech model")
+
+
+def test_installed_local_model_wins_tail_race_without_waiting_for_cloud():
+    release = threading.Event()
+    entered = threading.Event()
+
+    def cloud_call(*args):
+        entered.set()
+        assert release.wait(5)
+        return {"text": "Cloud.", "model": "cloud-model"}
+
+    local = Local()
+    cloud = CloudSttEngine(cloud_call, fallback=lambda: local, warned=set(), race_local=True)
+    try:
+        assert cloud.transcribe_tail(speech()) == "本機聽到的"
+        assert entered.wait(1)
+        assert cloud.last_used == "qwen3-asr"
+    finally:
+        release.set()
+
+
+def test_tail_without_installed_model_never_starts_local_decode():
+    def forbidden():
+        raise AssertionError("No local model should be opened")
+
+    cloud = CloudSttEngine(Brain(), fallback=forbidden, warned=set())
+    assert cloud.transcribe_tail(speech()) == "雲端聽到的"
+
+
+def test_final_retry_attempts_cloud_even_after_a_previous_local_fallback():
+    brain = Refusals(RpcError(INTERNAL_ERROR, "failed", {"kind": "timeout"}))
+    cloud, local = engine(brain)
+    assert cloud.transcribe(speech()) == "本機聽到的"
+    assert cloud.transcribe_final(speech()) == "雲端聽到的"
+    assert len(brain.calls) == 2
+
+
+def test_empty_local_result_cannot_win_a_tail_race():
+    class EmptyLocal:
+        def transcribe(self, *args, **kwargs):
+            return ""
+
+    cloud = CloudSttEngine(Brain(), fallback=EmptyLocal, warned=set(), race_local=True)
+    assert cloud.transcribe_tail(speech()) == "雲端聽到的"
+    assert cloud.last_used == "openai/gpt-transcribe"
+
+
+def test_both_tail_contenders_failing_leaves_an_error_for_audio_retention():
+    cloud = CloudSttEngine(Brain(error=RpcError(INTERNAL_ERROR, "failed")),
+                           fallback=no_local_model, warned=set(), race_local=True)
+    with pytest.raises(RpcError):
+        cloud.transcribe_tail(speech())
+
+
+def test_blank_cloud_reply_with_no_local_model_is_an_error_to_retain_the_audio():
+    cloud = CloudSttEngine(Brain(reply={"text": "  ", "model": "cloud-model"}),
+                           fallback=no_local_model, warned=set())
+    with pytest.raises(RpcError):
+        cloud.transcribe(speech())
+
+
+def test_blank_local_fallback_is_an_error_to_retain_the_audio():
+    class EmptyLocal:
+        def transcribe(self, *args, **kwargs):
+            return ""
+
+    cloud = CloudSttEngine(Brain(error=RpcError(INTERNAL_ERROR, "failed")),
+                           fallback=EmptyLocal, warned=set())
+    with pytest.raises(RpcError):
+        cloud.transcribe(speech())
+
+
+def test_a_losing_local_race_cannot_hold_the_core_process_open():
+    script = """
+import threading, time
+import numpy as np
+from raphael_core.device.cloud_stt import CloudSttEngine
+entered = threading.Event()
+class Local:
+    def transcribe(self, *args, **kwargs):
+        entered.set()
+        time.sleep(30)
+        return 'local'
+def call(*args):
+    assert entered.wait(2)
+    return {'text': 'cloud', 'model': 'fake'}
+engine = CloudSttEngine(call, fallback=Local, warned=set(), race_local=True)
+assert engine.transcribe_tail(np.ones(16000, dtype=np.float32)) == 'cloud'
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=5)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
 
 
 # --- the WAV ----------------------------------------------------------------------------------
@@ -169,6 +291,49 @@ def test_a_long_segment_is_cut_for_the_local_engine():
     text = cloud.transcribe(speech(30.0))
     assert [round(c["seconds"], 3) for c in local.calls] == [15.0, 15.0]
     assert text == "本機聽到的本機聽到的"  # Chinese is joined without a space
+
+
+# --- refusals that pass, and no local engine --------------------------------------------------
+
+RATE_LIMIT = RpcError(INTERNAL_ERROR, "busy", {"kind": "rate_limit"})
+
+
+@pytest.mark.parametrize("kind", ["rate_limit", "server"])
+def test_a_refusal_that_passes_is_tried_again_after_a_wait(kind):
+    brain = Refusals(RpcError(INTERNAL_ERROR, "busy", {"kind": kind}))
+    slept: list[float] = []
+    cloud, local = engine(brain, slept=slept)
+    assert cloud.transcribe(speech()) == "雲端聽到的"
+    assert len(brain.calls) == 2 and slept == [1.0] and local.calls == []
+    assert cloud.transcribe(speech()) == "雲端聽到的"  # the dictation stays in the cloud
+    assert len(brain.calls) == 3
+
+
+def test_a_refusal_that_lasts_falls_back_after_three_tries():
+    brain = Refusals(RATE_LIMIT, RATE_LIMIT, RATE_LIMIT)
+    slept: list[float] = []
+    cloud, local = engine(brain, slept=slept)
+    assert cloud.transcribe(speech()) == "本機聽到的"
+    assert len(brain.calls) == 3 and slept == [1.0, 2.0] and len(local.calls) == 1
+
+
+def test_other_failures_are_not_tried_again():
+    brain = Refusals(RpcError(NOT_CONFIGURED, "No key", {"kind": "no_key"}))
+    slept: list[float] = []
+    cloud, _ = engine(brain, slept=slept)
+    cloud.transcribe(speech())
+    assert len(brain.calls) == 1 and slept == []
+
+
+def test_without_a_local_engine_the_next_segment_tries_the_cloud_again(caplog):
+    brain = Refusals(*[RATE_LIMIT] * 3)
+    cloud = CloudSttEngine(brain, fallback=no_local_model, warned=set(), sleep=lambda _: None)
+    with pytest.raises(RpcError) as raised:
+        cloud.transcribe(speech())
+    assert raised.value.code == NO_LOCAL_MODEL
+    assert cloud.transcribe(speech()) == "雲端聽到的"
+    assert len(brain.calls) == 4
+    assert any("no local engine" in r.getMessage() for r in caplog.records)
 
 
 def test_nothing_of_the_audio_or_the_text_is_logged(caplog):

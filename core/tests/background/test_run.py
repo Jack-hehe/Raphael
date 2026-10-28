@@ -106,7 +106,8 @@ async def test_a_model_call_is_made_with_the_tools_of_the_snapshot_and_paid_into
     # The tools the worker names are not the tools the model is offered: the snapshot's are.
     assert sent["tools"] == rig.run.snapshot.definitions
     assert sent["messages"] == MESSAGES and sent["model"] == "fake/model"
-    assert sent["reasoning_effort"] == "none" and sent["fallbacks"]
+    # The task's own model answers: live, a fallback model replaced a slow reply at a third of its time.
+    assert sent["reasoning_effort"] == "none" and sent["fallbacks"] == []
     rows = rig.conn.execute("SELECT purpose, model, cost_usd FROM spend").fetchall()
     assert [tuple(r) for r in rows] == [("agent", "fake/model", 0.004)]
     assert rig.run.ledger.total == 0.004
@@ -135,34 +136,36 @@ async def test_a_conversation_that_is_not_one_is_refused_before_anything_is_paid
 
 async def test_the_fifteenth_model_call_is_the_last(rig):
     rig.client.replies = [turn("x") for _ in range(16)]
+    rig.run.limits = RunLimits(model_calls=15)
     for _ in range(15):
         await rig.chat()
     assert await stop_of(rig.chat()) == ("limit_model", None)
     assert len(rig.client.chat_calls) == 15
 
 
-async def test_a_task_that_spent_what_one_task_may_asks_the_model_no_more(rig):
+async def test_spending_does_not_stop_a_task(rig):
     rig.client.replies = [turn("x", cost=0.15), turn("x", cost=0.15), turn("x")]
     await rig.chat()
     await rig.chat()  # 0.15 is under 0.20: allowed; this one takes it to 0.30
-    assert await stop_of(rig.chat()) == ("limit_cost", None)
-    assert len(rig.client.chat_calls) == 2
+    assert (await rig.chat())["content"] == "x"
+    assert len(rig.client.chat_calls) == 3
 
 
-async def test_a_month_whose_limit_is_used_up_stops_the_task(rig):
+async def test_a_month_whose_limit_is_used_up_still_allows_the_task(rig):
     rig.settings.set("monthly_limit_usd", 1.0)
     rig.spend.record(purpose="cleanup", model="m", cost_usd=1.0, prompt_tokens=1, completion_tokens=1)
-    assert await stop_of(rig.chat()) == ("limit_month", None)
-    assert rig.client.chat_calls == []
+    rig.client.replies = [turn("Still working", cost=0.3)]
+    assert (await rig.chat())["content"] == "Still working"
+    assert rig.run.ledger.total == pytest.approx(0.3)
 
 
 async def test_a_task_out_of_time_asks_for_nothing(rig):
-    rig.clock.now += 601
+    rig.clock.now += 1801
     assert await stop_of(rig.chat()) == ("limit_time", None)
     rig.clock.now = 1000
     rig.client.replies = [turn("x")]
     await rig.chat()
-    rig.clock.now += 601
+    rig.clock.now += 1801
     assert await stop_of(rig.tool("local_time")) == ("limit_time", None)
 
 
@@ -193,8 +196,8 @@ async def test_cancelling_gives_up_the_model_call_under_way(rig):
         (OpenRouterError(401, "auth", "x"), "auth"),
         (OpenRouterError(402, "credits", "x"), "credits"),
         (OpenRouterError(0, "network", "x"), "offline"),
-        (OpenRouterError(429, "rate_limit", "x"), "offline"),
-        (OpenRouterError(503, "server", "x"), "offline"),
+        (OpenRouterError(429, "rate_limit", "x"), "error"),
+        (OpenRouterError(503, "server", "x"), "error"),
         (OpenRouterError(400, "bad_request", "x"), "error"),
         (OpenRouterError(404, "bad_request", "x"), "tools"),
         (RuntimeError("boom"), "error"),
@@ -204,9 +207,11 @@ async def test_a_model_that_fails_ends_the_task_with_the_kind_of_failure(rig, er
     rig.client.replies = [error]
     assert await stop_of(rig.chat()) == ("failed", detail)
     assert rig.steps()[0].outcome == "error"
+    # The reason is the kind folded into the view's few words: "offline" is a network that failed.
+    assert rig.steps()[0].reason == {"offline": "network", "tools": "error"}.get(detail, detail)
 
 
-async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeypatch):
+async def test_a_model_that_takes_too_long_is_a_timeout(rig, monkeypatch):
     import raphael_core.background.run as module
 
     monkeypatch.setattr(module, "CHAT_TIMEOUT_S", 0.05)
@@ -215,8 +220,9 @@ async def test_a_model_that_takes_too_long_is_a_failure_to_reach_it(rig, monkeyp
         await asyncio.sleep(30)
 
     rig.client.replies = [slow]
-    assert await stop_of(rig.chat()) == ("failed", "offline")
+    assert await stop_of(rig.chat()) == ("failed", "timeout")
     assert rig.steps()[0].outcome == "timeout"
+    assert rig.steps()[0].reason == "timeout"
 
 
 # --- the tools of the plugins ---------------------------------------------------------------------
@@ -231,6 +237,7 @@ async def test_a_tool_of_a_plugin_is_called_through_the_gate_and_audited_with_th
     assert rig.audit() == [("Notes", "look", None, "auto", "ok", rig.task_id)]
     [step] = rig.steps()
     assert (step.kind, step.tool, step.server, step.tier, step.outcome) == ("tool", "look", "Notes", "T1", "ok")
+    assert step.reason is None
     assert rig.run.tool_calls == 1
 
 
@@ -252,7 +259,7 @@ async def test_neither_the_steps_nor_the_audit_nor_the_database_hold_an_argument
 
 
 async def test_a_tool_that_would_have_to_ask_after_the_snapshot_is_refused_and_audited(rig, calls):
-    server = await rig.plugins.connect(look="T0")
+    await rig.plugins.connect(look="T0")
     rig.resnap()  # the task started with `look` at T0
     rig.plugins.hub.strict["look"] = Tier.T2  # ... and it needs a yes now
     reply = await rig.tool("Notes__look", {"topic": "x"})
@@ -291,21 +298,22 @@ async def test_a_tool_the_server_describes_differently_after_the_snapshot_is_sti
     assert reply["ok"] is True and calls == ["look"]  # a tool is on until the user turns it off
 
 
-async def test_a_tool_that_needs_a_yes_is_not_called_even_when_it_is_in_the_snapshot(rig, calls):
+async def test_a_tool_that_needs_a_yes_is_not_called_by_a_run_that_cannot_wait(rig, calls):
     server = await rig.plugins.connect(look="T0", note="T2")
     rig.resnap()
-    # The snapshot never held `note` (a background task has no yes to ask for) ...
-    assert "Notes__note" not in rig.run.snapshot.refs
+    # The snapshot holds `note` (a task of the background service asks through its question) ...
+    assert "Notes__note" in rig.run.snapshot.refs
+    assert rig.run.can_wait is False
     reply = await rig.tool("Notes__note", {"text": "x"})
+    # ... but a run that cannot wait for the owner is refused it by the gate itself.
     assert (reply["ok"], reply["kind"]) == (False, "blocked") and calls == []
-    # ... and one that was put there by hand is stopped by the gate itself.
     from raphael_core.background.snapshot import MCP, ToolRef
     from raphael_core.agent.policy import Tier
 
     rig.run.snapshot.refs["Notes__note"] = ToolRef(MCP, f"mcp:{server}/note", "Notes", "note", Tier.T0)
     reply = await rig.tool("Notes__note", {"text": "x"})
     assert reply["kind"] == "blocked" and calls == []
-    assert rig.audit() == [("Notes", "note", None, "none", "blocked", rig.task_id)]
+    assert rig.audit() == [("Notes", "note", None, "none", "blocked", rig.task_id)] * 2
 
 
 async def test_a_name_that_is_not_a_tool_of_the_task_is_not_called_and_not_audited(rig, calls):
@@ -334,6 +342,7 @@ async def test_a_tool_call_that_is_not_one_is_invalid(rig, params):
 
 
 async def test_the_twenty_sixth_tool_call_is_not_made(rig):
+    rig.run.limits = RunLimits(tool_calls=25)
     for _ in range(25):
         await rig.tool("local_time")
     assert await stop_of(rig.tool("local_time")) == ("limit_tool", None)
@@ -341,7 +350,7 @@ async def test_the_twenty_sixth_tool_call_is_not_made(rig):
 
 
 async def test_what_a_tool_returns_is_cut_to_a_size_the_worker_can_take(rig):
-    server = await rig.plugins.connect(big="T0")
+    await rig.plugins.connect(big="T0")
     rig.resnap()
     reply = await rig.tool("Notes__big")
     assert reply["ok"] and reply["truncated"] is True and len(reply["content"]) <= 12_000
@@ -353,6 +362,7 @@ async def test_a_tool_that_fails_is_told_as_a_failure_with_its_kind(rig):
     reply = await rig.tool("Notes__broken")
     assert (reply["ok"], reply["kind"]) == (False, "tool_error")
     assert "secret detail" not in json.dumps(rig.steps()[0].__dict__)
+    assert rig.steps()[0].reason == "tool_error"  # the kind, not the service's words
     assert rig.audit()[0][4] == "error"
 
 
@@ -397,11 +407,11 @@ async def test_a_search_is_paid_for_by_the_task(rig):
     assert rig.client.text_calls[0]["model"] == "fake/model"
 
 
-async def test_a_search_is_refused_once_the_task_has_spent_what_it_may(rig):
+async def test_search_costs_are_recorded_without_stopping_the_task(rig):
     rig.client.search_cost = 0.25
     await rig.tool("web_search", {"query": "tea"})
-    assert await stop_of(rig.tool("web_search", {"query": "more tea"})) == ("limit_cost", None)
-    # ... but a lookup that costs nothing is still made.
+    assert (await rig.tool("web_search", {"query": "more tea"}))["ok"]
+    assert rig.run.ledger.total == pytest.approx(0.5)
     assert (await rig.tool("local_time"))["ok"]
 
 

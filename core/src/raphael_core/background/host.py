@@ -17,7 +17,10 @@ puts the core in one: the worker dies with it), and ends by itself when its stdi
 - Three crashes within ten minutes switch the worker off until the core is started again
   (`disabled`): something is wrong that starting again will not mend.
 - `cancel(run)` tells the worker to stop the task, and ends the process if it has not stopped within
-  a few seconds. The `TaskRun` has already begun to refuse every call by then.
+  a few seconds. The `TaskRun` has already begun to refuse every call by then. A worker that is
+  still being started for the task (it may take a minute to say hello) is ended at once, and so is
+  one whose start is itself cancelled (the core closes, the task's time is up) or that is starting
+  when the host closes: a worker is never left behind half-started. It is ended by its own handle.
 - An idle worker is ended after ten minutes, and `aclose` ends it for good.
 
 Nothing here logs what a task is, or says.
@@ -43,7 +46,12 @@ logger = logging.getLogger(__name__)
 IDLE_S = 600.0
 # How long a worker that was told to stop gets before it is ended.
 GRACE_S = 5.0
-HELLO_TIMEOUT_S = 20.0
+# How long a worker that was started is given to answer `worker.hello`. It runs below normal
+# priority (`_WINDOWS_FLAGS`), and loading Python and its libraries can take a busy machine (a
+# build, a game, a scan) far longer than the few seconds it takes an idle one.
+HELLO_TIMEOUT_S = 60.0
+# How long the end of a worker's output is waited for once the worker has exited.
+PIPES_END_S = 5.0
 CRASH_LIMIT = 3
 CRASH_WINDOW_S = 600.0
 # Longer than any message the core gets from the worker (asyncio's default is 64 KiB a line).
@@ -127,7 +135,6 @@ class ProcessLink:
         self.process = process
         self.peer = Peer(self._write)
         self._tasks: list[asyncio.Task[None]] = []
-        self.dropped_log_lines = 0
 
     def _write(self, line: str) -> None:
         stdin = self.process.stdin
@@ -168,10 +175,9 @@ class ProcessLink:
 
     def _log_line(self, raw: bytes, dropping: bool) -> None:
         text = raw.decode("utf-8", errors="replace").rstrip()
+        # Any other line is dropped: a traceback may quote the task, so it is not passed on.
         if not dropping and len(raw) <= STDERR_LINE_MAX and _LOG_LINE.match(text):
             logger.info("worker: %s", text)
-        else:
-            self.dropped_log_lines += 1  # a traceback may quote the task: it is not passed on
 
     async def _watch(self) -> None:
         await self.peer.serve(self._lines())
@@ -212,11 +218,31 @@ class ProcessLink:
                 self.process.kill()
 
     async def _finish(self) -> None:
+        """Let go of the pipes of a worker that has exited. Its output is read to the end first:
+        asyncio closes the process's transport only once both pipes have reached their end, and a
+        transport left open when the core's loop closes is a "Exception ignored ... unclosed
+        transport" traceback on the way out. The process is over, so the end comes at once; on a
+        busy machine it can come after the exit has been seen. The readers are stopped only if it
+        does not come within `PIPES_END_S`."""
         self.peer.close()
+        pending = [task for task in self._tasks if not task.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=PIPES_END_S)
         for task in self._tasks:
             if not task.done():
                 task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        # Process.wait() can return as soon as its exit code is known. The stdin pipe's
+        # connection_lost callback must also finish while its event loop is still alive.
+        if self.process.stdin is not None:
+            with contextlib.suppress(OSError):
+                await asyncio.wait_for(self.process.stdin.wait_closed(), PIPES_END_S)
+        # On Windows wait() can observe the exit before all pipe callbacks have released their
+        # transports. Close the owned transport explicitly before the event loop can shut down.
+        transport = getattr(self.process, "_transport", None)
+        if transport is not None:
+            transport.close()
+            await asyncio.sleep(0)
 
 
 async def connect_process(command: Sequence[str] | None = None) -> Link:
@@ -261,6 +287,13 @@ class WorkerHost:
         self._crash_window_s = crash_window_s
         self._clock = clock
         self._link: Link | None = None
+        # While a worker is being started: the task it is for, the worker once its process is
+        # there (until it has said hello), and whether that task was cancelled meanwhile.
+        self._starting_for: TaskRun | None = None
+        self._pending: Link | None = None
+        self._start_cancelled = False
+        # The ends of workers whose start was cancelled, which are let go of in the background.
+        self._reaping: set[asyncio.Task[None]] = set()
         self._current: TaskRun | None = None
         self._crashes: list[float] = []
         self._disabled = False
@@ -279,9 +312,17 @@ class WorkerHost:
     def running(self) -> bool:
         return self._link is not None and not self._link.peer.closed
 
+    @property
+    def start_s(self) -> float:
+        """The longest the start of a worker may take inside `run` before the task is given up
+        on: the wait for its hello. Whoever waits for `run` leaves room for it."""
+        return self._hello_timeout_s
+
     # --- starting -------------------------------------------------------------------------------
 
-    async def _ensure(self) -> Link:
+    async def _ensure(self, run: TaskRun | None = None) -> Link:
+        """The running worker, or a new one that has said hello, for `run`. A start that is broken
+        off (`run` is cancelled meanwhile, or the host closes) ends its worker: WorkerStopped."""
         async with self._starting:
             link = self._link
             if link is not None and not link.peer.closed:
@@ -290,30 +331,70 @@ class WorkerHost:
                 self._link = None
                 with contextlib.suppress(Exception):
                     await link.stop()
+            self._starting_for, self._start_cancelled = run, False
             try:
-                link = await self._connect()
-            except Exception as exc:
-                logger.warning("The worker could not be started: %s", type(exc).__name__)
-                self._note_crash()  # a worker that cannot start is no better than one that dies
-                raise WorkerUnavailable from None
-            link.peer.register("host.chat", self._chat)
-            link.peer.register("host.tool", self._tool)
-            try:
-                hello = await asyncio.wait_for(
-                    link.peer.request("worker.hello", {}), self._hello_timeout_s
-                )
-            except (TimeoutError, PeerClosed, RpcError) as exc:
-                logger.warning("The worker did not answer hello: %s", type(exc).__name__)
-                link.kill()
-                with contextlib.suppress(Exception):
-                    await link.stop()
-                self._note_crash()
-                raise WorkerUnavailable from None
-            pid = hello.get("pid") if isinstance(hello, dict) else None
-            self.pid = pid if isinstance(pid, int) else None
-            logger.info("The worker is running (pid %s)", self.pid)
-            self._link = link
-            return link
+                return await self._start()
+            finally:
+                self._starting_for = self._pending = None
+
+    async def _start(self) -> Link:
+        """A new worker, under the start lock: its process, then its hello. (A start cancelled
+        while the process is being made is asyncio's to undo: it kills a process it made.)"""
+        try:
+            link = await self._connect()
+        except Exception as exc:
+            logger.warning("The worker could not be started: %s", type(exc).__name__)
+            self._note_crash()  # a worker that cannot start is no better than one that dies
+            raise WorkerUnavailable from None
+        if self._start_broken_off():  # while the process was being made
+            await self._let_go(link)
+            raise WorkerStopped
+        link.peer.register("host.chat", self._chat)
+        link.peer.register("host.tool", self._tool)
+        self._pending = link
+        try:
+            hello = await asyncio.wait_for(
+                link.peer.request("worker.hello", {}), self._hello_timeout_s
+            )
+        except (TimeoutError, PeerClosed, RpcError) as exc:
+            await self._let_go(link)
+            if self._start_broken_off():  # ended by the cancel or the close, on purpose
+                raise WorkerStopped from None
+            logger.warning("The worker did not answer hello: %s", type(exc).__name__)
+            self._note_crash()
+            raise WorkerUnavailable from None
+        except BaseException:
+            # The start itself was cancelled (the core closes, the task's time is up): the worker
+            # is ended now, and its pipes are let go of in the background, as a cancelled task
+            # should not wait for that; `aclose` does.
+            link.kill()
+            reaping = asyncio.ensure_future(self._stop_quietly(link))
+            self._reaping.add(reaping)
+            reaping.add_done_callback(self._reaping.discard)
+            raise
+        if self._start_broken_off():  # it said hello as it was being ended
+            await self._let_go(link)
+            raise WorkerStopped
+        pid = hello.get("pid") if isinstance(hello, dict) else None
+        self.pid = pid if isinstance(pid, int) else None
+        logger.info("The worker is running (pid %s)", self.pid)
+        self._link = link
+        return link
+
+    def _start_broken_off(self) -> bool:
+        """Whether the start under way should not go on: its task was cancelled since it began
+        (`cancel`), or the host is closing."""
+        return self._closing or self._start_cancelled
+
+    async def _let_go(self, link: Link) -> None:
+        """End a worker that is not to be used, now, and let go of its pipes."""
+        link.kill()
+        await self._stop_quietly(link)
+
+    @staticmethod
+    async def _stop_quietly(link: Link) -> None:
+        with contextlib.suppress(Exception):
+            await link.stop()
 
     # --- the worker's calls ---------------------------------------------------------------------
 
@@ -338,7 +419,7 @@ class WorkerHost:
         if self._disabled:
             raise WorkerUnavailable
         self._cancel_idle()
-        link = await self._ensure()
+        link = await self._ensure(run)
         self._current = run
         try:
             # The worker keeps to its own limits too; this is the net under them.
@@ -364,6 +445,13 @@ class WorkerHost:
     def cancel(self, run: TaskRun) -> None:
         """Stop the task: the worker is told, and ended if it has not stopped in `grace_s`."""
         run.cancel()
+        if self._starting_for is run:
+            # Still starting: there is no task to stop yet, only the worker, which is ended now
+            # (or, if its process is not there yet, as soon as it is).
+            self._start_cancelled = True
+            if self._pending is not None:
+                self._pending.kill()
+            return
         link = self._link
         if link is None or self._current is not run:
             return
@@ -420,4 +508,10 @@ class WorkerHost:
         self._closing = True
         self._cancel_idle()
         self._cancel_kill()
+        if self._pending is not None:
+            self._pending.kill()
+        async with self._starting:  # a start under way sees the close and ends its worker
+            pass
         await self._end()
+        if self._reaping:
+            await asyncio.gather(*self._reaping, return_exceptions=True)

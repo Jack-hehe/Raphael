@@ -154,6 +154,50 @@ function page() {
 const SETTINGS: OverlayEvent = { type: "settings", px: 150, subtitles: "on", language: "zh-TW" };
 const NO_SOUND: OverlayEvent = { type: "notice", text: "《否。未收到聲音。請確認麥克風。》" };
 
+test.each(["hide", "release"] as const)("a voiced answer keeps its words and emblem until %s", (type) => {
+  const p = page();
+  p.send(SETTINGS, { type: "show", mode: "listening" });
+  run(1000);
+  p.send({ type: "say", prefix: "Answer", text: "Hello.", hold: true });
+  run(1000);
+  expect(p.view.lines).toBe("《Answer. Hello.》");
+  run(30_000);
+  expect(p.view.lines).toBe("《Answer. Hello.》");
+  expect(p.drawsNow()).toBe(true);
+  p.send({ type });
+  run(3000);
+  expect(p.view.lines).toBeNull();
+  expect(p.emblem.phase).toBe("hidden");
+});
+
+test("releasing a voiced answer preserves the reports queued after it", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "say", prefix: "Answer", text: "Hello.", hold: true });
+  run(1000);
+  p.send({ type: "notice", text: "Remembered." });
+  run(30_000);
+  expect(p.view.lines).toBe("《Answer. Hello.》");
+  p.send({ type: "release" });
+  run(100);
+  expect(p.view.lines).toBe("Remembered.");
+  expect(p.drawsNow()).toBe(true);
+  run(15_000);
+  expect(p.emblem.phase).toBe("hidden");
+});
+
+test("a voiced answer takes over a background notice before a quick release", () => {
+  const p = page();
+  p.send(SETTINGS, { type: "notice", text: "Background report." });
+  run(1000);
+  p.send({ type: "say", prefix: "Answer", text: "Hello.", hold: true });
+  run(100);
+  expect(p.view.lines).toBe("《Answer. Hello.》");
+  p.send({ type: "release" });
+  run(15_000);
+  expect(p.view.lines).toBeNull();
+  expect(p.emblem.phase).toBe("hidden");
+});
+
 test("learned words wait through live dictation and completion before appearing", () => {
   const p = page();
   p.send({ type: "show", mode: "listening" });

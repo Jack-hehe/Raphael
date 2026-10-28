@@ -11,7 +11,7 @@ def names(snapshot):
 
 def test_without_plugins_a_task_has_the_lookups_of_raphael_only():
     snapshot = take_snapshot(None)
-    assert names(snapshot) == ["weather", "web_search", "local_time"]
+    assert names(snapshot) == ["weather", "web_search", "local_time", "web_read"]
     assert {ref.kind for ref in snapshot.refs.values()} == {BUILTIN}
     assert all(ref.tier is Tier.T0 for ref in snapshot.refs.values())
 
@@ -44,10 +44,11 @@ async def test_a_tool_the_user_turned_off_is_not_in_it(plugins):
     assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == []
 
 
-async def test_a_tool_that_would_have_to_ask_is_not_in_it(plugins):
-    # None does today (a tool is on or off), but the worker cannot ask at the overlay if one did.
+async def test_a_tool_that_asks_is_in_it_and_one_that_cannot_be_undone_is_not(plugins):
+    # A T2 tool asks the owner through the waiting question; a T3 one is never offered to a task.
     await plugins.connect(look="T0", note="T2", wipe="T3")
-    assert [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP] == ["look"]
+    names = [ref.name for ref in take_snapshot(plugins.hub).refs.values() if ref.kind == MCP]
+    assert sorted(names) == ["look", "note"]
 
 
 async def test_a_plugin_that_is_off_has_no_tool_in_it(plugins):
@@ -77,7 +78,7 @@ def test_a_tool_of_a_plugin_never_takes_the_name_of_one_of_raphaels_own():
             return Tier.T0
 
     snapshot = take_snapshot(Hub())
-    assert names(snapshot) == ["weather", "web_search", "local_time"]
+    assert names(snapshot) == ["weather", "web_search", "local_time", "web_read"]
     assert snapshot.refs["weather"].kind == BUILTIN
 
 
@@ -86,4 +87,4 @@ def test_a_hub_that_breaks_leaves_its_tools_out_and_not_the_task():
         def offered(self):
             raise RuntimeError("down")
 
-    assert names(take_snapshot(Broken())) == ["weather", "web_search", "local_time"]
+    assert names(take_snapshot(Broken())) == ["weather", "web_search", "local_time", "web_read"]

@@ -29,10 +29,18 @@ The tests are heuristics with no dictionary behind them (the core has no phoneti
 no new dependency), so they only decide what may become a rule. A pair also needs a second
 observation, and must not break the replacements the user already has
 (`DictionaryStore.learn_pair`).
+
+The same tests decide which words of the dictionary the cleanup prompt shows for a transcript
+(`may_be_heard_in`). A Latin word with nothing spelled or sounding like it in the transcript cannot
+be a recognition error there: shown to the model, it only invites a translation (提交 written as
+Commit because Commit is in the dictionary).
 """
 
+import functools
 import re
 import unicodedata
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 # What a form must have to be distinctive: more than two Latin letters, or at least three CJK
 # characters.
@@ -182,12 +190,29 @@ def _soundex(text: str) -> str:
     return code[:4].ljust(4, "0")
 
 
-def _alike_in_latin(word: str, form: str) -> bool:
-    first, second = _compact(word), _compact(form)
+def _within_edits(first: str, second: str, limit: int) -> bool:
+    """Whether `_edit_distance(first, second) <= limit`, stopping as soon as it cannot be."""
+    if abs(len(first) - len(second)) > limit:
+        return False
+    previous = list(range(len(second) + 1))
+    for i, a in enumerate(first, 1):
+        current = [i]
+        for j, b in enumerate(second, 1):
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (a != b)))
+        if min(current) > limit:
+            return False
+        previous = current
+    return previous[-1] <= limit
+
+
+@functools.lru_cache(maxsize=65_536)
+def _alike_in_spelling(first: str, second: str) -> bool:
+    """`_alike_in_latin` for two compact texts, without the Soundex test. Cached: the cleanup prompt
+    asks it about the same dictionary and the speaker's own words dictation after dictation."""
     if first == second:
         return True
     longer, shorter = max(len(first), len(second)), min(len(first), len(second))
-    if _edit_distance(first, second) <= _MAX_EDIT_RATIO * longer:
+    if shorter >= _MIN_STEM_LETTERS and (first in second or second in first):
         return True
     stem = 0
     for a, b in zip(first, second, strict=False):
@@ -196,7 +221,12 @@ def _alike_in_latin(word: str, form: str) -> bool:
         stem += 1
     if stem >= _MIN_STEM_LETTERS and stem * 3 >= shorter * 2:
         return True
-    if shorter >= _MIN_STEM_LETTERS and (first in second or second in first):
+    return _within_edits(first, second, int(_MAX_EDIT_RATIO * longer))
+
+
+def _alike_in_latin(word: str, form: str) -> bool:
+    first, second = _compact(word), _compact(form)
+    if _alike_in_spelling(first, second):
         return True
     code = _soundex(first)
     return bool(code) and code == _soundex(second)
@@ -226,3 +256,96 @@ def may_become_rule(word: str, form: str) -> bool:
     """Whether the pair (`form` misheard for `word`) may become a replacement rule: its form is
     distinctive and the pair is plausible as a recognition error."""
     return is_distinctive(form) and is_plausible(word, form)
+
+
+# A Latin run of letters and digits in a transcript, and a phrase of such runs with only spaces or
+# marks between them (no CJK text, which ends a phrase).
+_LATIN_RUN = re.compile(r"[0-9A-Za-zÀ-ɏ]+")
+_LATIN_PHRASE = re.compile(r"[0-9A-Za-zÀ-ɏ]+(?:[\s\-_.'’]+[0-9A-Za-zÀ-ɏ]+)*")
+# The most runs of a transcript put together to compare with a word: speech-to-text splits words
+# ("tele gram") and a dictionary word can have several ("Hermes Agent").
+_MAX_WINDOW_RUNS = 3
+
+
+@dataclass(frozen=True)
+class _Windows:
+    """The Latin text of a transcript, indexed for `may_be_heard_in`: the compact text of every
+    run of up to _MAX_WINDOW_RUNS Latin words, by length and by first letters, and their Soundex
+    codes."""
+
+    has_cjk: bool
+    joined: str  # all the Latin runs, compact, one after another
+    texts: frozenset[str]
+    by_length: dict[int, list[str]]
+    by_stem: dict[str, list[str]]
+    codes: frozenset[str]
+
+
+@functools.lru_cache(maxsize=4)
+def _windows(text: str) -> _Windows:
+    """The cleanup prompt asks about every word of the dictionary for the same transcript, so its
+    index is built once."""
+    texts: set[str] = set()
+    for phrase in _LATIN_PHRASE.findall(text):
+        runs = [_compact(run) for run in _LATIN_RUN.findall(phrase)]
+        texts.update(
+            "".join(runs[start:end])
+            for start in range(len(runs))
+            for end in range(start + 1, min(start + _MAX_WINDOW_RUNS, len(runs)) + 1)
+        )
+    by_length: dict[int, list[str]] = {}
+    by_stem: dict[str, list[str]] = {}
+    for window in texts:
+        by_length.setdefault(len(window), []).append(window)
+        if len(window) >= _MIN_STEM_LETTERS:
+            by_stem.setdefault(window[:_MIN_STEM_LETTERS], []).append(window)
+    return _Windows(
+        has_cjk=any(_is_cjk(char) for char in text),
+        joined="".join(map(_compact, _LATIN_PHRASE.findall(text))),
+        texts=frozenset(texts),
+        by_length=by_length,
+        by_stem=by_stem,
+        codes=frozenset(filter(None, map(_soundex, texts))),
+    )
+
+
+def _heard_like(part: str, windows: _Windows) -> bool:
+    """Whether a run of the transcript is alike to `part`, a compact Latin text, as
+    `_alike_in_latin` judges. The index picks the runs that could be; `_alike_in_spelling` decides.
+    """
+    if part in windows.texts or _soundex(part) in windows.codes:
+        return True
+    if len(part) >= _MIN_STEM_LETTERS and part in windows.joined:
+        return True  # a run that holds it
+    candidates = {
+        part[start:end]
+        for start in range(len(part))
+        for end in range(start + _MIN_STEM_LETTERS, len(part) + 1)
+    } & windows.texts  # runs it holds
+    candidates.update(windows.by_stem.get(part[:_MIN_STEM_LETTERS], ()))
+    for length, texts in windows.by_length.items():
+        if abs(length - len(part)) <= _MAX_EDIT_RATIO * max(length, len(part)):
+            candidates.update(texts)
+    return any(_alike_in_spelling(part, window) for window in candidates)
+
+
+def may_be_heard_in(word: str, text: str, forms: Sequence[str] = ()) -> bool:
+    """Whether `text`, a transcript, may hold the dictionary's `word`, said right or misheard.
+
+    A word with CJK characters always may, and so does every word when the transcript has no CJK
+    text to be translated from. Otherwise a Latin word may when one of its known misheard `forms`
+    is in the text, or when a run of up to _MAX_WINDOW_RUNS of the text's Latin words is alike to it
+    or to one of its words of three letters or more, as `is_plausible` judges Latin text.
+    """
+    if any(_is_cjk(char) for char in word):
+        return True
+    windows = _windows(text)
+    if not windows.has_cjk:
+        return True
+    compact_text = _compact(text)
+    if any(key and key in compact_text for key in map(_compact, forms)):
+        return True
+    parts = {_compact(word)} | {
+        key for key in map(_compact, word.split()) if len(key) >= _MIN_LATIN_LETTERS
+    }
+    return any(_heard_like(part, windows) for part in parts if part)

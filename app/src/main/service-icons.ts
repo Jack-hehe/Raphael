@@ -1,21 +1,34 @@
 // The marks of the well-known programs a connection can be, to tell them apart in the lists. Two kinds,
 // and nothing is fetched at run time:
-// - one drawn path from Simple Icons 16.35.0 (https://simpleicons.org, CC0-1.0; its text is in the release
+// - one drawn path (the existing marks are from Simple Icons 16.35.0, https://simpleicons.org, CC0-1.0;
+//   its text is in the release
 //   notices), bare, in the brand colour where that has enough contrast on every surface of both themes
 //   (`BRAND_COLORS`), else in the colour of the text;
+//   OpenRouter, Brave and SearXNG are Simple Icons paths too, checked identical to the upstream files
+//   (develop branch) on 2026-10-23; the existing marks are from 16.35.0.
+//   Upstream reference: https://github.com/simple-icons/simple-icons (icons/openrouter.svg,
+//   icons/brave.svg and icons/searxng.svg).
 // - the brand's own full-colour logo, a file in `service-logos/` (with where each came from in
 //   `sources.json`), for the brands Simple Icons does not have: the Microsoft marks are not in
 //   it, removed at their owners' request. A logo that is dark in its official form has a light twin
-//   (`<id>.dark.svg`) that the dark theme shows instead.
+//   (`<id>.dark.svg` or `<id>.dark.png`) that the dark theme shows instead.
 // The marks belong to their owners, who do not sponsor or endorse Raphael. They are drawn bare, with no
-// tile of ours behind them. A program that is none of them gets a letter (`monogram`), never a made-up logo.
+// tile of ours behind them. A program that is none of them gets a generic plug icon, never a letter.
 
 import { esc } from "./ui";
 
-/** The brands that have a logo file of their own in `service-logos/` (the test keeps this and the folder the same). */
+/** Registered logo ids, including reserved provider artwork. `hasLogo` reports installed files. */
 export const LOGO_IDS = [
   "monday", "jam", "fireflies", "close", "attio", "granola", "klaviyo", "apify", "jotform", "context7", "deepwiki", "mslearn", "aws",
-  "huggingface", "exa",
+  "huggingface", "exa", "tavily", "jina", "firecrawl", "fish",
+  "openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud",
+  "ollama", "vercel", "lmstudio", "deepseek", "mistral",
+  "xai", "fireworks", "novita", "deepinfra", "together", "perplexity", "cerebras", "sambanova", "hyperbolic", "nvidia",
+  "moonshot", "dashscope", "zai", "minimax", "stepfun", "arcee", "gmi", "ollama_cloud", "meta", "opencode_zen", "kilocode",
+  "chutes", "siliconflow", "baidu_qianfan", "volcengine_ark", "venice", "featherless", "inference_net", "lambda", "scaleway", "ovhcloud", "cohere", "ai21",
+  "vllm", "sglang", "llamacpp", "jan", "koboldcpp", "localai", "text_generation_webui", "vertex", "bedrock",
+  // the makers of models (the author in a model's id, "qwen/qwen3-…")
+  "qwen", "microsoft", "tencent", "aionlabs", "bytedance", "xiaomi", "amazon", "sakana", "poolside", "inception", "inclusionai", "upstage", "nousresearch", "liquid", "perceptron", "ibm", "reka", "relace", "morph", "typesafe", "dotsstudio", "meituan", "dolphin", "thinkingmachines", "thedrummer", "moondream", "scaledown", "nex_agi", "sao10k", "xingchen_agi", "prism_ml", "writer", "anthracite", "undi95", "gryphe", "alibaba", "assemblyai", "baai", "baseten", "bfl", "cloudflare", "elevenlabs", "krea", "kling", "recraft", "runway", "voyage", "deepgram", "sesame", "canopylabs", "nace_ai", "sentence_transformers", "hexgrad", "thenlper", "jaredpalmer",
 ] as const;
 export type LogoIconId = (typeof LOGO_IDS)[number];
 
@@ -48,6 +61,10 @@ export const SERVICE_ICONS = {
   postman: { title: "Postman", path: "M13.527.099C6.955-.744.942 3.9.099 10.473c-.843 6.572 3.8 12.584 10.373 13.428 6.573.843 12.587-3.801 13.428-10.374C24.744 6.955 20.101.943 13.527.099zm2.471 7.485a.855.855 0 0 0-.593.25l-4.453 4.453-.307-.307-.643-.643c4.389-4.376 5.18-4.418 5.996-3.753zm-4.863 4.861l4.44-4.44a.62.62 0 1 1 .847.903l-4.699 4.125-.588-.588zm.33.694l-1.1.238a.06.06 0 0 1-.067-.032.06.06 0 0 1 .01-.073l.645-.645.512.512zm-2.803-.459l1.172-1.172.879.878-1.979.426a.074.074 0 0 1-.085-.039.072.072 0 0 1 .013-.093zm-3.646 6.058a.076.076 0 0 1-.069-.083.077.077 0 0 1 .022-.046h.002l.946-.946 1.222 1.222-2.123-.147zm2.425-1.256a.228.228 0 0 0-.117.256l.203.865a.125.125 0 0 1-.211.117h-.003l-.934-.934-.294-.295 3.762-3.758 1.82-.393.874.874c-1.255 1.102-2.971 2.201-5.1 3.268zm5.279-3.428h-.002l-.839-.839 4.699-4.125a.952.952 0 0 0 .119-.127c-.148 1.345-2.029 3.245-3.977 5.091zm3.657-6.46l-.003-.002a1.822 1.822 0 0 1 2.459-2.684l-1.61 1.613a.119.119 0 0 0 0 .169l1.247 1.247a1.817 1.817 0 0 1-2.093-.343zm2.578 0a1.714 1.714 0 0 1-.271.218h-.001l-1.207-1.207 1.533-1.533c.661.72.637 1.832-.054 2.522zM18.855 6.05a.143.143 0 0 0-.053.157.416.416 0 0 1-.053.45.14.14 0 0 0 .023.197.141.141 0 0 0 .084.03.14.14 0 0 0 .106-.05.691.691 0 0 0 .087-.751.138.138 0 0 0-.194-.033z" },
   sanity: { title: "Sanity", path: "m23.327 15.205-.893-1.555-4.321 2.632 4.799-6.11.726-.426-.179-.27.33-.421-1.515-1.261-.693.883-13.992 8.186 5.173-6.221 9.636-5.282-.915-1.769-5.248 2.876 2.584-3.106-1.481-1.305-5.816 6.994-5.777 3.168 4.423-5.847 2.771-1.442-.88-1.789-8.075 4.203L6.186 4.43 4.648 3.198 0 9.349l.072.058.868 1.768 5.153-2.683-4.696 6.207.77.617.458.885 5.425-2.974-5.974 7.185 1.481 1.304.297-.358 14.411-8.459-4.785 6.094.078.065-.007.005.992 1.726 6.364-3.877-2.451 3.954 1.642 1.077L24 15.648z" },
   bitly: { title: "Bitly", path: "M13.055 21.26c-1.345.022-2.325-.41-2.386-1.585-.025-.44-.018-.91.002-1.192.137-1.716 1.333-2.95 2.53-3.19 1.482-.294 2.455.38 2.455 2.31 0 1.303-.36 3.618-2.59 3.657h-.016zM11.923 0C5.32 0 0 5.297 0 12.224c0 3.594 1.92 7.062 4.623 9.147.52.4 1.138.367 1.497.02.297-.285.272-.984-.285-1.475-2.16-1.886-3.652-4.76-3.652-7.635 0-5.15 4.58-9.49 9.74-9.49 6.28 0 9.636 5.102 9.636 9.43 0 2.65-1.29 5.84-3.626 7.874.015 0 .493-.942.493-2.784 0-3.13-1.976-4.836-4.28-4.836-1.663 0-2.667.598-3.34 1.152 0-1.272.045-3.652.045-3.652 0-1.572-.54-2.83-2.47-2.86-1.11-.015-1.932.493-2.44 1.647-.18.436-.12.916.254 1.125.3.18.81.046 1.046-.284.165-.21.254-.254.404-.24.24.03.257.405.257.66.014.193.193 2.903.088 9.865C7.98 21.798 9.493 24 13.1 24c1.56 0 2.756-.435 4.493-1.422C20.243 21.08 24 17.758 24 12.128 23.953 5.045 18.265 0 11.933 0" },
+  telegram: { title: "Telegram", path: "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" },
+  openrouter: { title: "OpenRouter", path: "M16.778 1.844v1.919q-.569-.026-1.138-.032-.708-.008-1.415.037c-1.93.126-4.023.728-6.149 2.237-2.911 2.066-2.731 1.95-4.14 2.75-.396.223-1.342.574-2.185.798-.841.225-1.753.333-1.751.333v4.229s.768.108 1.61.333c.842.224 1.789.575 2.185.799 1.41.798 1.228.683 4.14 2.75 2.126 1.509 4.22 2.11 6.148 2.236.88.058 1.716.041 2.555.005v1.918l7.222-4.168-7.222-4.17v2.176c-.86.038-1.611.065-2.278.021-1.364-.09-2.417-.357-3.979-1.465-2.244-1.593-2.866-2.027-3.68-2.508.889-.518 1.449-.906 3.822-2.59 1.56-1.109 2.614-1.377 3.978-1.466.667-.044 1.418-.017 2.278.02v2.176L24 6.014Z" },
+  brave: { title: "Brave", path: "M15.68 0l2.096 2.38s1.84-.512 2.709.358c.868.87 1.584 1.638 1.584 1.638l-.562 1.381.715 2.047s-2.104 7.98-2.35 8.955c-.486 1.919-.818 2.66-2.198 3.633-1.38.972-3.884 2.66-4.293 2.916-.409.256-.92.692-1.38.692-.46 0-.97-.436-1.38-.692a185.796 185.796 0 01-4.293-2.916c-1.38-.973-1.712-1.714-2.197-3.633-.247-.975-2.351-8.955-2.351-8.955l.715-2.047-.562-1.381s.716-.768 1.585-1.638c.868-.87 2.708-.358 2.708-.358L8.321 0h7.36zm-3.679 14.936c-.14 0-1.038.317-1.758.69-.72.373-1.242.637-1.409.742-.167.104-.065.301.087.409.152.107 2.194 1.69 2.393 1.866.198.175.489.464.687.464.198 0 .49-.29.688-.464.198-.175 2.24-1.759 2.392-1.866.152-.108.254-.305.087-.41-.167-.104-.689-.368-1.41-.741-.72-.373-1.617-.69-1.757-.69zm0-11.278s-.409.001-1.022.206-1.278.46-1.584.46c-.307 0-2.581-.434-2.581-.434S4.119 7.152 4.119 7.849c0 .697.339.881.68 1.243l2.02 2.149c.192.203.59.511.356 1.066-.235.555-.58 1.26-.196 1.977.384.716 1.042 1.194 1.464 1.115.421-.08 1.412-.598 1.776-.834.364-.237 1.518-1.19 1.518-1.554 0-.365-1.193-1.02-1.413-1.168-.22-.15-1.226-.725-1.247-.95-.02-.227-.012-.293.284-.851.297-.559.831-1.304.742-1.8-.089-.495-.95-.753-1.565-.986-.615-.232-1.799-.671-1.947-.74-.148-.068-.11-.133.339-.175.448-.043 1.719-.212 2.292-.052.573.16 1.552.403 1.632.532.079.13.149.134.067.579-.081.445-.5 2.581-.541 2.96-.04.38-.12.63.288.724.409.094 1.097.256 1.333.256s.924-.162 1.333-.256c.408-.093.329-.344.288-.723-.04-.38-.46-2.516-.541-2.961-.082-.445-.012-.45.067-.579.08-.129 1.059-.372 1.632-.532.573-.16 1.845.009 2.292.052.449.042.487.107.339.175-.148.069-1.332.508-1.947.74-.615.233-1.476.49-1.565.986-.09.496.445 1.241.742 1.8.297.558.304.624.284.85-.02.226-1.026.802-1.247.95-.22.15-1.413.804-1.413 1.169 0 .364 1.154 1.317 1.518 1.554.364.236 1.355.755 1.776.834.422.079 1.08-.4 1.464-1.115.384-.716.039-1.422-.195-1.977-.235-.555.163-.863.355-1.066l2.02-2.149c.341-.362.68-.546.68-1.243 0-.697-2.695-3.96-2.695-3.96s-2.274.436-2.58.436c-.307 0-.972-.256-1.585-.461-.613-.205-1.022-.206-1.022-.206z" },
+  searxng: { title: "SearXNG", path: "m13.716 17.261 6.873 6.582L24 20.282l-6.824-6.536a9.11 9.11 0 0 0 1.143-4.43c0-5.055-4.105-9.159-9.16-9.159S0 4.261 0 9.316c0 5.055 4.104 9.159 9.159 9.159a9.11 9.11 0 0 0 4.557-1.214ZM9.159 2.773a6.546 6.546 0 0 1 6.543 6.543 6.545 6.545 0 0 1-6.543 6.542 6.545 6.545 0 0 1-6.542-6.542 6.545 6.545 0 0 1 6.542-6.543ZM7.26 5.713a4.065 4.065 0 0 1 4.744.747 4.064 4.064 0 0 1 .707 4.749l1.157.611a5.376 5.376 0 0 0-.935-6.282 5.377 5.377 0 0 0-6.274-.987l.601 1.162Z" },
 } as const;
 
 export type MonoIconId = keyof typeof SERVICE_ICONS;
@@ -63,7 +80,10 @@ for (const id of LOGO_IDS) {
   const light = svgFiles[`./service-logos/${id}.svg`];
   const dark = svgFiles[`./service-logos/${id}.dark.svg`];
   const png = pngFiles[`./service-logos/${id}.png`];
-  LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(dark ? { dark: svgUri(dark) } : {}) };
+  const darkPng = pngFiles[`./service-logos/${id}.dark.png`];
+  if (!light && !png) continue; // Reserved provider ids use the plug until artwork arrives.
+  const twin = dark ? svgUri(dark) : darkPng;
+  LOGOS[id] = { light: light ? svgUri(light) : (png ?? ""), ...(twin ? { dark: twin } : {}) };
 }
 
 /** Does the brand have a full-colour logo file (rather than a drawn path)? */
@@ -115,6 +135,13 @@ const MATCHERS: Partial<Record<ServiceIconId, readonly (readonly string[])[]>> =
   jotform: [["jotform"]],
   context7: [["context7"]],
   deepwiki: [["deepwiki"]],
+  openrouter: [["openrouter"]],
+  brave: [["brave", "search"], ["bravesearch"]],
+  searxng: [["searxng"]],
+  tavily: [["tavily"]],
+  jina: [["jina"]],
+  firecrawl: [["firecrawl"]],
+  fish: [["fish", "audio"], ["fishaudio"]],
 };
 
 /** The words of a text: lower case, letters and digits. */
@@ -168,6 +195,7 @@ export const BRAND_COLORS: Partial<Record<MonoIconId, string>> = {
   wix: "#0C6EFC",
   calendly: "#006BFF",
   bitly: "#EE6123",
+  brave: "#FB542B",
 };
 
 /** The attribute that gives a mark's wrapper its brand colour (`.logo-mono[style]` uses it); none for the others. */
@@ -177,5 +205,5 @@ export const brandStyle = (id: MonoIconId): string => (BRAND_COLORS[id] ? ` styl
 export const serviceIconSVG = (id: MonoIconId): string =>
   `<svg class="logo" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="${SERVICE_ICONS[id].path}"/></svg>`;
 
-/** The first letter of a name, capitalised: the picture of a program that has no mark here. */
+/** The first letter of a name, capitalised: used for paired user avatars. */
 export const monogram = (name: string): string => esc((Array.from(name.trim())[0] ?? "?").toUpperCase());

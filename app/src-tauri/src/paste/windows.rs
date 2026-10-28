@@ -296,7 +296,7 @@ fn foreground_target() -> Option<Target> {
 
 /// A process's executable file name and whether it runs elevated. A process that we may not
 /// even look at counts as elevated: it is out of our reach in the same way.
-fn describe_process(pid: u32) -> (String, bool) {
+pub(crate) fn describe_process(pid: u32) -> (String, bool) {
     let access_denied = HRESULT::from_win32(ERROR_ACCESS_DENIED.0);
     // SAFETY: `Owned` closes the handle.
     let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {

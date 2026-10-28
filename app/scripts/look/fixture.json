@@ -1,0 +1,3174 @@
+{
+  "teamBoard": {
+    "groups": [
+      {
+        "id": 1,
+        "name": "學習",
+        "position": 0,
+        "sources": []
+      }
+    ],
+    "members": [
+      {
+        "id": 0,
+        "name": "拉斐爾",
+        "role": "幕僚長",
+        "group_id": null,
+        "model": ""
+      },
+      {
+        "id": 3,
+        "name": "紫苑",
+        "role": "日文老師",
+        "group_id": 1,
+        "model": "cli:claude:haiku"
+      },
+      {
+        "id": 1,
+        "name": "哥不挺",
+        "role": "員工一號",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 2,
+        "name": "執行長",
+        "role": "CEO / 策略與商業決策",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 4,
+        "name": "營運長",
+        "role": "COO / 營運與執行",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 5,
+        "name": "技術長",
+        "role": "CTO / 技術架構與研發",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 6,
+        "name": "產品經理",
+        "role": "PM / 產品策略與需求",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 7,
+        "name": "研發工程師",
+        "role": "RD / 產品開發與維護",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 8,
+        "name": "成長行銷",
+        "role": "行銷 / 成長與品牌",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      },
+      {
+        "id": 9,
+        "name": "財務長",
+        "role": "財務 / 現金流與單位經濟",
+        "group_id": null,
+        "model": "cli:codex:gpt-6.1-sol?effort=high"
+      }
+    ],
+    "models": {
+      "codex": {
+        "id": "cli:codex:gpt-6.1-sol",
+        "name": "GPT-6.1 Sol",
+        "is_default": true,
+        "reasoning_efforts": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "claude": {
+        "id": "cli:claude:haiku",
+        "name": "Haiku",
+        "is_default": true,
+        "reasoning_efforts": []
+      }
+    }
+  },
+  "permissionTurns": {
+    "tool": {
+      "turn": {
+        "id": 150,
+        "session_id": "look-permission-gmail",
+        "member_id": 0,
+        "conversation_id": 1,
+        "created_at_ms": 1792807185000,
+        "question": "幫我寄一封信給小美，說週四下午三點可以開會。",
+        "route": "answer",
+        "source": "app",
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "detail": null,
+        "status": "confirm",
+        "cost_usd": 0.0009,
+        "model": "openai/gpt-6-sol",
+        "steps": [],
+        "attachments": [],
+        "messages": [],
+        "permissions": [
+          {
+            "id": "perm-gmail",
+            "source": "ask",
+            "kind": "tool",
+            "service": "Gmail",
+            "tool": "send_email",
+            "summary": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+            "reason": null,
+            "digest": "2a262f9dfdde08c1ff085e923ddeaf9f470babf04dab7395d7ec6a48effd0f91",
+            "always": true,
+            "state": "pending",
+            "expires_at_ms": 1792807215000
+          }
+        ]
+      },
+      "question": {
+        "id": "perm-gmail",
+        "member_id": 0,
+        "conversation_id": 1,
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "tier": "T2",
+        "timeout_ms": 30000,
+        "yes": "允許一次",
+        "no": "拒絕",
+        "always": "一律允許"
+      },
+      "done": "《答。已用 Gmail 寄出這封信。》",
+      "denied": "《了。已取消，沒有寄出。》"
+    },
+    "ask-first": {
+      "turn": {
+        "id": 151,
+        "session_id": "look-permission-rule",
+        "member_id": 1,
+        "conversation_id": 11,
+        "created_at_ms": 1792807185000,
+        "question": "幫我寄一封信給小美，說週四下午三點可以開會。",
+        "route": "answer",
+        "source": "app",
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "detail": null,
+        "status": "confirm",
+        "cost_usd": 0.0009,
+        "model": "openai/gpt-6-sol",
+        "steps": [],
+        "attachments": [],
+        "messages": [],
+        "permissions": [
+          {
+            "id": "perm-rule",
+            "source": "ask",
+            "kind": "tool",
+            "service": "Gmail",
+            "tool": "send_email",
+            "summary": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+            "reason": "此操作符合安全規則「寄信前先問」。",
+            "digest": "707be4e520c562ddb64611ff1b2ce598e78fe99840b94896cd7cecf97adb6332",
+            "always": false,
+            "state": "pending",
+            "expires_at_ms": 1792807215000
+          }
+        ]
+      },
+      "question": {
+        "id": "perm-rule",
+        "member_id": 1,
+        "conversation_id": 11,
+        "prefix": "問",
+        "text": "是否讓「Gmail」執行「send_email」（to: mei@example.com, subject: 週四下午三點的會議）？",
+        "tier": "T2",
+        "timeout_ms": 30000,
+        "yes": "是",
+        "no": "否"
+      },
+      "done": "《答。已用 Gmail 寄出這封信。》",
+      "denied": "《了。已取消，沒有寄出。》"
+    }
+  },
+  "mailTurns": {
+    "draft": {
+      "id": 160,
+      "session_id": "look-mail-draft",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "幫我回信給小美，說週四下午三點可以開會。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "草稿放在這裡了，請看一下，需要的話可以直接修改。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。草稿放在這裡了，請看一下，需要的話可以直接修改。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "drafts": [
+        {
+          "id": "mail-1",
+          "mode": "card",
+          "state": "draft",
+          "version": 1,
+          "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "from": {
+            "key": "mcp:gmail/send_email",
+            "name": "Gmail"
+          },
+          "senders": [
+            {
+              "key": "mcp:gmail/send_email",
+              "name": "Gmail"
+            },
+            {
+              "key": "mcp:work/send",
+              "name": "Outlook"
+            }
+          ],
+          "to": "mei@example.com",
+          "cc": "",
+          "subject": "回覆：週四下午三點的會議",
+          "body": "小美，您好：\n\n週四下午三點可以開會，我會提前十分鐘到會議室。\n\n謝謝你的邀請。",
+          "offer": null,
+          "error": null,
+          "holder_id": 1,
+          "author_name": ""
+        }
+      ]
+    }
+  },
+  "secretTurns": {
+    "notion": {
+      "id": 130,
+      "session_id": "look-secret-notion",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我看一下 Notion 上「產品路線圖」頁的標題。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "需要先儲存 Notion 的金鑰，儲存後我就接著查。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "Notion",
+          "outcome": "error",
+          "at_ms": 1792807185500,
+          "ms": 310,
+          "reason": "missing_secret"
+        }
+      ],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。需要先儲存 Notion 的金鑰，儲存後我就接著查。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "secrets": [
+        {
+          "id": "card-notion",
+          "name": "Notion",
+          "secret": "NOTION_TOKEN",
+          "state": "pending",
+          "error": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    }
+  },
+  "secretResume": {
+    "id": 131,
+    "session_id": "connect-130",
+    "member_id": 0,
+    "conversation_id": 1,
+    "created_at_ms": 1792807195000,
+    "question": "幫我看一下 Notion 上「產品路線圖」頁的標題。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "答",
+    "text": "「產品路線圖」頁的標題是「2027 路線圖」。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_secrets": [
+      "Notion"
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "search",
+        "server": "Notion",
+        "outcome": "ok",
+        "at_ms": 1792807196000,
+        "ms": 640,
+        "reason": null
+      },
+      {
+        "kind": "tool",
+        "tool": "fetch",
+        "server": "Notion",
+        "outcome": "ok",
+        "at_ms": 1792807197000,
+        "ms": 520,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "《答。「產品路線圖」頁的標題是「2027 路線圖」。》",
+        "at_ms": 1792807198000
+      }
+    ]
+  },
+  "computerTurns": {
+    "signin": {
+      "id": 140,
+      "session_id": "look-computer-signin",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "請在電腦上看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "",
+      "text": "請在瀏覽器登入，完成後在這裡按「我完成了」。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0008,
+      "model": "openai/gpt-6-sol",
+      "steps": [
+        {
+          "kind": "computer",
+          "tool": "apps",
+          "server": null,
+          "outcome": "ok",
+          "at_ms": 1792807185500,
+          "ms": 120,
+          "reason": null
+        },
+        {
+          "kind": "computer",
+          "tool": "look",
+          "server": "Google Chrome",
+          "outcome": "ok",
+          "at_ms": 1792807185800,
+          "ms": 240,
+          "reason": null
+        }
+      ],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "請在瀏覽器登入，完成後在這裡按「我完成了」。",
+          "at_ms": 1792807186000
+        }
+      ],
+      "computers": [
+        {
+          "id": "card-pc",
+          "seq": 1,
+          "reason": "sign_in",
+          "app": "Google Chrome",
+          "state": "control",
+          "error": null,
+          "note": null,
+          "expires_at_ms": 1792808985000
+        }
+      ]
+    }
+  },
+  "computerResume": {
+    "id": 141,
+    "session_id": "connect-140",
+    "member_id": 1,
+    "conversation_id": 11,
+    "created_at_ms": 1792807205000,
+    "question": "請在電腦上看一下 YouTube Studio 的上傳頁，告訴我頁面上的確認碼。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "",
+    "text": "頁面上的確認碼是 YT-4F2A。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_computers": [
+      "Google Chrome"
+    ],
+    "steps": [
+      {
+        "kind": "computer",
+        "tool": "apps",
+        "server": null,
+        "outcome": "ok",
+        "at_ms": 1792807206000,
+        "ms": 110,
+        "reason": null
+      },
+      {
+        "kind": "computer",
+        "tool": "look",
+        "server": "Google Chrome",
+        "outcome": "ok",
+        "at_ms": 1792807207000,
+        "ms": 230,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "頁面上的確認碼是 YT-4F2A。",
+        "at_ms": 1792807208000
+      }
+    ]
+  },
+  "connectorTurns": {
+    "gmail": {
+      "id": 120,
+      "session_id": "look-connect-gmail",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "需要先連結 Gmail，連好後就繼續找這封信。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。需要先連結 Gmail，連好後就繼續找這封信。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-gmail",
+          "app": "gmail",
+          "name": "Gmail",
+          "state": "pending",
+          "error": null,
+          "reconnect": false,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    },
+    "expired": {
+      "id": 120,
+      "session_id": "look-connect-gmail",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807185000,
+      "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "Gmail 的授權過期了，重新連結後就繼續找這封信。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0009,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "《答。Gmail 的授權過期了，重新連結後就繼續找這封信。》",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-gmail",
+          "app": "gmail",
+          "name": "Gmail",
+          "state": "pending",
+          "error": null,
+          "reconnect": true,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    },
+    "calendar": {
+      "id": 122,
+      "session_id": "look-connect-calendar",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807185000,
+      "question": "幫我看下週二下午有沒有空檔，再跟客戶約會議。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "",
+      "text": "需要先連結 Google Calendar，連好後就查下週二的空檔。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.0008,
+      "model": "openai/gpt-6-sol",
+      "steps": [],
+      "attachments": [],
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "reply",
+          "text": "需要先連結 Google Calendar，連好後就查下週二的空檔。",
+          "at_ms": 1792807186000
+        }
+      ],
+      "connectors": [
+        {
+          "id": "card-calendar",
+          "app": "googlecalendar",
+          "name": "Google Calendar",
+          "state": "pending",
+          "error": null,
+          "reconnect": false,
+          "tool_count": null,
+          "expires_at_ms": 1792893585000,
+          "resumed": false
+        }
+      ]
+    }
+  },
+  "connectorResume": {
+    "id": 121,
+    "session_id": "connect-120",
+    "member_id": 0,
+    "conversation_id": 1,
+    "created_at_ms": 1792807195000,
+    "question": "幫我找出主旨含 GX-7Q 的信，告訴我信裡的確認碼。",
+    "route": "answer",
+    "source": "connector",
+    "prefix": "答",
+    "text": "找到了，信裡的確認碼是 MC-4F2A。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.0011,
+    "model": "openai/gpt-6-sol",
+    "attachments": [],
+    "resumed_apps": [
+      "gmail"
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "gmail_search",
+        "server": "Google (private)",
+        "outcome": "ok",
+        "at_ms": 1792807196000,
+        "ms": 640,
+        "reason": null
+      },
+      {
+        "kind": "tool",
+        "tool": "gmail_get_message",
+        "server": "Google (private)",
+        "outcome": "ok",
+        "at_ms": 1792807197000,
+        "ms": 520,
+        "reason": null
+      }
+    ],
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "《答。找到了，信裡的確認碼是 MC-4F2A。》",
+        "at_ms": 1792807198000
+      }
+    ]
+  },
+  "p02MeetingEvent": { "type": "meeting", "room_id": 1, "name": "產品方向討論" },
+  "p02BlockedIntents": [
+    { "id": 100, "origin_message_id": 1, "source_message_id": 1, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cli_rate_limited" },
+    { "id": 101, "origin_message_id": 7, "source_message_id": 7, "recipient_id": 1, "recipient_name": "小堇", "state": "blocked", "reason": "owner" },
+    { "id": 102, "origin_message_id": 7, "source_message_id": 7, "recipient_id": 2, "recipient_name": "研究員", "state": "blocked", "reason": "cost" }
+  ],
+  "p02BlockedMessage": {
+    "id": 7, "room_id": 1, "member_id": null, "text": "@小晴 @小森 請補上文案檢查結果。",
+    "created": 1792807200000, "status": "done", "request_id": null, "reply_to": null,
+    "turn_id": null, "reply_to_member": null, "kind": "message"
+  },
+  "p02Roles": { "1": "moderator", "2": "pro", "3": "con" },
+  "liveScenarioOwnerTurns": [
+    {
+      "id": 1700, "session_id": "guardian-owner-view", "member_id": 0, "conversation_id": 1,
+      "created_at_ms": 1792807154000, "question": "請讀取測試信件，無法讀取時請告訴我需要什麼。",
+      "route": "answer", "source": "app", "prefix": "", "text": "需要重新登入並授予讀取權限。",
+      "detail": null, "status": "done", "cost_usd": 0.001, "model": "openai/gpt-6-luna",
+      "messages": [
+        { "seq": 1, "kind": "progress", "text": "正在查看信件服務。", "at_ms": 1792807155000 },
+        { "seq": 2, "kind": "reply", "text": "需要重新登入並授予讀取權限。", "at_ms": 1792807156000 }
+      ],
+      "steps": [{ "kind": "tool", "tool": "read", "server": "Guardian", "outcome": "error", "at_ms": 1792807155000, "ms": 12, "reason": "auth" }],
+      "attachments": []
+    }
+  ],
+  "composioConfigured": true,
+  "managedConnectors": [
+    { "id": "composio:notion", "kind": "composio", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "status": "ACTIVE", "enabled": true, "enabled_tools": ["NOTION_SEARCH", "NOTION_CREATE_PAGE", "NOTION_UPDATE_PAGE"], "disabled_tools": [] },
+    { "id": "google", "kind": "google", "status": "ACTIVE", "enabled": true, "enabled_tools": ["gmail_list_messages", "calendar_list_events"], "disabled_tools": [] }
+  ],
+  "pluginCatalogLoad": { "count": 360 },
+  "pluginCategories": [
+    { "id": "productivity", "name": "生產力" },
+    { "id": "development", "name": "開發工具" },
+    { "id": "communication", "name": "通訊" }
+  ],
+  "pluginCatalog": [
+    { "slug": "notion", "name": "Notion", "description": "搜尋筆記、整理頁面與專案資料", "logo": "", "categories": ["productivity"], "can_connect": true, "no_auth": false },
+    { "slug": "github", "name": "GitHub", "description": "管理儲存庫、議題與程式碼審查", "logo": "", "categories": ["development"], "can_connect": true, "no_auth": false },
+    { "slug": "slack", "name": "Slack", "description": "搜尋團隊訊息、分享工作進度", "logo": "", "categories": ["communication"], "can_connect": true, "no_auth": false },
+    { "slug": "gmail", "name": "Gmail", "description": "搜尋郵件、撰寫草稿與回覆", "logo": "", "categories": ["communication"], "can_connect": true, "no_auth": false },
+    { "slug": "linear", "name": "Linear", "description": "追蹤專案與團隊議題", "logo": "", "categories": ["development"], "can_connect": true, "no_auth": false },
+    { "slug": "googledrive", "name": "Google Drive", "description": "查找檔案、整理共用文件", "logo": "", "categories": ["productivity"], "can_connect": true, "no_auth": false }
+  ],
+  "pluginTools": {
+    "composio:notion": [
+      { "slug": "NOTION_SEARCH", "name": "搜尋頁面", "description": "在工作區搜尋筆記與資料庫", "kind": "read", "enabled": true },
+      { "slug": "NOTION_CREATE_PAGE", "name": "建立頁面", "description": "在指定的位置新增頁面", "kind": "write", "enabled": true },
+      { "slug": "NOTION_UPDATE_PAGE", "name": "更新頁面", "description": "修改頁面的內容與屬性", "kind": "write", "enabled": true }
+    ],
+    "google": [
+      { "slug": "gmail_list_messages", "name": "搜尋郵件", "description": "讀取 Gmail 郵件清單", "kind": "read", "enabled": true },
+      { "slug": "calendar_list_events", "name": "讀取日曆", "description": "查看 Google 日曆行程", "kind": "read", "enabled": true }
+    ]
+  },
+  "adminQuestions": {
+    "create": {
+      "id": "look-admin-create",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立成員\n名稱：COO\n職責：營運長\n簡介：協助安排公司的日常營運。\n群組：個人公司\n工作指示：追蹤目標、整理進度，並提出具體下一步。\n允許這項變更嗎？",
+      "tier": "T1",
+      "timeout_ms": 30000
+    },
+    "long": {
+      "id": "look-admin-long",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立成員\n名稱：COO\n職責：營運長\n群組：個人公司\n工作指示：每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n每週整理產品、研發、行銷與財務的進度，列出負責人、截止日期與尚待確認的事項。遇到資訊不足時，先提出一個具體問題，並把已完成與尚未完成的工作分開說明。\n最後一項指示：保留完整決策紀錄。\n允許這項變更嗎？",
+      "tier": "T1",
+      "timeout_ms": 30000
+    },
+    "batch": {
+      "id": "look-admin-batch",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立群組\n名稱：個人公司\n\n建立成員\n名稱：COO\n職責：營運長\n簡介：營運長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：PM\n職責：專案經理\n簡介：專案經理，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：RD\n職責：研發工程師\n簡介：研發工程師，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：CEO\n職責：執行長\n簡介：執行長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：CTO\n職責：技術長\n簡介：技術長，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Marketing\n職責：行銷主管\n簡介：行銷主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Finance\n職責：財務主管\n簡介：財務主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n建立成員\n名稱：Design\n職責：設計主管\n簡介：設計主管，負責公司專業領域的規劃與執行。\n群組：個人公司\n\n允許以上所有變更嗎？",
+      "tier": "T2",
+      "timeout_ms": 30000
+    },
+    "delete": {
+      "id": "look-admin-delete",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "永久刪除成員及其所有資料：小晴\nID：1\n允許這項變更嗎？",
+      "tier": "T3",
+      "timeout_ms": 30000
+    },
+    "draft": {
+      "id": "look-admin-draft",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "建立群組\n名稱：個人公司\n\n建立成員\n名稱：COO\n職責：營運長\n簡介：負責公司日常營運與進度追蹤。\n群組：個人公司\n\n建立成員\n名稱：PM\n職責：專案經理\n簡介：負責產品規劃與需求拆解。\n群組：個人公司\n\n建立成員\n名稱：RD\n職責：研發工程師\n簡介：負責系統架構與程式實作。\n群組：個人公司\n\n允許以上所有變更嗎？",
+      "tier": "T2",
+      "timeout_ms": 30000,
+      "groups": [
+        { "id": "group-1", "name": "個人公司", "group_id": null }
+      ],
+      "drafts": [
+        {
+          "id": "draft-1",
+          "name": "COO",
+          "role": "營運長",
+          "blurb": "負責公司日常營運與進度追蹤。",
+          "personality": "可靠、有條理，清楚交代負責人與期限。",
+          "instructions": "追蹤目標、整理進度，並提出具體下一步。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        },
+        {
+          "id": "draft-2",
+          "name": "PM",
+          "role": "專案經理",
+          "blurb": "負責產品規劃與需求拆解。",
+          "personality": "細心、擅長溝通，先釐清目標再拆解任務。",
+          "instructions": "整理需求規格、追蹤里程碑與跨部門協作。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        },
+        {
+          "id": "draft-3",
+          "name": "RD",
+          "role": "研發工程師",
+          "blurb": "負責系統架構與程式實作。",
+          "personality": "務實、嚴謹，重視程式碼品質與驗證。",
+          "instructions": "先理解現有設計再做變更，執行測試並回報驗證結果。",
+          "group": "個人公司",
+          "avatar_preset": "",
+          "member_id": null
+        }
+      ]
+    },
+    "delete_orig": {
+      "id": "look-admin-delete",
+      "turn_id": 1,
+      "member_id": 0,
+      "prefix": "問",
+      "text": "永久刪除成員及其所有資料：小晴\nID：1\n允許這項變更嗎？",
+      "tier": "T3",
+      "timeout_ms": 30000
+    }
+  },
+  "adminGroup": {
+    "id": 3,
+    "name": "個人公司",
+    "position": 2,
+    "sources": []
+  },
+  "adminMember": {
+    "id": 8,
+    "name": "COO",
+    "role": "營運長",
+    "blurb": "協助安排公司的日常營運。",
+    "group_id": 3,
+    "avatar": "",
+    "reply_style": "full",
+    "personality": "",
+    "preview": "",
+    "last_at": null,
+    "unread": false,
+    "waiting": false,
+    "instructions": "追蹤目標、整理進度，並提出具體下一步。"
+  },
+  "now": 1792807200000,
+  "device": {
+    "dictation_keys": [
+      "AltRight"
+    ],
+    "dictation_mode": "toggle",
+    "paste_last_keys": [
+      "AltRight+V"
+    ],
+    "agent_keys": [
+      "AltRight+Space"
+    ],
+    "microphone": null,
+    "emblem_size": 150,
+    "subtitles": "on",
+    "appearance": "light",
+    "ui_language": "zh-TW",
+    "autostart": true,
+    "onboarded": true,
+    "computer_apps": []
+  },
+  "settings": {
+    "owner_name": "Jack",
+    "owner_about": "請用繁體中文回答，保留有助理解的英文術語，並提供具體例子。",
+    "owner_photo": "",
+    "skin": "default",
+    "agent_model": "openai/gpt-6-sol",
+    "quick_model": "openai/gpt-6-luna",
+    "quick_effort": "low",
+    "cleanup_model": "openai/gpt-6-luna",
+    "stt_engine": "cloud",
+    "stt_cloud_model": "elevenlabs/scribe-v2",
+    "monthly_limit_usd": 20,
+    "languages": [
+      "zh-TW",
+      "en-US"
+    ],
+    "history_retention_days": 30,
+    "worker_enabled": true,
+    "worker_cost_cap_usd": 0.2,
+    "worker_timeout_s": 1800,
+    "action_mode": "ask"
+  },
+  "status": {
+    "openrouter": {
+      "state": "ok",
+      "latency_ms": 120,
+      "checked_at_ms": 1792807200000,
+      "error": null,
+      "key": null,
+      "usage": null
+    },
+    "spend": {
+      "month_usd": 1.24,
+      "today_usd": 0.04,
+      "limit_usd": 20,
+      "forecast_usd": 2,
+      "daily": [
+        0.01,
+        0.04,
+        0.03
+      ]
+    },
+    "last": null
+  },
+  "members": [
+    {
+      "id": 0,
+      "name": "拉斐爾",
+      "role": "幕僚長",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "/brand/in-app-icon.png",
+      "group_id": null,
+      "model": "",
+      "tools": null,
+      "position": 0,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 1,
+      "name": "小晴",
+      "role": "研究與資訊整理",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 1,
+      "model": "",
+      "tools": null,
+      "position": 1,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 2,
+      "name": "小森",
+      "role": "專案進度",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 1,
+      "model": "",
+      "tools": null,
+      "position": 2,
+      "created": 1792202400000,
+      "unread": true,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    },
+    {
+      "id": 3,
+      "name": "紫苑",
+      "role": "日文老師",
+      "instructions": "回答時請附上具體例子，並區分已確認的事實與推測。",
+      "personality": "溫和、細心，重視資料來源。",
+      "avatar": "",
+      "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+      "group_id": 2,
+      "model": "",
+      "tools": null,
+      "position": 3,
+      "created": 1792202400000,
+      "unread": false,
+      "waiting": false,
+      "preview": "研究摘要已整理完成，接著確認下週的安排。",
+      "last_at": 1792807140000,
+      "voice": null,
+      "read_aloud": false,
+      "notify": true
+    }
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "name": "專案工作",
+      "position": 0,
+      "sources": []
+    },
+    {
+      "id": 2,
+      "name": "語言學習",
+      "position": 1,
+      "sources": []
+    }
+  ],
+  "rooms": [
+    {
+      "id": 1,
+      "name": "網站上線研究室",
+      "member_ids": [
+        0,
+        1,
+        2
+      ],
+      "group_id": 1,
+      "created": 1792720800000,
+      "is_team": 0
+    },
+    {
+      "id": 2,
+      "name": "專案工作",
+      "member_ids": [
+        0,
+        1,
+        2
+      ],
+      "group_id": 1,
+      "created": 1792720800000,
+      "is_team": 1
+    }
+  ],
+  "messages": [
+    {
+      "id": 1,
+      "room_id": 1,
+      "member_id": null,
+      "text": "@小晴 @小森 整理一下今天的上線進度。",
+      "created": 1792807110000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": null,
+      "reply_to_member": null,
+      "kind": "message"
+    },
+    {
+      "id": 2,
+      "room_id": 1,
+      "member_id": 1,
+      "text": "主要流程都已通過，剩下兩項文案需要確認。",
+      "created": 1792807140000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": 1,
+      "reply_to_member": null,
+      "origin_message_id": 1,
+      "reply_reference": { "message_id": 1, "author_kind": "owner", "author_member_id": null },
+      "kind": "message"
+    },
+    {
+      "id": 3,
+      "room_id": 1,
+      "member_id": 2,
+      "text": "我會更新專案清單，並將剩餘事項放進例行任務。",
+      "created": 1792807170000,
+      "status": "done",
+      "request_id": null,
+      "reply_to": null,
+      "turn_id": 1,
+      "reply_to_member": 1,
+      "origin_message_id": 1,
+      "reply_reference": { "message_id": 2, "author_kind": "member", "author_member_id": 1 },
+      "kind": "message"
+    }
+  ],
+  "roomExchanges": [],
+  "roomHandoffs": [],
+  "roomHandoff": {
+    "task_id": 42, "source_turn_id": 1, "work_turn_id": 101, "member_id": 1,
+    "member_name": "小晴", "from_member_id": 0, "stage_id": "launch-report", "mode": "work",
+    "state": "queued", "reason": null, "created_at_ms": 1792807141000, "ready_at_ms": 1792807141000,
+    "dispatch_policy": "immediate", "result": "已讀取來源，完成上線驗收報告。兩項待確認文案已整理。",
+    "evidence": [{ "kind": "artifact", "uri": "reports/上線驗收報告.html", "mime": "text/html", "digest": "fixture-report-digest", "verdict": "verified" }]
+  },
+  "roomActiveExchange": {
+    "origin_message_id": 1, "room_id": 1, "state": "running", "turns_taken": 2,
+    "hops": 1, "chime_ins": 0, "cost": 0.003, "stop_requested": 0,
+    "active_turn": 2, "pending": "[]", "language": "zh-TW", "spoken": "[0]",
+    "wrapup_sent": 0, "reason": "", "routing": {},
+    "reply_intents": [{ "id": 1, "recipient_id": 1, "recipient_name": "小晴", "state": "running", "reason": "", "turn_id": 2 },
+      { "id": 2, "recipient_id": 2, "recipient_name": "小森", "state": "queued", "reason": "", "turn_id": null }]
+  },
+  "roomDiscussionMessages": [
+    {
+      "id": 4, "room_id": 1, "member_id": 1,
+      "text": "@小森 我不同意今天直接上線。先完成最後兩項檢查，再請你確認時程。",
+      "created": 1792807200000, "status": "done", "request_id": null,
+      "reply_to": 3, "turn_id": 2, "reply_to_member": 2, "origin_message_id": 1, "kind": "message",
+      "reply_reference": { "message_id": 3, "author_kind": "member", "author_member_id": 2 }
+    },
+    {
+      "id": 5, "room_id": 1, "member_id": 2,
+      "text": "同意先測試。我負責更新時程，@拉斐爾 請協助確認需要由你決定的事項。",
+      "created": 1792807230000, "status": "done", "request_id": null,
+      "reply_to": 4, "turn_id": 3, "reply_to_member": 1, "origin_message_id": 1, "kind": "message",
+      "reply_reference": { "message_id": 4, "author_kind": "member", "author_member_id": 1 }
+    }
+  ],
+  "roomWrapupMessage": {
+    "id": 6, "room_id": 1, "member_id": 0,
+    "text": "### 結論\n先完成測試，再安排上線。\n\n### 待決定\n你希望今天完成檢查後上線，還是延到明天？\n\n### 下一步\n- 小晴：完成最後兩項文案與流程檢查。\n- 小森：更新時程，整理上線清單。\n- 拉斐爾：收到你的決定後確認交付安排。",
+    "created": 1792807260000, "status": "done", "request_id": null,
+    "reply_to": 5, "turn_id": 1, "reply_to_member": 2, "origin_message_id": 1, "kind": "wrapup"
+  },
+  "roomThinkingMessages": [
+    {
+      "id": 4,
+      "room_id": 1,
+      "member_id": 1,
+      "text": "",
+      "created": 1792807200000,
+      "status": "running",
+      "request_id": null,
+      "reply_to": 1,
+      "turn_id": 2,
+      "reply_to_member": null,
+      "kind": "message", "thread_id": 1, "scope": "room",
+      "reply_reference": { "message_id": 1, "author_kind": "owner", "author_member_id": null }
+    }
+  ],
+  "conversations": [
+    {
+      "id": 4,
+      "member_id": 0,
+      "kind": "quick",
+      "title": "",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792720800000
+    },
+    {
+      "id": 1,
+      "member_id": 0,
+      "title": "這週的研究與安排",
+      "is_default": true,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 2,
+      "member_id": 0,
+      "title": "專案規劃與會議記錄",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 3,
+      "member_id": 0,
+      "title": "日本旅行行程",
+      "is_default": false,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    },
+    {
+      "id": 11,
+      "member_id": 1,
+      "title": "研究資料整理",
+      "is_default": true,
+      "created_at_ms": 1792720800000,
+      "updated_at_ms": 1792807140000
+    }
+  ],
+  "sharedMemories": [],
+  "colleagueConversation": {
+    "id": 21,
+    "member_id": 2,
+    "title": "新品準備",
+    "is_default": true,
+    "created_at_ms": 1792807140000,
+    "updated_at_ms": 1792807176000
+  },
+  "colleagueTurn": {
+    "id": 70,
+    "session_id": "look-colleague",
+    "member_id": 2,
+    "conversation_id": 21,
+    "scope": "private",
+    "created_at_ms": 1792807170000,
+    "question": "請問小晴下週上市的新品代號，問到後告訴我。",
+    "route": "answer",
+    "source": "app",
+    "prefix": "",
+    "text": "小晴說下週上市的新品代號是 NX-2026。",
+    "detail": null,
+    "status": "done",
+    "cost_usd": 0.004,
+    "model": "openai/gpt-6-luna",
+    "messages": [
+      {
+        "seq": 1,
+        "kind": "reply",
+        "text": "小晴說下週上市的新品代號是 NX-2026。",
+        "at_ms": 1792807176000
+      }
+    ],
+    "steps": [
+      {
+        "kind": "tool",
+        "tool": "ask_member",
+        "server": "Raphael",
+        "outcome": "ok",
+        "ms": 3200,
+        "reason": null
+      }
+    ],
+    "attachments": [],
+    "handoffs": [
+      {
+        "task_id": null,
+        "source_turn_id": 70,
+        "work_turn_id": 71,
+        "member_id": 1,
+        "member_name": "小晴",
+        "from_member_id": 2,
+        "stage_id": "",
+        "mode": "consult",
+        "state": "done",
+        "reason": null,
+        "created_at_ms": 1792807171000,
+        "ready_at_ms": 1792807171000,
+        "dispatch_policy": "immediate",
+        "request": "下週上市的新品代號是多少？",
+        "result": "下週上市的新品代號是 NX-2026。",
+        "evidence": [],
+        "completion_state": "done"
+      }
+    ]
+  },
+  "colleagueExchanges": [
+    {
+      "id": 71,
+      "session_id": "look-colleague",
+      "member_id": 1,
+      "peer_id": 2,
+      "conversation_id": null,
+      "scope": "exchange",
+      "created_at_ms": 1792807171000,
+      "question": "下週上市的新品代號是多少？",
+      "route": "exchange",
+      "source": "member",
+      "prefix": "",
+      "text": "下週上市的新品代號是 NX-2026。",
+      "detail": null,
+      "status": "done",
+      "messages": [],
+      "steps": [],
+      "attachments": []
+    },
+    {
+      "id": 72,
+      "session_id": "look-colleague",
+      "member_id": 1,
+      "peer_id": 2,
+      "conversation_id": null,
+      "scope": "exchange",
+      "created_at_ms": 1792807175000,
+      "question": "上市日是哪一天？",
+      "route": "exchange",
+      "source": "member",
+      "prefix": "",
+      "text": "11 月 3 日上市，當天上午十點開賣。",
+      "detail": null,
+      "status": "done",
+      "messages": [],
+      "steps": [],
+      "attachments": []
+    }
+  ],
+  "turns": [
+    {
+      "id": 90, "session_id": "look-quick", "member_id": 0, "conversation_id": 4,
+      "created_at_ms": 1792807154000, "question": "今天下午有哪些會議？", "route": "answer",
+      "source": "voice", "prefix": "答", "text": "下午兩點有專案會議。", "detail": null,
+      "status": "done", "cost_usd": 0.001, "model": "openai/gpt-6-luna",
+      "messages": [
+        { "seq": 1, "kind": "progress", "text": "《告。正在查看今天下午的行程。》", "at_ms": 1792807155000 }
+      ],
+      "steps": [], "attachments": []
+    },
+    {
+      "id": 1,
+      "session_id": "look-research",
+      "member_id": 0,
+      "conversation_id": 1,
+      "created_at_ms": 1792807154000,
+      "question": "幫我整理這週的研究重點，並列出下週的安排。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "研究摘要已整理完成。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.021,
+      "model": "openai/gpt-6-sol",
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "thinking",
+          "text": "先比較資料日期與來源，再整理共同重點。",
+          "at_ms": 1792807156000
+        },
+        {
+          "seq": 2,
+          "kind": "progress",
+          "text": "《告。已核對三份報告，正在彙整研究結論。》",
+          "at_ms": 1792807160000
+        },
+        {
+          "seq": 3,
+          "kind": "event",
+          "text": "完成來源比對",
+          "at_ms": 1792807170000
+        },
+        {
+          "seq": 4,
+          "kind": "reply",
+          "text": "《答。這週的研究有三個重點：\n\n- **產品驗證**：訪談資料已整理，接著確認主要使用情境。\n- **技術方向**：先完成核心流程，再接上介面。\n- **下週安排**：週一討論需求，週三檢查原型，週五回顧結果。\n\n我已把相關資料整理成摘要，方便你接著討論。》",
+          "at_ms": 1792807180000
+        }
+      ],
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "outcome": "ok",
+          "at_ms": 1792807156000,
+          "ms": 720,
+          "reason": null
+        },
+        {
+          "kind": "model",
+          "tool": null,
+          "server": null,
+          "outcome": "ok",
+          "at_ms": 1792807160000,
+          "ms": 1800,
+          "reason": null
+        }
+      ],
+      "attachments": [
+        {
+          "id": "look-notes",
+          "name": "研究訪談摘要.pdf",
+          "mime": "application/pdf",
+          "size": 24576
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "session_id": "look-member",
+      "member_id": 1,
+      "conversation_id": 11,
+      "created_at_ms": 1792807154000,
+      "question": "幫我整理這週的研究重點，並列出下週的安排。",
+      "route": "answer",
+      "source": "app",
+      "prefix": "答",
+      "text": "研究摘要已整理完成。",
+      "detail": null,
+      "status": "done",
+      "cost_usd": 0.021,
+      "model": "openai/gpt-6-sol",
+      "messages": [
+        {
+          "seq": 1,
+          "kind": "thinking",
+          "text": "先比較資料日期與來源，再整理共同重點。",
+          "at_ms": 1792807156000
+        },
+        {
+          "seq": 2,
+          "kind": "progress",
+          "text": "已核對三份報告，正在彙整研究結論。",
+          "at_ms": 1792807160000
+        },
+        {
+          "seq": 3,
+          "kind": "event",
+          "text": "完成來源比對",
+          "at_ms": 1792807170000
+        },
+        {
+          "seq": 4,
+          "kind": "reply",
+          "text": "這週的研究有三個重點：\n\n- **產品驗證**：訪談資料已整理，接著確認主要使用情境。\n- **技術方向**：先完成核心流程，再接上介面。\n- **下週安排**：週一討論需求，週三檢查原型，週五回顧結果。\n\n我已把相關資料整理成摘要，方便你接著討論。",
+          "at_ms": 1792807180000
+        }
+      ],
+      "steps": [
+        {
+          "kind": "tool",
+          "tool": "search",
+          "server": "專案筆記",
+          "outcome": "ok",
+          "ms": 720,
+          "reason": null
+        },
+        {
+          "kind": "model",
+          "tool": null,
+          "server": null,
+          "outcome": "ok",
+          "ms": 1800,
+          "reason": null
+        }
+      ],
+      "attachments": []
+    }
+  ],
+  "routines": [
+    {
+      "id": 1,
+      "member_id": 0,
+      "title": "每天早上的進度",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "daily",
+        "time": "09:00"
+      },
+      "enabled": true,
+      "last_run": 1792803600000,
+      "next_run": 1792890000000
+    },
+    {
+      "id": 2,
+      "member_id": 1,
+      "title": "午間資訊摘要",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "weekdays",
+        "time": "12:30"
+      },
+      "enabled": true,
+      "last_run": 1792803600000,
+      "next_run": 1792890000000
+    },
+    {
+      "id": 3,
+      "member_id": 3,
+      "title": "每週單字複習",
+      "prompt": "查看專案資料，整理值得留意的進度，並附上待辦事項。",
+      "schedule": {
+        "kind": "weekly",
+        "days": [
+          1,
+          3,
+          5
+        ],
+        "time": "18:00"
+      },
+      "enabled": false,
+      "last_run": null,
+      "next_run": null
+    }
+  ],
+  "routineRuns": [
+    {
+      "id": 1,
+      "routine_id": 1,
+      "scheduled": 1792720800000,
+      "started": 1792720800000,
+      "finished": 1792720820000,
+      "status": "done",
+      "turn_id": 1,
+      "summary": "已完成進度整理，沒有新增待辦事項。",
+      "cost": 0.0032
+    },
+    {
+      "id": 2,
+      "routine_id": 1,
+      "scheduled": 1792634400000,
+      "started": 1792634400000,
+      "finished": 1792634420000,
+      "status": "error",
+      "turn_id": null,
+      "summary": "連線暫時無法使用，請稍後重試。",
+      "cost": 0
+    },
+    {
+      "id": 3,
+      "routine_id": 1,
+      "scheduled": 1792548000000,
+      "started": 1792548000000,
+      "finished": 1792548020000,
+      "status": "skipped",
+      "turn_id": null,
+      "summary": "前一項任務仍在進行，已略過此次執行。",
+      "cost": 0
+    }
+  ],
+  "spendRows": [
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "agent",
+      "cost_usd": 0.6
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "stt",
+      "cost_usd": 0.496
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "cleanup",
+      "cost_usd": 0.08
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "memory",
+      "cost_usd": 0.04
+    },
+    {
+      "created_at_ms": 1792771200000,
+      "purpose": "future-service",
+      "cost_usd": 0.024
+    },
+    {
+      "created_at_ms": 1790697600000,
+      "purpose": "agent",
+      "cost_usd": 0.25
+    }
+  ],
+  "usage": {
+    "range": "week",
+    "start_day": "2026-10-18",
+    "end_day": "2026-10-24",
+    "summary": {
+      "duration_ms": 123000,
+      "cost_usd": 0.084,
+      "tokens": 56800,
+      "ai_steps": 12,
+      "tools": 24,
+      "errors": 0
+    },
+    "groups": {
+      "member": [
+        {
+          "label": "拉斐爾",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 0,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM1Njc0ODEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小晴",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 1,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小森",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 2,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2YzkzODkiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "紫苑",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1,
+          "member_id": 3,
+          "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiNhNzdjOTEiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+"
+        },
+        {
+          "label": "小夏（已封存）",
+          "tokens": 1800,
+          "cost_usd": 0.003,
+          "runs": 1,
+          "member_id": 4
+        },
+        {
+          "label": "小秋（已封存）",
+          "tokens": 1200,
+          "cost_usd": 0.002,
+          "runs": 1,
+          "member_id": 5
+        }
+      ],
+      "model": [
+        {
+          "label": "openai/gpt-6-sol",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "cli:codex:gpt-6.1",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "openai/gpt-6-luna",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "day": [
+        {
+          "label": "2026-10-24",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "2026-10-23",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "2026-10-22",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "provider": [
+        {
+          "label": "OpenRouter",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "Codex CLI",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ],
+      "routine": [
+        {
+          "label": "午間資訊摘要",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        },
+        {
+          "label": "每天早上的進度",
+          "tokens": 14200,
+          "cost_usd": 0.021,
+          "runs": 1
+        }
+      ]
+    },
+    "total": 4
+  },
+  "allowances": {
+    "quotas": [],
+    "brains": [
+      {
+        "id": "claude",
+        "name": "Claude CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      },
+      {
+        "id": "codex",
+        "name": "Codex CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      },
+      {
+        "id": "gemini",
+        "name": "Gemini CLI",
+        "source": "reported",
+        "windows": [
+          {
+            "period": "fiveHour",
+            "remaining_percent": 76,
+            "resets_at": 1792814400
+          },
+          {
+            "period": "weekly",
+            "remaining_percent": 89,
+            "resets_at": 1792893600
+          }
+        ]
+      }
+    ]
+  },
+  "servers": [
+    {
+      "id": "notes",
+      "name": "專案筆記",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "notes-server"
+      ],
+      "url": "",
+      "env": [
+        "API_KEY"
+      ],
+      "headers": [],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ]
+    },
+    {
+      "id": "remote",
+      "name": "團隊資料庫",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "http",
+      "command": "",
+      "args": [],
+      "url": "https://tools.example.test/mcp",
+      "env": [],
+      "headers": [
+        "Authorization"
+      ],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ]
+    }
+  ],
+  "candidates": [
+    {
+      "id": "candidate",
+      "name": "本機專案筆記",
+      "enabled": false,
+      "status": "disabled",
+      "error": null,
+      "auth": "none",
+      "catalog_id": null,
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "notes-server"
+      ],
+      "url": "",
+      "env": [
+        "API_KEY"
+      ],
+      "headers": [],
+      "result_size_limit": 8000,
+      "tool_count": 2,
+      "enabled_count": 2,
+      "write_count": 1,
+      "read_count": 1,
+      "checked_at_ms": 1792807200000,
+      "tools": [
+        {
+          "name": "search",
+          "description": "搜尋專案筆記",
+          "enabled": true,
+          "kind": "read"
+        },
+        {
+          "name": "save",
+          "description": "儲存專案摘要",
+          "enabled": true,
+          "kind": "write"
+        }
+      ],
+      "source": "Codex"
+    }
+  ],
+  "services": [
+    {
+      "id": "notion",
+      "name": "Notion",
+      "publisher": "Notion",
+      "url": "https://mcp.notion.com/mcp",
+      "category": "docs",
+      "icon": "notion",
+      "auth": "oauth",
+      "popular": true,
+      "summary": {
+        "zh-TW": "搜尋、閱讀和編輯你的頁面與資料庫",
+        "en": "Search, read and edit your pages and databases",
+        "ja": "ページとデータベースを検索・閲覧・編集"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾在你的 Notion 工作區裡找資料、讀取頁面，也能新增和修改內容。",
+        "en": "Lets Raphael find things in your Notion workspace, read pages, and add or change content.",
+        "ja": "Notion のワークスペースで情報を探し、ページを読み、内容を追加・編集できます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "在 Notion 搜尋上週的會議記錄",
+          "把剛剛的想法記到 Notion",
+          "我的 Notion 待辦資料庫裡有什麼"
+        ],
+        "en": [
+          "Search Notion for last week's meeting notes",
+          "Save that idea to Notion",
+          "What is in my Notion to-do database"
+        ],
+        "ja": [
+          "Notion で先週の議事録を探して",
+          "さっきのアイデアを Notion にメモして",
+          "Notion のタスク一覧を教えて"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "publisher": "Linear",
+      "url": "https://mcp.linear.app/mcp",
+      "category": "projects",
+      "icon": "linear",
+      "auth": "oauth",
+      "popular": true,
+      "summary": {
+        "zh-TW": "查看和建立 Linear 的問題與專案",
+        "en": "Find and create Linear issues and projects",
+        "ja": "Linear の課題とプロジェクトを確認・作成"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾查詢你的 Linear 問題、專案和週期，也能建立問題、留言和更新狀態。",
+        "en": "Lets Raphael look up your Linear issues, projects and cycles, and create issues, comment and change status.",
+        "ja": "Linear の課題・プロジェクト・サイクルを調べ、課題の作成、コメント、ステータス更新ができます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "我在 Linear 上有哪些進行中的問題",
+          "在 Linear 建立一個問題：登入頁面壞掉",
+          "把那個問題標成已完成"
+        ],
+        "en": [
+          "What Linear issues are assigned to me",
+          "Create a Linear issue: the login page is broken",
+          "Mark that issue as done"
+        ],
+        "ja": [
+          "Linear で自分に割り当てられた課題は？",
+          "Linear に課題を作成して：ログイン画面が壊れている",
+          "その課題を完了にして"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "publisher": "Sentry",
+      "url": "https://mcp.sentry.dev/mcp",
+      "category": "developer",
+      "icon": "sentry",
+      "auth": "oauth",
+      "popular": false,
+      "summary": {
+        "zh-TW": "查看 Sentry 的錯誤與問題",
+        "en": "Look into Sentry errors and issues",
+        "ja": "Sentry のエラーと課題を確認"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾查詢 Sentry 專案裡的錯誤、堆疊追蹤和發生次數。",
+        "en": "Lets Raphael look up the errors, stack traces and counts in your Sentry projects.",
+        "ja": "Sentry のプロジェクトにあるエラー、スタックトレース、発生回数を調べられます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "Sentry 最近有哪些新的錯誤",
+          "這個錯誤發生了幾次",
+          "哪個專案的錯誤最多"
+        ],
+        "en": [
+          "What new errors came up in Sentry",
+          "How many times did this error happen",
+          "Which project has the most errors"
+        ],
+        "ja": [
+          "Sentry に新しいエラーはある？",
+          "このエラーは何回発生した？",
+          "エラーが一番多いプロジェクトは？"
+        ]
+      },
+      "server_id": null
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "publisher": "GitHub",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "category": "developer",
+      "icon": "github",
+      "auth": "device",
+      "popular": false,
+      "summary": {
+        "zh-TW": "你的程式庫、議題、PR 和通知",
+        "en": "Your repositories, issues, pull requests and notifications",
+        "ja": "リポジトリ、Issue、PR、通知"
+      },
+      "about": {
+        "zh-TW": "讓拉斐爾搜尋程式碼、閱讀和整理議題與 PR，也能查看你的通知。",
+        "en": "Lets Raphael search code, read and manage issues and pull requests, and check your notifications.",
+        "ja": "コードの検索、Issue や PR の閲覧・整理、通知の確認ができます。"
+      },
+      "examples": {
+        "zh-TW": [
+          "我有哪些待處理的 PR",
+          "在這個程式庫開一個議題",
+          "看一下我的 GitHub 通知"
+        ],
+        "en": [
+          "Which pull requests are waiting for me",
+          "Open an issue in this repository",
+          "Check my GitHub notifications"
+        ],
+        "ja": [
+          "自分宛ての PR を教えて",
+          "このリポジトリに Issue を作って",
+          "GitHub の通知を確認して"
+        ]
+      },
+      "server_id": null
+    }
+  ],
+  "providers": [
+    {
+      "id": "openrouter",
+      "kind": "openrouter",
+      "name": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "has_key": true,
+      "enabled": true,
+      "status": "ok",
+      "models": 2
+    }
+  ],
+  "providerKinds": [
+    {
+      "kind": "openrouter",
+      "name": "OpenRouter",
+      "group": "gateway",
+      "fields": [
+        "key"
+      ],
+      "default_base_url": "https://openrouter.ai/api/v1",
+      "available": true
+    }
+  ],
+  "catalog": {
+    "llm": [
+      {
+        "id": "openai/gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "provider": "OpenAI",
+        "input_per_mtok": 1,
+        "output_per_mtok": 2,
+        "per_minute": null,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "reasoning_efforts": ["max", "xhigh", "high", "medium", "low", "minimal", "none"],
+        "default_effort": "high",
+        "capabilities": {
+          "reasoning": true,
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "roles": {
+          "answer": {
+            "usable": true,
+            "reason": null
+          },
+          "cleanup": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      },
+      {
+        "id": "openai/gpt-6-luna",
+        "name": "GPT-6 Luna",
+        "provider": "OpenAI",
+        "input_per_mtok": 1,
+        "output_per_mtok": 2,
+        "per_minute": null,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "reasoning_efforts": ["max", "xhigh", "high", "medium", "low", "minimal", "none"],
+        "default_effort": "high",
+        "capabilities": {
+          "reasoning": true,
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "roles": {
+          "answer": {
+            "usable": true,
+            "reason": null
+          },
+          "cleanup": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      }
+    ],
+    "stt": [
+      {
+        "id": "elevenlabs/scribe-v2",
+        "name": "Scribe v2",
+        "provider": "ElevenLabs",
+        "input_per_mtok": null,
+        "output_per_mtok": null,
+        "per_minute": 0.004,
+        "free": false,
+        "variable_price": false,
+        "context_length": 128000,
+        "created_at_ms": null,
+        "capabilities": {
+          "reasoning": true,
+          "structured_output": true,
+          "tool_calling": true
+        },
+        "input_modalities": [
+          "audio"
+        ],
+        "roles": {
+          "stt": {
+            "usable": true,
+            "reason": null
+          }
+        }
+      }
+    ],
+    "source": "builtin",
+    "fetched_at_ms": 1792807200000,
+    "replaced": []
+  },
+  "clis": [
+    {
+      "id": "claude",
+      "name": "Claude CLI",
+      "installed": true,
+      "logged_in": true,
+      "available": true,
+      "disconnected": false,
+      "login_command": "claude",
+      "models": [
+        {
+          "id": "cli:claude:sonnet",
+            "reasoning_efforts": ["low", "medium", "high"],
+          "name": "Sonnet"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "name": "Codex CLI",
+      "installed": true,
+      "logged_in": true,
+      "available": true,
+      "disconnected": false,
+      "login_command": "codex",
+      "models": [
+        {
+          "id": "cli:codex:gpt-6.1",
+            "reasoning_efforts": ["low", "medium", "high", "xhigh"],
+          "name": "GPT-6.1"
+        }
+      ]
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI",
+      "installed": true,
+      "logged_in": true,
+      "available": true,
+      "disconnected": false,
+      "login_command": "gemini",
+      "models": [
+        {
+          "id": "cli:gemini:gemini-pro",
+            "reasoning_efforts": ["low", "high"],
+          "name": "Gemini Pro"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "today": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "week": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "month": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "all": {
+      "dictations": 48,
+      "words": 12000,
+      "audio_seconds": 3600,
+      "cost_usd": 1.24
+    },
+    "streak_days": 5,
+    "active_days": 26,
+    "longest_streak_days": 8,
+    "speed_wpm": 200,
+    "time_saved_seconds": 5400,
+    "by_day": [
+      {
+        "date": "2026-07-17",
+        "dictations": 0,
+        "words": 100
+      },
+      {
+        "date": "2026-07-18",
+        "dictations": 4,
+        "words": 104
+      },
+      {
+        "date": "2026-07-19",
+        "dictations": 4,
+        "words": 108
+      },
+      {
+        "date": "2026-07-20",
+        "dictations": 0,
+        "words": 112
+      },
+      {
+        "date": "2026-07-21",
+        "dictations": 4,
+        "words": 116
+      },
+      {
+        "date": "2026-07-22",
+        "dictations": 4,
+        "words": 120
+      },
+      {
+        "date": "2026-07-23",
+        "dictations": 0,
+        "words": 124
+      },
+      {
+        "date": "2026-07-24",
+        "dictations": 4,
+        "words": 128
+      },
+      {
+        "date": "2026-07-25",
+        "dictations": 4,
+        "words": 132
+      },
+      {
+        "date": "2026-07-26",
+        "dictations": 0,
+        "words": 136
+      },
+      {
+        "date": "2026-07-27",
+        "dictations": 4,
+        "words": 140
+      },
+      {
+        "date": "2026-07-28",
+        "dictations": 4,
+        "words": 144
+      },
+      {
+        "date": "2026-07-29",
+        "dictations": 0,
+        "words": 148
+      },
+      {
+        "date": "2026-07-30",
+        "dictations": 4,
+        "words": 152
+      },
+      {
+        "date": "2026-07-31",
+        "dictations": 4,
+        "words": 156
+      },
+      {
+        "date": "2026-08-01",
+        "dictations": 0,
+        "words": 160
+      },
+      {
+        "date": "2026-08-02",
+        "dictations": 4,
+        "words": 164
+      },
+      {
+        "date": "2026-08-03",
+        "dictations": 4,
+        "words": 168
+      },
+      {
+        "date": "2026-08-04",
+        "dictations": 0,
+        "words": 172
+      },
+      {
+        "date": "2026-08-05",
+        "dictations": 4,
+        "words": 176
+      },
+      {
+        "date": "2026-08-06",
+        "dictations": 4,
+        "words": 180
+      },
+      {
+        "date": "2026-08-07",
+        "dictations": 0,
+        "words": 184
+      },
+      {
+        "date": "2026-08-08",
+        "dictations": 4,
+        "words": 188
+      },
+      {
+        "date": "2026-08-09",
+        "dictations": 4,
+        "words": 192
+      },
+      {
+        "date": "2026-08-10",
+        "dictations": 0,
+        "words": 196
+      },
+      {
+        "date": "2026-08-11",
+        "dictations": 4,
+        "words": 200
+      },
+      {
+        "date": "2026-08-12",
+        "dictations": 4,
+        "words": 204
+      },
+      {
+        "date": "2026-08-13",
+        "dictations": 0,
+        "words": 208
+      },
+      {
+        "date": "2026-08-14",
+        "dictations": 4,
+        "words": 212
+      },
+      {
+        "date": "2026-08-15",
+        "dictations": 4,
+        "words": 216
+      },
+      {
+        "date": "2026-08-16",
+        "dictations": 0,
+        "words": 220
+      },
+      {
+        "date": "2026-08-17",
+        "dictations": 4,
+        "words": 224
+      },
+      {
+        "date": "2026-08-18",
+        "dictations": 4,
+        "words": 228
+      },
+      {
+        "date": "2026-08-19",
+        "dictations": 0,
+        "words": 232
+      },
+      {
+        "date": "2026-08-20",
+        "dictations": 4,
+        "words": 236
+      },
+      {
+        "date": "2026-08-21",
+        "dictations": 4,
+        "words": 240
+      },
+      {
+        "date": "2026-08-22",
+        "dictations": 0,
+        "words": 244
+      },
+      {
+        "date": "2026-08-23",
+        "dictations": 4,
+        "words": 248
+      },
+      {
+        "date": "2026-08-24",
+        "dictations": 4,
+        "words": 252
+      },
+      {
+        "date": "2026-08-25",
+        "dictations": 0,
+        "words": 256
+      },
+      {
+        "date": "2026-08-26",
+        "dictations": 4,
+        "words": 260
+      },
+      {
+        "date": "2026-08-27",
+        "dictations": 4,
+        "words": 264
+      },
+      {
+        "date": "2026-08-28",
+        "dictations": 0,
+        "words": 268
+      },
+      {
+        "date": "2026-08-29",
+        "dictations": 4,
+        "words": 272
+      },
+      {
+        "date": "2026-08-30",
+        "dictations": 4,
+        "words": 276
+      },
+      {
+        "date": "2026-08-31",
+        "dictations": 0,
+        "words": 280
+      },
+      {
+        "date": "2026-09-01",
+        "dictations": 4,
+        "words": 284
+      },
+      {
+        "date": "2026-09-02",
+        "dictations": 4,
+        "words": 288
+      },
+      {
+        "date": "2026-09-03",
+        "dictations": 0,
+        "words": 292
+      },
+      {
+        "date": "2026-09-04",
+        "dictations": 4,
+        "words": 296
+      },
+      {
+        "date": "2026-09-05",
+        "dictations": 4,
+        "words": 300
+      },
+      {
+        "date": "2026-09-06",
+        "dictations": 0,
+        "words": 304
+      },
+      {
+        "date": "2026-09-07",
+        "dictations": 4,
+        "words": 308
+      },
+      {
+        "date": "2026-09-08",
+        "dictations": 4,
+        "words": 312
+      },
+      {
+        "date": "2026-09-09",
+        "dictations": 0,
+        "words": 316
+      },
+      {
+        "date": "2026-09-10",
+        "dictations": 4,
+        "words": 320
+      },
+      {
+        "date": "2026-09-11",
+        "dictations": 4,
+        "words": 324
+      },
+      {
+        "date": "2026-09-12",
+        "dictations": 0,
+        "words": 328
+      },
+      {
+        "date": "2026-09-13",
+        "dictations": 4,
+        "words": 332
+      },
+      {
+        "date": "2026-09-14",
+        "dictations": 4,
+        "words": 336
+      },
+      {
+        "date": "2026-09-15",
+        "dictations": 0,
+        "words": 340
+      },
+      {
+        "date": "2026-09-16",
+        "dictations": 4,
+        "words": 344
+      },
+      {
+        "date": "2026-09-17",
+        "dictations": 4,
+        "words": 348
+      },
+      {
+        "date": "2026-09-18",
+        "dictations": 0,
+        "words": 352
+      },
+      {
+        "date": "2026-09-19",
+        "dictations": 4,
+        "words": 356
+      },
+      {
+        "date": "2026-09-20",
+        "dictations": 4,
+        "words": 360
+      },
+      {
+        "date": "2026-09-21",
+        "dictations": 0,
+        "words": 364
+      },
+      {
+        "date": "2026-09-22",
+        "dictations": 4,
+        "words": 368
+      },
+      {
+        "date": "2026-09-23",
+        "dictations": 4,
+        "words": 372
+      },
+      {
+        "date": "2026-09-24",
+        "dictations": 0,
+        "words": 376
+      },
+      {
+        "date": "2026-09-25",
+        "dictations": 4,
+        "words": 380
+      },
+      {
+        "date": "2026-09-26",
+        "dictations": 4,
+        "words": 384
+      },
+      {
+        "date": "2026-09-27",
+        "dictations": 0,
+        "words": 388
+      },
+      {
+        "date": "2026-09-28",
+        "dictations": 4,
+        "words": 392
+      },
+      {
+        "date": "2026-09-29",
+        "dictations": 4,
+        "words": 396
+      },
+      {
+        "date": "2026-09-30",
+        "dictations": 0,
+        "words": 400
+      },
+      {
+        "date": "2026-10-01",
+        "dictations": 4,
+        "words": 404
+      },
+      {
+        "date": "2026-10-02",
+        "dictations": 4,
+        "words": 408
+      },
+      {
+        "date": "2026-10-03",
+        "dictations": 0,
+        "words": 412
+      },
+      {
+        "date": "2026-10-04",
+        "dictations": 4,
+        "words": 416
+      },
+      {
+        "date": "2026-10-05",
+        "dictations": 4,
+        "words": 420
+      },
+      {
+        "date": "2026-10-06",
+        "dictations": 0,
+        "words": 424
+      },
+      {
+        "date": "2026-10-07",
+        "dictations": 4,
+        "words": 428
+      },
+      {
+        "date": "2026-10-08",
+        "dictations": 4,
+        "words": 432
+      },
+      {
+        "date": "2026-10-09",
+        "dictations": 0,
+        "words": 436
+      },
+      {
+        "date": "2026-10-10",
+        "dictations": 4,
+        "words": 440
+      },
+      {
+        "date": "2026-10-11",
+        "dictations": 4,
+        "words": 444
+      },
+      {
+        "date": "2026-10-12",
+        "dictations": 0,
+        "words": 448
+      },
+      {
+        "date": "2026-10-13",
+        "dictations": 4,
+        "words": 452
+      },
+      {
+        "date": "2026-10-14",
+        "dictations": 4,
+        "words": 456
+      },
+      {
+        "date": "2026-10-15",
+        "dictations": 0,
+        "words": 460
+      },
+      {
+        "date": "2026-10-16",
+        "dictations": 4,
+        "words": 464
+      },
+      {
+        "date": "2026-10-17",
+        "dictations": 4,
+        "words": 468
+      },
+      {
+        "date": "2026-10-18",
+        "dictations": 0,
+        "words": 472
+      },
+      {
+        "date": "2026-10-19",
+        "dictations": 4,
+        "words": 476
+      },
+      {
+        "date": "2026-10-20",
+        "dictations": 4,
+        "words": 480
+      },
+      {
+        "date": "2026-10-21",
+        "dictations": 0,
+        "words": 484
+      },
+      {
+        "date": "2026-10-22",
+        "dictations": 4,
+        "words": 488
+      },
+      {
+        "date": "2026-10-23",
+        "dictations": 4,
+        "words": 492
+      },
+      {
+        "date": "2026-10-24",
+        "dictations": 1,
+        "words": 496
+      }
+    ]
+  },
+  "history": [
+    {
+      "id": 1,
+      "kind": "dictation",
+      "text": "今天的會議記錄已整理完成，請確認下週的研究安排。",
+      "raw_text": "今天的會議記錄已整理完成請確認下週的研究安排",
+      "created_at_ms": 1792806900000,
+      "target_app": "notepad.exe",
+      "cleaned": true,
+      "stt_ms": 320,
+      "llm_ms": 450,
+      "cost_usd": 0.001
+    }
+  ],
+  "dictionary": [
+    {
+      "id": 1,
+      "word": "Raphael",
+      "misheard": [
+        "Rafael"
+      ],
+      "source": "manual",
+      "created_at_ms": 1792720800000
+    },
+    {
+      "id": 2,
+      "word": "Methelia",
+      "misheard": [],
+      "source": "learned",
+      "created_at_ms": 1792720800000
+    }
+  ],
+  "memories": [
+    {
+      "id": 1,
+      "member_id": 1,
+      "text": "專案每週三檢查原型，週五回顧結果。",
+      "created_at_ms": 1792720800000,
+      "name": "project-review.md",
+      "description": "專案每週三檢查原型，週五回顧結果。",
+      "type": "project",
+      "origin": "owner",
+      "updated": "2026-10-24",
+      "expires": null
+    }
+  ],
+  "analytics": {
+    "range": "7d",
+    "days": [
+      "2026-10-18",
+      "2026-10-19",
+      "2026-10-20",
+      "2026-10-21",
+      "2026-10-22",
+      "2026-10-23",
+      "2026-10-24"
+    ],
+    "tz": "Asia/Taipei",
+    "start_day": "2026-10-18",
+    "end_day": "2026-10-24",
+    "today_day": "2026-10-24",
+    "cost_by": {
+      "purpose": {
+        "total": 0,
+        "series": []
+      },
+      "model": {
+        "total": 0,
+        "series": []
+      },
+      "provider": {
+        "total": 0,
+        "series": []
+      }
+    },
+    "tools": {
+      "total": 0,
+      "series": []
+    },
+    "members": [],
+    "messages_by": {
+      "model": {
+        "total": 0,
+        "series": []
+      },
+      "source": {
+        "total": 0,
+        "series": []
+      }
+    },
+    "dictation": {
+      "dictations": [
+        4,
+        0,
+        4,
+        4,
+        0,
+        4,
+        4
+      ],
+      "words": [
+        100,
+        0,
+        200,
+        300,
+        0,
+        250,
+        400
+      ],
+      "estimated": [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "estimated_words": 0,
+      "estimated_dictations": 0,
+      "day_basis": "capture_local"
+    }
+  },
+  "avatar": {
+    "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAJZ0lEQVR42q1Xe3BTdRb+7ivvpk1f9JFWSdWlWEsLUuUhKbpWsavgDoWdFdgRVx1dd10V1nHdte2Ow/gYnyOuMOz6GHxMi7i6ZcG1K62CBVso1JBSQltT0qZN2rRp06RJbu7dc9M6oyIBHPPXTX435/V95zvnx+LCP6wkSaws//ChTAfV1ft5oIq7CJvgL+w1Ky/LTSLDMPRsqSwoKV2Wac4yCRwfdthPdXFgh+mslQ67lQAZRgmiPvaTBLBgwT1CW9v2KDnIvHb5xjeq7r9zxdWL5kOt0yI4FYV3YBAsL6Cj5XBs7+69uxnm9S3k/BiqKIj68wfBJMzbWs03N9eKgMZ638O1H2z880MmQ5ogdrum8JnNg4rSbPiCMUxSINcVJvEjfuCNl1/H35/YUiXj9C5mwQIBR45EE+J6roMqymDa+RXrnn/1jaa/PPcnkygIUbvDz+8/NsCHwhE+Xc/zakR5Xhb5xrYheTwYjm7+651Yv+mBdygzi9zWpjjnfkQFFMybCfO827a9tfXDDetvRas3EqNoOY5j4QtEEKCsC2YZEBYlcCyDwbEpfHTYhdVLLxGzU7X8wxsead3//vNlCjmZafLIF1oBZppwUN/1wD2v3kPObb6IgiUnKYdkKkUvIC9dhwg5VyxHYzIsFMxlOUnY2+bidRpE//jkYwsLilc9pfim7uAuGALCnVP+lJF/wx82bb47d4zsi2A4hzuAYDgGFVXA44/APToFFc9CorySVQxCYRFLCzMoQhZn3EEhPSddWv3Qg4+mJs+7vbZ2uahAeiEBME1NNaLSHes23HZffv4seAJRzk0Oe4cCSDUI4MjpFyf60Ts4AYGeRSqxUWCQTP2kUfMozE1C/1gYKikKzWXFWPnIw/Vk7/K6OqUjqtnEAVRVsUr2HFdYYb3l57O9EmIyy7KOgXHo1NMJ9PnCONn4Mdz9HlBlwBEG7vEIZmnpQZJwea6RSiZBoxJYXo5E00sWc0uuv6NSgc5qReIAqufeHydl5eqbbrukaC78gZgsykycZCadgK9HIrB1OPDk2nngAj4M+qNIosBOeUNxYmZrWXLMIcekjfPDbFIzskqLHEvBQsVueXl5YghqasrjwqFPSy9zOgcQJdcRIlimUQ2JUujoG4OZmUDxVRYUG6PocXqg1XAgX2g86UOumoVA/08xqIgvIpI1LGvQa5GZby6ZsS8mCkDpFjkv7xbT0daOn7m6exGgcMYmI8jP0KPfG0B/99e4fdFsyNT9V+bqMd5zCpNkMjtFhf9RAD1jIeQYpqFS2pKgYFKTBGTl5RTQT3k/lPRZmOQWZjNdrR0NshgZHgnE2D7PhJybqYKzrQUTXx3Gsy+9hy0v1ME15MeyfA0GPQEYdWqo1Sps+6wfevKvEdi4TgwHJSbm98Y4XqXOKqi4Mi4HVVXMuQJQhIJp+XiHDzi51j86ekJpKcfgpBSjSixeWIili67C1cUFsB1uwEf7Poc4GQAzNYlu6pAcPoijrgDePjQAHXUFM0NYNuiXWj5twfxF86+JzxaTiU00jOSamiblN/HQ/kOeOTfcAom4PDQcxpLyUthPebDCwqCsJBemtCwIGhV63BM40OqCITIObZjDfzo5zMpIQpKGx0RokhQkJjTv2bfblJmxSHHQ+tprIrt9+7khsNu9ccnsOdUruJ39yM80MCddfricXuTmpKN3gkiZP5sIQxoQjpIC6rFxYSqWz5+NytksVL5+OEemiJiSXJifgp7TffK4p+UB74jvcaO5IpW6Wv72CDhrHNfVVSmER35Rkdl5ZhCWZBOyKaMX/vEx7l4yC+FkHdJgREqSdjp+MmdJ0yAvlcESyxw4be/DdlyDtOtK5Syjmml3dp+mF72TAwfcDPMduH9YCWcOZxUvnFfYR0TrPe1kr8jSYvH1i/DKzv3xNjSlmxCj9gyGwkTCUUSpDYUkDfrODMOhtUBkVegfnmC0GgFFhZZUspc045NJqANWqzU+B3Lzl1ZY5pXqx6AVfYNeRkVn1xdlQm2Zi7c/OAC77TR4owE8zYX01GQIBi0+2X8C657agwG3l9pAj57+UfCsHCtbUpaWnFF2g2JXsZ9oI6I5ML12Vd5R9aBfkwbbv59lY0VzoBUqkKGWcPNN16JgPBOHDrSjpa0Ld/32Vhw9bMPfnnsPTcddCHsHYMrORmSUBEqnY7ibr5LnFOZh5cqKDW/t+HIX2ZcZhjnvOE5Jzki3BAb6MOqwM72dnXJwiiYeG8M1hVnoDKrQ7RzCpie2Y3H577B85aP4sOEAKdYQaYGA0NgoRnscQffBxoMR/xhPGco3rlh2K9ktohzPGkjf0YHy8hqlImN7dta/mJuRjNwri6Mum43p6HJJZp1K1iMqF80vxLY97QiHQmg77lCQlVNTjZBZjjZjGkc0n4c62iLd7W0v9dhPyrQSxUrLrVhy413rlOSrqxMoIa1gMWWDsR/915bmnW91V965XhUJhSbe3P4u+9EnXzDmZIExZ+rl2mc2k8zGoOg8jU+IIjFSlmNKb8qyNK7W6UjMQqmegcFT5JPv7OmHo6v7K8UHwZAQAsJojUIU8d2tT66R/cMoW7Wqvb2xccemx16MHvu8NZKkAnPN8mvxi7UrpYkxP1iWBjKjTHFOKQFtz6wxJUl/M02Dfw709nmV6XPo8xafp69pr5Jcc3Nz7DwcqI8p2zAQPLrn1a1r1XJ02YBndKvjSMv8xzY//cxE/wh0ekR+de86Vq1T/z4WFVcwkKpkKWaj7FdDEu/TpRqHlU0tOBn6eogwOPRpyy767qupiUMsn/deoGzD1mpayWtr6wY9IyqD0XC7b8xVzTAu25bHLaW1O56p1CcbkWM2Dzvad+2b+dv731TxiVcOcmsOvgu9Ue9r/PAADja88vz0hQXSBV9MyDntcXVcff2anZOYa2AutWpoWZ2iWv96dsm8E7/ceIeZGGdU3r3E+huNs/nNqW826qcb71V6LdZ5zG7s6uh6j567amqUqtaetQ8k3Nnt9np5+q7XHIbfKTY0NAhutzt0rM11orBk3vr+M327nZ2Hj5VcugpOZ/NMaZ2S+8iReCW8w4y+5/jRbaDdirCXL+pi8m1OfCOhR+iWU03QBH1f/nfHsy/v87qHwvFqZdrl72Eb3+CnRlvfkeU+97ck/uKuZue6zBCe1C25ZsBEFLMNJXDAfH/4/BQBxCuniM6MqjKJHJzv83/WWyUjzIZnJQAAAABJRU5ErkJggg==",
+    "crop": {
+      "x": 0.5,
+      "y": 0.5,
+      "zoom": 1
+    }
+  },
+  "serviceStatus": {
+    "search": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "read": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "pdf": {
+      "enabled": true,
+      "service": "builtin",
+      "options": [
+        {
+          "id": "builtin",
+          "needs_key": false,
+          "has_key": false,
+          "key_optional": false
+        }
+      ]
+    },
+    "voice": {
+      "enabled": false,
+      "service": "fish",
+      "options": [
+        {
+          "id": "fish",
+          "needs_key": true,
+          "has_key": false,
+          "key_optional": false
+        }
+      ],
+      "fish_voice_set": false
+    },
+    "vision": {
+      "enabled": true,
+      "model": "",
+      "resolved_model": "openai/gpt-6-sol",
+      "supports_images": true
+    }
+  },
+  "usageCsv": "time,member,title,model,provider,duration_ms,tokens,cost_usd,ai_steps,tools,errors\r\n2026-10-24,拉斐爾,研究摘要,openai/gpt-6-sol,OpenRouter,21000,14200,.021,3,6,0\r\n",
+  "presets": [],
+  "skills": [],
+  "commands": [],
+  "voices": {
+    "voices": [],
+    "configured": false
+  },
+  "speech": {
+    "ready": true
+  },
+  "safetyRules": [],
+  "modelStatus": {
+    "models": [
+      {
+        "name": "qwen3-asr",
+        "ready": true
+      },
+      {
+        "name": "silero-vad",
+        "ready": true
+      }
+    ]
+  },
+  "localModels": [
+    { "name": "qwen3-asr", "title": "Qwen3-ASR", "languages": ["zh", "en", "ja", "ko", "yue"], "note": "dictionary", "size": 878702423, "ready": false },
+    { "name": "sensevoice", "title": "SenseVoice", "languages": ["zh", "en", "ja", "ko", "yue"], "note": "fast", "size": 163002883, "ready": false },
+    { "name": "breeze-asr-25", "title": "Breeze-ASR-25", "languages": ["zh", "en"], "note": "taiwan", "size": 1775001000, "ready": false },
+    { "name": "fire-red-asr", "title": "FireRedASR", "languages": ["zh", "en"], "note": "mandarin", "size": 1700000000, "ready": false },
+    { "name": "paraformer-zh", "title": "Paraformer", "languages": ["zh"], "note": "chinese", "size": 227405559, "ready": false },
+    { "name": "whisper-turbo", "title": "Whisper Turbo", "languages": ["zh", "en", "ja", "multi"], "note": "multilingual", "size": 800000000, "ready": false }
+  ],
+  "languages": [],
+  "audioDevices": {
+    "devices": [
+      {
+        "index": 0,
+        "name": "桌上型麥克風",
+        "is_default": true
+      }
+    ],
+    "selected": null,
+    "automatic_device": "桌上型麥克風"
+  },
+  "messaging": {
+    "connected": false,
+    "enabled": false,
+    "allowed": [],
+    "pending": []
+  },
+  "home": {
+    "generated_at_ms": 1792807200000,
+    "report": {
+      "openrouter": {
+        "state": "ok",
+        "latency_ms": 120,
+        "checked_at_ms": 1792807200000,
+        "error": null,
+        "key": null,
+        "usage": null
+      },
+      "spend": {
+        "month_usd": 1.24,
+        "today_usd": 0.04,
+        "limit_usd": 20,
+        "forecast_usd": 2,
+        "daily": [
+          0.01,
+          0.04,
+          0.03
+        ]
+      },
+      "last": null
+    },
+    "today": [
+      {
+        "id": "question:1",
+        "kind": "question",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "確認本週研究方向",
+        "summary": "",
+        "at_ms": 1792807140000,
+        "turn_id": 1,
+        "conversation_id": 1,
+        "routine_id": null
+      },
+      {
+        "id": "routine:1",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792809000000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792816200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      }
+    ],
+    "reports": [
+      {
+        "id": "report:2",
+        "kind": "report",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "Research progress",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792807080000,
+        "turn_id": 2,
+        "conversation_id": 11,
+        "routine_id": null
+      },
+      {
+        "id": "report:1",
+        "kind": "report",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "Daily briefing",
+        "summary": "研究摘要已整理完成。",
+        "at_ms": 1792805400000,
+        "turn_id": 1,
+        "conversation_id": 1,
+        "routine_id": null
+      }
+    ],
+    "calendar": [
+      {
+        "id": "routine:1",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792809000000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792816200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      },
+      {
+        "id": "event:planning",
+        "kind": "event",
+        "member_id": 0,
+        "name": "Google Calendar",
+        "avatar_url": null,
+        "title": "Product planning",
+        "summary": "",
+        "at_ms": 1792825200000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": null
+      },
+      {
+        "id": "routine:1:tomorrow",
+        "kind": "routine",
+        "member_id": 0,
+        "name": "拉斐爾",
+        "avatar_url": "/brand/in-app-icon.png",
+        "title": "每天早上的進度",
+        "summary": "",
+        "at_ms": 1792891800000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 1
+      },
+      {
+        "id": "routine:2:tomorrow",
+        "kind": "routine",
+        "member_id": 1,
+        "name": "小晴",
+        "avatar_url": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCI+PHJlY3Qgd2lkdGg9IjgwIiBoZWlnaHQ9IjgwIiByeD0iMjQiIGZpbGw9IiM2ODdkYTUiLz48Y2lyY2xlIGN4PSI0MCIgY3k9IjMwIiByPSIxNCIgZmlsbD0iI2ZmZjJkYiIvPjxwYXRoIGQ9Ik0xNCA4MGEyNiAyOCAwIDAgMSA1MiAwIiBmaWxsPSIjZmZmMmRiIi8+PC9zdmc+",
+        "title": "午間資訊摘要",
+        "summary": "",
+        "at_ms": 1792904400000,
+        "turn_id": null,
+        "conversation_id": null,
+        "routine_id": 2
+      }
+    ],
+    "counts": {
+      "today": 3,
+      "reports": 2,
+      "calendar": 5
+    },
+    "usage": {
+      "month_usd": 1.24,
+      "limit_usd": 20,
+      "daily": [
+        0.02,
+        0.03,
+        0.01,
+        0.07,
+        0.04,
+        0.06,
+        0.02,
+        0.08,
+        0.11,
+        0.07,
+        0.09,
+        0.04,
+        0.03,
+        0.04
+      ],
+      "allowances": {
+        "quotas": [],
+        "brains": [
+          {
+            "id": "claude",
+            "name": "Claude CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          },
+          {
+            "id": "codex",
+            "name": "Codex CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          },
+          {
+            "id": "gemini",
+            "name": "Gemini CLI",
+            "source": "reported",
+            "windows": [
+              {
+                "period": "fiveHour",
+                "remaining_percent": 76,
+                "resets_at": 1792814400
+              },
+              {
+                "period": "weekly",
+                "remaining_percent": 89,
+                "resets_at": 1792893600
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "dictation": {
+      "words": 12000,
+      "audio_seconds": 3600,
+      "time_saved_seconds": 5400,
+      "speed_wpm": 200,
+      "daily": [
+        420,
+        0,
+        860,
+        1240,
+        610,
+        0,
+        0,
+        980,
+        1530,
+        720,
+        1100,
+        340,
+        0,
+        890
+      ]
+    }
+  }
+}

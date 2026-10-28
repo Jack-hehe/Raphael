@@ -19,7 +19,7 @@ from raphael_core.agent.failure import AgentFailure
 from raphael_core.agent.history import Turn
 from raphael_core.agent.ledger import Ledger
 from raphael_core.agent.tools import ToolResult
-from raphael_core.brain.openrouter import CLEANUP_FALLBACKS, Completion, OpenRouterError
+from raphael_core.brain.openrouter import Completion, OpenRouterError
 from raphael_core.brain.spend import SpendTracker
 
 NOW = {
@@ -29,6 +29,25 @@ NOW = {
     "time": "14:05",
     "utc_offset": "UTC+08:00",
 }
+
+
+def test_member_replies_keep_up_to_four_separate_messages_with_a_limit_per_message():
+    reply = parse_reply({"messages": ["Correction", "Example", "x" * 3000, "Your turn?", "extra"], "detail": ""}, "en", plain=True)
+    assert reply.messages[:2] == ["Correction", "Example"]
+    assert len(reply.messages) == 4
+    assert len(reply.messages[2]) == persona.MEMBER_TEXT_MAX
+    assert reply.text == "Your turn?"
+
+
+def test_display_frame_normalization_preserves_notice_and_ordinary_quoted_titles():
+    reply = parse_reply({"messages": ["《Notice. Finished.》", "Read 《The Book》 next."]}, "en", long=True)
+    assert reply.prefix == "Notice"
+    assert reply.messages == ["Finished.", "Read 《The Book》 next."]
+
+
+def test_member_text_is_not_interpreted_as_raphael_display_frames():
+    reply = parse_reply({"messages": ["《Answer. A quoted example.》"]}, "en", plain=True, long=True)
+    assert reply.prefix == "" and reply.text == "《Answer. A quoted example.》"
 
 
 def completion(data, cost=0.0009, model="openai/gpt-6-luna"):
@@ -81,7 +100,7 @@ async def test_the_model_is_asked_for_json_with_a_little_reasoning(voice, client
     await reply(voice, ledger)
     call = client.json_calls[0]
     assert call["model"] == "openai/gpt-6-luna"
-    assert call["fallbacks"] == CLEANUP_FALLBACKS
+    assert call["fallbacks"] == []  # the owner's brain answers as itself, never a fallback model
     assert call["system"] == persona.system_prompt("zh-TW", "answer")
     assert call["schema_name"] == "raphael_reply"
     assert call["reasoning_effort"] == "none"
@@ -130,6 +149,20 @@ async def test_the_last_thing_the_model_reads_is_the_language_to_reply_in(
     assert last_line.startswith(f"Reply in {named}") and last_line.endswith(" only.")
 
 
+async def test_the_background_tasks_are_given_as_their_own_block_before_the_question(
+    voice, client, ledger
+):
+    client.replies.append(completion(spoken()))
+    block = "<background_tasks>\nfacts\n</background_tasks>"
+    await reply(voice, ledger, question="寄出去了嗎", background=block)
+    message = client.json_calls[0]["user"]
+    assert block in message
+    assert message.index(block) < message.index("<question>")
+    client.replies.append(completion(spoken()))
+    await reply(voice, ledger)
+    assert "background_tasks" not in client.json_calls[1]["user"]
+
+
 async def test_the_conversation_so_far_is_given_oldest_first(voice, client, ledger):
     client.replies.append(completion(spoken()))
     context = [
@@ -139,7 +172,7 @@ async def test_the_conversation_so_far_is_given_oldest_first(voice, client, ledg
     await reply(voice, ledger, route="discuss", context=context)
     message = client.json_calls[0]["user"]
     section = message.split("Conversation so far (oldest first):\n")[1].split("\n\n")[0]
-    assert section == "User: 今天幾號\nRaphael: 今天是十月二十日。\nUser: 打開 YouTube\nRaphael: 了"
+    assert section == "owner: 今天幾號\nRaphael: 今天是十月二十日。\nowner: 打開 YouTube\nRaphael: 了"
 
 
 async def test_the_tool_results_are_given_as_data_and_a_tool_that_failed_is_said_to(
@@ -297,9 +330,9 @@ async def test_the_pages_are_listed_even_when_the_model_wrote_no_detail(voice, c
         (OpenRouterError(401, "auth", "no"), "auth"),
         (OpenRouterError(402, "credits", "broke"), "credits"),
         (OpenRouterError(0, "network", "offline"), "offline"),
-        (OpenRouterError(0, "timeout", "slow"), "offline"),
-        (OpenRouterError(503, "server", "down"), "offline"),
-        (OpenRouterError(429, "rate_limit", "slow"), "offline"),
+        (OpenRouterError(0, "timeout", "slow"), "timeout"),
+        (OpenRouterError(503, "server", "down"), "error"),
+        (OpenRouterError(429, "rate_limit", "slow"), "error"),
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (OpenRouterError(200, "bad_response", "html"), "error"),
         (RuntimeError("boom"), "error"),
@@ -319,7 +352,7 @@ async def test_a_model_that_hangs_is_a_timeout(client, ledger):
     client.replies.append(hang)
     with pytest.raises(AgentFailure) as failure:
         await reply(Voice(client, timeout_s=0.1), ledger)
-    assert failure.value.kind == "offline"
+    assert failure.value.kind == "timeout"
 
 
 async def test_a_reply_that_is_paid_for_but_empty_is_still_written_to_the_spend(
@@ -339,3 +372,56 @@ async def test_nothing_the_user_said_or_the_model_answered_is_logged(
         with pytest.raises(AgentFailure):
             await reply(voice, ledger, question="我的秘密問題")
     assert "秘密" not in caplog.text
+
+
+# --- the line in Japanese, for the voice ----------------------------------------------------------
+
+
+def test_the_schema_has_the_japanese_field_only_when_asked_for():
+    assert "say_ja" not in reply_schema("zh-TW")["properties"]
+    asking = reply_schema("zh-TW", say_ja=True)
+    assert asking["properties"]["say_ja"] == {"type": "string"}
+    assert asking["required"] == ["prefix", "text", "detail", "say_ja"]
+    assert reply_schema("zh-TW", memory=True, say_ja=True)["required"][-3:] == ["say_ja", "memory", "need"]
+
+
+def test_the_japanese_line_is_one_line_without_the_brackets_and_within_the_limit():
+    assert answers_module.japanese_line("《解。\n二十四度です。》") == "解。 二十四度です。"
+    long_line = "二十四度です。" * 60
+    cut = answers_module.japanese_line(long_line)
+    assert len(cut) <= answers_module.SAY_JA_MAX and cut.endswith("。")
+
+
+@pytest.mark.parametrize("value", [None, 5, "", "  ", "It is 24 degrees.", "台北現在 24 度。"])
+def test_a_japanese_line_with_no_kana_is_none(value):
+    assert answers_module.japanese_line(value) == ""
+
+
+def test_a_reply_carries_the_japanese_line_beside_the_shown_one():
+    reply = parse_reply(
+        {"prefix": "答", "text": "台北現在 24 度。", "detail": "", "say_ja": "台北は二十四度です。"}, "zh-TW"
+    )
+    assert (reply.prefix, reply.text, reply.say_ja) == ("答", "台北現在 24 度。", "台北は二十四度です。")
+    assert parse_reply({"prefix": "答", "text": "好。", "detail": ""}, "zh-TW").say_ja == ""
+
+
+async def test_the_voice_asks_for_the_japanese_in_the_same_call_when_told_to(voice, client, ledger):
+    client.replies.append(completion({**spoken("答", "好。"), "say_ja": "はい。"}))
+    got = await reply(voice, ledger, say_ja=True)
+    assert len(client.json_calls) == 1 and got.say_ja == "はい。"
+    call = client.json_calls[0]
+    assert "say_ja" in call["schema"]["properties"]
+    assert call["system"] == persona.system_prompt("zh-TW", "answer", say_ja=True)
+    assert call["user"].endswith(persona.language_reminder("zh-TW", say_ja=True))
+
+
+async def test_the_voice_does_not_ask_for_it_by_default_nor_for_a_japanese_screen(
+    voice, client, ledger
+):
+    client.replies.append(completion(spoken()))
+    await reply(voice, ledger)
+    assert "say_ja" not in client.json_calls[0]["schema"]["properties"]
+    client.replies.append(completion(spoken("解", "はい。")))
+    await reply(voice, ledger, language="ja", say_ja=True)
+    assert "say_ja" not in client.json_calls[1]["schema"]["properties"]
+    assert "say_ja" not in client.json_calls[1]["system"]

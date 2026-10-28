@@ -3,8 +3,9 @@
 // the core wrote goes through `esc` first.
 
 import { onLocaleChange, t, translatedMessage } from "./i18n";
+import { registerDismissal } from "./dismissals";
 
-import type { Notifier } from "./undo";
+import { type Notifier, UNDO_MS } from "./undo";
 
 // ---------- HTML ----------
 
@@ -13,32 +14,70 @@ const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;"
 /** Text as it can go into HTML, in an attribute too. */
 export const esc = (s: unknown): string => String(s).replace(/[&<>"']/g, (c) => ESCAPES[c]);
 
+// The app's line icons, one 16 x 16 drawing each: drawn to show at 16 CSS px (20 where a larger one
+// is meant), with a 1.5 stroke, round caps and joins and no fill (styles.css `svg.i`). Straight
+// lines sit on .25 / .75 so that one edge of each falls on a whole pixel; an icon shown at 14 or
+// 15 px, or moved by a fractional transform, loses that and blurs. Dots (`info`, `steps`, `more`)
+// are small closed circles the stroke fills.
 const ICON = {
-  home: "M2.5 7.2 8 2.8l5.5 4.4V13a.7.7 0 0 1-.7.7H9.6V9.8H6.4v3.9H3.2a.7.7 0 0 1-.7-.7z",
-  clock: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM8 4.8V8l2.2 1.4",
-  book: "M3 2.8h7.5A1.5 1.5 0 0 1 12 4.3v9H4.5A1.5 1.5 0 0 1 3 11.8zM3 11.8a1.5 1.5 0 0 1 1.5-1.5H12M6 5.6h3.5",
-  down: "M3.8 6 8 10.2 12.2 6",
-  plus: "M8 3.2v9.6M3.2 8h9.6",
-  copy: "M5.5 5.5V3.8a1.3 1.3 0 0 1 1.3-1.3h5.4a1.3 1.3 0 0 1 1.3 1.3v5.4a1.3 1.3 0 0 1-1.3 1.3h-1.7M3.8 5.5h5.4a1.3 1.3 0 0 1 1.3 1.3v5.4a1.3 1.3 0 0 1-1.3 1.3H3.8a1.3 1.3 0 0 1-1.3-1.3V6.8a1.3 1.3 0 0 1 1.3-1.3z",
-  trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.3a1 1 0 0 0 1 .9h3.8a1 1 0 0 0 1-.9l.6-8.3",
-  search: "M7 2.6a4.4 4.4 0 1 1 0 8.8 4.4 4.4 0 0 1 0-8.8zM10.2 10.2l3.2 3.2",
-  x: "M4.8 4.8l6.4 6.4M11.2 4.8l-6.4 6.4",
-  gear: "M6.8 1.8h2.4l.2 1.6.7.3 1.3-.9 1.8 1.8-.9 1.3.3.7 1.6.2v2.4l-1.6.2-.3.7.9 1.3-1.8 1.8-1.3-.9-.7.3-.2 1.6H6.8l-.2-1.6-.7-.3-1.3.9-1.8-1.8.9-1.3-.3-.7-1.6-.2V6.8l1.6-.2.3-.7-.9-1.3 1.8-1.8 1.3.9.7-.3zM8 5.8a2.2 2.2 0 1 1 0 4.4 2.2 2.2 0 0 1 0-4.4z",
-  mic: "M8 2.2a2 2 0 0 1 2 2v3.6a2 2 0 0 1-4 0V4.2a2 2 0 0 1 2-2zM4 7.6a4 4 0 0 0 8 0M8 11.6v2.2",
-  wallet: "M2.4 4.6h10.4a.8.8 0 0 1 .8.8v6.4a.8.8 0 0 1-.8.8H3.2a.8.8 0 0 1-.8-.8zM2.4 4.6 10.6 2.6v2M11 8.6h.6",
-  sparkle: "M8 2.2l1.3 3.6 3.6 1.3-3.6 1.3L8 12l-1.3-3.6L3.1 7.1l3.6-1.3zM12.6 10.8l.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5z",
-  info: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM8 7.2v3.8M8 5h.01",
-  lock: "M4.2 7.2h7.6a.6.6 0 0 1 .6.6v5a.6.6 0 0 1-.6.6H4.2a.6.6 0 0 1-.6-.6v-5a.6.6 0 0 1 .6-.6zM5.6 7.2V5.2a2.4 2.4 0 0 1 4.8 0v2",
-  left: "M10 3.8 5.8 8l4.2 4.2",
-  right: "M6 3.8 10.2 8 6 12.2",
-  refresh: "M13 6.5A5.2 5.2 0 0 0 3.4 4.3L2 6M2 2.8V6h3.2M3 9.5a5.2 5.2 0 0 0 9.6 2.2L14 10M10.8 10H14v3.2",
-  link: "M6.8 9.2a2.4 2.4 0 0 0 3.4 0l2.2-2.2a2.4 2.4 0 0 0-3.4-3.4l-.8.8M9.2 6.8a2.4 2.4 0 0 0-3.4 0L3.6 9a2.4 2.4 0 0 0 3.4 3.4l.8-.8",
-  chat: "M3.2 3.2h9.6a.8.8 0 0 1 .8.8v5.6a.8.8 0 0 1-.8.8H8.4L5.4 13v-2.6H3.2a.8.8 0 0 1-.8-.8V4a.8.8 0 0 1 .8-.8zM5.6 6.2h4.8M5.6 8h3",
-  globe: "M8 2.2a5.8 5.8 0 1 1 0 11.6A5.8 5.8 0 0 1 8 2.2zM2.4 8h11.2M8 2.2c1.6 1.6 2.4 3.6 2.4 5.8S9.6 12.2 8 13.8M8 2.2C6.4 3.8 5.6 5.8 5.6 8s.8 4.2 2.4 5.8",
-  monitor: "M2.6 3.2h10.8a.6.6 0 0 1 .6.6v6.6a.6.6 0 0 1-.6.6H2.6a.6.6 0 0 1-.6-.6V3.8a.6.6 0 0 1 .6-.6zM6 13.6h4M8 11v2.6",
-  shield: "M8 2.2 13 4v3.8c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4zM5.8 8l1.6 1.6 2.8-3",
-  star: "M8 2.4l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.6l-3.6 1.9.7-4L2.2 6.7l4-.6z",
-  grid: "M2.8 2.8h4v4h-4zM9.2 2.8h4v4h-4zM2.8 9.2h4v4h-4zM9.2 9.2h4v4h-4z",
+  person: "M10.75 4.75A3 3 0 1 1 4.75 4.75A3 3 0 1 1 10.75 4.75ZM2.75 13.25C2.75 8.25 12.75 8.25 12.75 13.25",
+  crown: "M2.75 5.25 5.25 7.25 7.75 3.25 10.25 7.25 12.75 5.25 11.75 11.25H3.75ZM4.25 13.25H11.25",
+  reply: "M6.25 3.25 2.75 6.75 6.25 10.25M3.25 6.75H9.25A3 3 0 0 1 12.25 9.75V12.25",
+  pin: "M5.25 2.25H10.25L9.75 6.25 12.25 8.75H8.25V13.75M7.25 8.75H3.25L5.75 6.25Z",
+  eyeOff: "M2.25 2.25 13.25 13.25M6.25 3.5 7.75 3.25C11.25 3.25 13.75 7.75 13.75 7.75L12 10M9.25 12 7.75 12.25C4.25 12.25 1.75 7.75 1.75 7.75L3.5 5.5",
+  home: "M2.25 6.75 7.75 2.25 13.25 6.75M3.75 5.75V11.75A1.5 1.5 0 0 0 5.25 13.25H6.25V9.25H9.25V13.25H10.25A1.5 1.5 0 0 0 11.75 11.75V5.75",
+  clock: "M13.25 7.75A5.5 5.5 0 1 1 2.25 7.75A5.5 5.5 0 1 1 13.25 7.75ZM7.75 4.25V7.75L10.25 9.25",
+  book: "M4.75 2.75H10.75A1.5 1.5 0 0 1 12.25 4.25V13.25H4.75A1.5 1.5 0 0 1 3.25 11.75V4.25A1.5 1.5 0 0 1 4.75 2.75M3.25 11.75A1.5 1.5 0 0 1 4.75 10.25H12.25M6.25 5.75H9.25",
+  down: "M3.75 5.75 7.75 9.75 11.75 5.75",
+  up: "M3.75 9.75 7.75 5.75 11.75 9.75",
+  plus: "M7.75 3.25V12.25M3.25 7.75H12.25",
+  copy: "M6.25 3.75A1.5 1.5 0 0 1 7.75 2.25H11.75A1.5 1.5 0 0 1 13.25 3.75V7.75A1.5 1.5 0 0 1 11.75 9.25M3.75 6.25H7.75A1.5 1.5 0 0 1 9.25 7.75V11.75A1.5 1.5 0 0 1 7.75 13.25H3.75A1.5 1.5 0 0 1 2.25 11.75V7.75A1.5 1.5 0 0 1 3.75 6.25Z",
+  trash: "M2.75 4.75H12.75M5.75 4.75V2.75H9.75V4.75M4.25 4.75V11.75A1.5 1.5 0 0 0 5.75 13.25H9.75A1.5 1.5 0 0 0 11.25 11.75V4.75M7.75 7.75V10.25",
+  search: "M10.75 6.75A4 4 0 1 1 2.75 6.75A4 4 0 1 1 10.75 6.75ZM9.75 9.75 13.25 13.25",
+  x: "M4.25 4.25 11.25 11.25M11.25 4.25 4.25 11.25",
+  gear: "M6.25 2.25H9.25L9.75 4.25 11.75 3.75 13.25 6.25 11.75 7.75 13.25 9.25 11.75 11.75 9.75 11.25 9.25 13.25H6.25L5.75 11.25 3.75 11.75 2.25 9.25 3.75 7.75 2.25 6.25 3.75 3.75 5.75 4.25ZM9.75 7.75A2 2 0 1 1 5.75 7.75A2 2 0 1 1 9.75 7.75Z",
+  mic: "M7.75 2.25A2 2 0 0 1 9.75 4.25V7.25A2 2 0 0 1 5.75 7.25V4.25A2 2 0 0 1 7.75 2.25ZM3.75 7.25A4 4 0 0 0 11.75 7.25M7.75 11.25V13.25M5.75 13.25H9.75",
+  wallet: "M12.25 5.25V2.75L3.75 4.75M3.75 5.25H11.75A1.5 1.5 0 0 1 13.25 6.75V11.75A1.5 1.5 0 0 1 11.75 13.25H3.75A1.5 1.5 0 0 1 2.25 11.75V6.75A1.5 1.5 0 0 1 3.75 5.25ZM10.75 9.25H11.25",
+  sparkle: "M7.75 2.25 9.25 6.25 13.25 7.75 9.25 9.25 7.75 13.25 6.25 9.25 2.25 7.75 6.25 6.25Z",
+  info: "M13.25 7.75A5.5 5.5 0 1 1 2.25 7.75A5.5 5.5 0 1 1 13.25 7.75ZM7.75 7.75V10.75M8.35 4.75A.6 .6 0 1 1 7.15 4.75A.6 .6 0 1 1 8.35 4.75Z",
+  lock: "M4.75 7.25H10.75A1.5 1.5 0 0 1 12.25 8.75V11.75A1.5 1.5 0 0 1 10.75 13.25H4.75A1.5 1.5 0 0 1 3.25 11.75V8.75A1.5 1.5 0 0 1 4.75 7.25ZM5.25 7.25V4.75A2.5 2.5 0 0 1 10.25 4.75V7.25M7.75 9.75V10.75",
+  left: "M9.75 3.75 5.75 7.75 9.75 11.75",
+  right: "M5.75 3.75 9.75 7.75 5.75 11.75",
+  refresh: "M12.75 6.25A5.25 5.25 0 0 0 3.25 4.75L2.25 6.25M2.25 2.75V6.25H5.75M2.75 9.25A5.25 5.25 0 0 0 12.25 10.75L13.25 9.25M9.75 9.25H13.25V12.75",
+  link: "M6.25 5.25 7.75 3.75A3 3 0 0 1 12 8L10.5 9.5M5 6 3.5 7.5A3 3 0 0 0 7.75 11.75L9.25 10.25M5.75 9.75 9.75 5.75",
+  chat: "M3.75 2.75H11.75A1.5 1.5 0 0 1 13.25 4.25V8.75A1.5 1.5 0 0 1 11.75 10.25H7.75L4.25 13.25V10.25H3.75A1.5 1.5 0 0 1 2.25 8.75V4.25A1.5 1.5 0 0 1 3.75 2.75ZM5.25 5.75H10.25M5.25 7.75H8.25",
+  globe: "M13.25 7.75A5.5 5.5 0 1 1 2.25 7.75A5.5 5.5 0 1 1 13.25 7.75ZM2.25 7.75H13.25M7.75 2.25C4.75 5.25 4.75 10.25 7.75 13.25C10.75 10.25 10.75 5.25 7.75 2.25Z",
+  monitor: "M3.75 2.75H11.75A1.5 1.5 0 0 1 13.25 4.25V9.25A1.5 1.5 0 0 1 11.75 10.75H3.75A1.5 1.5 0 0 1 2.25 9.25V4.25A1.5 1.5 0 0 1 3.75 2.75ZM7.75 10.75V13.25M5.25 13.25H10.25",
+  shield: "M7.75 2.25 12.75 4.25V7.75C12.75 10.25 10.75 12.25 7.75 13.25C4.75 12.25 2.75 10.25 2.75 7.75V4.25ZM5.25 7.75 7.25 9.75 10.25 6.75",
+  star: "M7.75 2.25 9.75 6.25 13.75 6.75 10.75 9.75 11.25 13.75 7.75 11.75 4.25 13.75 4.75 9.75 1.75 6.75 5.75 6.25Z",
+  grid: "M3.75 2.25H5.25A1.5 1.5 0 0 1 6.75 3.75V5.25A1.5 1.5 0 0 1 5.25 6.75H3.75A1.5 1.5 0 0 1 2.25 5.25V3.75A1.5 1.5 0 0 1 3.75 2.25ZM10.25 2.25H11.75A1.5 1.5 0 0 1 13.25 3.75V5.25A1.5 1.5 0 0 1 11.75 6.75H10.25A1.5 1.5 0 0 1 8.75 5.25V3.75A1.5 1.5 0 0 1 10.25 2.25ZM3.75 8.75H5.25A1.5 1.5 0 0 1 6.75 10.25V11.75A1.5 1.5 0 0 1 5.25 13.25H3.75A1.5 1.5 0 0 1 2.25 11.75V10.25A1.5 1.5 0 0 1 3.75 8.75ZM10.25 8.75H11.75A1.5 1.5 0 0 1 13.25 10.25V11.75A1.5 1.5 0 0 1 11.75 13.25H10.25A1.5 1.5 0 0 1 8.75 11.75V10.25A1.5 1.5 0 0 1 10.25 8.75Z",
+  check: "M3.25 7.75 6.25 10.75 12.25 4.75",
+  sliders: "M2.25 4.75H8.25M11.25 4.75H13.25M2.25 10.75H4.25M7.25 10.75H13.25M9.75 3.25V6.25M5.75 9.25V12.25",
+  keyboard: "M3.75 3.75H11.75A1.5 1.5 0 0 1 13.25 5.25V10.25A1.5 1.5 0 0 1 11.75 11.75H3.75A1.5 1.5 0 0 1 2.25 10.25V5.25A1.5 1.5 0 0 1 3.75 3.75ZM4.75 6.25H5.25M7.75 6.25H8.25M10.75 6.25H11.25M5.25 9.25H10.25",
+  cloud: "M4.75 12.25H11.25A2.5 2.5 0 0 0 11.75 7.25A4 4 0 0 0 4.25 5.75A3.25 3.25 0 0 0 4.75 12.25Z",
+  send: "M7.75 13.25V2.75M3.25 7.25 7.75 2.75 12.25 7.25",
+  stop: "M5.25 3.75H10.25A1.5 1.5 0 0 1 11.75 5.25V10.25A1.5 1.5 0 0 1 10.25 11.75H5.25A1.5 1.5 0 0 1 3.75 10.25V5.25A1.5 1.5 0 0 1 5.25 3.75Z",
+  bot: "M4.75 5.75H10.75A1.5 1.5 0 0 1 12.25 7.25V11.25A1.5 1.5 0 0 1 10.75 12.75H4.75A1.5 1.5 0 0 1 3.25 11.25V7.25A1.5 1.5 0 0 1 4.75 5.75ZM7.75 5.75V2.75M6.75 2.75H8.75M5.75 8.75V9.25M9.75 8.75V9.25M1.75 8.25V10.25M13.75 8.25V10.25",
+  pencil: "M9.75 2.75 12.75 5.75 5.25 13.25H2.25V10.25ZM8.25 4.25 11.25 7.25",
+  steps: "M3.35 3.75A.6 .6 0 1 1 2.15 3.75A.6 .6 0 1 1 3.35 3.75ZM3.35 7.75A.6 .6 0 1 1 2.15 7.75A.6 .6 0 1 1 3.35 7.75ZM3.35 11.75A.6 .6 0 1 1 2.15 11.75A.6 .6 0 1 1 3.35 11.75ZM6.25 3.75H12.75M6.25 7.75H12.75M6.25 11.75H12.75",
+  plug: "M5.25 2.25V5.25M10.25 2.25V5.25M3.25 5.25H12.25M4.25 5.25V7.75A3.5 3.5 0 0 0 11.25 7.75V5.25M7.75 11.25V13.75",
+  bell: "M3.25 11.25 4.25 9.75V6.25A3.5 3.5 0 0 1 11.25 6.25V9.75L12.25 11.25ZM6.25 13.25H9.25M7.75 2.75V1.75",
+  calendar: "M3.75 3.75H11.75A1.5 1.5 0 0 1 13.25 5.25V11.75A1.5 1.5 0 0 1 11.75 13.25H3.75A1.5 1.5 0 0 1 2.25 11.75V5.25A1.5 1.5 0 0 1 3.75 3.75ZM5.25 2.25V5.25M10.25 2.25V5.25M2.25 7.25H13.25M5.25 10.25H6.25M9.25 10.25H10.25",
+  news: "M2.25 3.25H8.75A1.5 1.5 0 0 1 10.25 4.75V11.25A1.5 1.5 0 0 0 13.25 11.25V5.75H10.25M2.25 3.25V11.25A1.5 1.5 0 0 0 3.75 12.75H11.75M4.75 6.25H7.25M4.75 9.25H7.25",
+  folder: "M2.25 4.25A1.5 1.5 0 0 1 3.75 2.75H6.25L8.25 4.75H11.75A1.5 1.5 0 0 1 13.25 6.25V11.25A1.5 1.5 0 0 1 11.75 12.75H3.75A1.5 1.5 0 0 1 2.25 11.25ZM2.25 6.75H13.25",
+  memory: "M4.75 2.75H10.75A1.5 1.5 0 0 1 12.25 4.25V13.25H4.75A1.5 1.5 0 0 1 3.25 11.75V4.25A1.5 1.5 0 0 1 4.75 2.75ZM3.25 11.75A1.5 1.5 0 0 1 4.75 10.25H12.25M6.25 2.75V7.25L7.75 5.75 9.25 7.25V2.75",
+  attach: "M12.75 7.25 7.25 12.75A3.5 3.5 0 0 1 2.3 7.8L7.8 2.3A2.25 2.25 0 0 1 10.98 5.48L5.48 10.98A1 1 0 0 1 4.07 9.57L9.25 4.39",
+  voice: "M2.75 6.25V9.25M5.25 3.75V11.75M7.75 2.25V13.25M10.25 4.75V10.75M12.75 6.25V9.25",
+  database: "M12.75 4.25A5 2 0 1 1 2.75 4.25A5 2 0 1 1 12.75 4.25ZM2.75 4.25V11.25A5 2 0 0 0 12.75 11.25V4.25M2.75 7.75A5 2 0 0 0 12.75 7.75",
+  play: "M4.75 2.75 12.75 7.75 4.75 12.75Z",
+  pause: "M4.75 3.25V12.25M10.75 3.25V12.25",
+  external: "M7.25 2.75H3.75A1.5 1.5 0 0 0 2.25 4.25V11.75A1.5 1.5 0 0 0 3.75 13.25H11.25A1.5 1.5 0 0 0 12.75 11.75V8.25M8.75 2.25H13.25V6.75M13.25 2.25 7.25 8.25",
+  minus: "M3.25 7.75H12.25",
+  image: "M3.75 2.75H11.75A1.5 1.5 0 0 1 13.25 4.25V11.25A1.5 1.5 0 0 1 11.75 12.75H3.75A1.5 1.5 0 0 1 2.25 11.25V4.25A1.5 1.5 0 0 1 3.75 2.75ZM2.25 10.25 5.75 6.75 9.75 10.75M8.75 9.75 10.25 8.25 13.25 11.25M10.35 5.75A.6 .6 0 1 1 9.15 5.75A.6 .6 0 1 1 10.35 5.75Z",
+  file: "M4.25 1.75H9.25L12.25 4.75V12.75A1.5 1.5 0 0 1 10.75 14.25H4.25A1.5 1.5 0 0 1 2.75 12.75V3.25A1.5 1.5 0 0 1 4.25 1.75ZM9.25 1.75V4.75H12.25",
+  more: "M3.85 7.75A.6 .6 0 1 1 2.65 7.75A.6 .6 0 1 1 3.85 7.75ZM8.35 7.75A.6 .6 0 1 1 7.15 7.75A.6 .6 0 1 1 8.35 7.75ZM12.85 7.75A.6 .6 0 1 1 11.65 7.75A.6 .6 0 1 1 12.85 7.75Z",
+  repeat: "M10.75 1.75 12.75 3.75 10.75 5.75M2.75 7.25V6.25A2.5 2.5 0 0 1 5.25 3.75H12.75M4.75 13.75 2.75 11.75 4.75 9.75M12.75 8.25V9.25A2.5 2.5 0 0 1 10.25 11.75H2.75",
+  mail: "M3.75 3.75H11.75A1.5 1.5 0 0 1 13.25 5.25V10.75A1.5 1.5 0 0 1 11.75 12.25H3.75A1.5 1.5 0 0 1 2.25 10.75V5.25A1.5 1.5 0 0 1 3.75 3.75ZM2.75 5.25 7.75 8.75 12.75 5.25",
 } as const;
 
 export type IconName = keyof typeof ICON;
@@ -88,6 +127,8 @@ export interface Choice {
   desc?: string;
   /** A small tag after the label in a menu: 「建議」, say. */
   tag?: string;
+  /** A face or an icon before the label in a menu, as markup from the app's own helpers (faceHTML, ico). */
+  lead?: string;
 }
 
 /** The text on a closed dropdown for `choice`, and its tooltip: the whole text. */
@@ -105,11 +146,79 @@ export function sel(options: Choice[], current: string, label: string, attrs = "
   );
 }
 
+export interface TabItem {
+  id: string;
+  label: string;
+  /** A number beside the name; text for what is not a number yet (「—」: it cannot be known), none for an empty string. */
+  count?: number | string;
+  /** Extra attributes for the tab's button, with a leading space. */
+  attrs?: string;
+}
+
+/**
+ * The one tab / segmented component. `nav` switches between views (bordered, joined, role=tablist);
+ * `filter` narrows one list (a pill; History and Dictionary only; role=group, aria-pressed).
+ * `fill` stretches the nav tabs across the width of their container. `plain` draws the nav tabs as
+ * quiet words with a soft fill under the one that is open, for a bar that also holds a search (the
+ * 「已安裝」 and 「商店」 of 連接): still tabs, with the same roles and keys.
+ */
+export function tabs(items: TabItem[], selected: string, o: { label: string; kind: "nav" | "filter"; fill?: boolean; plain?: boolean }): string {
+  const nav = o.kind === "nav";
+  const one = (it: TabItem): string => {
+    const on = it.id === selected;
+    const state = nav ? `role="tab" aria-selected="${on}"` : `aria-pressed="${on}"`;
+    const shown = typeof it.count === "string" ? it.count !== "" : it.count !== undefined && (it.count > 0 || o.plain);
+    const n = shown ? `<span class="n">${esc(it.count)}</span>` : "";
+    return `<button type="button" class="tab" ${state}${it.attrs ?? ""}>${esc(it.label)}${n}</button>`;
+  };
+  const cls = nav ? `tabs ${o.plain ? "plain" : "switch"}${o.fill ? " fill" : ""}` : "tabs seg";
+  return `<div class="${cls}" role="${nav ? "tablist" : "group"}" aria-label="${esc(o.label)}">${items.map(one).join("")}</div>`;
+}
+
+/** How long 「中斷連線」 (of a connection or a messaging app) waits for its second press. */
+export const DISCONNECT_CONFIRM_MS = 5000;
+
 export const btn = (label: string, kind = "", attrs = ""): string =>
   `<button type="button" class="btn${kind ? " " + kind : ""}"${attrs}>${label}</button>`;
 
-export const iconBtn = (name: IconName, label: string, attrs = ""): string =>
-  `<button type="button" class="icon-btn" aria-label="${esc(label)}" title="${esc(label)}"${attrs}>${ico(name)}</button>`;
+interface ActionButton {
+  /** HTML label; escape user text before passing it. */
+  label: string;
+  attrs?: string;
+  kind?: "sm";
+}
+
+export interface ActionRowOptions {
+  primary?: ActionButton;
+  /** Secondary controls, with Cancel last when present. */
+  secondary?: string;
+  destructive?: ActionButton;
+  cls?: string;
+  sticky?: boolean;
+}
+
+/** Danger first and separated, secondary controls next, and the primary action last in tab order. */
+export function actionRow(o: ActionRowOptions): string {
+  const button = (b: ActionButton, kind: string): string => btn(b.label, `${kind}${b.kind ? ` ${b.kind}` : ""}`, b.attrs);
+  return `<div class="action-row${o.cls ? ` ${o.cls}` : ""}${o.sticky ? " is-sticky" : ""}">` +
+    (o.destructive ? `<span class="action-destructive">${button(o.destructive, "danger")}</span>` : "") +
+    (o.secondary ?? "") + (o.primary ? button(o.primary, "pri") : "") + `</div>`;
+}
+
+/**
+ * A button with an icon only (trash, ×, chevron, search, settings, sliders): what it does is its
+ * label and its tooltip. It has no border, only a fill under the pointer and the focus ring
+ * (styles.css `.btn.icon`): a border is what tells a button with words in it. The ⋯ (`more`) is marked
+ * `data-overflow`: context-menu.ts presses it when its row is right-clicked.
+ */
+export const iconButton = (name: IconName, label: string, attrs = "", cls = ""): string =>
+  `<button type="button" class="btn icon${name === "trash" ? " danger" : ""}${cls ? " " + cls : ""}" aria-label="${esc(label)}" title="${esc(label)}"${attrs}${name === "more" ? " data-overflow" : ""}>${ico(name)}</button>`;
+
+/** The filled primary send glyph shares the icon source with the line drawings. */
+export const sendGlyph = (): string => `<svg class="cmp-plane" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 20.85 12.92a1 1 0 0 0 0-1.84L3.4 3.6a1 1 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91Z"/></svg>`;
+
+/** The small icon button on a row (copy, delete, close): `iconButton` at the row's size, borderless too. */
+export const iconBtn = (name: IconName, label: string, attrs = "", cls = ""): string => iconButton(name, label, attrs, `row${cls ? " " + cls : ""}`);
 
 /** Keys as caps, such as 「右 Alt」 + 「V」. */
 export const keys = (labels: string[]): string =>
@@ -165,18 +274,121 @@ export function fieldHTML(placeholder: string, value = "", o: FieldOptions = {})
 /** Raphael's words, as the subtitles on the desktop have them: one line, in the language of the window. */
 export const line = (text: string): string => `<div class="line"><div class="sub-line">${esc(text)}</div></div>`;
 
+// ---------- motion ----------
+// The design's table of motion: a page that changes fades in and rises 6 px (180 ms), the rows of a
+// list that is new come in one after another (25 ms apart, 300 ms at most), a dialog grows in from
+// 96 % (200 ms) and goes the same way out (140 ms), a switch slides and tints its row (160 ms), a
+// toast slides in from the corner with a bar that counts down. Only where something changes; the
+// keyframes are in styles.css, and under `prefers-reduced-motion` nothing moves (the rule at the end
+// of styles.css), and nothing waits for an animation that does not play.
+
+/** Whether Windows asks for less motion. */
+export const reducedMotion = (): boolean =>
+  typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * Plays the way out of `el` (its `leaving` class, which styles.css animates over `ms`) and then calls
+ * `done`, at once when nothing may move. Returns what stops the way out and leaves `el` as it was.
+ */
+export function leave(el: HTMLElement | null, ms: number, done: () => void): () => void {
+  if (!el || reducedMotion()) {
+    done();
+    return () => {};
+  }
+  el.classList.add("leaving");
+  const timer = setTimeout(() => {
+    el.classList.remove("leaving");
+    done();
+  }, ms);
+  return () => {
+    clearTimeout(timer);
+    el.classList.remove("leaving");
+  };
+}
+
+/** Plays a one-off animation class on `el` again from its start (a page change, say). */
+export function replay(el: HTMLElement, cls: string): void {
+  el.classList.remove(cls);
+  void el.offsetWidth; // the class goes, so that its animation starts over when it comes back
+  el.classList.add(cls);
+}
+
+/**
+ * Puts `html` into `host` in place of what it holds (as `innerHTML` does) and lets only what changed
+ * move, since a page is drawn again whole after every change:
+ * - a list marked `data-stagger="<key>"` has its rows come in one after another when it is new; the
+ *   same list drawn again (the same key) is marked `again` and stands still;
+ * - a dialog marked `data-dialog="<key>"` grows in when it opens, not each time it is drawn again;
+ * - a switch whose state changed since the last drawing slides to it (`flip`) and tints its row for a
+ *   moment (`tinted`); one drawn in the state it had stands still. Switches are told apart by their
+ *   `aria-label`, which names what each one switches.
+ */
+export function swapHTML(host: HTMLElement, html: string): void {
+  const keys = (attr: string): Set<string> =>
+    new Set(Array.from(host.querySelectorAll<HTMLElement>(`[${attr}]`), (node) => node.getAttribute(attr) ?? ""));
+  const lists = keys("data-stagger");
+  const dialogs = keys("data-dialog");
+  const switches = new Map(Array.from(host.querySelectorAll<HTMLElement>(".tg"), (s) => [s.getAttribute("aria-label") ?? "", s.getAttribute("aria-checked")]));
+  host.innerHTML = html;
+  for (const [attr, seen] of [["data-stagger", lists], ["data-dialog", dialogs]] as const) {
+    host.querySelectorAll<HTMLElement>(`[${attr}]`).forEach((node) => {
+      if (seen.has(node.getAttribute(attr) ?? "")) node.classList.add("again");
+    });
+  }
+  host.querySelectorAll<HTMLElement>(".tg").forEach((s) => {
+    const before = switches.get(s.getAttribute("aria-label") ?? "");
+    if (before === undefined || before === s.getAttribute("aria-checked")) return;
+    s.classList.add("flip");
+    s.closest(".row, .cs-item")?.classList.add("tinted");
+  });
+}
+
 // ---------- menu ----------
 
 /** The menu or panel that is open, the button that opened it, and what it does with keys of its own. */
-let menu: { el: HTMLElement; anchor: HTMLElement; onKey?: (e: KeyboardEvent) => boolean } | null = null;
+interface MenuState {
+  el: HTMLElement; anchor: HTMLElement; rect: DOMRect; stopOutside(): void;
+  onKey?: (e: KeyboardEvent) => boolean; onClose?: () => void;
+  parent: MenuState | null; placement?: "beside" | "start" | "pointer"; anchorRect?: () => DOMRect;
+  /** Set when a right click asked for the menu: it stands at that point rather than under its button. */
+  at?: PointerAt;
+}
+let menu: MenuState | null = null;
 let menuListening = false;
 
+/** Where a right click asked for the menu of a ⋯ button; `until` is when that stops holding (see `pressOverflow`). */
+interface PointerAt { x: number; y: number; until: number }
+const pointedAt = new WeakMap<HTMLElement, PointerAt>();
+/** How long a press waits for a menu that opens after something is read (a message's), and for one that replaces another. */
+const POINTED_GRACE_MS = 1500;
+
+/**
+ * Presses a ⋯ button for a right click (context-menu.ts). Its own handler runs as it always does. With a point, the menu it
+ * opens, and any that replaces it from the same button (「移到分組」 after the first), stands there instead of under the
+ * button; a left click on the button afterwards places the menu under it again. Any menu that is open closes first, unless
+ * the ⋯ is in it: it would otherwise take the press for a click outside it.
+ */
+export function pressOverflow(button: HTMLElement, at?: { x: number; y: number }): void {
+  if (!menu?.el.contains(button)) closeMenu();
+  if (at) pointedAt.set(button, { ...at, until: performance.now() + POINTED_GRACE_MS });
+  else pointedAt.delete(button);
+  button.click();
+}
+
 export function closeMenu(): void {
+  while (menu) closeMenuLevel();
+}
+
+function closeMenuLevel(): void {
   if (!menu) return;
-  menu.anchor.setAttribute("aria-expanded", "false");
-  menu.anchor.removeAttribute("aria-controls");
-  menu.el.remove();
-  menu = null;
+  const closing = menu;
+  menu = closing.parent;
+  closing.stopOutside();
+  closing.anchor.setAttribute("aria-expanded", "false");
+  closing.anchor.removeAttribute("aria-controls");
+  closing.el.remove();
+  if (closing.at) closing.at.until = performance.now() + POINTED_GRACE_MS;
+  closing.onClose?.();
 }
 
 /** The buttons of the open menu that can be reached with the arrow keys. */
@@ -186,28 +398,29 @@ const menuItems = (el: HTMLElement): HTMLButtonElement[] =>
 function listenForMenuEvents(): void {
   if (menuListening) return;
   menuListening = true;
-  document.addEventListener(
-    "pointerdown",
-    (e) => {
-      // A click on the button that opened the menu closes it (the page's click handler toggles).
-      if (menu && e.target instanceof Node && !menu.el.contains(e.target) && !menu.anchor.contains(e.target)) closeMenu();
-    },
-    true,
-  );
   document.addEventListener("keydown", (e) => {
     if (!menu) return;
     if (menu.onKey?.(e)) {
       e.preventDefault();
       return;
     }
+    if (menu.parent && (e.key === "Escape" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      const anchor = menu.anchor;
+      closeMenuLevel(); anchor.focus({ preventScroll: true });
+      return;
+    }
     if (e.key === "Escape" || e.key === "Tab") {
       if (e.key === "Escape") e.preventDefault();
-      const anchor = menu.anchor;
+      const anchor = menuRootAnchor() ?? menu.anchor;
       closeMenu();
       anchor.focus({ preventScroll: true });
       return;
     }
     const items = menuItems(menu.el);
+    if (e.key === "ArrowRight" && (document.activeElement as HTMLElement | null)?.getAttribute("aria-haspopup") === "menu") {
+      e.preventDefault(); (document.activeElement as HTMLElement).click(); return;
+    }
     if (items.length === 0) return;
     const i = items.indexOf(document.activeElement as HTMLButtonElement);
     if (e.key === "ArrowDown") {
@@ -226,12 +439,18 @@ function listenForMenuEvents(): void {
   });
   window.addEventListener("blur", closeMenu);
   window.addEventListener("resize", closeMenu);
+  // A click of the person's own on a ⋯ puts its menu under it again, however an earlier right click placed it.
+  document.addEventListener("click", (e) => {
+    if (e.isTrusted && e.target instanceof Element) { const more = e.target.closest<HTMLElement>("[data-overflow]"); if (more) pointedAt.delete(more); }
+  }, true);
   // Scrolling inside the menu (a long list) leaves it alone; scrolling the page carries it along
-  // with its button, and closes it once the button is out of sight.
+  // with its button, and closes it once the button is out of sight. A menu at the pointer has no
+  // button to follow: it closes.
   document.addEventListener(
     "scroll",
     (e) => {
       if (!menu || (e.target instanceof Node && menu.el.contains(e.target))) return;
+      if (menu.at) { closeMenu(); return; }
       const r = menu.anchor.getBoundingClientRect();
       if (!menu.anchor.isConnected || r.bottom < 0 || r.top > innerHeight) closeMenu();
       else placeMenu();
@@ -261,11 +480,18 @@ export function openMenuOnArrow(e: KeyboardEvent): boolean {
   return true;
 }
 
-/** Keep anchored menus inside the usable viewport, below any custom window controls. */
+const pointRect = (at: PointerAt): DOMRect => new DOMRect(at.x, at.y, 0, 0);
+
+/**
+ * Keep anchored menus inside the usable viewport, below any custom window controls. A menu ends at its
+ * anchor's right edge by default; `start` (a text completion) begins at its left edge and prefers the space above;
+ * `pointer` (a right click, whose anchor is a point) begins at the point and prefers the space below.
+ */
 export function menuPlacement(
-  anchor: Pick<DOMRect, "top" | "bottom" | "right">,
+  anchor: Pick<DOMRect, "top" | "bottom" | "right"> & Partial<Pick<DOMRect, "left">>,
   size: { width: number; height: number },
   viewport: { width: number; height: number; headerBottom: number },
+  alignment: "end" | "start" | "pointer" = "end",
 ): { left: number; top: number; maxHeight: number } {
   const upper = viewport.headerBottom + 8;
   const lower = Math.max(upper, viewport.height - 8);
@@ -273,32 +499,55 @@ export function menuPlacement(
   const aboveBottom = Math.min(lower, Math.max(upper, anchor.top - 4));
   const below = lower - belowTop;
   const above = aboveBottom - upper;
-  const useBelow = size.height <= below || (size.height > above && below >= above);
+  const useBelow = alignment === "start"
+    ? !(size.height <= above || (size.height > below && above >= below))
+    : size.height <= below || (size.height > above && below >= above);
   const maxHeight = useBelow ? below : above;
   return {
-    left: Math.max(8, Math.min(anchor.right - size.width, viewport.width - size.width - 8)),
+    left: Math.max(8, Math.min(alignment === "end" ? anchor.right - size.width : anchor.left ?? anchor.right, viewport.width - size.width - 8)),
     top: useBelow ? belowTop : aboveBottom - Math.min(size.height, maxHeight),
     maxHeight,
   };
 }
 
-/** Prefer below the trigger, then above it; long lists scroll on the roomier side. */
+/** A nested menu follows its row, preferring the right side while staying within the viewport. */
+export function submenuPlacement(
+  anchor: Pick<DOMRect, "top" | "left" | "right">,
+  size: { width: number; height: number },
+  viewport: { width: number; height: number; headerBottom: number },
+): { left: number; top: number; maxHeight: number } {
+  const upper = viewport.headerBottom + 8, lower = Math.max(upper, viewport.height - 8);
+  const right = anchor.right + 4;
+  return {
+    left: Math.max(8, Math.min(right + size.width <= viewport.width - 8 ? right : anchor.left - size.width - 4, viewport.width - size.width - 8)),
+    top: Math.max(upper, Math.min(anchor.top, lower - Math.min(size.height, lower - upper))),
+    maxHeight: lower - upper,
+  };
+}
+
+/** Dropdowns prefer below; start-aligned text completions prefer above their character. */
 export function placeMenu(): void {
   if (!menu) return;
   const { el, anchor } = menu;
-  const r = anchor.getBoundingClientRect();
+  const r = anchor.isConnected ? menu.anchorRect?.() ?? anchor.getBoundingClientRect() : menu.rect;
   const headerBottom = document.getElementById("window-chrome")?.getBoundingClientRect().bottom ?? 0;
+  // A dropdown's menu is at least as wide as the dropdown itself (owner, 2026-10-24).
+  if (anchor.classList?.contains("sel")) el.style.minWidth = `${Math.round(r.width)}px`;
   // Release the previous side's height limit before measuring a menu after scrolling or redraw.
   el.style.maxHeight = `${Math.max(0, innerHeight - headerBottom - 16)}px`;
-  const placement = menuPlacement(r, { width: el.offsetWidth, height: el.offsetHeight }, {
-    width: innerWidth, height: innerHeight, headerBottom,
-  });
+  const size = { width: el.offsetWidth, height: el.offsetHeight }, viewport = { width: innerWidth, height: innerHeight, headerBottom };
+  const placement = menu.placement === "beside" ? submenuPlacement(r, size, viewport) : menuPlacement(r, size, viewport, menu.placement === "start" || menu.placement === "pointer" ? menu.placement : "end");
   el.style.maxHeight = `${placement.maxHeight}px`;
   el.style.left = `${placement.left}px`;
   el.style.top = `${placement.top}px`;
 }
 
 export interface PopoverOptions {
+  /** Beside preserves its parent menu; start aligns text completions above their character. */
+  placement?: "beside" | "start";
+  /** A live text/caret rectangle; the field remains the dismissal and focus anchor. */
+  anchorRect?: () => DOMRect;
+  onClose?: () => void;
   /** The classes of the panel, `menu` among them. */
   className: string;
   role: string;
@@ -313,30 +562,45 @@ export interface PopoverOptions {
  */
 export function openPopover(anchor: HTMLElement, html: string, o: PopoverOptions): HTMLElement {
   listenForMenuEvents();
-  closeMenu();
+  // A panel that places itself (a caret, a submenu) keeps its own place; any other from a button that a right click pressed stands where it was.
+  const pointed = o.anchorRect || o.placement === "beside" ? undefined : pointedAt.get(anchor);
+  const at = pointed && pointed.until > performance.now() ? pointed : undefined;
+  const rect = at ? pointRect(at) : o.anchorRect?.() ?? anchor.getBoundingClientRect();
+  const parent = o.placement === "beside" && menu?.el.contains(anchor) ? menu : null;
+  if (!parent) closeMenu();
   const el = document.createElement("div");
   el.className = o.className;
-  el.id = "app-popover";
+  el.id = parent ? "app-submenu" : "app-popover";
   el.tabIndex = -1;
   el.setAttribute("role", o.role);
   if (o.label) el.setAttribute("aria-label", o.label);
   el.innerHTML = html;
   document.body.append(el);
-  menu = { el, anchor, onKey: o.onKey };
+  if (at) at.until = Infinity;
+  menu = { el, anchor, rect, parent, placement: at ? "pointer" : o.placement, anchorRect: at ? () => pointRect(at) : o.anchorRect, at,
+    stopOutside: registerDismissal(el, () => { const root = menuRootAnchor(); closeMenu(); root?.focus({ preventScroll: true }); }, undefined, anchor), onKey: o.onKey, onClose: o.onClose };
   anchor.setAttribute("aria-expanded", "true");
   anchor.setAttribute("aria-controls", el.id);
   placeMenu();
   return el;
 }
 
+function menuRootAnchor(): HTMLElement | undefined {
+  let root = menu;
+  while (root?.parent) root = root.parent;
+  return root?.anchor;
+}
+
 /** An item at the foot of a menu that does something rather than choose (「重新搜尋麥克風」). */
 export interface MenuAction {
   label: string;
+  desc?: string;
   icon?: IconName;
+  submenu?: boolean;
   /** What it does is under way: the item stays where it is but does nothing until it is done. */
   busy?: boolean;
   /** Runs when the item is chosen. The menu stays open, so that what the action finds shows in it. */
-  run(): void;
+  run(anchor: HTMLElement): void;
 }
 
 /**
@@ -351,12 +615,13 @@ export function openMenu(
   onPick: (value: string) => void,
   head?: string,
   actions: readonly MenuAction[] = [],
+  placement?: Pick<PopoverOptions, "placement" | "anchorRect"> & { selectionIndicator?: boolean },
 ): void {
   const active = document.activeElement as HTMLElement | null;
   const again = menu && (menu.anchor === anchor || (!menu.anchor.isConnected && menu.anchor.dataset.k === anchor.dataset.k)) &&
     active && menu.el.contains(active) ? active : null;
   const detailed = options.some((o) => o.detail);
-  const described = options.some((o) => o.desc);
+  const described = options.some((o) => o.desc) || actions.some(a => a.desc);
   const html =
     (head ? `<div class="menu-head" aria-hidden="true">${esc(head)}</div>` : "") +
     options
@@ -364,7 +629,8 @@ export function openMenu(
         (o) =>
           `<button type="button" role="menuitemradio" tabindex="-1" data-value="${esc(o.value)}" aria-checked="${o.value === current}"` +
           `${o.title ? ` title="${esc(o.title)}"` : ""}>` +
-          `<span class="ck">${o.value === current ? CHECK : ""}</span>` +
+          (placement?.selectionIndicator === false ? "" : `<span class="ck">${o.value === current ? CHECK : ""}</span>`) +
+          (o.lead ? `<span class="mlead" aria-hidden="true">${o.lead}</span>` : "") +
           (o.desc
             ? `<span class="mtd"><span class="mt">${esc(o.label)}</span><span class="mdesc">${esc(o.desc)}</span></span>`
             : `<span class="mt">${esc(o.label)}</span>`) +
@@ -373,16 +639,17 @@ export function openMenu(
           `</button>`,
       )
       .join("") +
-    (actions.length ? `<div class="menu-sep" role="separator"></div>` : "") +
+    (options.length && actions.length ? `<div class="menu-sep" role="separator"></div>` : "") +
     actions
       .map(
         (a, i) =>
-          `<button type="button" role="menuitem" tabindex="-1" class="menu-action" data-action="${i}"${a.busy ? ' aria-disabled="true"' : ""}>` +
-          `<span class="ck">${a.icon ? ico(a.icon) : ""}</span><span class="mt">${esc(a.label)}</span></button>`,
+          `<button type="button" role="menuitem" tabindex="-1" class="menu-action" data-action="${i}"${a.busy ? ' aria-disabled="true"' : ""}${a.submenu ? ' aria-haspopup="menu" aria-expanded="false"' : ""}>` +
+          `<span class="ck">${a.icon ? ico(a.icon) : ""}</span><span class="mtd"><span class="mt">${esc(a.label)}</span>${a.desc ? `<span class="mdesc">${esc(a.desc)}</span>` : ""}</span>${a.submenu ? ico("right") : ""}</button>`,
       )
       .join("");
   const el = openPopover(anchor, html, {
-    className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}`,
+    className: `menu${detailed ? " detailed" : ""}${described ? " described" : ""}${placement?.placement === "beside" ? " menu-submenu" : ""}`,
+    ...placement,
     role: "menu",
     label: anchor.getAttribute("aria-label") ?? undefined,
   });
@@ -396,11 +663,12 @@ export function openMenu(
     if (!pick) return;
     if (pick.dataset.action !== undefined) {
       const action = actions[Number(pick.dataset.action)];
-      if (action && !action.busy) action.run();
+      if (action && !action.busy) action.run(pick);
       return;
     }
+    const root = menuRootAnchor();
     closeMenu();
-    anchor.focus();
+    (root ?? anchor).focus();
     onPick(pick.dataset.value ?? "");
   });
   // The item that had the focus before the menu was drawn again keeps it: a choice by its value, an
@@ -410,8 +678,9 @@ export function openMenu(
   (remembered ?? el.querySelector<HTMLElement>('[aria-checked="true"]') ?? el.querySelector<HTMLElement>("button") ?? el).focus();
 }
 
-/** The check mark of a chosen item: drawn, so that it is the same in every font. */
-export const CHECK = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.6 8.4 6.6 11.2 12.4 4.8"/></svg>`;
+/** The check mark of a chosen item: drawn, so that it is the same in every font; the `check` of ICON,
+ * drawn at 16 px by `.menu .ck svg`. */
+export const CHECK = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="${ICON.check}"/></svg>`;
 
 // ---------- toasts ----------
 
@@ -444,7 +713,11 @@ class Toaster implements Notifier {
     return this.host;
   }
 
-  /** Shows `message`. With `undo` the toast stays until `hide()` and has a 「復原」 button; without, it goes by itself. */
+  /**
+   * Shows `message`. With `undo` the toast stays until `hide()` (the 10 seconds of `Undoable`) and has
+   * a 「復原」 button; without, it goes by itself. Either way a thin bar along its foot counts down the
+   * time it has left (styles.css), so that its going is no surprise.
+   */
   show(message: string, undo?: () => void): void {
     const toast = document.createElement("div");
     toast.className = "toast";
@@ -454,6 +727,7 @@ class Toaster implements Notifier {
     this.messages.set(toast, translatedMessage(message));
     text.textContent = message;
     toast.append(text);
+    const ms = undo ? UNDO_MS : infoMs(message);
     if (undo) {
       if (this.undoToast) this.messages.delete(this.undoToast);
       this.undoToast?.remove();
@@ -461,8 +735,13 @@ class Toaster implements Notifier {
       toast.insertAdjacentHTML("beforeend", btn(t("ui.001"), "sm"));
       toast.querySelector("button")?.addEventListener("click", undo);
     } else {
-      setTimeout(() => { toast.remove(); this.messages.delete(toast); }, infoMs(message));
+      setTimeout(() => { toast.remove(); this.messages.delete(toast); }, ms);
     }
+    const bar = document.createElement("i");
+    bar.className = "toast-bar";
+    bar.setAttribute("aria-hidden", "true");
+    bar.style.animationDuration = `${ms}ms`;
+    toast.append(bar);
     this.container().append(toast);
   }
 

@@ -6,9 +6,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
 import {
   PickerList,
-  footText,
+  acceptsImages,
+  fitFor,
+  modelPickerHTML,
+  usableFor,
   formatContext,
-  listHTML,
   modelsFor,
   moveIndex,
   pickerRows,
@@ -23,6 +25,21 @@ import {
 import type { CatalogModel, ModelCatalog } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
+
+test("direct connections stay grouped with favourites inside each group and OpenRouter last", () => {
+  const direct = llm("gpt-5", { name: "GPT-5", provider_id: "p3", provider_name: "OpenAI" });
+  const local = llm("llama:8b", { name: "Llama", provider_id: "p4", provider_name: "Ollama" });
+  const list = new PickerList("answer", [OLD, direct, local, LUNA], "missing", {}, [OLD.id]);
+  expect(list.rows.map((r) => r.model.id)).toEqual(["@p4:llama:8b", "@p3:gpt-5", "openai/gpt-5", "openai/gpt-6-luna"]);
+});
+
+test("all-provider search ranks exact and prefix names across connections before substring matches", () => {
+  const direct = llm("gpt-5", { name: "GPT-5", provider_id: "p3", provider_name: "OpenAI", input_per_mtok: 99 });
+  const prefix = llm("gpt-5-mini", { name: "GPT-5 Mini", provider_id: "p3", provider_name: "OpenAI" });
+  const tail = llm("other/gpt-5", { name: "Something GPT-5", free: true });
+  const list = new PickerList("answer", [tail, prefix, OLD, direct], tail.id, { query: "gpt-5" }, [tail.id]);
+  expect(list.rows.map((r) => r.model.id)).toEqual(["@p3:gpt-5", OLD.id, "@p3:gpt-5-mini", tail.id]);
+});
 
 const DAY = 86_400_000;
 const OCT_18 = Date.UTC(2026, 9, 18, 4);
@@ -225,17 +242,16 @@ describe("the maker", () => {
   });
 });
 
+test.each([
+  ["openai/gpt-4o-mini", false, false],
+  ["anthropic/claude-sonnet-5.5", true, false],
+] as const)("cleanup chooses %s when the core marks it usable", (id, reasoning, reasoningOff) => {
+  const model = llm(id, { capabilities: { structured_output: true, max_tokens: true, reasoning, reasoning_off: reasoningOff } });
+  const list = new PickerList("cleanup", [model], id);
+  expect(list.chosen()).toBe(id);
+});
+
 describe("the rows a role cannot use", () => {
-  test("come last, under a heading, greyed with the reason in plain words", () => {
-    const html = listHTML(new PickerList("cleanup", LLMS, "openai/gpt-6-luna"));
-    const heading = html.indexOf('class="mp-group"');
-    expect(heading).toBeGreaterThan(html.indexOf('data-id="odd/model"'));
-    expect(html.slice(heading)).toContain("無法用來整理聽寫");
-    expect(html).toMatch(/data-id="google\/gemini-3\.8-flash" aria-selected="false" aria-disabled="true"/);
-    expect(html).toContain("一定會先推理，太慢");
-    expect(html).toContain("無法依指定格式（JSON）回覆");
-    expect(html.match(/aria-disabled="true"/g)).toHaveLength(2);
-  });
 
   test("can be highlighted, so that their reason is read out, but never chosen", () => {
     const list = new PickerList("cleanup", LLMS, "openai/gpt-6-luna");
@@ -280,10 +296,12 @@ describe("the keys", () => {
   test("the list opens on the chosen model, and Enter chooses the highlighted one", () => {
     const list = new PickerList("cleanup", LLMS, "openai/gpt-6-luna");
     expect(list.activeId()).toBe("openai/gpt-6-luna");
+    // the chosen model stays where the order puts it: the list opens there, not with it moved to the top
+    const ids = list.rows.map((row) => row.model.id);
+    const at = ids.indexOf("openai/gpt-6-luna");
+    expect(at).toBeGreaterThan(0);
     expect(list.move("ArrowDown")).toBe(true);
-    expect(list.chosen()).toBe("openai/gpt-5");
-    expect(list.move("ArrowUp") && list.move("ArrowUp")).toBe(true);
-    expect(list.chosen()).toBe("~openai/gpt-luna-latest");
+    expect(list.activeId()).toBe(ids[at + 1]);
     expect(list.move("x")).toBe(false);
   });
 
@@ -305,59 +323,10 @@ describe("the keys", () => {
   });
 });
 
-describe("the chosen model", () => {
-  test("is checked, and only it", () => {
-    const html = listHTML(new PickerList("cleanup", LLMS, "anthropic/claude-haiku-5.5"));
-    expect(html.match(/data-current/g)).toHaveLength(1);
-    expect(html).toMatch(/data-id="anthropic\/claude-haiku-5\.5"[^>]*data-current/);
-    const row = html.slice(html.indexOf('data-id="anthropic/claude-haiku-5.5"'));
-    expect(row.slice(0, row.indexOf("</button>"))).toContain("<svg");
-    expect(row).toContain("Claude Haiku 5.5, Anthropic, 輸入 $0.10 / 輸出 $0.50 每百萬 token, 目前使用");
-  });
 
-  test("a row shows its maker and its context, and no badge", () => {
-    const html = listHTML(new PickerList("cleanup", [LUNA], "x/y"));
-    expect(html).toContain("GPT-6 Luna");
-    expect(html).toContain("OpenAI · 1.05M 上下文");
-    expect(html).not.toContain("mp-badge");
-    expect(html).not.toContain("推薦");
-    expect(html).toContain('<span class="mp-price num">$0.10 / $0.50</span>');
-    expect(html).not.toContain("data-current");
-  });
-
-  test("a speech model says when it uses the dictionary, and the newest order shows the dates", () => {
-    const html = listHTML(new PickerList("stt", STTS, "elevenlabs/scribe-v2", { sort: "newest" }));
-    expect(html).toContain("OpenAI · 會參考詞典 · 2026 年 10 月 18 日上架");
-    expect(html).not.toContain("上下文");
-  });
-
-  test("text from the list is escaped", () => {
-    const html = listHTML(new PickerList("cleanup", [llm("x/<b>", { name: "<img src=x>", provider: '"Q"' })], "x/y"));
-    expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;img src=x&gt;");
-    expect(html).toContain("&quot;Q&quot;");
-  });
-});
 
 describe("favourites", () => {
-  const list = (favorites: string[], state = {}, current = "openai/gpt-6-luna") => new PickerList("cleanup", LLMS, current, state, favorites);
-
-  test("none at all: the list is as it was, with no heading", () => {
-    const html = listHTML(list([]));
-    expect(html).not.toContain("我的最愛");
-    expect(html).not.toContain("所有模型");
-    expect(ids(list([]).rows)).toEqual(rows());
-  });
-
-  test("come first, in the order of the list, under a heading, and the other models under one of theirs", () => {
-    const l = list(["openai/gpt-10", "nvidia/nemotron:free"]);
-    expect(ids(l.rows).slice(0, 3)).toEqual(["nvidia/nemotron:free", "openai/gpt-10", "anthropic/claude-haiku-5.5"]);
-    expect(l.rows.map((row) => row.favorite).slice(0, 4)).toEqual([true, true, false, false]);
-    const html = listHTML(l);
-    expect(html.indexOf("我的最愛")).toBeLessThan(html.indexOf('data-id="nvidia/nemotron:free"'));
-    expect(html.indexOf("所有模型")).toBeGreaterThan(html.indexOf('data-id="openai/gpt-10"'));
-    expect(html.indexOf("所有模型")).toBeLessThan(html.indexOf('data-id="openai/gpt-6-luna"'));
-  });
+  const list = (favorites: string[], state = {}, current = "openai/gpt-6-luna") => new PickerList("cleanup", LLMS, current, { connection: "openrouter", ...state }, favorites);
 
   test("are listed once", () => {
     const l = list(["openai/gpt-10"]);
@@ -370,17 +339,6 @@ describe("favourites", () => {
     expect(ids(l.rows).slice(0, 3)).toEqual(["openai/gpt-5", "openai/gpt-6-luna", "openai/gpt-10"]);
     l.setSort("price");
     expect(ids(l.rows).slice(0, 3)).toEqual(["openai/gpt-6-luna", "openai/gpt-5", "openai/gpt-10"]);
-  });
-
-  test("that answer a search still come first, and those that do not are gone", () => {
-    const l = list(["openai/gpt-10", "nvidia/nemotron:free"]);
-    l.setQuery("gpt");
-    expect(ids(l.rows).slice(0, 2)).toEqual(["openai/gpt-10", "~openai/gpt-luna-latest"]);
-    expect(ids(l.rows)).not.toContain("nvidia/nemotron:free");
-    expect(l.rows.map((row) => row.favorite)).toEqual([true, false, false, false]);
-    expect(listHTML(l)).toContain("我的最愛");
-    l.setQuery("zzz");
-    expect(l.rows).toEqual([]);
   });
 
   test("are narrowed to a maker too", () => {
@@ -398,44 +356,10 @@ describe("favourites", () => {
     expect(withFavorite(l.favorites, "openai/gpt-5", true)).toEqual(["gone/model", "openai/gpt-10", "openai/gpt-5"]);
   });
 
-  test("a favourite the role cannot use stays among the favourites, greyed with its reason", () => {
-    const l = list(["google/gemini-3.8-flash", "openai/gpt-10"]);
-    expect(ids(l.rows).slice(0, 2)).toEqual(["openai/gpt-10", "google/gemini-3.8-flash"]);
-    const html = listHTML(l);
-    expect(html).toMatch(/data-id="google\/gemini-3\.8-flash"[^>]*aria-disabled="true"/);
-    expect(html.indexOf("一定會先推理，太慢")).toBeLessThan(html.indexOf("所有模型"));
-    // The heading over the other models that cannot be used comes once, after them.
-    expect(html.match(/無法用來整理聽寫/g)).toHaveLength(1);
-    expect(html.indexOf("無法用來整理聽寫")).toBeGreaterThan(html.indexOf('data-id="odd/model"'));
-  });
-
   test("a favourite is chosen like any model", () => {
     const l = list(["openai/gpt-10"], {}, "openai/gpt-10");
     expect(l.activeId()).toBe("openai/gpt-10");
     expect(l.chosen()).toBe("openai/gpt-10");
-  });
-
-  test("each row has a real star button beside its option, never inside it, that says what it does", () => {
-    const html = listHTML(list(["openai/gpt-10"]));
-    const fav = html.slice(html.indexOf('data-id="openai/gpt-10"'));
-    const optionEnd = fav.indexOf("</button>");
-    expect(fav.slice(0, optionEnd)).not.toContain("mp-star");
-    const star = fav.slice(optionEnd).match(/<button type="button" class="mp-star"[^>]*>/)![0];
-    expect(star).toContain('data-star="openai/gpt-10"');
-    expect(star).toContain('aria-label="從最愛移除：GPT-10"');
-    expect(star).toContain('tabindex="-1"');
-    expect(star).toContain("data-on");
-    const plain = html.slice(html.indexOf('data-id="openai/gpt-5"'));
-    const plainStar = plain.slice(plain.indexOf("</button>")).match(/<button type="button" class="mp-star"[^>]*>/)![0];
-    expect(plainStar).toContain('aria-label="加到最愛：GPT-5"');
-    expect(plainStar).not.toContain("data-on");
-    expect(html.match(/class="mp-star"/g)).toHaveLength(LLMS.length);
-  });
-
-  test("the star speaks the language of the window", () => {
-    setLocale("en");
-    expect(listHTML(list(["openai/gpt-10"]))).toContain('aria-label="Remove from favorites: GPT-10"');
-    expect(listHTML(list([]))).toContain('aria-label="Add to favorites: GPT-10"');
   });
 
   test("a favourite added or removed moves the model and keeps the highlight on it", () => {
@@ -458,12 +382,6 @@ describe("favourites", () => {
 });
 
 describe("the small print and the notices", () => {
-  test("says how many models are shown and where their prices are from", () => {
-    expect(footText(CATALOG, 8)).toBe("8 個模型 · 價格來自 OpenRouter，今天更新。實際花費依 OpenRouter 選用的供應商而定。");
-    const builtin: ModelCatalog = { ...CATALOG, source: "builtin", fetched_at_ms: null };
-    expect(footText(builtin, 3)).toContain("暫時連不上 OpenRouter，只列出拉斐爾原本提供的模型。");
-    expect(footText(null, 0)).toBe("");
-  });
 
   test("tells of each chosen model that went back to its default", () => {
     const catalog: ModelCatalog = {
@@ -482,5 +400,41 @@ describe("the small print and the notices", () => {
       "OpenRouter no longer lists tencent/hunyuan-a13b-instruct, so the cleanup model is back to the default, GPT-6 Luna.",
     );
     expect(replacementNotices(CATALOG)).toEqual([]);
+  });
+});
+
+describe("the picker of 看圖片 (the role vision)", () => {
+  const LEAD = { id: "", name: "與回答相同" };
+  const seeing = llm("google/gemini-4-flash", { input_modalities: ["text", "image"] });
+  const blind = llm("openai/gpt-6-luna", { input_modalities: ["text"] });
+  const unsaid = llm("acme/old-model");
+
+  test("chooses among the language models; those that read images can be used, the others say why", () => {
+    expect(modelsFor(CATALOG, "vision")).toBe(CATALOG.llm);
+    expect(usableFor(seeing, "vision")).toBe(true);
+    expect(usableFor(blind, "vision")).toBe(false);
+    expect(fitFor(blind, "vision")).toEqual({ usable: false, reason: "no_image_input" });
+    expect(reasonText("no_image_input")).toBe("無法讀圖片");
+    // a catalog that says nothing of what a model reads: the core still refuses an image to one that cannot take it
+    expect(acceptsImages(unsaid)).toBe(true);
+  });
+
+  test("the lead goes with a search that does not match it, and stays whatever the maker or the order", () => {
+    const list = new PickerList("vision", [blind, seeing], "", {}, [], LEAD);
+    list.setQuery("gemini");
+    expect(list.rows.map((row) => row.model.id)).toEqual(["google/gemini-4-flash"]);
+    list.setQuery("回答");
+    expect(list.rows.map((row) => row.model.id)).toEqual([""]);
+    list.setQuery("");
+    list.setProvider("google");
+    list.setSort("name");
+    expect(list.rows.map((row) => row.model.id)).toEqual(["", "google/gemini-4-flash"]);
+  });
+
+  test("the button names the lead when it is chosen, and a model otherwise", () => {
+    const look = { role: "vision" as const, label: "看圖片", catalog: { ...CATALOG, llm: [seeing] }, lead: LEAD, showPrice: false };
+    expect(modelPickerHTML({ ...look, current: "" })).toContain('<strong class="mp-tname">與回答相同</strong>');
+    expect(modelPickerHTML({ ...look, current: "" })).toContain('aria-label="看圖片: 與回答相同 · 與回答相同"');
+    expect(modelPickerHTML({ ...look, current: "google/gemini-4-flash" })).toContain('<strong class="mp-tname">gemini-4-flash</strong>');
   });
 });

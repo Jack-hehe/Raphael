@@ -1,10 +1,10 @@
 """What the assistant knows of the plugins: the tools it may offer a model, and the door to call one.
 
 The plugins themselves (`raphael_core.integrations`) are MCP servers the user connected, and each
-of their tools has a tier only because the user gave it one. This module is the assistant's side of
-that: a `PluginHub` says which tools may be offered to a model at all (those with a tier, on a
-plugin that is on, that are still the tool the user gave the tier to), what tier a tool has now,
-and calls one. The assistant never reaches a plugin any other way.
+of their tools is on until the user turns it off. This module is the assistant's side of that: a
+`PluginHub` says which tools may be offered to a model at all (those that are on, of a plugin that
+is on: they have a tier, the one that runs at once), what tier a tool has now, and calls one. The
+assistant never reaches a plugin any other way.
 
 How a model gets to the tools. For a request that may need them, one call to the language model
 sees the request, the last few turns, and only the tools that may be offered, and answers with the
@@ -32,15 +32,20 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..brain.catalog import LLM, TOOL_CALLING, CatalogEntry, find
-from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterClient, OpenRouterError
+from ..brain.openrouter import CLEANUP_FALLBACKS, OpenRouterError
+from ..brain.providers.base import ModelProvider
 from ..brain.pricing import builtin_catalog
+from ..memory.conversation import turn_text
 from .failure import AgentFailure, failure_kind
 from .history import Turn
 from .ledger import Ledger
 from .policy import PLUGIN_PREFIX, Tier
+
+if TYPE_CHECKING:
+    from ..integrations.pool import McpPool
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +100,7 @@ class PluginHub(Protocol):
         ...
 
     def tier_of(self, key: str) -> Tier | None:
-        """The tier the user gave the tool now, or None when it has none (or is not usable)."""
+        """The tier the tool has now, or None when it has none: it is off, or its plugin is."""
         ...
 
     async def call(
@@ -105,10 +110,13 @@ class PluginHub(Protocol):
         *,
         approver: str,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         """Call a tool and write the audit. `approver` is "auto" for a call that needs no yes, and
         "user" for one the user said yes to; a call at T2 or T3 is refused without "user".
-        `task_id` is the background task that makes the call, if one does (the audit says so)."""
+        `task_id` is the background task that makes the call, if one does (the audit says so).
+        `pool` keeps the connection to the tool's server open for the next call (none: one is made
+        for this call alone)."""
         ...
 
     def record_unrun(self, key: str, *, outcome: str, task_id: int | None = None) -> None:
@@ -215,16 +223,17 @@ def resolve_calls(offer: Offer, requested: list[tuple[str, Any]]) -> list[Planne
     return planned
 
 
-def preview(arguments: Mapping[str, Any]) -> str:
+def preview(arguments: Mapping[str, Any], limit: int = PREVIEW_CHARS) -> str:
     """The arguments of a call as a short line for the question that asks whether to run it: the
-    values, one line, cut. It goes on the overlay and nowhere else."""
+    values, one line, cut (to `limit` characters). It goes on the overlay and in the card of the
+    chat that was asked, and nowhere else."""
     parts = []
     for name, value in arguments.items():
         shown = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
         parts.append(f"{name}: {shown}")
     line = " ".join(" ".join(parts).split())
     line = "".join(char for char in line if char.isprintable())
-    return line if len(line) <= PREVIEW_CHARS else line[: PREVIEW_CHARS - 1] + "…"
+    return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
 # --- the call that picks the tools ---------------------------------------------------------------
@@ -244,6 +253,11 @@ request needs.
 - Call a tool only when the request needs something from the user's own connected services, or \
 asks to do something in them.
 - Raphael has its own weather, clock and web search: never call a tool for those alone.
+- The tools ask_member and create_member, when offered, reach the user's own team of assistants: \
+call ask_member when the request mentions another member by name or refers to something said or \
+taught in that member's thread, even without an explicit request to ask them. Use the member's \
+answer instead of claiming the conversation cannot be accessed. Call \
+create_member only when the user asks for a new member.
 - Call at most three tools, and fill in arguments only with what the request or the conversation \
 says. Never invent a value, a name or an address.
 - Leave optional parameters out unless the request needs them. Never invent an id, a cursor or a \
@@ -257,7 +271,7 @@ def build_plan_message(question: str, context: Sequence[Turn]) -> str:
     which mark it as the user's words."""
     parts = []
     if context:
-        lines = [f"User: {turn.question}\nRaphael: {turn.text or turn.prefix}" for turn in context]
+        lines = [turn_text(turn, detail=False) for turn in context]
         parts.append("Conversation so far (oldest first):\n" + "\n".join(lines))
     parts.append(f"<question>\n{question}\n</question>")
     return "\n\n".join(parts)
@@ -321,7 +335,7 @@ class Planner:
     """Asks the language model which of the offered tools a request needs. `client` is the
     OpenRouter client."""
 
-    def __init__(self, client: OpenRouterClient, *, timeout_s: float = PLAN_TIMEOUT_S) -> None:
+    def __init__(self, client: ModelProvider, *, timeout_s: float = PLAN_TIMEOUT_S) -> None:
         self._client = client
         self._timeout_s = timeout_s
 
@@ -353,15 +367,16 @@ class Planner:
             raise AgentFailure(failure_kind(error)) from None
         except TimeoutError:
             logger.warning("The tool-picking model timed out")
-            raise AgentFailure("offline") from None
+            raise AgentFailure("timeout") from None
         except Exception as exc:
             logger.warning("The tool-picking model failed unexpectedly: %s", type(exc).__name__)
-            raise AgentFailure("error") from None
+            raise AgentFailure(failure_kind(exc)) from None
         ledger.add(
             model=plan.model,
             cost_usd=plan.cost_usd,
             prompt_tokens=plan.prompt_tokens,
             completion_tokens=plan.completion_tokens,
+            ms=plan.latency_ms,
         )
         asked = [(call.name, call.arguments) for call in plan.calls]
         planned = resolve_calls(offer, asked)

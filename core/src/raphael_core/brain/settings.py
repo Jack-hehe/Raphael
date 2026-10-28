@@ -4,37 +4,50 @@ Only keys in DEFAULTS exist. A key nobody has set reads as its default. Most key
 type-checked; the speech-to-text engine and the local model must also be one of their listed
 values, `languages` a valid selection (see raphael_core.languages), `model_favorites` the starred
 model ids of each role (at most 50 each), and the models and the assistant's city a text of some
-substance (saved without the spaces around it; a model id has none inside). Which models may be
+substance (saved without the spaces around it; a model id has none inside). The services of the
+tools (`web_search_service`, `web_read_service`, `pdf_service`) must be one of their listed values,
+`vision_model` a model id or "" (the answer model), and `searxng_url` an http(s) address or "".
+Raphael's voice is `tts_service` (the provider: "fish"), `tts_fish_voice` (the 32 hexadecimal
+characters of the owner's Fish Audio voice model, or "": it is the owner's to fill in) and
+`tts_fish_model` (a short token). `tts_language` is the language the voice speaks ("ja", the only
+one the owner's voice model speaks; the seam for voices in other languages).
+
+Each capability of the tools has a switch of its own: `web_search_enabled`, `web_read_enabled`,
+`vision_enabled`, `pdf_enabled` (all on until the owner turns one off) and `tts_enabled` (off until
+the owner turns Raphael's voice on). A capability that is off is not used at all, whichever service
+is chosen for it. Before the switches, "no voice" was a provider, `tts_service` "none": a saved
+"none" now reads as the default provider with `tts_enabled` off, and a saved "fish" with a voice id
+(and no `tts_enabled` saved yet) reads as `tts_enabled` on, so a database made before them keeps
+working without being rewritten.
+Which models may be
 chosen is for the brain to say, which knows OpenRouter's list of them (brain/catalog.py): here a
 model is only an id.
 
 A key that an older version saved but that is no longer a setting stays in the table and is never
 read: `all` lists only the keys of DEFAULTS, and `get` and `set` refuse the others, so nothing has
-to be rewritten at start-up. Two are such keys: `agent_router` (whether Jev or the language model
-routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing) and
+to be rewritten at start-up. Such keys are `agent_router` (whether Jev or the language model
+routed the assistant's requests; Jev always does now, so a saved "luna" changes nothing),
 `learn_corrections` (whether the words corrected after a paste were learned; they always are now,
-so a saved false changes nothing).
-
-`language` is the setting `languages` replaced, kept for one release: it reads as what the
-selection amounts to ("zh", "ja", "en" or "auto"), and setting it sets `languages`. A saved
-`language` of an older version reads as the selection it stands for until `languages` is saved.
+so a saved false changes nothing) and `language`, the single language that `languages` replaced
+before the first release.
 """
 
 import copy
 import json
+import re
 import sqlite3
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..device.models import LOCAL_STT_MODELS
-from ..languages import (
-    DEFAULT_LANGUAGES,
-    LEGACY_LANGUAGES,
-    checked_languages,
-    from_legacy,
-    legacy_language,
-)
+from ..languages import DEFAULT_LANGUAGES, checked_languages
 
 DEFAULTS: dict[str, Any] = {
+    "first_bot_profile": {},
+    "owner_name": "",
+    "owner_about": "",
+    "owner_photo": "",
+    "skin": "default",
     "monthly_limit_usd": 10.0,
     # Chosen from the cleanup eval of 2026-10-18 for its cost and its speed (~1.25 s on average).
     # The cases and the prompt have changed since, so no pass rate is claimed for it: compare the
@@ -42,11 +55,10 @@ DEFAULTS: dict[str, Any] = {
     "cleanup_model": "openai/gpt-6-luna",
     # The dictation languages, in the user's order of priority (raphael_core.languages).
     "languages": list(DEFAULT_LANGUAGES),
-    # Derived from `languages`, never saved (see the module's docstring).
-    "language": legacy_language(DEFAULT_LANGUAGES),
     "history_retention_days": 30,
-    # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback) or "local" (the
-    # engine on this computer only; no audio leaves it). Read at the start of each dictation.
+    # Speech-to-text: "cloud" (OpenRouter, with the local engine as the fallback when there is one)
+    # or "local" (the engine on this computer only; no audio leaves it). Read at the start of each
+    # dictation.
     "stt_engine": "cloud",
     # Which of the catalogue's models (device/models.py) the local engine is. The one Raphael has
     # always used, so that nobody who runs locally needs a new download.
@@ -57,12 +69,65 @@ DEFAULTS: dict[str, Any] = {
     # The voice assistant (raphael_core.agent). The model that words its answers, and that decides
     # what a request is when Jev (agent/routing.py, not a setting) fails or is unsure.
     "agent_model": "openai/gpt-6-luna",
+    "quick_model": "",
+    "quick_effort": "low",
+    # API-only work when the conversational brain is a subscription CLI or local model.
+    "assistant_model": "",
+    # Empty purpose-specific primaries inherit the answer/vision model, as before.
+    "router_model": "",
+    "memory_model": "",
+    "pdf_model": "",
+    "agent_fallbacks": [],
+    "cleanup_fallbacks": [],
+    "router_fallbacks": [],
+    "vision_fallbacks": [],
+    "pdf_fallbacks": [],
+    "stt_fallbacks": [],
+    "memory_fallbacks": [],
     # Where the weather is looked up when the user does not say.
     "agent_city": "台北",
+    # Shared by every member and the worker; read at each action, never cached per conversation.
+    "action_mode": "direct",
+    # The most one background task may spend, in US$ (one of WORKER_COST_CAPS).
+    "worker_cost_cap_usd": 0.20,
     # The models the user starred in the pickers, per role (the page's names for them), in the order
     # they were added. The page shows the ones the catalog still has at the top of its list; the
     # others stay here, in case the catalog gets them back.
     "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+    "disconnected_clis": [],
+    # The services Raphael's tools stand on (raphael_core.services), each chosen by the owner. The
+    # web search: "openrouter" is the answer model with OpenRouter's `web` plugin, as it always was;
+    # the others are search engines that return results for the answer model to word.
+    "web_search_service": "openrouter",
+    # Reading a page: "builtin" fetches it from this computer and turns its HTML into text here, at
+    # no cost; the others are services that read it for Raphael.
+    "web_read_service": "builtin",
+    # The model that reads an image, or "" for the answer model (`agent_model`).
+    "vision_model": "",
+    # Reading a PDF: "builtin" takes its text here (pypdf) and shows the vision model the pages that
+    # have none; "openrouter" sends the whole file to the vision model, through OpenRouter's
+    # `file-parser` plugin.
+    "pdf_service": "builtin",
+    # The address of the owner's own SearXNG, for `web_search_service` "searxng"; "" when none.
+    "searxng_url": "",
+    # Whether each capability is used at all (the switch of its row in Settings › 拉斐爾 › 服務). The
+    # search, the reading of pages, the reading of images and the reading of PDFs are on by default;
+    # Raphael's voice is off until the owner turns it on.
+    "web_search_enabled": True,
+    "web_read_enabled": True,
+    "vision_enabled": True,
+    "pdf_enabled": True,
+    "tts_enabled": False,
+    # Raphael's voice (raphael_core.services.tts): the service that speaks his answers aloud when
+    # `tts_enabled` is on. Fish Audio's voice is the owner's own clone, chosen by the id of its
+    # model, which is not in the repository: "" until the owner fills it in.
+    "tts_service": "fish",
+    "tts_fish_voice": "",
+    "tts_fish_model": "s2.1-pro-free",
+    # The language Raphael speaks aloud, whatever the language on screen: the owner's voice model
+    # speaks Japanese only, so what is shown in another language is spoken in a Japanese rendering
+    # (see raphael_core.agent.persona.spoken_line). No page offers it: a seam for other voices.
+    "tts_language": "ja",
 }
 
 # The longest model id or city name taken: far more than any real one, short of an accident.
@@ -70,26 +135,48 @@ AGENT_TEXT_MAX_CHARS = 100
 # The roles that have favourites, and the most that one of them holds.
 FAVORITE_ROLES = ("cleanup", "answer", "stt")
 MAX_FAVORITES = 50
+DISCONNECTABLE_CLIS = ("claude", "codex", "gemini")
 STT_ENGINES = ("cloud", "local")
-# The OpenRouter transcription models the settings page offered before it offered every one, the
-# default first. All are listed in OpenRouter's speech-to-text collection, each with an endpoint
-# (checked 2026-10-18).
-STT_CLOUD_MODELS = (
-    "elevenlabs/scribe-v2",
-    "openai/gpt-transcribe",
-    "microsoft/mai-transcribe-2",
-    "assemblyai/universal-3-6-pro",
-    "qwen/qwen3-asr-1.7b",
-    "google/gemini-3.5-transcribe",
-    "openai/whisper-large-v3-turbo",
+# The services each tool may stand on (raphael_core.services.catalog says what each needs).
+WEB_SEARCH_SERVICES = ("openrouter", "brave", "tavily", "exa", "searxng")
+WEB_READ_SERVICES = ("builtin", "jina", "firecrawl", "tavily")
+PDF_SERVICES = ("builtin", "openrouter")
+# The services that may speak Raphael's answers. "No voice" is `tts_enabled` off, not a service.
+TTS_SERVICES = ("fish",)
+# The languages a voice may speak (for now the owner's only).
+TTS_LANGUAGES = ("ja",)
+# The switches of the capabilities (the keys of DEFAULTS that are on or off).
+ENABLED_SETTINGS = (
+    "web_search_enabled",
+    "web_read_enabled",
+    "vision_enabled",
+    "pdf_enabled",
+    "tts_enabled",
 )
-_CHOICES: dict[str, tuple[str, ...]] = {
+# A Fish Audio voice model is named by 32 hexadecimal characters; its model by a short token.
+FISH_VOICE_PATTERN = re.compile(r"[0-9a-f]{32}")
+FISH_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,39}")
+# The longest address of a SearXNG taken.
+URL_MAX_CHARS = 300
+# What one background task may cost, as the settings page offers it.
+WORKER_COST_CAPS = (0.10, 0.20, 0.50, 1.00)
+_CHOICES: dict[str, tuple[Any, ...]] = {
+    "skin": ("default", "paper", "graphite", "lagoon", "dusk", "midnight", "meadow", "ink", "catppuccin"),
+    "action_mode": ("ask", "direct"),
+    "worker_cost_cap_usd": WORKER_COST_CAPS,
     "stt_engine": STT_ENGINES,
     "stt_local_model": tuple(entry.name for entry in LOCAL_STT_MODELS),
-    "language": LEGACY_LANGUAGES,
+    "web_search_service": WEB_SEARCH_SERVICES,
+    "web_read_service": WEB_READ_SERVICES,
+    "pdf_service": PDF_SERVICES,
+    "tts_service": TTS_SERVICES,
+    "tts_language": TTS_LANGUAGES,
 }
 # The settings that hold the id of an OpenRouter model.
 MODEL_SETTINGS = ("cleanup_model", "stt_cloud_model", "agent_model")
+OPTIONAL_MODEL_SETTINGS = ("vision_model", "router_model", "memory_model", "pdf_model", "assistant_model", "quick_model")
+FALLBACK_SETTINGS = tuple(purpose + "_fallbacks" for purpose in
+                          ("agent", "cleanup", "router", "vision", "pdf", "stt", "memory"))
 _TRIMMED = (*MODEL_SETTINGS, "agent_city")
 
 
@@ -107,11 +194,15 @@ def _checked(key: str, value: Any) -> Any:
     raise TypeError(f"Setting {key!r} must be a {expected.__name__}, not {type(value).__name__}")
 
 
+# The settings that may also be None: the local model, when there is none to fall back on.
+_NULLABLE = ("stt_local_model",)
+
+
 def _allowed(key: str, value: Any) -> Any:
     """`value`, or ValueError if the key has a list of choices and `value` is not on it."""
-    choices = _CHOICES.get(key)
+    choices = ("none", "minimal", "low", "medium", "high", "xhigh", "max") if key == "quick_effort" else _CHOICES.get(key)
     if choices is not None and value not in choices:
-        raise ValueError(f"Setting {key!r} must be one of {', '.join(choices)}")
+        raise ValueError(f"Setting {key!r} must be one of {', '.join(str(c) for c in choices)}")
     return value
 
 
@@ -125,8 +216,50 @@ def _trimmed(key: str, value: str) -> str:
         raise ValueError(f"Setting {key!r} must not be blank")
     if len(text) > AGENT_TEXT_MAX_CHARS:
         raise ValueError(f"Setting {key!r} must be at most {AGENT_TEXT_MAX_CHARS} characters")
-    if key in (*MODEL_SETTINGS, "model_favorites") and any(char.isspace() for char in text):
+    if key in (*MODEL_SETTINGS, *OPTIONAL_MODEL_SETTINGS, "model_favorites") and any(char.isspace() for char in text):
         raise ValueError(f"Setting {key!r} must not contain spaces")
+    return text
+
+
+def _url(key: str, value: str) -> str:
+    """`value` without the spaces around it: "" for none, else an http or https address with a
+    host, of at most URL_MAX_CHARS and with no space inside. ValueError for anything else."""
+    text = value.strip()
+    if not text:
+        return ""
+    if len(text) > URL_MAX_CHARS or any(char.isspace() for char in text):
+        raise ValueError(f"Setting {key!r} must be an address of at most {URL_MAX_CHARS} characters")
+    try:
+        parsed = urlsplit(text)
+        host = parsed.hostname
+    except ValueError:
+        host = None
+    if host is None or parsed.scheme.lower() not in ("http", "https"):
+        raise ValueError(f"Setting {key!r} must be an http or https address")
+    return text
+
+
+def _optional_model(key: str, value: str) -> str:
+    """`value` without the spaces around it: "" (the answer model), or a model id (`_trimmed`)."""
+    text = value.strip()
+    return _trimmed(key, text) if text else ""
+
+
+def _fish_voice(key: str, value: str) -> str:
+    """`value` without the spaces around it, in lower case: "" (none yet) or the 32 hexadecimal
+    characters of a Fish Audio voice model. ValueError for anything else."""
+    text = value.strip().lower()
+    if text and not FISH_VOICE_PATTERN.fullmatch(text):
+        raise ValueError(f"Setting {key!r} must be empty or 32 hexadecimal characters")
+    return text
+
+
+def _fish_model(key: str, value: str) -> str:
+    """`value` without the spaces around it: a short token such as "s2.1-pro-free". ValueError for
+    a blank text, one with a space or other mark in it, or one of more than 40 characters."""
+    text = value.strip()
+    if not FISH_MODEL_PATTERN.fullmatch(text):
+        raise ValueError(f"Setting {key!r} must be a short token of letters, digits, . _ and -")
     return text
 
 
@@ -163,19 +296,94 @@ def _read_favorites(saved: Any) -> dict[str, list[str]]:
         return _no_favorites()
 
 
+def _disconnected_clis(value: list) -> list[str]:
+    """The disconnected CLI names to save, each once and in order."""
+    if any(type(name) is not str for name in value):
+        raise TypeError("Setting 'disconnected_clis' must be a list of CLI names")
+    unknown = [name for name in value if name not in DISCONNECTABLE_CLIS]
+    if unknown:
+        raise ValueError(f"Setting 'disconnected_clis' has no CLI {unknown[0]!r}")
+    return list(dict.fromkeys(value))
+
+
+def _read_disconnected_clis(saved: Any) -> list[str]:
+    """The disconnected CLIs as saved; a damaged saved value reads as none."""
+    if type(saved) is not list:
+        return []
+    return list(dict.fromkeys(name for name in saved if type(name) is str and name in DISCONNECTABLE_CLIS))
+
+
 def checked(key: str, value: Any) -> tuple[str, Any]:
     """The key and the value that setting `key` to `value` saves, or the error `SettingsStore.set`
     raises for them (see there). Nothing is saved."""
+    if key == "first_bot_profile":
+        limits = {"name": 16, "role": 24, "personality": 2000, "instructions": 2000}
+        if not isinstance(value, dict) or set(value) - set(limits):
+            raise ValueError("Invalid first Bot profile")
+        if any(not isinstance(text, str) or len(text.strip()) > limits[field] or "\x00" in text
+               for field, text in value.items()):
+            raise ValueError("Invalid first Bot profile text")
+        if value and not value.get("name", "").strip():
+            raise ValueError("The first Bot needs a name")
+        return key, {field: text.strip() for field, text in value.items()}
     if key == "languages":
         return key, checked_languages(key, value)
+    if value is None and key in _NULLABLE:
+        return key, None
     value = _allowed(key, _checked(key, value))
+    if key in ("owner_name", "owner_about"):
+        value = value.strip()
+        if len(value) > (100 if key == "owner_name" else 4000) or "\x00" in value:
+            raise ValueError("Owner profile text is too long or contains a null character")
+    if key == "owner_photo" and value:
+        if len(value) > 400000 or not re.fullmatch(r"data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+=*", value):
+            raise ValueError("Owner photo must be a small PNG, JPEG or WebP data URL")
     if key in _TRIMMED:
         value = _trimmed(key, value)
     if key == "model_favorites":
         value = _favorites(value)
-    if key == "language":
-        return "languages", from_legacy(value)
+    if key == "disconnected_clis":
+        value = _disconnected_clis(value)
+    if key == "searxng_url":
+        value = _url(key, value)
+    if key in OPTIONAL_MODEL_SETTINGS:
+        value = _optional_model(key, value)
+    if key in FALLBACK_SETTINGS:
+        if len(value) > 3:
+            raise ValueError("At most three fallback models")
+        kept = []
+        for reference in value:
+            if not isinstance(reference, str):
+                raise TypeError("Fallbacks must contain model references")
+            reference = _trimmed("model_favorites", reference)
+            if reference.startswith("@") and not re.fullmatch(r"@[A-Za-z0-9_-]+:.+", reference):
+                raise ValueError("Invalid fallback model reference")
+            if reference not in kept:
+                kept.append(reference)
+        value = kept
+    if key == "tts_fish_voice":
+        value = _fish_voice(key, value)
+    if key == "tts_fish_model":
+        value = _fish_model(key, value)
     return key, value
+
+
+def api_model(settings, *candidates: object, api_providers=()) -> str:
+    """Select a model for API work without inheriting a CLI or local model reference.
+
+    Explicit API candidates retain their order. The owner's auxiliary API preference and the
+    built-in answer model are used only when none of those candidates can be sent to the API.
+    A provider router may explicitly identify hosted API providers whose references it resolves.
+    """
+    try:
+        assistant = settings.get("assistant_model")
+    except (KeyError, sqlite3.Error):
+        assistant = ""
+    for value in (*candidates, assistant, DEFAULTS["agent_model"]):
+        if isinstance(value, str) and (model := value.strip()) and not model.startswith("cli:"):
+            if not model.startswith("@") or model[1:].partition(":")[0] in api_providers:
+                return model
+    return DEFAULTS["agent_model"]
 
 
 class SettingsStore:
@@ -188,38 +396,55 @@ class SettingsStore:
         return None if row is None else json.loads(row["value"])
 
     def _languages(self) -> list[str]:
-        """The saved selection; else the one a saved old `language` stands for; else the default.
-        A saved selection that is no longer valid reads as the default."""
+        """The saved selection, else the default. A saved selection that is no longer valid reads
+        as the default."""
         saved = self._saved("languages")
         if saved is None:
-            old = self._saved("language")
-            return list(DEFAULT_LANGUAGES) if old is None else from_legacy(old)
+            return list(DEFAULT_LANGUAGES)
         try:
             return checked_languages("languages", saved)
         except (TypeError, ValueError):
             return list(DEFAULT_LANGUAGES)
 
+    def _voice_was_on(self) -> bool:
+        """Whether Raphael's voice was on in a database made before `tts_enabled`: a saved
+        `tts_service` "fish" together with a voice id (a voice that cannot speak was off in
+        effect). Used only while `tts_enabled` itself has never been saved."""
+        return self._saved("tts_service") == "fish" and bool(self._saved("tts_fish_voice"))
+
     def get(self, key: str) -> Any:
-        """The saved value, else the default. KeyError for a key that is not a setting."""
+        """The saved value, else the default (`tts_service` and `tts_enabled` read the older voice
+        setting as the module says). KeyError for a key that is not a setting."""
         default = DEFAULTS[key]
         if key == "languages":
             return self._languages()
-        if key == "language":
-            return legacy_language(self._languages())
         saved = self._saved(key)
         if key == "model_favorites":
             return _read_favorites(saved)
-        return default if saved is None else saved
+        if key == "disconnected_clis":
+            return _read_disconnected_clis(saved)
+        if key == "tts_service":
+            return saved if saved in TTS_SERVICES else default  # a saved "none" was "no voice"
+        if key == "tts_enabled" and saved is None:
+            return self._voice_was_on()
+        if saved is None and key in _NULLABLE and self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = ?", (key,)
+        ).fetchone():
+            return None  # saved as "none", which is not the same as never saved
+        return copy.deepcopy(default) if saved is None else saved
 
     def set(self, key: str, value: Any) -> None:
         """Save a value.
 
         Raises KeyError for an unknown key, TypeError for a value of the wrong type and ValueError
         for a number JSON cannot hold (nan, inf), a value that is not one of the key's choices, a
-        blank or absurd text or a selection of languages that is not valid. Setting `language`
-        saves `languages`.
+        blank or absurd text or a selection of languages that is not valid.
         """
         key, value = checked(key, value)
+        if key == "stt_engine" and value == "local" and self.get("stt_local_model") is None:
+            raise ValueError("Setting 'stt_local_model' must name a model for the local engine")
+        if key == "stt_local_model" and value is None and self.get("stt_engine") == "local":
+            raise ValueError("Setting 'stt_local_model' must name a model while the engine is local")
         encoded = json.dumps(value, allow_nan=False)
         with self._conn:
             self._conn.execute(
@@ -230,11 +455,13 @@ class SettingsStore:
 
     def all(self) -> dict[str, Any]:
         """Every setting: the defaults with the saved values on top."""
-        values = dict(DEFAULTS)
+        values = copy.deepcopy(DEFAULTS)
         for row in self._conn.execute("SELECT key, value FROM settings"):
             if row["key"] in values:
                 values[row["key"]] = json.loads(row["value"])
         values["model_favorites"] = _read_favorites(values["model_favorites"])
+        values["disconnected_clis"] = _read_disconnected_clis(values["disconnected_clis"])
         values["languages"] = self._languages()
-        values["language"] = legacy_language(values["languages"])
+        values["tts_service"] = self.get("tts_service")
+        values["tts_enabled"] = self.get("tts_enabled")
         return values

@@ -1,65 +1,124 @@
-import { afterEach, describe, expect, test } from "vitest";
-import { setLocale } from "../i18n";
-import type { StatsSummary } from "../types";
-import { homeHTML, usageHTML } from "./home";
+// @vitest-environment happy-dom
+// Home's hero (pages/home.ts): Raphael's emblem turns while the window allows motion and stands still when
+// the person asked for less; nothing beside his report asks him, and a refresh does not start his turn over.
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { HomeOverview } from "../home-types";
+import type { AppContext, MainEvent } from "../types";
 
-afterEach(() => setLocale("zh-TW"));
+const { queue } = vi.hoisted(() => ({ queue: [] as unknown[] }));
+vi.mock("../api", () => ({ homeOverview: vi.fn(async () => queue.length > 1 ? queue.shift() : queue[0]), statusCheckOpenrouter: vi.fn() }));
+vi.mock("../team-navigation", () => ({ openMemberThread: vi.fn() }));
 
-const period = { dictations: 4, words: 1200, audio_seconds: 300, cost_usd: 0.1 };
-const stats: StatsSummary = {
-  today: period,
-  week: period,
-  month: period,
-  all: period,
-  streak_days: 2,
-  by_day: [{ date: "2026-10-20", dictations: 4, words: 1200 }],
-  active_days: 3,
-  longest_streak_days: 5,
-  speed_wpm: 80,
-  time_saved_seconds: 1800,
+let reduce = true;
+let change: ((e: { matches: boolean }) => void) | null = null;
+
+const overview = (month: number, state: "ok" | "no_key" = "ok"): HomeOverview => ({
+  generated_at_ms: Date.UTC(2026, 9, 27, 4, 0),
+  report: {
+    openrouter: { state, latency_ms: 120, checked_at_ms: null, error: null, key: null, usage: null },
+    spend: { month_usd: month, today_usd: 0, limit_usd: 20, forecast_usd: 2, daily: [0, month] },
+    last: null,
+  },
+  today: [], reports: [], calendar: [],
+  counts: { today: 0, reports: 0, calendar: 0 },
+  usage: { month_usd: month, limit_usd: 20, daily: [0, month], allowances: { brains: [] } },
+  dictation: { words: 0, time_saved_seconds: 0, speed_wpm: null, audio_seconds: 0, daily: [] },
+});
+
+async function load() {
+  vi.resetModules();
+  return import("./home");
+}
+
+const flush = async (): Promise<void> => {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 };
 
-/** The page with the history's cards drawn into the main column, as `paint` does. */
-const page = (s: StatsSummary = stats): string => homeHTML().replace('<div class="usage"></div>', `<div class="usage">${usageHTML(s)}</div>`);
+beforeEach(() => {
+  change = null;
+  reduce = true;
+  queue.length = 0;
+  queue.push(overview(5));
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes("reduce") ? reduce : false,
+    media: query,
+    addEventListener: (_: string, fn: (e: { matches: boolean }) => void) => (change = fn),
+    removeEventListener() {},
+  }));
+});
 
-describe("the main column of the home page", () => {
-  test("is the four numbers, then the activity grid", () => {
-    const html = page();
-    const numbers = html.indexOf('class="icards"');
-    const activity = html.indexOf('class="card activity"');
-    expect(numbers).toBeGreaterThan(-1);
-    expect(activity).toBeGreaterThan(numbers);
-    // and all of it comes before the right column
-    expect(html.indexOf('class="home-side"')).toBeGreaterThan(activity);
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+const hero = (html: string): HTMLElement => {
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  return host.querySelector<HTMLElement>(".ho-hero")!;
+};
+
+/** The page as the app mounts it, and the events its refreshes hear. */
+async function mount() {
+  const { createHome } = await load();
+  const heard: ((event: MainEvent) => void)[] = [];
+  const app = { go: vi.fn(), onEvent: (handler: (event: MainEvent) => void) => (heard.push(handler), () => {}), cleared: { on: () => () => {} } } as unknown as AppContext;
+  const page = createHome(app);
+  document.body.append(page.el);
+  page.show();
+  await flush();
+  return { page, emit: (event: MainEvent) => heard.forEach((handler) => handler(event)) };
+}
+
+describe("the hero", () => {
+  test("is his emblem and his report, and nothing beside the report asks him", async () => {
+    const { homeHTML } = await load();
+    const well = hero(homeHTML(overview(5)));
+    expect([...well.children].map((child) => child.className)).toEqual(["av", "ho-said"]);
+    expect(well.querySelector("button")).toBeNull();
+    // a report that needs fixing keeps its one icon, and it is not an ask
+    const broken = hero(homeHTML(overview(5, "no_key")));
+    expect([...broken.querySelectorAll("button")].map((button) => button.getAttribute("data-home-go"))).toEqual(["report"]);
+    for (const html of [well.outerHTML, broken.outerHTML]) {
+      expect(html).not.toContain("ho-ask");
+      expect(html).not.toContain('data-home-go="agent"');
+    }
   });
 
-  test("the first number names what the core counts: a CJK character or a Latin word is one", () => {
-    // 字 is how Chinese counts mixed text already; English and Japanese call them words.
-    const first = (): string => usageHTML(stats).match(/<div class="icard">.*?<\/div><\/div>/)![0];
-    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>字</small></div><div class="k">聽寫字數</div></div>');
-    setLocale("en");
-    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>words</small></div><div class="k">Words dictated</div></div>');
-    setLocale("ja");
-    expect(first()).toBe('<div class="icard"><div class="v">1,200<small>語</small></div><div class="k">音声入力した語数</div></div>');
+  test("shows his emblem turning while the window allows motion", async () => {
+    reduce = false;
+    const { homeHTML } = await load();
+    const emblem = hero(homeHTML(overview(5))).querySelector(".av")!;
+    expect([...emblem.querySelectorAll("img")].map((image) => image.getAttribute("src"))).toEqual(["/brand/app-emblem-light-loop.webp", "/brand/app-emblem-dark-loop.webp"]);
   });
 
-  test("the numbers are four cards and the activity has its grid and its paging", () => {
-    const html = usageHTML(stats);
-    expect(html.match(/class="icard"/g)).toHaveLength(4);
-    expect(html).toContain('class="heat-box"');
-    expect(html).toContain('data-act="older"');
-    expect(html).toContain('data-act="newer"');
+  test("stands his emblem still under reduced motion, and turns it again when the preference goes", async () => {
+    const { page } = await mount();
+    const sources = (): (string | null)[] => [...page.el.querySelectorAll(".ho-hero > .av img")].map((image) => image.getAttribute("src"));
+    expect(sources()).toEqual(["/brand/app-emblem-light-128.webp", "/brand/app-emblem-dark-128.webp"]);
+    expect(change).not.toBeNull();
+    change!({ matches: false });
+    expect(sources()).toEqual(["/brand/app-emblem-light-loop.webp", "/brand/app-emblem-dark-loop.webp"]);
+    change!({ matches: true });
+    expect(sources().join()).not.toContain("loop");
+    page.hide();
   });
 
-  test("has no personalization card", () => {
-    const html = page();
-    for (const gone of ["persona", "rose", "personaChart", "個人化", "App 類型"]) expect(html).not.toContain(gone);
-  });
-
-  test("the page still has the strip, the shortcuts and Raphael's latest words", () => {
-    const html = homeHTML();
-    expect(html.indexOf('class="stage home-stage"')).toBeLessThan(html.indexOf('class="home-main"'));
-    expect(html).toContain('class="card keys-card"');
-    expect(html).toContain('class="card turns-card"');
+  test("is drawn again by a refresh without starting his turn over: the emblem stays the same node", async () => {
+    reduce = false;
+    queue.splice(0, queue.length, overview(2), overview(11));
+    const { page, emit } = await mount();
+    const emblem = page.el.querySelector(".ho-hero > .av")!;
+    const said = page.el.querySelector(".ho-said")!.textContent;
+    emit({ type: "QuotaChanged" });
+    await flush();
+    expect(page.el.querySelector(".ho-hero > .av")).toBe(emblem);
+    expect(emblem.isConnected).toBe(true);
+    // the words and the board are the new ones
+    expect(page.el.querySelector(".ho-said")!.textContent).not.toBe(said);
+    expect(page.el.querySelectorAll(".ho-hero").length).toBe(1);
+    expect(page.el.querySelectorAll(".ho-board").length).toBe(1);
+    expect(page.el.querySelector(".ho-spend .ho-big")!.textContent).toContain("11.00");
+    page.hide();
   });
 });

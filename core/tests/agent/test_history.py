@@ -3,6 +3,7 @@
 import pytest
 
 from raphael_core.agent.history import AgentHistory, Turn
+from raphael_core.agent.steps import Step
 
 
 class Clock:
@@ -51,6 +52,7 @@ def test_a_turn_is_stored_as_given_and_stamped_with_the_time(history, clock):
         detail="長一點的答案",
         status="done",
         cost_usd=0.0004,
+        conversation_id=1,
     )
 
 
@@ -61,6 +63,32 @@ def test_a_turn_needs_no_detail_and_costs_nothing_by_default(history, clock):
 
 def test_an_unknown_turn_is_none(history):
     assert history.get(99) is None
+
+
+def test_messages_are_immediately_readable_in_order_and_cleared_with_their_thread(history, clock):
+    first = add(history, clock, status="running", member_id=1)
+    other = add(history, clock, member_id=2)
+    history.add_message(first, "progress", "I will check the examples.")
+    clock.now_ms += 10
+    history.add_message(first, "event", "Example saved")
+    history.add_message(first, "reply", "Try the next sentence.")
+    history.add_message(other, "reply", "Another conversation")
+    messages = history.messages([first, other])
+    assert [(m["seq"], m["kind"], m["text"]) for m in messages[first]] == [
+        (1, "progress", "I will check the examples."),
+        (2, "event", "Example saved"),
+        (3, "reply", "Try the next sentence."),
+    ]
+    assert messages[first][1]["at_ms"] == clock.now_ms
+    history.resolve(first, prefix="", text="Try the next sentence.", status="done")
+    assert history.recent(1, member_id=1)[0].messages == [
+        "I will check the examples.", "Example saved", "Try the next sentence."
+    ]
+    assert history.search("examples", member_id=1)[0].id == first
+    history.clear_member(1)
+    assert history.messages([first, other]) == {other: messages[other]}
+    history.clear()
+    assert history.messages([other]) == {}
 
 
 def test_list_is_newest_first(history, clock):
@@ -118,11 +146,17 @@ def test_clear_deletes_every_turn_and_counts_them(history, clock):
     assert history.clear() == 0
 
 
-def test_prune_deletes_the_turns_before_a_time(history, clock):
-    for i in range(4):
-        add(history, clock, f"q{i}", advance=10)  # at 1010, 1020, 1030, 1040
-    assert history.prune(1_030) == 2
-    assert [t.question for t in history.list()] == ["q3", "q2"]
+def test_the_turns_are_never_pruned_by_age(history):
+    # One continuous conversation: the turns stay until the user clears them.
+    assert not hasattr(history, "prune")
+
+
+def test_after_gives_the_turns_after_one_oldest_first_whatever_their_status(history, clock):
+    ids = [add(history, clock, f"q{i}", status="confirm" if i == 2 else "done") for i in range(5)]
+    assert [t.question for t in history.after(ids[1])] == ["q2", "q3", "q4"]
+    assert [t.question for t in history.after(0, limit=2)] == ["q3", "q4"]
+    assert history.after(ids[-1]) == [] and history.after(0, limit=0) == []
+    assert history.last_id() == ids[-1]
 
 
 def test_a_confirmation_that_died_with_the_process_is_expired(history, clock):
@@ -149,3 +183,53 @@ def test_every_write_is_committed(tmp_path):
     assert theirs.list() == []
     writer.close()
     reader.close()
+
+
+# --- where a turn came from, and its steps ---
+
+
+def test_a_turn_is_spoken_unless_said_otherwise_and_keeps_its_model(history, clock):
+    spoken = history.get(add(history, clock))
+    assert (spoken.source, spoken.model) == ("voice", None)
+    typed = history.get(add(history, clock, source="telegram", model="google/gemini-3-flash"))
+    assert (typed.source, typed.model) == ("telegram", "google/gemini-3-flash")
+
+
+def test_a_turn_is_stored_with_its_steps_in_order(history, clock):
+    weather = Step("tool", "weather", "Raphael", "ok", 420, at_ms=900)
+    failed = Step("tool", "create-event", "Google Calendar", "error", 1_200, "auth", at_ms=950)
+    turn_id = add(history, clock, steps=[weather, failed])
+    other = add(history, clock)
+    assert history.steps([turn_id, other]) == {turn_id: [weather, failed]}
+    assert history.steps([]) == {}
+
+
+def test_steps_added_later_come_after_the_ones_a_turn_has(history, clock):
+    turn_id = add(history, clock, steps=[Step("tool", "weather", "Raphael", "ok", 1, at_ms=5)])
+    clock.now_ms = 7_000
+    history.add_steps(turn_id, [Step("command", "copy_text", None, "ok", 3)])
+    steps = history.steps([turn_id])[turn_id]
+    assert [s.tool for s in steps] == ["weather", "copy_text"]
+    assert steps[1].at_ms == 7_000  # stamped now when it was not given a time
+
+
+def test_a_negative_duration_is_kept_as_none_at_all(history, clock):
+    turn_id = add(history, clock, steps=[Step("tool", "weather", "Raphael", "ok", -4, at_ms=1)])
+    assert history.steps([turn_id])[turn_id][0].ms == 0
+
+
+def test_resolve_keeps_the_model_unless_a_new_one_answered(history, clock):
+    turn_id = add(history, clock, status="confirm", model="a/first")
+    history.resolve(turn_id, prefix="了", text="", status="done")
+    assert history.get(turn_id).model == "a/first"
+    history.resolve(turn_id, prefix="答", text="好", status="done", model="b/second")
+    assert history.get(turn_id).model == "b/second"
+
+
+def test_clear_takes_the_steps_and_the_search_with_the_turns(history, clock, conn):
+    old = add(history, clock, advance=10, steps=[Step("tool", "weather", "Raphael", "ok", 1)])
+    new = add(history, clock, advance=10, steps=[Step("tool", "web_search", "Raphael", "ok", 1)])
+    assert set(history.steps([old, new])) == {old, new}
+    history.clear()
+    assert conn.execute("SELECT count(*) FROM agent_steps").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM agent_turns_fts").fetchone()[0] == 0

@@ -1,0 +1,5 @@
+.problem-notice { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); padding: var(--sp-2) var(--sp-3); border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-2); font-size: var(--fs-xs); line-height: 1.6; }
+.problem-notice > .i { flex: none; width: 16px; height: 16px; }
+.problem-notice > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.problem-notice .btn { flex: none; }
+.page-agent .problem-notice { width: 100%; max-width: var(--pa-colw); margin: 0 auto var(--sp-2); }

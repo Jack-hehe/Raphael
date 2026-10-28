@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
+import { ico } from "./ui";
 import {
   DEFAULT_LANGUAGES,
   type LanguageGroup,
@@ -87,7 +88,7 @@ describe("the language row's dropdown", () => {
     expect(html).toContain('aria-label="你說的語言：繁體中文（香港）、English (UK)、日本語"');
     expect(html).toContain('title="繁體中文（香港）、English (UK)、日本語"');
     // a chevron like the other dropdowns: not chips, not a pencil
-    expect(html).toContain('<path d="M3.8 6 8 10.2 12.2 6"/>');
+    expect(html).toContain(ico("down"));
     expect(html).not.toContain("lchip");
   });
 

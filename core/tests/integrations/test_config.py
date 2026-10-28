@@ -48,7 +48,7 @@ def test_a_stdio_server_is_made_and_its_secrets_set_apart():
     assert new.config.env == ["API_KEY"]  # the name stays in the config...
     assert new.env == {"API_KEY": "s3cret-value"}  # ...the value is apart, for the vault
     assert "s3cret-value" not in repr(new.config)
-    assert new.config.enabled and new.config.tools == [] and new.config.disabled_tools == set()
+    assert not new.config.enabled and new.config.tools == [] and new.config.disabled_tools == set()
 
 
 def test_an_http_server_is_made_and_its_secrets_set_apart():
@@ -294,61 +294,17 @@ def test_an_entry_that_is_not_a_server_does_not_cost_the_others(tmp_path):
     assert [s.id for s in ConfigStore(tmp_path).servers()] == [good.id]
 
 
-def test_the_file_has_no_grants_any_more(tmp_path):
+def test_the_file_says_its_version_and_the_tools_turned_off(tmp_path):
     ConfigStore(tmp_path).add(a_server())
     data = json.loads((tmp_path / "integrations.json").read_text(encoding="utf-8"))
     assert data["version"] == 2
-    assert "grants" not in data["servers"][0]
     assert data["servers"][0]["disabled_tools"] == ["wipe"]
 
 
-def old_file(tmp_path, grants):
-    """A file of the first format: four tools, and the tiers the user gave some of them. A grant
-    marked unseen is tied to a description the tool does not have any more."""
-    tools = [tool_record(name, f"The {name}.", {"type": "object"}) for name in ("look", "note", "wipe", "fresh")]
-    by_name = {t.name: t for t in tools}
-    server = {
-        "id": "s1",
-        "name": "Old",
-        "transport": "http",
-        "url": "https://example.com/mcp",
-        "enabled": True,
-        "tools": [
-            {"name": t.name, "description": t.description, "input_schema": t.input_schema, "fingerprint": t.fingerprint}
-            for t in tools
-        ],
-        "grants": {
-            name: {"tier": tier, "fingerprint": by_name[name].fingerprint if seen else "old"}
-            for name, (tier, seen) in grants.items()
-        },
-    }
-    (tmp_path / "integrations.json").write_text(json.dumps({"version": 1, "servers": [server]}), encoding="utf-8")
-
-
-def test_a_file_of_the_first_format_keeps_every_granted_tool_on(tmp_path):
-    # wipe: a tier, but the tool is described differently since
-    old_file(tmp_path, {"look": ("T0", True), "note": ("T2", True), "wipe": ("T3", False)})
-    [server] = ConfigStore(tmp_path).servers()
-    assert not ({"look", "note", "wipe"} & server.disabled_tools)  # any tier is on
-
-
-def test_a_file_of_the_first_format_turns_off_only_what_was_blocked_on_purpose(tmp_path):
-    old_file(tmp_path, {"look": ("T1", True), "wipe": ("block", True)})
-    [server] = ConfigStore(tmp_path).servers()
-    assert server.disabled_tools == {"wipe"}  # a tool never decided is on, like every new one
-    assert not hasattr(server, "grants")
-
-
-def test_a_grant_whose_tier_is_not_a_tier_is_not_a_block(tmp_path):
-    old_file(tmp_path, {"look": ("T9", True)})
-    [server] = ConfigStore(tmp_path).servers()
-    assert server.disabled_tools == set()
-
-
-def test_a_file_of_the_new_format_is_not_migrated_again(tmp_path):
+def test_a_saved_file_keeps_the_tools_turned_off_and_the_login(tmp_path):
     ConfigStore(tmp_path).add(a_server())
     [again] = ConfigStore(tmp_path).servers()
-    assert again.disabled_tools == {"wipe"}  # "look" stays on, and nothing is invented
+    assert again.disabled_tools == {"wipe"}  # "look" stays on
     assert (again.auth, again.catalog_id, again.revocation_url) == ("oauth", "notion", "https://auth.example.com/revoke")
 
 

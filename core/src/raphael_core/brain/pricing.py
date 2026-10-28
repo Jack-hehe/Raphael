@@ -6,8 +6,9 @@ says what its prices mean.
 The list is kept for 24 hours, in memory and in the `settings` table under a key that is no
 setting (so it survives a restart and is not offered by `settings.get`). It is fetched only when
 `models.catalog` is called, never during a dictation, with a 5 second deadline. If that fails, the
-answer is the latest list kept, however old, else the builtin table below: Raphael's own models at
-their prices of 2026-10-18, so the page always has something to show. `source` says which of the
+answer is the latest list kept, however old, else the builtin table below: the models Raphael
+calls when nobody chose another, at their prices of 2026-10-18, so the page always has something to
+show. `source` says which of the
 three it was: "live" (just fetched), "cached" or "builtin". Choosing a model reads what is kept
 (`known`), and never fetches.
 """
@@ -23,14 +24,14 @@ from typing import Any
 from .catalog import (
     CAPABILITIES,
     LLM,
-    STT,
+    ROLES,
     CatalogEntry,
     ModelPrice,
     entry_from_json,
     entry_to_json,
     parse_catalog,
 )
-from .openrouter import CLEANUP_MODEL_CHOICES, STT_MODELS_WITH_HINTS, OpenRouterError
+from .openrouter import CLEANUP_FALLBACKS, STT_MODELS_WITH_HINTS, OpenRouterError
 
 logger = logging.getLogger(__name__)
 
@@ -41,22 +42,23 @@ CACHE_KEY = "cache.pricing"
 # How the cached list was read. A cache of another reading is no cache: raise this whenever
 # `parse_catalog` reads a model differently, or the cache holds something else (2: the MAI models
 # per hour, not unknown; 3: every model Raphael could use, not only the prices of his own; 4: the
-# batch variants left out; 5: whether a language model takes tools, as a capability).
-CACHE_READING = 5
+# batch variants left out; 5: whether a language model takes tools, as a capability; 6: the kind
+# of a model whose modalities are not listed, from its `modality`; 7: whether a language model
+# reads images and files, as capabilities).
+CACHE_READING = 7
 
-# OpenRouter's model list of 2026-10-18, read the way `parse_catalog` reads it (a test keeps the
-# two alike, with tests/brain/fixtures/openrouter_models.json, a trimmed copy of that list).
+# The models Raphael calls when nobody chose another: the default of each role (the settings'
+# DEFAULTS) and the fallbacks of the language models (openrouter.CLEANUP_FALLBACKS), at their
+# prices in OpenRouter's model list of 2026-10-18, read the way `parse_catalog` reads it (a test
+# keeps the two alike, with tests/brain/fixtures/openrouter_models.json, a trimmed copy of that
+# list). It is no offering of models: every model the settings page offers comes from OpenRouter's
+# list. It is what the page shows, and what may be chosen, before that list could ever be read, and
+# the prices of those models for what has to know them without it.
 BUILTIN_PRICES: dict[str, ModelPrice] = {
     "openai/gpt-6-luna": ModelPrice(input_per_mtok=0.1, output_per_mtok=0.5),
     "anthropic/claude-haiku-5.5": ModelPrice(input_per_mtok=0.1, output_per_mtok=0.5),
     "google/gemini-3.1-flash-lite": ModelPrice(input_per_mtok=0.25, output_per_mtok=1.5),
     "elevenlabs/scribe-v2": ModelPrice(per_minute=0.00183333),
-    "openai/gpt-transcribe": ModelPrice(per_minute=0.0045),
-    "microsoft/mai-transcribe-2": ModelPrice(per_minute=0.00166667),  # listed per hour
-    "assemblyai/universal-3-6-pro": ModelPrice(per_minute=0.005),
-    "qwen/qwen3-asr-1.7b": ModelPrice(per_minute=0.00045),
-    "google/gemini-3.5-transcribe": ModelPrice(input_per_mtok=2.0, output_per_mtok=12.0),
-    "openai/whisper-large-v3-turbo": ModelPrice(per_minute=0.0001998),
 }
 # The maker and the name of each of those models, as the same list gives them ("OpenAI: GPT-6
 # Luna"), for the catalog without the list.
@@ -65,21 +67,24 @@ BUILTIN_LISTING: dict[str, tuple[str, str]] = {
     "anthropic/claude-haiku-5.5": ("Anthropic", "Claude Haiku 5.5"),
     "google/gemini-3.1-flash-lite": ("Google", "Gemini 3.1 Flash Lite"),
     "elevenlabs/scribe-v2": ("ElevenLabs", "Scribe v2"),
-    "openai/gpt-transcribe": ("OpenAI", "GPT Transcribe"),
-    "microsoft/mai-transcribe-2": ("Microsoft AI", "MAI-Transcribe 2"),
-    "assemblyai/universal-3-6-pro": ("AssemblyAI", "Universal-3.6 Pro"),
-    "qwen/qwen3-asr-1.7b": ("Qwen", "Qwen3 ASR 1.7B"),
-    "google/gemini-3.5-transcribe": ("Google", "Gemini 3.5 Transcribe"),
-    "openai/whisper-large-v3-turbo": ("OpenAI", "Whisper Large V3 Turbo"),
 }
 
 
+def builtin_kinds() -> dict[str, str]:
+    """The kind of each model the builtin table must hold: the default of each role is of the
+    role's kind, and the fallbacks of the language models are language models."""
+    kinds = {role.default: role.kind for role in ROLES}
+    kinds.update(dict.fromkeys(CLEANUP_FALLBACKS, LLM))
+    return kinds
+
+
 def builtin_catalog() -> list[CatalogEntry]:
-    """Raphael's own models at the builtin prices: the catalog when OpenRouter's list cannot be had.
-    They were all tried live, so every role of their kind can use them."""
+    """The builtin table as a catalog: what `models.catalog` answers when OpenRouter's list cannot
+    be had. Its models were all tried live, so every role of their kind can use them."""
+    kinds = builtin_kinds()
     entries = []
     for model_id, price in BUILTIN_PRICES.items():
-        kind = LLM if model_id in CLEANUP_MODEL_CHOICES else STT
+        kind = kinds[model_id]
         capabilities = set(CAPABILITIES[kind])
         if model_id not in STT_MODELS_WITH_HINTS:
             capabilities.discard("dictionary_hints")

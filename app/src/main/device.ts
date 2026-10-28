@@ -6,6 +6,12 @@ import type { DeviceSettings } from "./types";
 export interface DeviceSource {
   get(): Promise<DeviceSettings>;
   set(patch: Partial<DeviceSettings>): Promise<DeviceSettings>;
+  /**
+   * Takes one app off the always-allowed list, under the app's own lock on the settings, and
+   * returns them all afterwards. A whole list computed here could put back an app that another
+   * removal, still on its way, takes away.
+   */
+  removeComputerApp(exe: string): Promise<DeviceSettings>;
 }
 
 /**
@@ -47,10 +53,19 @@ export class DeviceState {
   }
 
   /** Changes some settings; rejects with the reason. */
-  async set(patch: Partial<DeviceSettings>): Promise<DeviceSettings> {
+  set(patch: Partial<DeviceSettings>): Promise<DeviceSettings> {
+    return this.write(() => this.source.set(patch));
+  }
+
+  /** Takes the app `exe` off the always-allowed list; rejects with the reason. */
+  removeComputerApp(exe: string): Promise<DeviceSettings> {
+    return this.write(() => this.source.removeComputerApp(exe));
+  }
+
+  private async write(change: () => Promise<DeviceSettings>): Promise<DeviceSettings> {
     this.changes++;
     try {
-      this.current = await this.source.set(patch);
+      this.current = await change();
     } catch (err) {
       // The settings may have changed although the call failed (a file that could not be saved).
       this.current = await this.source.get().catch(() => this.current);

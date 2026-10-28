@@ -5,9 +5,7 @@ import {
   homeHint,
   historyEmptyHint,
   isDictationMode,
-  keylineAction,
   modeDescription,
-  tryBoxText,
 } from "./dictation";
 import { esc, sel } from "./ui";
 
@@ -76,34 +74,12 @@ describe("the copy that explains the key", () => {
     expect(historyEmptyHint("hold", "右 Alt")).toBe("按住右 Alt 說話，結果會出現在這裡。");
   });
 
-  test("the first-run guide's try box names the keys and follows the mode", () => {
-    for (const mode of MODES) {
-      const text = tryBoxText(mode, "右 Alt 或 F9");
-      explainsOnlyItsMode(mode, text);
-      expect(text).toContain("右 Alt 或 F9");
-      expect(text).toContain("貼上整理好的文字");
-    }
-    expect(tryBoxText("toggle", "右 Alt")).toBe(
-      "把游標放在下面的框裡，按一下右 Alt 開始說話，再按一下就會貼上整理好的文字。之後在任何程式裡都一樣。",
-    );
-    expect(tryBoxText("hold", "右 Alt")).toBe(
-      "把游標放在下面的框裡，按住右 Alt 說話，放開就會貼上整理好的文字。之後在任何程式裡都一樣。",
-    );
-  });
-
-  test("the guide's key line says how the key is used", () => {
-    for (const mode of MODES) explainsOnlyItsMode(mode, keylineAction(mode));
-    expect(keylineAction("toggle")).toBe("按一下開始聽寫，再按一下結束");
-    expect(keylineAction("hold")).toBe("按住聽寫，放開結束");
-  });
-
   test("the texts are plain: a page escapes them where it puts them in HTML", () => {
     const tricky = '<b>"&</b>';
-    expect(esc(tryBoxText("toggle", tricky))).not.toContain("<b>");
     expect(esc(historyEmptyHint("hold", tricky))).toContain("&lt;b&gt;");
     // and the texts themselves have nothing in them that HTML would need escaped
     for (const mode of MODES) {
-      for (const text of [modeDescription(mode), homeHint(mode), keylineAction(mode)]) {
+      for (const text of [modeDescription(mode), homeHint(mode)]) {
         expect(esc(text)).toBe(text);
       }
     }

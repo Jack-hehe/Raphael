@@ -1,7 +1,7 @@
 // Dictionary: words Raphael should spell right. A filter (all, learned by itself, typed), a search,
 // the words as a grid of chips (learned ones with a small sparkle), 「新增單字」 for a word of one's
-// own and 「匯入」 for many from a .csv or .txt, after a confirmation; words that keep coming up in
-// dictation join by themselves.
+// own and 「匯入」 for many from a .csv or .txt, after a confirmation. A word joins by itself only when
+// the user corrected it in a pasted dictation, never for being said often.
 
 import { onLocaleChange, t } from "../i18n";
 
@@ -10,9 +10,10 @@ import { ImportError, countKnown, decodeWordFile, parseWordFile } from "../dicti
 import { describeError } from "../format";
 import { LearnHints, editorName } from "../learn-hint";
 import { loadingHTML } from "../loading";
+import { openActions } from "../member-column";
 import type { AppContext, DictionaryEntry, Page } from "../types";
 import { Deletions } from "../undo";
-import { btn, esc, fieldHTML, ico, iconBtn, st, toaster } from "../ui";
+import { actionRow, btn, esc, fieldHTML, ico, iconBtn, st, tabs, toaster } from "../ui";
 
 type Filter = "all" | "auto" | "manual";
 const FILTERS: { id: Filter; name: string }[] = [
@@ -21,8 +22,8 @@ const FILTERS: { id: Filter; name: string }[] = [
   { id: "manual", get name() { return t("dictionary.003"); } },
 ];
 
-/** The core uses "learned" for corrections; "auto" is also accepted. Other sources count as manual. */
-export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned" || entry.source === "auto";
+/** A word Raphael added by itself, from the user's correction of a pasted dictation (the core's "learned"). The other sources count as manual. */
+export const isAuto = (entry: DictionaryEntry): boolean => entry.source === "learned";
 
 export function matches(entry: DictionaryEntry, filter: Filter, query: string): boolean {
   if (filter === "auto" && !isAuto(entry)) return false;
@@ -37,7 +38,7 @@ const wordChip = (entry: DictionaryEntry): string =>
   (isAuto(entry) ? t("dictionary.004", { p0: ico("sparkle") }) : "") +
   `<div class="wtext"><span class="word">${esc(entry.word)}</span>` +
   (entry.misheard.length > 0 ? t("dictionary.005", { p0: esc(entry.misheard.join("、")) }) : "") +
-  `</div><span class="acts">${iconBtn("trash", t("dictionary.006", { p0: entry.word }), ' data-act="delete"')}</span></div>`;
+  `</div><span class="acts">${iconBtn("more", t("members.more", { p0: entry.word }), ' data-act="word-menu" aria-haspopup="menu" aria-expanded="false"')}</span></div>`;
 
 /** The dictionary, and the way in that the tray's 「將單字加入字典」 takes. */
 export interface DictionaryPage extends Page {
@@ -53,18 +54,16 @@ export function createDictionary(app: AppContext): DictionaryPage {
   el.innerHTML =
     t("dictionary.008", {
       p0:
-        `<div class="head-actions">${btn(t("dictionary.025"), "", ' data-act="import"')}` +
-        `${btn(t("dictionary.007", { p0: ico("plus") }), "pri", ' data-act="new" aria-expanded="false"')}</div>`,
+        actionRow({ cls: "head-actions", secondary: btn(t("dictionary.025"), "", ' data-act="import"'), primary: { label: t("dictionary.007", { p0: ico("plus") }), attrs: ' data-act="new" aria-expanded="false"' } }),
     }) +
-    t("dictionary.009") +
     `<div class="addword card" hidden>${fieldHTML(t("dictionary.010"), "", { id: "nw-word", get label() { return t("dictionary.011"); } })}` +
-    `<div class="addword-actions">${btn(t("dictionary.014"), "pri", ' data-act="add"')}${btn(t("onboarding.031"), "", ' data-act="new-cancel"')}</div></div>` +
+    actionRow({ cls: "addword-actions", secondary: btn(t("common.cancel"), "", ' data-act="new-cancel"'), primary: { label: t("dictionary.014"), attrs: ' data-act="add"' } }) + `</div>` +
     `<div class="importbox card" role="status" hidden><span class="importmsg"></span>` +
-    `<div class="addword-actions">${btn(t("dictionary.025"), "pri", ' data-act="import-go"')}${btn(t("onboarding.031"), "", ' data-act="import-cancel"')}</div></div>` +
+    actionRow({ cls: "addword-actions", secondary: btn(t("common.cancel"), "", ' data-act="import-cancel"'), primary: { label: t("dictionary.025"), attrs: ' data-act="import-go"' } }) + `</div>` +
     `<input type="file" accept=".csv,.txt,text/csv,text/plain" hidden data-import-file aria-label="${esc(t("dictionary.034"))}">` +
-    t("dictionary.015") +
-    FILTERS.map((f) => `<button type="button" data-filter="${f.id}" aria-pressed="${f.id === "all"}">${f.name}</button>`).join("") +
-    `</div><span class="count num"></span>` +
+    `<div class="tools">` +
+    tabs(FILTERS.map((f) => ({ id: f.id, label: f.name, attrs: ` data-filter="${f.id}"` })), "all", { label: t("common.filter"), kind: "filter" }) +
+    `<span class="count num"></span>` +
     `<div class="dsearch">${fieldHTML(t("dictionary.016"), "", { icon: "search", get label() { return t("dictionary.016"); }, id: "dict-q" })}</div></div>` +
     `<div class="learn-hint" hidden></div>` +
     `<div class="wgrid"></div><div class="empty" hidden></div>`;
@@ -119,6 +118,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
     const kept = entries.filter((entry) => !deleting.has(entry.id));
     const shown = kept.filter((entry) => matches(entry, filter, query));
     count.textContent = t("dictionary.017", { p0: shown.length });
+    // The words come in one after another when the list is new (a load, a filter, a search); drawn
+    // again for the same list (a word deleted or added), they stand still (styles.css `data-stagger`).
+    const list = `${filter}|${query}`;
+    grid.classList.toggle("again", grid.dataset.stagger === list);
+    grid.dataset.stagger = list;
     grid.innerHTML = shown.map(wordChip).join("");
     empty.hidden = shown.length > 0;
     empty.innerHTML =
@@ -258,7 +262,11 @@ export function createDictionary(app: AppContext): DictionaryPage {
       renderImport();
     }
     else if (act.dataset.act === "hint-dismiss") hints.dismiss(act.dataset.editor ?? "");
-    else if (act.dataset.act === "delete") remove(Number(act.closest<HTMLElement>(".wrow")?.dataset.id));
+    else if (act.dataset.act === "word-menu") {
+      const id = Number(act.closest<HTMLElement>(".wrow")?.dataset.id);
+      const entry = entries.find(entry => entry.id === id);
+      if (entry) openActions(act, [{ id: "delete", label: t("dictionary.006", { p0: entry.word }), icon: "trash" }], () => remove(id));
+    }
   });
   el.addEventListener("keydown", (e) => {
     const target = e.target as Element;
@@ -294,12 +302,12 @@ export function createDictionary(app: AppContext): DictionaryPage {
     importFile.setAttribute("aria-label", t("dictionary.034"));
     el.querySelector('[data-act="import"]')!.textContent = t("dictionary.025");
     importBox.querySelector('[data-act="import-go"]')!.textContent = t("dictionary.025");
-    importBox.querySelector('[data-act="import-cancel"]')!.textContent = t("onboarding.031");
+    importBox.querySelector('[data-act="import-cancel"]')!.textContent = t("common.cancel");
     renderImport();
     searchInput.placeholder = t("dictionary.016");
     searchInput.setAttribute("aria-label", t("dictionary.016"));
     addBox.querySelector('[data-act="add"]')!.textContent = t("dictionary.014");
-    addBox.querySelector('[data-act="new-cancel"]')!.textContent = t("onboarding.031");
+    addBox.querySelector('[data-act="new-cancel"]')!.textContent = t("common.cancel");
     render();
   });
 

@@ -100,30 +100,15 @@ def _has_cjk(text: str) -> bool:
 _ENGLISH_NAMES = sorted(set(ALIASES.values()), key=len, reverse=True)
 
 
-def city_in(text: str) -> str | None:
-    """The city of the table that `text` names, written as it is there, or None when it names
-    none. The longest name wins (新北市 over 新北); of two as long, the one the table lists
-    first (台北 in 台北京站)."""
-    key = city_key(text)
-    spelled = [spelling for spelling in ALIASES if spelling in key]
-    if spelled:
-        return max(spelled, key=len)
-    folded = unicodedata.normalize("NFKC", text).casefold()
-    for english in _ENGLISH_NAMES:
-        if re.search(rf"(?<![a-z]){re.escape(english.casefold())}(?![a-z])", folded):
-            return english
-    return None
-
-
 # How many cities one question is looked up for: a comparison, not a tour.
 MAX_CITIES = 4
 
 
 def cities_in(text: str) -> list[str]:
     """The cities of the table that `text` names, in the order they are named, each once, at most
-    `MAX_CITIES`, written as `city_in` writes them. As there, the longest name wins and a name
-    inside a longer one is not a second city (新北 in 新北市); of two as long, the one the table
-    lists first (台北 in 台北京站)."""
+    `MAX_CITIES`, each written as the table spells it (an English name only as a word of its own).
+    The longest name wins and a name inside a longer one is not a second city (新北 in 新北市); of
+    two as long, the one the table lists first (台北 in 台北京站)."""
     folded = unicodedata.normalize("NFKC", text)
     # The text as the table is looked up in (`city_key`), each character with where it stood.
     key, where = "", []

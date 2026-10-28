@@ -5,38 +5,10 @@ is tested in tests/background."""
 import pytest
 
 from raphael_core.agent.persona import PHRASES, phrase
-from raphael_core.background.tasks import Refused
 
-from .conftest import decision
+from .conftest import FakeBackground, decision
 from .test_plugin_model import Catalog, llm  # noqa: F401
 from .test_service import make_rig, spoken  # noqa: F401
-
-
-class FakeBackground:
-    def __init__(self):
-        self.submitted = []
-        self.attached = []
-        self.pruned = []
-        self.cleared = 0
-        self.refuse = None
-        self.fail = None
-
-    def submit(self, *, session_id, text, language, model):
-        if self.refuse:
-            raise Refused(self.refuse)
-        if self.fail:
-            raise self.fail
-        self.submitted.append((session_id, text, language, model))
-        return len(self.submitted)
-
-    def attach_turn(self, task_id, turn_id):
-        self.attached.append((task_id, turn_id))
-
-    def prune(self, older_than_ms):
-        self.pruned.append(older_than_ms)
-
-    def clear(self):
-        self.cleared += 1
 
 
 @pytest.fixture
@@ -74,6 +46,53 @@ async def test_the_turn_of_the_history_is_the_handoff_and_the_task_is_tied_to_it
         "do the long thing", "Understood", "Handed to the background.",
     )  # fmt: skip
     assert background.attached == [(1, result["turn_id"])]
+    # The history shows the task with its turn, and the worker's steps after the turn's own.
+    assert turn["task"] == {"id": 1, "state": "running", "started_at_ms": 5}
+    assert [step["tool"] for step in turn["steps"]] == ["look"]
+
+
+def some_briefs():
+    from raphael_core.background.brief import TaskBrief, ToolUse
+
+    return [
+        TaskBrief(2, "send the report to Ann", "running", 4, (ToolUse("Gmail", "send", "cut_off"),), None, None),
+        TaskBrief(1, "look up tea", "done", 3, (), "Found three kinds.", 5),
+    ]  # fmt: skip
+
+
+async def test_the_router_and_the_answer_know_about_the_background_without_another_model_call(
+    rig, client, background
+):
+    background.briefs = some_briefs()
+    client.decisions.append(decision("answer"))
+    client.replies.append(spoken("答", "還在做。"))
+    await rig.ask("寄出去了嗎", language="zh-TW")
+    [call] = client.decide_calls
+    assert call["state"]["background"] == "1 running (step 4, last: Gmail send), 1 done 5 min ago"
+    [answer] = client.json_calls
+    assert "<background_tasks>" in answer["user"] and "send the report to Ann" in answer["user"]
+    assert "Gmail / send: cut_off (unknown whether it ran)" in answer["user"]
+    assert background.submitted == []  # not handed over again
+    assert len(client.decide_calls) == 1 and client.plan_calls == []  # one router call, one answer
+
+
+async def test_nothing_about_the_background_is_added_when_there_are_no_tasks(rig, client, background):
+    client.decisions.append(decision("answer"))
+    client.replies.append(spoken("答", "好。"))
+    await rig.ask("你好嗎", language="zh-TW")
+    assert "background" not in client.decide_calls[0]["state"]
+    assert "background_tasks" not in client.json_calls[0]["user"]
+
+
+async def test_a_background_that_cannot_be_read_does_not_stop_the_request(rig, client, background):
+    def broken(limit=3):
+        raise RuntimeError("PRIVATE")
+
+    background.brief_for_assistant = broken
+    client.decisions.append(decision("answer"))
+    client.replies.append(spoken("答", "好。"))
+    result = await rig.ask("你好嗎", language="zh-TW")
+    assert result["text"] == "好。" and "PRIVATE" not in str(result)
 
 
 async def test_a_queue_that_is_full_or_a_worker_that_is_off_is_a_refusal_with_the_reason(
@@ -120,16 +139,12 @@ async def test_esc_does_not_stop_the_background(rig, client, background):
     assert background.submitted and background.attached  # nothing was taken back
 
 
-async def test_the_old_tasks_go_with_the_history_when_it_is_pruned_and_cleared(rig, client, background):
+async def test_the_tasks_go_with_the_history_when_it_is_cleared_and_are_never_pruned(
+    rig, client, background
+):
     client.decisions.append(decision("delegate"))
     await rig.ask("do it", language="en")
     assert await rig.call("agent.history.clear") == {"deleted": 1}
     assert background.cleared == 1
-    assert background.pruned  # the retention was applied when the service started
-
-
-async def test_without_a_worker_the_route_is_answered_as_before(make_rig, client):
-    rig = make_rig()
-    client.decisions.append(decision("delegate"))
-    result = await rig.ask("do it", language="en")
-    assert result["text"] == phrase("en", "delegate")
+    # The tasks are part of the one conversation, which the retention of the dictations leaves be.
+    assert not hasattr(background, "pruned")

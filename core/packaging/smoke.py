@@ -215,18 +215,20 @@ def smoke_without_a_key(executable: Path) -> dict:
             # why; nothing is asked of a model and nothing is done to this computer (a request that
             # is a command would be: so this one is not).
             refused = rpc.call("agent.ask", {"session_id": "smoke", "text": "What is the weather?",
-                                             "ui_language": "en", "target_app": None})
+                                             "ui_language": "en", "target_app": None, "destination": "quick"})
             require(refused["status"] == "done" and refused["prefix"] == "Negative",
                     "The voice assistant did not refuse a request it cannot answer without a key")
-            turns = rpc.call("agent.history.list")["turns"]
+            quick = next(c["id"] for c in rpc.call("conversations.list")["conversations"] if c["kind"] == "quick")
+            turns = rpc.call("agent.history.list", {"conversation_id": quick})["turns"]
             require(len(turns) == 1 and turns[0]["status"] == "error", "The assistant's turn was not recorded")
             require(rpc.call("agent.history.clear") == {"deleted": 1}, "The assistant's history was not cleared")
             # The plugins are part of the bundle too, with the MCP SDK and what it imports. A server
             # whose program does not exist makes the SDK load and fail the one way that proves it:
             # "not_found". A bundle that left a module of the SDK out fails another way ("error").
-            require(rpc.call("integrations.list") == {"servers": []}, "The plugins did not start empty")
+            require(rpc.call("toolsets.list") == {"groups": []}, "The plugins did not start empty")
             added = rpc.call("integrations.add", {"name": "Smoke", "transport": "stdio",
                                                   "command": "raphael-smoke-no-such-program"})["server"]
+            rpc.call("integrations.set_enabled", {"id": added["id"], "enabled": True})
             refreshed = rpc.call("integrations.refresh", {"id": added["id"]})["server"]
             require(refreshed["status"] == "error" and refreshed["error"] == "not_found",
                     f"The MCP SDK did not load in the bundle (a missing program should be not_found, "
@@ -276,22 +278,24 @@ def smoke_with_the_fake_llm(executable: Path) -> dict:
                         f"{languages[0]}: the cleaned dictation was not saved as cleaned at no cost")
             # The voice assistant answers small talk with the fake LLM, in the language asked for.
             spoken = rpc.call("agent.ask", {"session_id": "smoke", "text": "hello",
-                                            "ui_language": "en", "target_app": None})
+                                            "ui_language": "en", "target_app": None, "destination": "quick"})
             require(spoken == {"status": "done", "turn_id": 1, "prefix": "Answer", "text": "hello"},
                     "The voice assistant did not answer with the fake LLM")
-            require([turn["question"] for turn in rpc.call("agent.history.list")["turns"]] == ["hello"],
+            quick = next(c["id"] for c in rpc.call("conversations.list")["conversations"] if c["kind"] == "quick")
+            require([turn["question"] for turn in rpc.call("agent.history.list", {"conversation_id": quick})["turns"]] == ["hello"],
                     "The assistant's turn was not recorded")
             # A task for the background worker: the core starts its worker (this executable again,
             # with --worker), which carries out the fake model's script and reports. If the bundle
             # could not start itself that way the task would end interrupted or failed.
             handed = rpc.call("agent.ask", {"session_id": "smoke", "text": "[delegate] what time is it",
-                                            "ui_language": "en", "target_app": None})
+                                            "ui_language": "en", "target_app": None, "destination": "quick"})
             require(handed["status"] == "done" and handed["text"] == "Handed to the background.",
                     "The task was not handed to the background worker")
             task = rpc.wait_for_notification("worker.report", timeout=90)
             require(task["state"] == "done" and task["text"] == "The scripted task saw 1 results.",
                     f"The background worker did not carry the task out: {task['state']}")
-            steps = rpc.call("worker.get", {"id": task["task_id"]})["task"]["steps"]
+            turns = rpc.call("agent.history.list", {"conversation_id": quick})["turns"]
+            steps = next(turn for turn in turns if turn["route"] == "delegate")["steps"]
             require([step["kind"] for step in steps] == ["model", "tool", "model"],
                     "The background worker's steps were not written down")
             returncode = shut_down(rpc, root)
@@ -358,9 +362,23 @@ def smoke_the_worker(executable: Path, extra_environment: dict[str, str] | None 
                 "elapsed_seconds": round(time.monotonic() - began, 2)}
 
 
+def smoke_the_voice_decoder(executable: Path) -> dict:
+    """The fourth pass: `raphael-core.exe --check-voice-decoder` decodes a small Opus clip that is
+    built into the core, which it can do only if the bundle carries libsndfile with its codecs."""
+    began = time.monotonic()
+    result = subprocess.run(
+        [str(executable), "--check-voice-decoder"], cwd=executable.parent, capture_output=True,
+        text=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    require(result.returncode == 0 and "voice decoder ok" in result.stdout,
+            f"The bundled audio decoder did not decode an Opus clip (exit {result.returncode}): "
+            f"{(result.stdout + result.stderr)[-400:]}")
+    return {"passed": True, "elapsed_seconds": round(time.monotonic() - began, 2)}
+
+
 def smoke(executable: Path) -> dict:
-    """The three passes. The report is the first pass's, with the second under `cleanup_pass` and the
-    third under `worker_pass`."""
+    """The four passes. The report is the first pass's, with the second under `cleanup_pass`, the
+    third under `worker_pass` and the fourth under `voice_pass`."""
     began = time.monotonic()
     report = smoke_without_a_key(executable)
     cleanup = smoke_with_the_fake_llm(executable)
@@ -369,6 +387,7 @@ def smoke(executable: Path) -> dict:
     report["calls"] = [*report["calls"], *cleanup["calls"]]
     report["stderr"] = [*report["stderr"], *cleanup["stderr"]]
     report["worker_pass"] = smoke_the_worker(executable)
+    report["voice_pass"] = smoke_the_voice_decoder(executable)
     report["elapsed_seconds"] = round(time.monotonic() - began, 2)
     return report
 

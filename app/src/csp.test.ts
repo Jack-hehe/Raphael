@@ -41,17 +41,29 @@ describe("content security policy", () => {
     expect(scripts).not.toContain("'unsafe-inline'");
   });
 
-  test("sources are the app itself, its IPC and local data: no remote host and no wildcard", () => {
+  test("sources are the app itself, its IPC, local data and allowed media/YouTube embeds: no wildcard", () => {
     const allowed = new Set(["'self'", "'none'", "data:", "ipc:", "http://ipc.localhost"]);
+    const frameHosts = new Set(["'self'", "https://www.youtube-nocookie.com", "https://www.youtube.com"]);
     for (const [name, sources] of policy()) {
       for (const source of sources) {
         if (source === "'unsafe-inline'") {
           expect(name, "'unsafe-inline' is for style attributes only").toBe("style-src");
+        } else if (name === "frame-src") {
+          expect(frameHosts, `${name} ${source}`).toContain(source);
+        } else if ((name === "img-src" || name === "media-src") && (source === "https:" || source === "blob:")) {
+          expect(["https:", "blob:"]).toContain(source);
         } else {
           expect(allowed, `${name} ${source}`).toContain(source);
         }
       }
     }
+    expect(policy().get("frame-src")).toEqual(
+      expect.arrayContaining(["https://www.youtube-nocookie.com", "https://www.youtube.com"]),
+    );
+  });
+
+  test("the main window lets HTML5 drops deliver file bytes to its composer", () => {
+    expect(config.app.windows.find((window: { label: string }) => window.label === "main").dragDropEnabled).toBe(false);
   });
 
   test("plugins, objects, base tags, framing and forms are shut", () => {

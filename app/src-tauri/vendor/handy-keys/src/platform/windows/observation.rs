@@ -21,14 +21,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::observation::{
     ascii_capture_allowed, composition_state, deadline_after, edit_key, keyboard_origin,
-    monotonic_ms, mouse_origin, permitted, submission_key, EditBuffer, EditEvent, HookHeartbeat,
-    ImeAnswer, InputOrigin, InputStamp,
+    monotonic_ms, mouse_origin, permitted, submission_key, terminal_key, EditBuffer, EditEvent,
+    HookHeartbeat, ImeAnswer, InputOrigin, InputStamp,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Edits,
     Submissions,
+    Terminal,
 }
 
 struct Session {
@@ -226,6 +227,11 @@ pub fn observe_edits(hwnd: isize, duration: Duration) -> Option<EditObservation>
 /// Without a running keyboard hook there is nothing to observe with, and no observation starts.
 pub fn observe_submissions(hwnd: isize, duration: Duration) -> Option<EditObservation> {
     observe(hwnd, duration, Mode::Submissions)
+}
+
+/// Literal terminal edits when provable, otherwise a same-field UIA resynchronization.
+pub fn observe_terminal_edits(hwnd: isize, duration: Duration) -> Option<EditObservation> {
+    observe(hwnd, duration, Mode::Terminal)
 }
 
 fn observe(hwnd: isize, duration: Duration, mode: Mode) -> Option<EditObservation> {
@@ -456,6 +462,18 @@ pub(super) fn keyboard(kb: &KBDLLHOOKSTRUCT, message: u32, blocked: bool) {
         let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
         let vk = kb.vkCode as u16;
         let event = match session.mode {
+            Mode::Terminal => {
+                let caps = unsafe { GetKeyState(0x14) & 1 != 0 };
+                terminal_key(
+                    vk,
+                    down,
+                    held(0x10),
+                    caps,
+                    held(0x11),
+                    [0x12, 0x5B, 0x5C].into_iter().any(held),
+                    us_layout(session.focus),
+                )
+            }
             Mode::Edits => {
                 let caps = unsafe { GetKeyState(0x14) & 1 != 0 };
                 edit_key(vk, down, held(0x10), caps, unsafe_modifiers())
@@ -518,6 +536,10 @@ pub(super) fn mouse(mouse: &MSLLHOOKSTRUCT) {
     }
     with_session(|session| {
         if session.complete.load(Ordering::Acquire) {
+            return;
+        }
+        if session.mode == Mode::Terminal && in_scope(session) {
+            record(session, EditEvent::Resync);
             return;
         }
         session.invalid.store(true, Ordering::Release);

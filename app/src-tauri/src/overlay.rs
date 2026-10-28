@@ -20,11 +20,11 @@
 //!
 //! The page can draw the emblem in a window that nobody sees: something else may have hidden,
 //! minimized or covered the window, or the shell may keep it on another virtual desktop. So each
-//! time the emblem appears, [`sight`] looks at the window from the main thread, writes what it saw
-//! to the log, and puts right what it can, without ever activating the window. In between,
-//! [`screen`] writes down what happens to the screen (the display turning off and on, the session
-//! locking, sleep, the webview's GPU process exiting), so that an emblem that nobody saw in a
-//! window that was in sight can be put next to it.
+//! time the emblem appears, and again as it thinks and counts, [`sight`] looks at the window from
+//! the main thread, writes what it saw to the log, and puts right what it can, without ever
+//! activating the window. In between, [`screen`] writes down what happens to the screen (the
+//! display turning off and on, the session locking, sleep, the webview's GPU process exiting), so
+//! that an emblem that nobody saw in a window that was in sight can be put next to it.
 
 mod screen;
 mod sight;
@@ -33,8 +33,9 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use serde::Serialize;
@@ -44,7 +45,8 @@ use tauri::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-/// What the emblem shows while it is on screen.
+/// What the emblem shows while it is on screen, as the shell sets it. The page has one more of its
+/// own, "steady", which it picks by itself for a notice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
@@ -52,18 +54,6 @@ pub enum Mode {
     Listening,
     /// Processing continues while its numeric percentage is shown.
     Thinking,
-    /// The white ring follows Raphael's voice.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Raphael has no voice (TTS) yet")
-    )]
-    Speaking,
-    /// Just there, with a thin ring (used for notices).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the overlay page picks it for a notice by itself")
-    )]
-    Steady,
 }
 
 /// How far a dictation has come after the key was released: the speech that is left is
@@ -119,16 +109,29 @@ impl Tier {
 
 /// A question for the person to answer YES or NO, with the words on its buttons, from the core's
 /// confirmation. `id` comes back with the answer (`overlay_confirm`); `timeout_ms` is how long the
-/// question stays open before it counts as a NO.
+/// question stays open before it counts as a NO. `always`, sent only when there is one, is the
+/// label of a third button (「一律允許」, the question about an app Raphael is to operate): a YES
+/// that is also kept for next time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AskPrompt {
     pub id: String,
+    /// The recipient of the request, supplied by the controller rather than the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<u64>,
     pub tier: Tier,
     pub prefix: String,
     pub text: String,
     pub yes: String,
     pub no: String,
     pub timeout_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drafts: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<serde_json::Value>>,
 }
 
 /// What the overlay page is told. Every text in it is in the interface language and in that one
@@ -160,20 +163,34 @@ pub enum OverlayEvent {
     Level { value: f32 },
     /// How far the dictation has come since the key was released, shown beside the glyph ring.
     Progress(Progress),
+    /// The latest public narration from the same turn stream as the conversation.
+    Step { text: String, language: String },
     /// Raphael's report: the emblem appears with `text` as its subtitle, then vanishes.
     Notice { text: String },
     /// Learned words are reported like a notice, but they never take the emblem from a dictation
     /// that is showing: the page tells them when it is over.
     Learned { text: String },
     /// Raphael answers: the emblem and one subtitle line, 《`prefix`。`text`》.
-    Say { prefix: String, text: String },
+    Say {
+        prefix: String,
+        text: String,
+        /// A voiced answer stays until the controller publishes Release or Hide.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        hold: bool,
+    },
     /// Raphael asks a question: the subtitle line 《`prefix`。`text`》 and two buttons under it.
     /// The window takes the mouse until the question is over.
     Ask(AskPrompt),
     /// Delivery succeeded: show 100% briefly before the normal vanish animation.
     Complete,
+    /// The voice ended: release the held answer and continue with any queued reports.
+    Release,
     /// The vanish animation.
     Hide,
+    /// Raphael operates the desktop: the emblem shows its 「操作中」 look, with `line` (the step,
+    /// 《告。操作中：點擊「七」》) beside it until something else takes the stage. A question that
+    /// was on screen goes; the corner is the apps' again (the window lets the mouse through).
+    Operate { line: String },
     /// The emblem's diameter in logical pixels, whether the subtitles show (`"on"` or `"off"`)
     /// and the interface language (`"zh-TW"`, `"en"` or `"ja"`).
     Settings {
@@ -181,6 +198,9 @@ pub enum OverlayEvent {
         subtitles: String,
         language: String,
     },
+    /// Raphael's picture changed (avatar.rs): the page asks for it again (`avatar_get`). A page
+    /// that loads asks for it anyway, so the event is not kept for one that has not.
+    Avatar,
 }
 
 /// How the rest of the app drives the overlay. Calls do not wait for the page and none of them
@@ -202,6 +222,9 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// interface language) every second or so, until the answer or something else replaces them.
     /// No default, for the same reason as [`Self::greet`].
     fn think_quietly(&self, lines: &[&str]);
+    fn step(&self, text: &str, _language: &str) {
+        self.think_quietly(&[text]);
+    }
     /// Loudness from 0 to 1.
     fn level(&self, value: f32);
     /// Raphael reports `text` (in the interface language) as a subtitle for a time that depends on
@@ -214,6 +237,14 @@ pub trait OverlayApi: Send + Sync + 'static {
     /// Raphael answers: the emblem appears with 《`prefix`。`text`》 as one subtitle line, then
     /// vanishes after a time that depends on the length of `text`.
     fn say(&self, prefix: &str, text: &str);
+    /// A voiced answer whose lifetime is owned by the dictation controller.
+    fn say_held(&self, prefix: &str, text: &str) {
+        self.say(prefix, text);
+    }
+    /// Release a voiced answer without dropping the reports queued behind it.
+    fn release_say(&self) {
+        self.hide();
+    }
     /// Raphael asks a YES/NO question: the subtitle line and two buttons. From now on the window
     /// takes the mouse, without ever being activated, until another call puts something else on
     /// the stage (the reply to the answer, a notice, a hide). It keeps the mouse while the answer
@@ -228,6 +259,11 @@ pub trait OverlayApi: Send + Sync + 'static {
     }
     /// How far the dictation has come since the key was released.
     fn progress(&self, progress: Progress);
+    /// Raphael operates the desktop: the emblem's 「操作中」 look with `line`, the step, beside it
+    /// (see [`OverlayEvent::Operate`]). A fake may show it as a notice.
+    fn operate(&self, line: &str) {
+        self.notice(line);
+    }
 }
 
 // ---------- placement ----------
@@ -321,15 +357,19 @@ pub(crate) fn takes_clicks(event: &OverlayEvent) -> Option<bool> {
         OverlayEvent::Show { .. }
         | OverlayEvent::Say { .. }
         | OverlayEvent::Notice { .. }
+        | OverlayEvent::Operate { .. }
         | OverlayEvent::Complete
+        | OverlayEvent::Release
         | OverlayEvent::Hide => Some(false),
         // The loudness and progress are about the emblem, learned words wait behind whatever is
         // on the stage, and the settings are no scene.
         OverlayEvent::Mode { .. }
+        | OverlayEvent::Step { .. }
         | OverlayEvent::Level { .. }
         | OverlayEvent::Progress(_)
         | OverlayEvent::Learned { .. }
-        | OverlayEvent::Settings { .. } => None,
+        | OverlayEvent::Settings { .. }
+        | OverlayEvent::Avatar => None,
     }
 }
 
@@ -362,13 +402,17 @@ impl OverlayEvent {
             OverlayEvent::Mode { .. } => "mode",
             OverlayEvent::Level { .. } => "level",
             OverlayEvent::Progress(_) => "progress",
+            OverlayEvent::Step { .. } => "step",
             OverlayEvent::Notice { .. } => "notice",
             OverlayEvent::Learned { .. } => "learned",
             OverlayEvent::Say { .. } => "say",
             OverlayEvent::Ask(_) => "ask",
             OverlayEvent::Complete => "complete",
+            OverlayEvent::Release => "release",
             OverlayEvent::Hide => "hide",
+            OverlayEvent::Operate { .. } => "operate",
             OverlayEvent::Settings { .. } => "settings",
+            OverlayEvent::Avatar => "avatar",
         }
     }
 }
@@ -397,6 +441,7 @@ impl Bus {
                 // Replayed to a new page as `self.settings`, and a loudness reading or a progress
                 // report is stale by the time a page could use it.
                 OverlayEvent::Settings { .. }
+                | OverlayEvent::Avatar
                 | OverlayEvent::Level { .. }
                 | OverlayEvent::Progress(_) => {}
                 _ => {
@@ -465,7 +510,14 @@ pub struct Overlay {
     /// Whether the window takes the mouse now (see [`takes_clicks`]); the window starts out
     /// letting it through. Held while the window is changed, so that two changes cannot cross.
     clicks: Mutex<bool>,
+    /// When the window was created, and when it was last checked (ms after that): a long
+    /// recording has no other event, and another window may come over the emblem meanwhile.
+    born: Instant,
+    last_sight_ms: AtomicU64,
 }
+
+/// How often the window is checked while the emblem is on screen with nothing else happening.
+const SIGHT_EVERY_MS: u64 = 2_000;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -521,9 +573,16 @@ impl Overlay {
             emblem_px: AtomicU32::new(emblem_px),
             bus: Mutex::new(Bus::new(emblem_px, subtitles, language)),
             clicks: Mutex::new(false),
+            born: Instant::now(),
+            last_sight_ms: AtomicU64::new(0),
         });
         overlay.place_window();
         Ok(overlay)
+    }
+
+    /// Raphael's picture changed: the page asks for the new one.
+    pub fn avatar_changed(&self) {
+        self.publish(OverlayEvent::Avatar);
     }
 
     /// A new emblem size changes the window's size, so it is put in its corner again.
@@ -619,9 +678,31 @@ impl Overlay {
     /// appear in (see [`sight`]). It is queued behind the placing that came before it, so it sees
     /// the window where it was just put; the caller does not wait for it.
     fn keep_in_sight(&self, placement: Option<Placement>) {
+        self.last_sight_ms
+            .store(self.elapsed_ms(), Ordering::Relaxed);
         if let Some(hwnd) = self.hwnd {
             sight::check(&self.window, hwnd, placement);
         }
+    }
+
+    /// [`Self::keep_in_sight`], at most every [`SIGHT_EVERY_MS`]: for the events that keep coming
+    /// while the emblem is on screen (the microphone's level, an answer being said), so that a
+    /// window that came over it during a long recording is put back under it.
+    fn keep_in_sight_now_and_then(&self) {
+        let now = self.elapsed_ms();
+        let last = self.last_sight_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= SIGHT_EVERY_MS
+            && self
+                .last_sight_ms
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            self.keep_in_sight(None);
+        }
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 }
 
@@ -642,6 +723,9 @@ impl OverlayApi for Overlay {
     }
 
     fn set_mode(&self, mode: Mode) {
+        // Another topmost window may have come over the emblem since it appeared: the person
+        // must see it think and count up to 100 % (owner, 2026-10-23).
+        self.keep_in_sight(self.place_window());
         self.publish(OverlayEvent::Mode {
             mode,
             quiet: false,
@@ -657,7 +741,24 @@ impl OverlayApi for Overlay {
         });
     }
 
+    fn step(&self, text: &str, language: &str) {
+        self.publish(OverlayEvent::Show {
+            mode: Mode::Thinking,
+            line: None,
+        });
+        self.publish(OverlayEvent::Mode {
+            mode: Mode::Thinking,
+            quiet: true,
+            lines: Vec::new(),
+        });
+        self.publish(OverlayEvent::Step {
+            text: text.to_owned(),
+            language: language.to_owned(),
+        });
+    }
+
     fn level(&self, value: f32) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Level { value });
     }
 
@@ -674,14 +775,36 @@ impl OverlayApi for Overlay {
     }
 
     fn say(&self, prefix: &str, text: &str) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Say {
+            hold: false,
             prefix: prefix.to_owned(),
             text: text.to_owned(),
         });
     }
 
+    fn say_held(&self, prefix: &str, text: &str) {
+        self.keep_in_sight_now_and_then();
+        self.publish(OverlayEvent::Say {
+            prefix: prefix.to_owned(),
+            text: text.to_owned(),
+            hold: true,
+        });
+    }
+
+    fn release_say(&self) {
+        self.publish(OverlayEvent::Release);
+    }
+
     fn ask(&self, prompt: &AskPrompt) {
+        self.keep_in_sight_now_and_then();
         self.publish(OverlayEvent::Ask(prompt.clone()));
+    }
+
+    fn operate(&self, line: &str) {
+        self.publish(OverlayEvent::Operate {
+            line: line.to_owned(),
+        });
     }
 
     fn hide(&self) {
@@ -693,6 +816,7 @@ impl OverlayApi for Overlay {
     }
 
     fn progress(&self, progress: Progress) {
+        self.keep_in_sight(self.place_window());
         self.publish(OverlayEvent::Progress(progress));
     }
 }
@@ -717,12 +841,18 @@ pub fn overlay_subscribe(
     Ok(())
 }
 
-/// The page's answer to the question on screen: whether the YES button (`approved`) or the NO
-/// button was clicked, for the question `id`.
+/// An answer to the question on screen: whether the YES button (`approved`) or the NO button was
+/// clicked, for the question `id`, on the overlay or (`in_app`) on the card of the main window's
+/// 拉斐爾 page (`agent_question_answer` in commands.rs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Confirmation {
     pub id: String,
     pub approved: bool,
+    pub in_app: bool,
+    /// The third answer of a question that has one (「一律允許」): a YES, kept for next time.
+    pub always: bool,
+    pub drafts: Option<Vec<serde_json::Value>>,
+    pub groups: Option<Vec<serde_json::Value>>,
 }
 
 /// Where the page's answers go: the dictation controller's task takes them from the other end.
@@ -731,7 +861,9 @@ pub struct ConfirmSender(pub UnboundedSender<Confirmation>);
 
 /// The overlay page answers the question on screen: `approved` is true for its YES button. The
 /// answer goes to the controller, which takes it only for the question that is open (`id`). Only
-/// the overlay page may call it: nothing else may approve what Raphael was about to do.
+/// the overlay page may call it; the main window answers through its own command
+/// (`agent_question_answer`), which says so, and nothing else may approve what Raphael was about
+/// to do.
 ///
 /// It needs no capability: the commands of the app itself are not behind the capabilities (the
 /// build declares no app manifest), and the window is checked here, like `overlay_log` does.
@@ -741,6 +873,7 @@ pub fn overlay_confirm(
     webview: Webview,
     id: String,
     approved: bool,
+    always: Option<bool>,
 ) -> Result<(), String> {
     crate::commands::ensure_caller(webview.label(), crate::OVERLAY_WINDOW)?;
     let Some(answers) = app.try_state::<ConfirmSender>() else {
@@ -748,7 +881,14 @@ pub fn overlay_confirm(
     };
     answers
         .0
-        .send(Confirmation { id, approved })
+        .send(Confirmation {
+            id,
+            approved,
+            in_app: false,
+            always: approved && always == Some(true),
+            drafts: None,
+            groups: None,
+        })
         .map_err(|_| "nothing is listening to the overlay's answers".to_owned())
 }
 
@@ -1113,22 +1253,7 @@ mod tests {
             }),
             r#"{"type":"mode","mode":"thinking"}"#
         );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Speaking,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"speaking"}"#
-        );
-        assert_eq!(
-            json(OverlayEvent::Mode {
-                mode: Mode::Steady,
-                quiet: false,
-                lines: Vec::new(),
-            }),
-            r#"{"type":"mode","mode":"steady"}"#
-        );
+
         // a question being thought about: no progress caption, and the waiting lines in its place
         assert_eq!(
             json(OverlayEvent::Mode {
@@ -1158,6 +1283,7 @@ mod tests {
         );
         assert_eq!(json(OverlayEvent::Hide), r#"{"type":"hide"}"#);
         assert_eq!(json(OverlayEvent::Complete), r#"{"type":"complete"}"#);
+        assert_eq!(json(OverlayEvent::Release), r#"{"type":"release"}"#);
         assert_eq!(
             json(OverlayEvent::Learned {
                 text: "《了。「手機」已加入詞典。》".into()
@@ -1169,7 +1295,7 @@ mod tests {
                 stage: Stage::Transcribing,
                 done: 1,
                 total: 3,
-                audio_seconds: 4.5
+                audio_seconds: 4.5,
             })),
             r#"{"type":"progress","stage":"transcribing","done":1,"total":3,"audio_seconds":4.5}"#
         );
@@ -1196,6 +1322,11 @@ mod tests {
 
     fn prompt(tier: Tier) -> AskPrompt {
         AskPrompt {
+            member_id: None,
+            conversation_id: None,
+            always: None,
+            drafts: None,
+            groups: None,
             id: "c-7".into(),
             tier,
             prefix: "問".into(),
@@ -1211,6 +1342,15 @@ mod tests {
         let json = |e: OverlayEvent| serde_json::to_string(&e).unwrap();
         assert_eq!(
             json(OverlayEvent::Say {
+                prefix: "Answer".into(),
+                text: "Hello.".into(),
+                hold: true,
+            }),
+            r#"{"type":"say","prefix":"Answer","text":"Hello.","hold":true}"#
+        );
+        assert_eq!(
+            json(OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: "台北現在二十四度，多雲。".into()
             }),
@@ -1251,11 +1391,13 @@ mod tests {
                 line: None,
             },
             OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: String::new(),
             },
             notice(1),
             OverlayEvent::Complete,
+            OverlayEvent::Release,
             OverlayEvent::Hide,
         ] {
             assert_eq!(takes_clicks(&ends), Some(false), "{ends:?}");
@@ -1308,6 +1450,7 @@ mod tests {
         };
         let ask = OverlayEvent::Ask(prompt(Tier::T3));
         let say = OverlayEvent::Say {
+            hold: false,
             prefix: "了".into(),
             text: "好了".into(),
         };
@@ -1337,6 +1480,29 @@ mod tests {
             .unwrap();
         assert!(build.contains(".focusable(false)"));
         assert!(build.contains(".focused(false)"));
+    }
+
+    #[test]
+    fn the_window_is_kept_in_sight_when_the_emblem_appears_thinks_and_counts() {
+        // Another topmost window can cover the corner after `show`, while the user speaks or
+        // while transcription runs, so `set_mode` and `progress` must also raise the window.
+        let source = include_str!("overlay.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        let api = production
+            .split("impl OverlayApi for Overlay {")
+            .nth(1)
+            .unwrap();
+        for method in ["fn show(", "fn greet(", "fn set_mode(", "fn progress("] {
+            let body = api
+                .split(method)
+                .nth(1)
+                .and_then(|rest| rest.split("\n    }\n").next())
+                .unwrap();
+            assert!(
+                body.contains("self.place_window()") && body.contains("self.keep_in_sight("),
+                "{method} must place the window and keep it in sight"
+            );
+        }
     }
 
     #[cfg(windows)]
@@ -1483,14 +1649,14 @@ mod tests {
         bus.subscribe("a", a);
         bus.subscribe("b", b);
         bus.publish(OverlayEvent::Show {
-            mode: Mode::Steady,
+            mode: Mode::Listening,
             line: None,
         });
         bus.publish(OverlayEvent::Level { value: 1.0 });
         bus.publish(OverlayEvent::Hide);
         let expected = [
             SETTINGS_150_ON,
-            r#"{"type":"show","mode":"steady"}"#,
+            r#"{"type":"show","mode":"listening"}"#,
             r#"{"type":"level","value":1.0}"#,
             r#"{"type":"hide"}"#,
         ];
@@ -1575,11 +1741,11 @@ mod tests {
     fn every_event_has_its_kind_for_the_log() {
         let events = [
             OverlayEvent::Show {
-                mode: Mode::Steady,
+                mode: Mode::Listening,
                 line: None,
             },
             OverlayEvent::Mode {
-                mode: Mode::Steady,
+                mode: Mode::Thinking,
                 quiet: false,
                 lines: Vec::new(),
             },
@@ -1590,11 +1756,13 @@ mod tests {
                 text: String::new(),
             },
             OverlayEvent::Say {
+                hold: false,
                 prefix: "答".into(),
                 text: String::new(),
             },
             OverlayEvent::Ask(prompt(Tier::T2)),
             OverlayEvent::Complete,
+            OverlayEvent::Release,
             OverlayEvent::Hide,
             OverlayEvent::Settings {
                 px: 150,
@@ -1612,6 +1780,7 @@ mod tests {
     fn an_answer_and_a_question_from_before_the_page_loaded_wait_for_it() {
         let mut bus = Bus::new(150, "on", "zh-TW");
         bus.publish(OverlayEvent::Say {
+            hold: false,
             prefix: "答".into(),
             text: "好".into(),
         });

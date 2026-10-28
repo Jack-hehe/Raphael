@@ -16,7 +16,12 @@ Everything that could go wrong on the way is dealt with here or by the host, nev
   or the model failed: it raises `Stop`, and the loop ends there with the kind. The loop counts the
   limits too, so a host that forgot would not make a task endless;
 - cancelling is looked at before every step and while a host call is under way: the task stops at
-  once, and the call under way is given up.
+  once, and the call under way is given up;
+- a call the owner must say yes to first stops the loop too (`Stop("waiting")`): the core keeps the
+  question, and the loop gives back the conversation as it stands (the reply that asked for the
+  call, and the results of the calls of that reply made before it), so that the task can go on
+  later from there. It is started again with that conversation (`messages`), and with the result
+  of the call the owner answered, and of those after it that were not made, added by the core.
 
 The loop makes no call by itself and holds no key. Nothing here logs a prompt, an argument or a
 result.
@@ -31,6 +36,8 @@ from typing import Any, Protocol
 from .guards import (
     MAX_ARGUMENT_CHARS,
     RepeatGuard,
+    FailureGuard,
+    STEER_NOTE,
     canonical,
     elide_old,
     wrap_untrusted,
@@ -44,21 +51,27 @@ REPEATED = (
     "This exact call has been made twice already, with the same arguments. Do not make it again: "
     "use what you have, or try something else, or report."
 )
+WAITING_FOR_WORK = "Not made: waiting for delegated work."
 
 
 @dataclass(frozen=True)
 class Limits:
     """What one task may use. The core enforces these; the loop counts them too."""
 
-    model_calls: int = 15
-    tool_calls: int = 25
-    seconds: float = 600.0
+    model_calls: int = 80
+    tool_calls: int = 200
+    seconds: float = 1800.0
+
+
+# The kind of `Stop` of a call that waits for the owner's yes: the task pauses there.
+WAITING = "waiting"
 
 
 class Stop(Exception):
     """The host will not go on, or the loop may not. `kind` says why: "cancelled" (the user
-    stopped the task), "limit_model", "limit_tool", "limit_time", "limit_cost", "limit_month" (a
-    limit was reached), or "failed" (the model failed; `detail` is the kind of failure)."""
+    stopped the task), "limit_model", "limit_tool", "limit_time" (a
+    limit was reached), "failed" (the model failed; `detail` is the kind of failure) or "waiting"
+    (a call waits for the owner's yes: the task pauses)."""
 
     def __init__(self, kind: str, detail: str | None = None) -> None:
         super().__init__(kind)
@@ -95,6 +108,7 @@ class ToolOutcome:
     content: str = ""
     truncated: bool = False
     tools: list[dict] = field(default_factory=list)  # tools the call made available from now on
+    instruction: str = ""  # a refusal of Raphael's own tool: what the model is told instead of `kind`
 
 
 class Host(Protocol):
@@ -116,6 +130,10 @@ class Outcome:
     detail: str | None = None
     model_calls: int = 0
     tool_calls: int = 0
+    # A task that pauses for the owner's yes ("stopped", kind "waiting"): the conversation as it
+    # stands, and the id of the call that waits.
+    messages: list[dict] | None = None
+    waiting_call: str | None = None
 
 
 async def _until(
@@ -170,19 +188,25 @@ async def run_task(
     limits: Limits = Limits(),
     cancelled: asyncio.Event | None = None,
     clock: Callable[[], float] = time.monotonic,
+    messages: Sequence[dict] | None = None,
 ) -> Outcome:
     """Carry out a task. `system` and `user` are the first two messages of the conversation (the
-    core wrote them), `tools` the tools the model is offered in the chat format. The loop ends when
-    the model reports, when a limit is reached, when the task is cancelled or when the host stops
-    it; it raises nothing for any of those."""
+    core wrote them), `tools` the tools the model is offered in the chat format; a task that goes
+    on after a pause starts from the whole conversation instead (`messages`, which the core gives
+    back as the loop left it, with the results of the calls that waited). The loop ends when the
+    model reports, when a limit is reached, when the task is cancelled or when the host stops it;
+    it raises nothing for any of those. `limits` are what is left to the task."""
     cancelled = cancelled if cancelled is not None else asyncio.Event()
     tools = list(tools)
     offered = {tool["function"]["name"] for tool in tools}
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
+    conversation: list[dict[str, Any]] = (
+        [dict(message) for message in messages]
+        if messages
+        else [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    )
+    messages = conversation
     repeats = RepeatGuard()
+    failures = FailureGuard()
     deadline = clock() + limits.seconds
     model_calls = tool_calls = 0
 
@@ -202,15 +226,34 @@ async def run_task(
             messages.append(_assistant_message(turn))
             if not turn.calls:
                 return Outcome("done", turn.content, None, None, model_calls, tool_calls)
+            steer = False
+            dispatched = False
             for call in turn.calls:
-                refusal = _refusal(call, offered, repeats)
+                # Every hand-off of a batch starts now; anything else in it waits for the delegated work.
+                refusal = WAITING_FOR_WORK if dispatched and call.name != "handoff" else _refusal(call, offered, repeats)
                 if refusal is None:
                     check_before("limit_tool", tool_calls, limits.tool_calls)
                     tool_calls += 1
-                    outcome = await _until(
-                        host.tool(call.id, call.name, call.arguments), cancelled, deadline, clock
-                    )
-                    content = _result_text(call.name, outcome)
+                    try:
+                        outcome = await _until(
+                            host.tool(call.id, call.name, call.arguments), cancelled, deadline, clock
+                        )
+                    except Stop as stop:
+                        if stop.kind != WAITING:
+                            raise
+                        # The task pauses for the owner: the core keeps the conversation.
+                        return Outcome(
+                            "stopped", "", WAITING, None, model_calls, tool_calls,
+                            messages=list(messages), waiting_call=call.id,
+                        )  # fmt: skip
+                    content = result_text(call.name, outcome)
+                    if outcome.ok:
+                        failures.succeeded()
+                    else:
+                        verdict = failures.failed()
+                        if verdict == "stop":
+                            raise Stop("failed", "tool_failures")
+                        steer = steer or verdict == "steer"
                     for found in outcome.tools:
                         name = found["function"]["name"]
                         if name not in offered:
@@ -219,6 +262,13 @@ async def run_task(
                 else:
                     content = wrap_untrusted(call.name, refusal, ok=False)
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
+                dispatched = dispatched or (refusal is None and outcome.ok and outcome.kind == 'handoff')
+            if dispatched:
+                # The receipts have returned. Persist this continuation and release the worker.
+                return Outcome('stopped',kind='handoff',model_calls=model_calls,tool_calls=tool_calls,messages=list(messages))
+            if steer:
+                # told after the results of this round, so that it reads them first
+                messages.append({"role": "user", "content": STEER_NOTE})
             elide_old(messages)
     except Stop as stop:
         status = "cancelled" if stop.kind == "cancelled" else "stopped"
@@ -238,9 +288,13 @@ def _refusal(call: Call, offered: set[str], repeats: RepeatGuard) -> str | None:
     return None
 
 
-def _result_text(name: str, outcome: ToolOutcome) -> str:
+def result_text(name: str, outcome: ToolOutcome) -> str:
+    """What the model is shown of a call that was made: its result, or why it failed, wrapped as
+    untrusted data. The core uses it too, for the call a paused task waited on."""
     if outcome.ok:
         return wrap_untrusted(name, outcome.content, ok=True)
+    if outcome.instruction:
+        return wrap_untrusted(name, f"The call was refused. {outcome.instruction}", ok=False)
     reason = outcome.kind or "error"
     text = f"The call failed ({reason})."
     if outcome.content:  # a tool that says why it failed: its words are data too

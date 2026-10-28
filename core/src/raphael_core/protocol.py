@@ -22,6 +22,8 @@ BUDGET_EXCEEDED = 1002
 BUSY = 1003
 NO_MICROPHONE = 1004
 NOT_FOUND = 1005
+# The cloud speech-to-text failed and there is no local model to fall back on.
+NO_LOCAL_MODEL = 1006
 # The core refuses a model call or a tool call of a background task (it was cancelled, a limit was
 # reached, the model failed); `data` says which. Only the worker is ever answered this.
 WORKER_STOPPED = 1100
@@ -38,6 +40,12 @@ class RpcError(Exception):
 
     def __str__(self) -> str:
         return f"[{self.code}] {self.message}"
+
+
+def invalid_params(message: str) -> RpcError:
+    """An INVALID_PARAMS error. `message` names a param, never a value: a value may be a key, or
+    what the user said."""
+    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def request(id: int | str, method: str, params: dict | None) -> dict:

@@ -137,7 +137,7 @@ class FakeView implements OverlayView {
   setHold(state: HoldState): void {
     this.log.push(`hold:${state}`);
   }
-  setChoice(choice: "yes" | "no" | null): void {
+  setChoice(choice: "yes" | "no" | "always" | null): void {
     this.log.push(`choice:${choice}`);
   }
   hideAsk(): void {
@@ -148,7 +148,7 @@ class FakeView implements OverlayView {
 let emblem: FakeEmblem;
 let view: FakeView;
 let controller: OverlayController;
-let confirm: ReturnType<typeof vi.fn<(id: string, approved: boolean) => Promise<unknown>>>;
+let confirm: ReturnType<typeof vi.fn<(id: string, approved: boolean, always?: boolean) => Promise<unknown>>>;
 const send = (event: OverlayEvent) => controller.handle(event);
 
 beforeEach(() => {
@@ -171,6 +171,20 @@ const EN = "《Notice. This window has higher privileges and refuses the paste. 
 const settings = (subtitles: string, language: string = "zh-TW", px = 150): OverlayEvent => ({ type: "settings", px, subtitles, language });
 
 const lines = (): string[] => view.log.filter((line) => line.startsWith("line:"));
+
+test("public turn progress replaces the previous subtitle without rotating or reviving a finished question", () => {
+  send({ type: "show", mode: "listening", line: "Hello" });
+  send({ type: "mode", mode: "thinking", quiet: true });
+  send({ type: "step", text: "Checking the schedule.", language: "en" });
+  expect(view.waiting).toBe("Checking the schedule.");
+  send({ type: "step", text: "Found two meetings.", language: "en" });
+  vi.advanceTimersByTime(10_000);
+  expect(view.waiting).toBe("Found two meetings.");
+  send({ type: "say", prefix: "Answer", text: "Two meetings." });
+  expect(view.waiting).toBeNull();
+  send({ type: "step", text: "Late event", language: "en" });
+  expect(view.waiting).toBeNull();
+});
 
 test("the fake page notices a caption and a line that stand in their one place together", () => {
   view.showLine("《答。好的》", "zh-TW");
@@ -536,6 +550,36 @@ test("three notices are shown one after the other, in order", () => {
   expect(emblem.log.filter((l) => l === "vanish")).toHaveLength(1);
 });
 
+// The answer the owner saw run out of the top of the window on 2026-10-27, with an address in it.
+const LONG = "1. 建立帳號並登入控制台。 2. 若設定只要求金鑰，前往「Settings → Project Settings → API Keys」取得。" +
+  "[官方說明](https://docs.composio.dev/reference/authenticating-to-composio) 3. 將金鑰填入設定頁，再回到 Gmail 連結卡完成 Google 授權。" +
+  "金鑰請只填入專用欄位，不要貼到聊天中。";
+
+test("a long voiced answer is told page by page without its address, and its last page waits for the voice", () => {
+  send({ type: "say", prefix: "答", text: LONG, hold: true });
+  vi.advanceTimersByTime(60_000);
+  const pages = lines().map((line) => line.slice("line:".length));
+  expect(pages.length).toBeGreaterThan(2);
+  expect(pages[0]!.startsWith("《答。1. ")).toBe(true);
+  expect(pages[pages.length - 1]!.endsWith("》")).toBe(true);
+  expect(pages.join("")).not.toMatch(/https?:|\]\(/);
+  expect(emblem.log).not.toContain("vanish"); // the last page stays while the voice speaks
+  send({ type: "release" });
+  expect(view.last).toBe("clear");
+  expect(emblem.last).toBe("vanish");
+});
+
+test("a voice that ends before the last page lets the pages that are left run on their own time", () => {
+  send({ type: "say", prefix: "答", text: LONG, hold: true });
+  vi.advanceTimersByTime(833);
+  expect(lines()).toHaveLength(1);
+  send({ type: "release" });
+  vi.advanceTimersByTime(120_000);
+  expect(lines().length).toBeGreaterThan(2);
+  expect(lines()[lines().length - 1]!.endsWith("》")).toBe(true);
+  expect(emblem.last).toBe("vanish");
+});
+
 test("hide during a notice cancels it and the notices that wait", () => {
   send({ type: "notice", text: ZH });
   send({ type: "notice", text: "《了。》" });
@@ -629,12 +673,16 @@ test("say writes 《prefix。text》 after the appear animation, for as long as 
   expect(emblem.last).toBe("vanish");
 });
 
-test("a long answer stays 12 s and no longer", () => {
-  const text = "字".repeat(80);
-  send({ type: "say", prefix: "答", text });
+test("a long answer is told in pages of about two lines, each on screen for its own time", () => {
+  const first = `《答。${"字".repeat(51)}`, second = `${"字".repeat(29)}》`;
+  send({ type: "say", prefix: "答", text: "字".repeat(80) });
   vi.advanceTimersByTime(833);
-  expect(lines()).toEqual([`line:《答。${text}》`]);
-  vi.advanceTimersByTime(11_999);
+  expect(lines()).toEqual([`line:${first}`]);
+  vi.advanceTimersByTime(noticeDurationMs(first));
+  expect(view.last).toBe("clear");
+  vi.advanceTimersByTime(1);
+  expect(lines()).toEqual([`line:${first}`, `line:${second}`]);
+  vi.advanceTimersByTime(noticeDurationMs(second) - 1);
   expect(emblem.log).not.toContain("vanish");
   vi.advanceTimersByTime(1);
   expect(emblem.last).toBe("vanish");
@@ -1318,4 +1366,131 @@ test("levels and settings leave the lines going", () => {
   send(settings("on", "zh-TW", 194));
   vi.advanceTimersByTime(WAITING_LINE_MS * 2);
   expect(shown()).toHaveLength(3);
+});
+
+// ---- a question with a third answer ----
+
+test("a question with the third answer shows three buttons, and is never held", () => {
+  send(ask({ tier: "T3", yes: "允許一次", no: "不要", always: "一律允許" }));
+  vi.advanceTimersByTime(833);
+  expect(view.asked).toEqual([{ yes: "允許一次", no: "不要", always: "一律允許", tier: "T2", language: "zh-TW" }]);
+  expect(controller.holdStart()).toBe(false);
+});
+
+test("a question without the third answer has no always label", () => {
+  send(ask());
+  vi.advanceTimersByTime(833);
+  expect(view.asked[0]).not.toHaveProperty("always");
+});
+
+test("the third answer says YES with always, once", () => {
+  asked({ always: "一律允許" });
+  controller.clickAsk("always");
+  expect(confirm).toHaveBeenCalledExactlyOnceWith("c1", true, true);
+  expect(view.log).toEqual(["choice:always"]);
+  controller.clickAsk("yes");
+  controller.clickAsk("no");
+  expect(confirm).toHaveBeenCalledTimes(1);
+});
+
+test("YES and NO of a question with the third answer are sent without always", () => {
+  asked({ always: "一律允許" });
+  controller.clickAsk("yes");
+  expect(confirm).toHaveBeenCalledExactlyOnceWith("c1", true);
+  send(ask({ id: "c2", always: "一律允許" }));
+  vi.advanceTimersByTime(833);
+  controller.clickAsk("no");
+  expect(confirm).toHaveBeenLastCalledWith("c2", false);
+});
+
+test("a click on always is ignored when the question has no such answer", () => {
+  asked();
+  controller.clickAsk("always");
+  expect(confirm).not.toHaveBeenCalled();
+  expect(view.log).toEqual([]);
+});
+
+test("a third answer that could not be sent can be given again", async () => {
+  confirm.mockRejectedValueOnce(new Error("no"));
+  asked({ always: "一律允許" });
+  controller.clickAsk("always");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(view.log).toEqual(["choice:always", "choice:null"]);
+  controller.clickAsk("always");
+  expect(confirm).toHaveBeenCalledTimes(2);
+});
+
+// ---- Raphael operates an app ----
+
+const OPERATE = "《告。操作中：點擊「七」》";
+
+test("operate shows the emblem in the operating mode with the line in the caption's place", () => {
+  send({ type: "operate", line: OPERATE });
+  expect(emblem.log).toEqual(["appear", "set:operating"]);
+  expect(view.waiting).toBe(OPERATE);
+  expect(view.waitingLanguages).toEqual(["zh-TW"]);
+  expect(controller.expectsPaint).toBe(true);
+  // static: the line does not rotate, and nothing else is written
+  vi.advanceTimersByTime(WAITING_LINE_MS * 5);
+  expect(view.waitings).toEqual([OPERATE]);
+  expect(view.overlaps).toEqual([]);
+});
+
+test("operate is written whatever the subtitles setting says", () => {
+  send(settings("off", "ja", 150));
+  send({ type: "operate", line: OPERATE });
+  expect(view.waiting).toBe(OPERATE);
+  expect(view.waitingLanguages).toEqual(["ja"]);
+});
+
+test("another operate replaces the line; an empty one is ignored", () => {
+  send({ type: "operate", line: OPERATE });
+  send({ type: "operate", line: "《告。操作中：輸入文字》" });
+  expect(view.waiting).toBe("《告。操作中：輸入文字》");
+  send({ type: "operate", line: "" });
+  expect(view.waiting).toBe("《告。操作中：輸入文字》");
+});
+
+test("operate during a question takes it from the screen and sends no answer", () => {
+  asked({ always: "一律允許" });
+  send({ type: "operate", line: OPERATE });
+  expect(view.log).toContain("ask-hide");
+  expect(confirm).not.toHaveBeenCalled();
+  controller.clickAsk("always");
+  controller.clickAsk("yes");
+  expect(confirm).not.toHaveBeenCalled();
+  expect(view.waiting).toBe(OPERATE);
+  expect(emblem.log).toContain("set:operating");
+});
+
+test("a following say replaces the operate line", () => {
+  send({ type: "operate", line: OPERATE });
+  send({ type: "say", prefix: "答", text: "好了" });
+  expect(view.waiting).toBeNull();
+  vi.advanceTimersByTime(833);
+  expect(view.log).toContain("line:《答。好了》");
+});
+
+test("hide, show and a question each take the operate line away", () => {
+  send({ type: "operate", line: OPERATE });
+  send({ type: "hide" });
+  expect(view.waiting).toBeNull();
+
+  send({ type: "operate", line: OPERATE });
+  send({ type: "show", mode: "listening" });
+  expect(view.waiting).toBeNull();
+  send({ type: "hide" });
+
+  send({ type: "operate", line: OPERATE });
+  send(ask());
+  expect(view.waiting).toBeNull();
+});
+
+test("operate drops the notices that waited but keeps the learned words", () => {
+  send({ type: "learned", text: "learned" });
+  vi.advanceTimersByTime(833);
+  send({ type: "notice", text: "a notice" });
+  send({ type: "operate", line: OPERATE });
+  vi.advanceTimersByTime(60_000);
+  expect(view.log).not.toContain("line:a notice");
 });

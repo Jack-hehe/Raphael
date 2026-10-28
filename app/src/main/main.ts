@@ -1,31 +1,47 @@
-// The main window: a sidebar with home, Raphael's conversations, history and dictionary, this
+// The main window: home overview first, conversations, automation, team and dictation, this
 // month's spend and the way to the settings at the bottom, and the page that is chosen. The
 // settings open as a panel over the window. The pages are in pages/; this file holds what they
-// share.
+// share. On the 拉斐爾 page the sidebar is a rail of its icons alone (52 px), to leave room for the
+// members' column: `data-rail` on <html> says so to the style sheet, and each icon is named in its
+// tooltip then.
 
 import { onLocaleChange, setLocale, t } from "./i18n";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { loadGlyphTexture } from "../overlay/emblem";
 import * as api from "./api";
+import { avatarHTML, loadAvatar, onAvatarChange } from "./avatar";
+import { createAutomationsPage } from "./pages/automations";
+import { createTeamPage } from "./pages/team";
+import { createHome } from "./pages/home";
+import { configureRooms } from "./group-chats";
 import { createAgent } from "./pages/agent";
 import { createDictionary } from "./pages/dictionary";
 import { createHistory } from "./pages/history";
-import { createHome } from "./pages/home";
+import { createDictationOverview } from "./pages/dictation-overview";
+import { createDictation } from "./pages/dictation";
 import { createSettings } from "./pages/settings";
+import { createNavigationPage, registerNavigationPages, resolvePage, START_PAGE } from "./navigation-pages";
+import { applySkin } from "./owner-settings";
 import { DeviceState } from "./device";
 import { resumeModels } from "./models";
 import { mountOnboarding } from "./onboarding";
 import { Navigation, type Place, samePage } from "./nav-history";
 import { installNavInput } from "./nav-input";
-import { brandIcon } from "./brand";
+import { labelNavItem, navAppsHTML, navItemHTML, navHomeHTML, renderAppsEntry } from "./nav-items";
+import type { InventoryView } from "./apps-inventory";
 import { installWindowHotkeys } from "./window-hotkeys";
+import { installFocusKeys } from "./focus-keys";
+import { installContextMenus } from "./context-menu";
 import { followTray } from "./tray-open";
 import { installWindowChrome, labelWindowControls, showMaximized } from "./window-chrome";
-import type { AppContext, DeviceSettings, MainEvent, Page, PageId, SettingsPane } from "./types";
+import { installWindowZoom } from "./window-zoom";
+import type { AgentDraft, AppContext, DeviceSettings, MainEvent, MainPageId, Page, PageId, SettingsPane } from "./types";
 import { spendMini } from "./spend";
 import { Undoable } from "./undo";
-import { type IconName, ico, toaster } from "./ui";
+import { Cleared } from "./cleared";
+import { type IconName, esc, ico, leave, toaster } from "./ui";
 import "./styles.css";
 
 /** The glyph ring texture (app/public/brand/glyph-ring.png); if it fails to load the emblem draws a plain ring. */
@@ -44,25 +60,28 @@ const DEFAULT_DEVICE: DeviceSettings = {
   ui_language: "zh-TW",
   autostart: true,
   onboarded: false,
+  computer_apps: [],
 };
 
 /** A page that comes on screen again within this time of the last time is not loaded again. */
 const RESHOW_MS = 1000;
 
-const NAV: { id: Exclude<PageId, "settings">; name: string; icon: IconName }[] = [
-  { id: "home", get name() { return t("main.001"); }, icon: "home" },
-  { id: "agent", get name() { return t("nav.agent"); }, icon: "chat" },
-  { id: "history", get name() { return t("main.002"); }, icon: "clock" },
-  { id: "dictionary", get name() { return t("main.003"); }, icon: "book" },
+/** Rail destinations; Raphael uses his face rather than a line icon. */
+const NAV: { id: MainPageId; name: string; icon: IconName | "face" }[] = [
+  { id: "home", get name() { return t("nav.overview"); }, icon: "home" },
+  { id: "agent", get name() { return t("nav.agent"); }, icon: "face" },
+  { id: "team", get name() { return t("nav.team"); }, icon: "grid" },
+  { id: "dictation", get name() { return t("nav.dictation"); }, icon: "mic" },
 ];
 
 // ---------- the theme ----------
 
 const prefersDark = matchMedia("(prefers-color-scheme: dark)");
+let skin = "default";
 /** The device settings, kept right when reads and writes overlap. */
 const device = new DeviceState(
   DEFAULT_DEVICE,
-  { get: api.deviceSettingsGet, set: api.deviceSettingsSet },
+  { get: api.deviceSettingsGet, set: api.deviceSettingsSet, removeComputerApp: api.deviceComputerAppRemove },
   () => {
     applyTheme();
     setLocale(device.get().ui_language);
@@ -72,7 +91,7 @@ const device = new DeviceState(
 /** Light or dark, as `appearance` says; `system` follows the system. */
 function applyTheme(): void {
   const { appearance } = device.get();
-  document.documentElement.dataset.theme = appearance === "system" ? (prefersDark.matches ? "dark" : "light") : appearance;
+  applySkin(skin, appearance, prefersDark.matches);
 }
 prefersDark.addEventListener("change", applyTheme);
 
@@ -97,10 +116,18 @@ function mountWindowChrome(): void {
   } catch (error) {
     console.warn("main: window controls are unavailable outside Tauri", error);
   }
+  try {
+    const webview = getCurrentWebview();
+    installWindowZoom(window, (factor) => webview.setZoom(factor));
+  } catch (error) {
+    console.warn("main: window zoom is unavailable outside Tauri", error);
+  }
 }
 
 async function start(): Promise<void> {
   applyTheme();
+  // Focus rings only while Tab moves the focus (focus-keys.ts); a click or the caret shows the rest.
+  installFocusKeys(document);
   let deviceRead = false;
   try {
     await device.refresh();
@@ -111,10 +138,8 @@ async function start(): Promise<void> {
   installWindowHotkeys(() => device.get());
   void loadGlyphTexture(GLYPH_URL);
 
-  // The browser's own menu (reload, back, ...) has no place in an app. Text fields keep theirs.
-  document.addEventListener("contextmenu", (e) => {
-    if (!(e.target instanceof HTMLInputElement)) e.preventDefault();
-  });
+  // A right click presses the ⋯ of the row under it; elsewhere the browser's own menu has no place in an app. Text fields keep theirs.
+  installContextMenus(document);
 
   const listeners = new Set<(event: MainEvent) => void>();
   const ctx: AppContext = {
@@ -126,37 +151,95 @@ async function start(): Promise<void> {
     device: () => device.get(),
     refreshDevice: () => device.refresh(),
     setDevice: (patch) => device.set(patch),
+    removeComputerApp: (exe) => device.removeComputerApp(exe),
     onEvent(handler) {
       listeners.add(handler);
       return () => void listeners.delete(handler);
     },
     undo: new Undoable(toaster),
+    cleared: new Cleared(),
     closeSettings: () => closeSettings(),
+    rerunGuide: () => startGuide("rerun"),
   };
 
   const history = createHistory(ctx);
   const dictionary = createDictionary(ctx);
-  const home = createHome(ctx);
+  const overview = createDictationOverview(ctx);
+  const dictation = createDictation(ctx, { overview, history, dictionary }, tab => navigation.visit(() => { dictation.setTab(tab); main.scrollTop = 0; }));
   const agent = createAgent(ctx);
   const settings = createSettings(ctx);
-  const pages: Record<PageId, Page> = { home, agent, history, dictionary, settings };
+  configureRooms(ctx);
+  registerNavigationPages({ automations: createAutomationsPage, team: createTeamPage });
+  const pages: Record<MainPageId | "settings", Page> = { home: createHome(ctx), dictation, agent, settings, automations: createNavigationPage("automations", ctx), team: createNavigationPage("team", ctx) };
 
   const nav = document.getElementById("nav")!;
   const main = document.getElementById("main")!;
   const guide = document.getElementById("ob")!;
-  const button = (id: PageId, name: string, icon: IconName): string =>
-    `<button type="button" class="nav" data-go="${id}" aria-current="false">${ico(icon)}<span>${name}</span></button>`;
+  const face = (): string => avatarHTML({ size: 18, cls: "nav-face" });
+  const button = (id: PageId, name: string, icon: IconName | "face"): string => navItemHTML(id, name, icon === "face" ? face() : ico(icon));
   nav.innerHTML =
-    `<div class="brand" data-window-drag>${brandIcon()}<span>Raphael</span></div>` +
+    navHomeHTML() +
     NAV.map((item) => button(item.id, item.name, item.icon)).join("") +
     `<div class="side-fill"></div>` +
     `<button type="button" class="usage-box" data-go="settings" data-pane="usage" hidden></button>` +
-    t("main.004", { p0: ico("gear") });
+    `<div class="side-foot">${navAppsHTML()}${button("settings", t("nav.settings"), "gear")}</div>`;
   const usageBox = nav.querySelector<HTMLElement>(".usage-box")!;
+  const agentItem = nav.querySelector<HTMLElement>('.nav[data-go="agent"]')!;
+  // 拉斐爾 shows Raphael's face, the person's picture once there is one.
+  onAvatarChange(() => agentItem.querySelector(".av")?.replaceWith(document.createRange().createContextualFragment(face())));
+  void loadAvatar(api.avatarGet);
+  /** A gold dot on 拉斐爾 while one of his YES/NO questions waits for its answer. */
+  let waitingQuestion: string | null = null;
+  const markQuestion = (id: string | null): void => {
+    waitingQuestion = id;
+    agentItem.classList.toggle("is-asking", id !== null);
+    agentItem.querySelector(".nav-dot")?.remove();
+    if (id !== null) agentItem.insertAdjacentHTML("beforeend", `<span class="nav-dot" role="img" aria-label="${esc(t("agent.asking"))}"></span>`);
+  };
+  void api.agentQuestionOpen().then((open) => markQuestion(open?.id ?? null), () => {});
   function translateNavigation(): void {
     nav.setAttribute("aria-label", t("nav.pages"));
-    for (const item of NAV) nav.querySelector<HTMLElement>(`[data-go="${item.id}"] span`)!.textContent = item.name;
-    nav.querySelector<HTMLElement>(".nav-bottom span")!.textContent = t("nav.settings");
+    const homeButton = nav.querySelector<HTMLElement>(".brand")!;
+    homeButton.setAttribute("aria-label", t("nav.home"));
+    homeButton.title = t("nav.home");
+    markQuestion(waitingQuestion);
+    for (const item of NAV) labelNavItem(nav, item.id, item.name);
+    labelNavItem(nav, "settings", t("nav.settings"));
+    renderAppsEntry(nav, appsInventory);
+    nameRailItems();
+  }
+
+  /** The owner's apps as the core counts them, for the sidebar's 「連結應用程式」: the one number every screen shows. */
+  let appsInventory: InventoryView = "loading";
+  let appsReads = 0;
+  async function refreshApps(): Promise<void> {
+    const mine = ++appsReads;
+    let next: InventoryView;
+    try {
+      next = await api.integrationsInventory();
+    } catch {
+      next = "failed";
+    }
+    if (mine !== appsReads) return;
+    appsInventory = next;
+    renderAppsEntry(nav, appsInventory);
+    nameRailItems();
+  }
+
+  /** Whether the sidebar is the rail of icons: while the 拉斐爾 page is the one on screen. */
+  let rail = false;
+  /** In the rail each icon says its page in its tooltip; in the whole sidebar the name is beside it. */
+  function nameRailItems(): void {
+    nav.querySelectorAll<HTMLElement>(".nav").forEach((item) => {
+      const name = item.dataset.navTitle ?? item.querySelector(".nav-t")?.textContent ?? "";
+      if (rail && name) item.title = name;
+      else item.removeAttribute("title");
+    });
+  }
+  function setRail(on: boolean): void {
+    rail = on;
+    document.documentElement.dataset.rail = String(on);
+    nameRailItems();
   }
   translateNavigation();
   onLocaleChange(() => {
@@ -167,24 +250,50 @@ async function start(): Promise<void> {
     const target = (e.target as Element).closest<HTMLElement>("[data-go]");
     if (target) go(target.dataset.go as PageId, target.dataset.pane as SettingsPane | undefined);
   });
+  async function refreshOwner(): Promise<void> {
+    try {
+      const { settings: value } = await api.settingsGet();
+      skin = value.skin ?? "default";
+      applyTheme();
+    } catch { /* The window remains usable while the core restarts. */ }
+  }
+  ctx.onEvent(event => { if (event.type === "SettingsChanged") void refreshOwner(); });
+  void refreshOwner();
+  // The count of connected apps moves with them: a sign-in, a switch, an uninstall, a call that failed.
+  ctx.onEvent(event => { if (event.type === "ConnectionsChanged") void refreshApps(); });
+  void refreshApps();
   for (const page of Object.values(pages)) if (page !== settings) main.append(page.el);
   // The panel goes before the window controls, which come last in the document.
   document.getElementById("window-chrome")!.before(settings.el);
-  // Keep the version outside the scroll container's containing block.
-  document.querySelector(".wbody")!.append(pages.home.el.querySelector(".home-version")!);
+  // Keep the overview version outside the scroll container's containing block.
+  document.querySelector(".wbody")!.append(overview.el.querySelector(".home-version")!);
 
-  let current: Exclude<PageId, "settings"> | null = null;
+  let current: MainPageId | null = null;
   let settingsOpen = false;
   /** What had the focus before the settings opened: it gets it back when they close. */
   let opener: HTMLElement | null = null;
   let shownAt = 0;
+  /** What the app last heard of whether the 拉斐爾 page is what the window shows (`agentPageShown`). */
+  let agentPageTold = false;
+  /**
+   * Tells the app whether the 拉斐爾 page is what the window shows: the page is the current one,
+   * with no settings over it and no guide in its place. While it is and the window is in front, a
+   * question to Raphael is shown here alone, and the overlay at the bottom right stays empty.
+   */
+  function tellAgentPage(): void {
+    const shown = current === "agent" && !settingsOpen && guide.hidden !== false;
+    if (shown === agentPageTold) return;
+    agentPageTold = shown;
+    void api.agentPageShown(shown).catch(() => {});
+  }
 
   /** Where the window is: the page, the settings panel if it is open over it and the day the history shows. Null before the first page. */
   function where(): Place | null {
     if (!current) return null;
     const place: Place = { page: current };
     if (settingsOpen) place.pane = settings.pane();
-    const day = current === "history" ? history.day() : null;
+    if (current === "dictation") place.tab = dictation.tab();
+    const day = current === "dictation" && dictation.tab() === "history" ? history.day() : null;
     if (day !== null) place.day = day;
     return place;
   }
@@ -200,7 +309,8 @@ async function start(): Promise<void> {
       const here = where();
       // Back from the settings panel only closes it: the page under it is on screen already.
       if (!here || !samePage(here, place)) {
-        if (place.page === "history") history.setDay(place.day ?? null);
+        if (place.page === "dictation" && place.tab) dictation.setTab(place.tab, false);
+        if (place.tab === "history" || place.page === "history") history.setDay(place.day ?? null);
         showPage(place.page);
       }
       if (place.pane !== undefined) openSettings(place.pane);
@@ -209,48 +319,76 @@ async function start(): Promise<void> {
   });
   installNavInput(window, (step) => navigation.step(step));
 
-  /** Goes to a page, or opens the settings panel over the one on screen (at `pane`, if given). */
-  function go(id: PageId, pane?: SettingsPane): void {
+  /**
+   * Goes to a page, or opens the settings panel over the one on screen (at the tab `arg` names, if
+   * any). The 拉斐爾 page is handed a draft for its composer the same way.
+   */
+  function go(id: PageId, arg?: SettingsPane | AgentDraft): void {
     navigation.visit(() => {
-      if (id === "settings") openSettings(pane);
-      else showPage(id);
+      if (id === "settings") openSettings(arg?.startsWith("draft:") ? undefined : (arg as SettingsPane | undefined));
+      else showPage(id, arg?.startsWith("draft:") ? arg : undefined);
     });
   }
 
-  function showPage(id: Exclude<PageId, "settings">): void {
+  /**
+   * Shows a page in place of the one on screen. A page that comes on screen fades in and rises a
+   * little (styles.css, on its becoming visible); the same page shown again stands still.
+   */
+  function showPage(target: Exclude<PageId, "settings">, arg?: SettingsPane | AgentDraft): void {
+    const { page: id, tab } = resolvePage(target);
     if (settingsOpen) closeSettings(false);
     if (current && current !== id) pages[current].hide();
+    if (tab) dictation.setTab(tab, false);
     current = id;
+    setRail(id === "agent");
     for (const page of Object.values(pages)) if (page !== settings) page.el.hidden = page.id !== id;
+    // The calendar opens from Home and has no rail entry of its own.
+    const railId = id === "automations" ? "home" : id;
     nav.querySelectorAll<HTMLElement>(".nav[data-go]").forEach((item) =>
-      item.setAttribute("aria-current", item.dataset.go === id ? "page" : "false"),
+      item.setAttribute("aria-current", item.dataset.go === railId ? "page" : "false"),
     );
     main.scrollTop = 0;
     shownAt = performance.now();
-    void pages[id].show();
+    void pages[id].show(arg);
+    tellAgentPage();
     void refreshUsage();
   }
+
+  /** Stops the settings' way out (`closeSettings`) when they are opened again before it is over. */
+  let stopLeaving: (() => void) | null = null;
 
   function openSettings(pane?: SettingsPane): void {
     if (settingsOpen) return;
     settingsOpen = true;
+    stopLeaving?.();
+    stopLeaving = null;
     document.documentElement.dataset.windowModal = "true";
     opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     settings.el.hidden = false;
     document.querySelector<HTMLElement>(".wbody")!.inert = true;
     void settings.show(pane);
+    tellAgentPage();
   }
 
+  /**
+   * Closes the settings at once for everything but the eye: the page under them works again, and the
+   * panel shrinks and fades away (140 ms) before it is hidden, letting clicks through meanwhile.
+   */
   function closeSettings(restoreFocus = true): void {
     if (!settingsOpen) return;
     settingsOpen = false;
     delete document.documentElement.dataset.windowModal;
     settings.hide();
-    settings.el.hidden = true;
+    stopLeaving = leave(settings.el, 140, () => {
+      settings.el.hidden = true;
+      stopLeaving = null;
+    });
     document.querySelector<HTMLElement>(".wbody")!.inert = false;
     if (restoreFocus) opener?.focus();
     opener = null;
+    tellAgentPage();
     void refreshUsage();
+    void refreshApps();
   }
 
   /** This month's spend in the sidebar; hidden when the core does not answer. */
@@ -271,36 +409,66 @@ async function start(): Promise<void> {
     shownAt = performance.now();
     void pages[current].show();
     void refreshUsage();
+    void refreshApps();
   };
   window.addEventListener("focus", comeBack);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) comeBack();
   });
 
+  ctx.onEvent((event) => {
+    if (event.type === "AgentQuestion") markQuestion(event.id);
+    else if (event.type === "AgentQuestionClosed" && event.id === waitingQuestion) markQuestion(null);
+  });
+
   // The tray's menu asks for a page. Rust sends this before it shows the window.
   ctx.onEvent((event) => followTray(event, { inGuide: () => !guide.hidden, go, addWord: () => dictionary.addWord() }));
 
-  api.subscribeMainEvents((event) => listeners.forEach((handler) => handler(event))).catch((err) => {
+  api.subscribeMainEvents((event) => {
+    if (event.type === "DictationPasted" && document.activeElement instanceof HTMLTextAreaElement) {
+      document.activeElement.dispatchEvent(new CustomEvent("dictation-pasted", { detail: event.text }));
+    }
+    listeners.forEach((handler) => handler(event));
+  }).catch((err) => {
     console.warn("main: no events from the app", err);
   });
+
+  /**
+   * The guide takes the place of the pages: on a first run until it is done, and from the settings
+   * (`rerun`) until it is done or left. A rerun never clears `onboarded`.
+   */
+  function startGuide(mode: "first" | "rerun"): void {
+    if (!guide.hidden) return;
+    closeSettings(false);
+    document.documentElement.dataset.windowLayout = "onboarding";
+    document.querySelector<HTMLElement>(".wbody")!.hidden = true;
+    guide.hidden = false;
+    tellAgentPage();
+    mountOnboarding(
+      guide,
+      {
+        mode,
+        onDone: (result) => {
+          guide.hidden = true;
+          showPages();
+          tellAgentPage();
+          if (mode === "first" || !current) go(START_PAGE);
+          if (result.toSettings) go("settings", "usage");
+          // The speech models that the guide did not wait for come on in the background.
+          void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
+        },
+      },
+      ctx,
+    );
+  }
 
   // Until the first-run guide is done it takes the place of the pages. (Settings that could not be
   // read are no reason to start a guide for someone who has been through it.)
   if (deviceRead && !device.get().onboarded) {
-    document.documentElement.dataset.windowLayout = "onboarding";
-    guide.hidden = false;
-    mountOnboarding(
-      guide,
-      () => {
-        guide.hidden = true;
-        showPages();
-        go("home");
-      },
-      ctx,
-    );
+    startGuide("first");
   } else {
     showPages();
-    go("home");
+    go(START_PAGE);
     // A guide that was left before the speech models were all there: fetch what is missing.
     void resumeModels({ status: api.modelsStatus, ensure: api.modelsEnsure }, (message) => console.warn("main:", message));
   }

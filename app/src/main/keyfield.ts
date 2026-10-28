@@ -35,6 +35,8 @@ export interface KeyFieldOptions {
   submit(value: string): void;
   /** Whether the page has focus; the document's own answer unless a test says otherwise. */
   hasFocus?: () => boolean;
+  /** Removes the listeners when it aborts. */
+  signal?: AbortSignal;
 }
 
 /** Wires the key field inside `host` as above. Registers no `change` listener on purpose. */
@@ -48,7 +50,7 @@ export function wireKeyField(host: HTMLElement, options: KeyFieldOptions): void 
       e.preventDefault();
       options.submit(input.value);
     }
-  });
+  }, { signal: options.signal });
 
   // No redraw here: the click that moved the focus (on 取消, say) must still find its button.
   host.addEventListener("focusout", (e) => {
@@ -61,5 +63,5 @@ export function wireKeyField(host: HTMLElement, options: KeyFieldOptions): void 
       documentHasFocus: hasFocus(),
     });
     if (action === "clear") input.value = "";
-  });
+  }, { signal: options.signal });
 }

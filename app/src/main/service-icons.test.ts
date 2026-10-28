@@ -3,6 +3,53 @@ import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { readdirSync } from "node:fs";
 import { BRAND_COLORS, LOGO_IDS, SERVICE_ICONS, brandStyle, hasLogo, monogram, serviceIconOf, serviceIconSVG, serviceLogoHTML } from "./service-icons";
+import { iconHTML } from "./connections";
+import { ico } from "./ui";
+import { providerMark } from "./provider-marks";
+import providerKinds from "./fixtures/provider-kinds.json";
+
+test("the provider-kinds fixture covers the local registry", () => {
+  const presets = readFileSync("../core/src/raphael_core/brain/providers/presets.py", "utf8");
+  const kinds = [...presets.matchAll(/^\s*(?:preset\(|\()"([^"]+)",/gm)].map((match) => match[1]);
+  expect([...providerKinds].sort()).toEqual(kinds.sort());
+});
+
+test.each(providerKinds)("provider kind %s resolves to installed artwork or its own generic icon", (kind) => {
+  const html = providerMark(kind);
+  if (["openai_compatible", "koboldcpp", "text_generation_webui"].includes(kind)) {
+    expect(html).toContain(ico("plug"));
+  } else {
+    expect(html).not.toContain(ico("plug"));
+    expect(html).toMatch(/logo-(?:art|mono)/);
+    expect(html).not.toContain('src=""');
+  }
+  const base = kind.replace(/_cn$/, "");
+  expect(providerMark(`${base}_cn`)).toBe(providerMark(base));
+});
+
+test.each([
+  ["bedrock", "aws"], ["amazon_bedrock", "aws"], ["ollama_cloud", "ollama"], ["vertex", "vertex"],
+] as const)("%s uses the installed %s mark", (kind, mark) => {
+  expect(hasLogo(mark)).toBe(true);
+  expect(providerMark(kind)).toContain(serviceLogoHTML(mark));
+});
+
+test("new provider artwork is reserved and regional variants share the base mark", () => {
+  for (const id of ["vertex", "bedrock", "xai", "moonshot", "dashscope", "minimax", "vllm", "text_generation_webui", "inference_net"] as const) {
+    expect(LOGO_IDS).toContain(id);
+    if (!hasLogo(id)) expect(iconHTML(id, id, "md")).toContain(ico("plug"));
+  }
+  for (const id of ["moonshot", "dashscope", "minimax"]) expect(providerMark(`${id}_cn`)).toBe(providerMark(id));
+});
+
+test("reserved provider brands with no installed artwork show the plug instead of a broken image or initial", () => {
+  for (const id of ["openai", "azure", "litellm", "portkey", "nebius", "bifrost", "groq", "anthropic", "googlegemini", "googlecloud", "ollama", "vercel", "lmstudio", "deepseek", "mistral"] as const) {
+    expect(LOGO_IDS).toContain(id);
+    const html = iconHTML(id, id, "md");
+    expect(html).not.toContain('src=""');
+    if (!hasLogo(id)) expect(html).toContain(ico("plug"));
+  }
+});
 
 describe("the marks of well-known programs", () => {
   test.each([
@@ -28,6 +75,13 @@ describe("the marks of well-known programs", () => {
     [{ name: "x", url: "https://mcp.stripe.com" }, "stripe"],
     [{ name: "x", url: "https://mcp.zapier.com/api/mcp/mcp" }, "zapier"],
     [{ name: "x", url: "https://mcp.paypal.com/mcp" }, "paypal"],
+    [{ name: "OpenRouter" }, "openrouter"],
+    [{ name: "Brave Search" }, "brave"],
+    [{ name: "SearXNG" }, "searxng"],
+    [{ name: "Tavily" }, "tavily"],
+    [{ name: "Jina AI" }, "jina"],
+    [{ name: "Firecrawl" }, "firecrawl"],
+    [{ name: "Fish Audio" }, "fish"],
   ] as const)("%j is %s", (hints, id) => {
     expect(serviceIconOf(hints)).toBe(id);
   });
@@ -81,7 +135,7 @@ describe("the marks of well-known programs", () => {
       for (const surface of surfaces) expect(ratio(colour, surface), `${id} on ${surface}`).toBeGreaterThanOrEqual(3);
     }
     // the ones that would not read are left to the colour of the text
-    for (const id of ["notion", "github", "spotify", "obsidian", "atlassian", "cloudflare", "sentry", "paypal"] as const) expect(BRAND_COLORS[id]).toBeUndefined();
+    for (const id of ["notion", "github", "spotify", "obsidian", "atlassian", "cloudflare", "sentry", "paypal", "telegram"] as const) expect(BRAND_COLORS[id]).toBeUndefined();
   });
 
   test("the brand colour is given to the wrapper as a variable, and only for the marks that have one", () => {
@@ -89,7 +143,7 @@ describe("the marks of well-known programs", () => {
     expect(brandStyle("notion")).toBe("");
   });
 
-  test("a letter stands in for the others, escaped", () => {
+  test("a paired person's avatar can keep an escaped initial", () => {
     expect(monogram("filesystem")).toBe("F");
     expect(monogram("  筆記")).toBe("筆");
     expect(monogram("<b>")).toBe("&lt;");
@@ -111,12 +165,36 @@ describe("the marks of well-known programs", () => {
     expect(html).toMatch(/class="logo lg-d" src="data:image\/svg\+xml/);
   });
 
+  test("Fish Audio uses its official PNG artwork instead of an unattributed vector", () => {
+    expect(hasLogo("fish")).toBe(true);
+    expect(SERVICE_ICONS).not.toHaveProperty("fish");
+    expect(serviceLogoHTML("fish")).toMatch(/^<img class="logo lg-l" src="data:image\/png;base64,/);
+    const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8"));
+    expect(sources.fish).toMatchObject({ file: "fish.png", url: "https://fish.audio/apple-touch-icon.png", page: "https://fish.audio/" });
+  });
+
+  test("release credits name all the added service marks and their source groups", () => {
+    const notice = readFileSync("scripts/release-licenses/brand-logos-NOTICE.txt", "utf8");
+    const manifest = JSON.parse(readFileSync("scripts/release-licenses/manifest.json", "utf8"));
+    const icons = manifest.components.find((entry: { name: string }) => entry.name === "Simple Icons");
+    const logos = manifest.components.find((entry: { name: string }) => entry.name === "Brand logos");
+    for (const name of ["OpenRouter", "Brave", "SearXNG"]) {
+      expect(notice).toContain(name);
+      expect(icons.usage).toContain(name);
+    }
+    for (const name of ["Tavily", "Jina", "Firecrawl", "Fish Audio"]) {
+      expect(notice).toContain(name);
+      expect(logos.usage).toContain(name);
+    }
+  });
+
   test("the logo files and the list of ids are the same, and each has its source written down", () => {
     const files = readdirSync("src/main/service-logos");
-    const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.svg$|\.(svg|png)$/, "")));
-    expect([...ids].sort()).toEqual([...LOGO_IDS].sort());
+    const ids = new Set(files.filter((f) => /\.(svg|png)$/.test(f)).map((f) => f.replace(/\.dark\.(svg|png)$|\.(svg|png)$/, "")));
+    const installed = LOGO_IDS.filter(hasLogo);
+    expect([...ids].sort()).toEqual([...installed].sort());
     const sources = JSON.parse(readFileSync("src/main/service-logos/sources.json", "utf8")) as Record<string, { file: string; url: string }>;
-    expect(Object.keys(sources).sort()).toEqual([...LOGO_IDS].sort());
+    expect(Object.keys(sources).sort()).toEqual([...installed].sort());
     for (const [id, source] of Object.entries(sources)) {
       expect(source.url, id).toMatch(/^https:\/\//);
       expect(files, id).toContain(source.file);

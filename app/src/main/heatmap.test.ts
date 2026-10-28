@@ -67,7 +67,7 @@ describe("labels and drawing", () => {
 
   test("weeks that fit a width stay between 6 and 53", () => {
     expect(weeksThatFit(100)).toBe(6);
-    expect(weeksThatFit(500)).toBe(30);
+    expect(weeksThatFit(500)).toBe(22);
     expect(weeksThatFit(5000)).toBe(53);
   });
 

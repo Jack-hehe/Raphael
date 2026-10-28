@@ -2,28 +2,36 @@
 
 The window manages the plugins with:
 
-- `integrations.list` the servers: name, how to reach it, whether it is on, how it is doing, how many
-  tools it has and how many are on;
+- `toolsets.list` the servers of the 「連接」 tab (`toolsets.py` groups their tools): for each, its
+  name, how to reach it, whether it is on, how it is doing, how many tools it has and how many are
+  on, and the tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
 - `integrations.catalog` the store (`catalog`): every service that can be added with one login, and
   the server each is added as, if it is;
 - `integrations.connect {catalog_id}` add a service of the store, or `{id}` sign in to a server again:
   opens the browser for the login and waits for the user (up to five minutes, which is why it is not
   a job like the others). It answers `{connected: true, server, tools}`, or `{connected: false, error}`
   with the kind of what went wrong (`denied` for a login the user refused, `cancelled`, `timeout`...);
-  `integrations.connect_cancel` ends the wait. The tokens go to the vault and nowhere else;
+  `integrations.connect_cancel` ends the wait. The tokens go to the vault and nowhere else. A service
+  with the device flow (GitHub) opens no browser: when the code is issued the core sends the
+  notification `integrations.device_code {catalog_id, user_code, verification_uri, expires_in}`,
+  the window shows it, and the call waits for the user to type it at the service;
 - `integrations.add {name, transport, command, args, env, url, headers}` connect a server of the
   user's own. The values of `env` and `headers` are secrets: they go to the vault at once and are
   never sent back, logged or kept anywhere else; the list shows only their names;
 - `integrations.set_enabled {id, enabled}` the whole service on or off; `integrations.disconnect {id}`
-  revokes the login if the server takes revocations, forgets the secrets and removes the server;
-- `integrations.refresh {id}` connect, read the tool list, keep it; `integrations.tools {id}` the
-  tools kept, each on or off and a `kind` (`write` or `read`, for the screen only);
+  revokes the login if the server takes revocations (a device login has no revocation: the user
+  takes it back on the service's page), forgets the secrets and removes the server;
+- `integrations.refresh {id}` connect, read the tool list, keep it, and answer with the server and
+  its tools;
 - `integrations.set_tool_enabled {id, tool, enabled}` the user's decision about one tool. Every tool
   is on until the user turns it off, new ones and ones described differently later included;
   `integrations.set_tools_enabled {id, tools, enabled}` does the same for a list of tools at once,
   all or none, with one write of the file;
 - `integrations.audit {limit}` the latest calls;
-- `toolsets.list` the servers of the 「連接」 tab with their tools (`toolsets.py`).
+- `integrations.inventory` the owner's apps and how many of them are connected, the one count the
+  sidebar, the 「連接」 tab and the roster of every model share (`inventory.py` says what connected
+  means). A failure of a server's call, or the end of one, is announced like any other change, so
+  that the count of a window that is open does not go stale.
 
 The assistant reaches the tools through `PluginHub` (`agent.plugins`): `offered`, `tier_of`,
 `call` and `record_unrun`, by way of the one gate (`agent.gate`). A tool that is on has the tier
@@ -38,14 +46,15 @@ import asyncio
 import json
 import logging
 import secrets
-import time
+import copy
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..agent.plugins import MAX_ARGUMENT_CHARS, PluginResult, PluginTool, clean_arguments, tool_key
 from ..agent.policy import PLUGIN_PREFIX, Tier
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..clock import wall_clock_ms
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
 from . import catalog
 from .audit import LIST_DEFAULT, AuditLog
@@ -57,23 +66,20 @@ from .config import (
     ToolRecord,
     parse_new_server,
 )
+from .inventory import app_state, mark_duplicates, read_inventory, unreadable
 from .oauth import OpenBrowser, VaultTokenStorage, open_in_browser, revoke
 from .toolsets import tool_kind
 from .vault import SecretTooLong, SecretVault, secret_name
+from .imports import McpImports
+
+if TYPE_CHECKING:
+    from .pool import McpPool
 
 logger = logging.getLogger(__name__)
 
 # The tier of a tool that is on: the one the gate lets through without a yes. A tool that is off has
 # none. (The tiers T2 and T3, which ask first, are for Raphael's own commands.)
 ON_TIER = Tier.T1
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _not_saved(exc: OSError) -> RpcError:
@@ -83,10 +89,14 @@ def _not_saved(exc: OSError) -> RpcError:
     return RpcError(INTERNAL_ERROR, "Could not save the plugins")
 
 
+class NoSuchSecret(LookupError):
+    """A secret that no connection of the owner's declares (any more): it is not kept."""
+
+
 def _str(params: dict, name: str) -> str:
     value = params.get(name)
     if not isinstance(value, str) or not value:
-        raise _invalid(f"{name} must be a non-empty string")
+        raise invalid_params(f"{name} must be a non-empty string")
     return value
 
 
@@ -112,10 +122,12 @@ class IntegrationsService:
         vault: SecretVault,
         *,
         connector: McpConnector | None = None,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         call_timeout_s: float = CALL_TOTAL_S,
         open_browser: OpenBrowser = open_in_browser,
         login_timeout_s: float = LOGIN_TIMEOUT_S,
+        notify: Callable[[str, dict], None] | None = None,
+        import_home: Path | None = None,
     ) -> None:
         self._config = ConfigStore(directory)
         self._vault = vault
@@ -128,49 +140,70 @@ class IntegrationsService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._open_browser = open_browser
         self._login_timeout_s = login_timeout_s
+        self._notify = notify
+        self._imports = McpImports(import_home)
         # The login that is under way (one at a time: there is one browser and one user).
         self._login: asyncio.Task | None = None
         self._login_for = ""  # the id of the server it signs in to
+        self.managed: Any = None
 
     def register(self, router: Router) -> None:
         methods = {
-            "integrations.list": self._list,
             "integrations.catalog": self._catalog,
             "integrations.connect": self._connect,
             "integrations.connect_cancel": self._connect_cancel,
             "integrations.add": self._add,
+            "integrations.update": self._update,
+            "integrations.test": self._test,
+            "integrations.preview": self._preview,
+            "integrations.discover": self._discover,
+            "integrations.import": self._import,
             "integrations.set_enabled": self._set_enabled,
             "integrations.disconnect": self._disconnect,
             "integrations.refresh": self._refresh,
-            "integrations.tools": self._tools,
             "integrations.set_tool_enabled": self._set_tool_enabled,
             "integrations.set_tools_enabled": self._set_tools_enabled,
             "integrations.audit": self._audit_list,
+            "integrations.inventory": self._inventory,
             "toolsets.list": self._toolsets,
         }
         for method, handler in methods.items():
             router.register(method, handler)
+        self._notify_change = lambda: router.notify("integrations.changed", {})
 
     # --- views ----------------------------------------------------------------------------------
+
+    def _status(self, server: ServerConfig) -> str:
+        """`disabled`, `error` (the latest job with it failed), `unchecked` (its tools were never read) or `ready`."""
+        if not server.enabled:
+            return "disabled"
+        if server.id in self._failure:
+            return "error"
+        return "unchecked" if server.tools_checked_at_ms is None else "ready"
+
+    def _fail(self, server_id: str, kind: str) -> None:
+        """Note that the latest job with a server failed, and tell the windows when that is news: the
+        server is no longer one of the connected apps."""
+        if self._failure.get(server_id) != kind:
+            self._failure[server_id] = kind
+            self._changed()
+
+    def _recover(self, server_id: str) -> None:
+        """Note that the latest job with a server worked, and tell the windows if it had failed before."""
+        if self._failure.pop(server_id, None) is not None:
+            self._changed()
 
     def _view(self, server: ServerConfig) -> dict[str, Any]:
         """A server as the window sees it: nothing secret, only the names of what is."""
         failure = self._failure.get(server.id)
-        if not server.enabled:
-            status = "disabled"
-        elif failure is not None:
-            status = "error"
-        elif server.tools_checked_at_ms is None:
-            status = "unchecked"
-        else:
-            status = "ready"
+        status = self._status(server)
         return {
             "id": server.id,
             "name": server.name,
             "transport": server.transport,
             "command": server.command,
             "args": server.args,
-            "url": server.url,
+            "url": "" if server.managed_by else server.url,
             "enabled": server.enabled,
             "env": server.env,
             "headers": server.headers,
@@ -183,6 +216,8 @@ class IntegrationsService:
             "write_count": sum(1 for tool in server.tools if tool_kind(tool) == "write"),
             "read_count": sum(1 for tool in server.tools if tool_kind(tool) == "read"),
             "checked_at_ms": server.tools_checked_at_ms,
+            "result_size_limit": server.result_size_limit,
+            **({"managed_by": server.managed_by} if server.managed_by else {}),
         }
 
     @staticmethod
@@ -198,7 +233,9 @@ class IntegrationsService:
     def _server(self, params: dict) -> ServerConfig:
         server = self._config.get(_str(params, "id"))
         if server is None:
-            raise _invalid("There is no such plugin")
+            raise invalid_params("There is no such plugin")
+        if server.managed_by:
+            raise invalid_params("Manage this connection through connectors RPCs")
         return server
 
     def _save(self) -> None:
@@ -206,11 +243,14 @@ class IntegrationsService:
             self._config.save()
         except OSError as exc:
             raise _not_saved(exc) from None
+        self._changed()
+
+    def _changed(self) -> None:
+        if hasattr(self, "_notify_change"):
+            self._notify_change()
 
     # --- the methods of the window --------------------------------------------------------------
 
-    async def _list(self, params: dict) -> dict:
-        return {"servers": [self._view(server) for server in self._config.servers()]}
 
     async def _catalog(self, params: dict) -> dict:
         added = {s.catalog_id: s.id for s in self._config.servers() if s.catalog_id}
@@ -228,19 +268,19 @@ class IntegrationsService:
         """Sign in to a service of the store, or to a server again. Waits for the user in the
         browser, so it can take minutes; `connect_cancel` ends it."""
         if self._login is not None and not self._login.done():
-            raise _invalid("A login is under way already")
+            raise invalid_params("A login is under way already")
         ident = params.get("id")
         if ident is not None:
             server = self._server(params)
-            if server.auth != "oauth":
-                raise _invalid("This plugin does not use a login")
+            if server.auth not in ("oauth", "device"):
+                raise invalid_params("This plugin does not use a login")
             new = False
         else:
             entry = catalog.find(_str(params, "catalog_id"))
             if entry is None:
-                raise _invalid("There is no such service in the store")
+                raise invalid_params("There is no such service in the store")
             if any(s.catalog_id == entry.id for s in self._config.servers()):
-                raise _invalid("This service is added already")
+                raise invalid_params("This service is added already")
             server = ServerConfig(
                 id=secrets.token_hex(6),
                 name=self._unused_name(entry.name),
@@ -250,11 +290,14 @@ class IntegrationsService:
                 catalog_id=entry.id,
             )
             new = True
+        self._connector.invalidate(server.id)  # a login again: the old one is not to be used
         if server.auth == "none":
             # A public server: there is no login, so the browser stays shut and the tools are read at once.
             job = self._join_public(server)
         else:
-            job = self._connector.login(server, self._open_browser, timeout_s=self._login_timeout_s)
+            job = self._connector.login(
+                server, self._open_browser, timeout_s=self._login_timeout_s, on_code=self._code_sender(server)
+            )
         self._login = asyncio.create_task(job)
         self._login_for = server.id
         try:
@@ -281,10 +324,29 @@ class IntegrationsService:
         except (ValueError, OSError) as exc:
             self._wipe_login(server, True)
             if isinstance(exc, ValueError):  # too many plugins
-                raise _invalid(str(exc)) from None
+                raise invalid_params(str(exc)) from None
             raise _not_saved(exc) from None
         self._failure.pop(server.id, None)
+        self._connector.invalidate(server.id)  # the connections of before used the old login
+        self._changed()  # a service joined, or signed in again: the count of apps is another
         return {"connected": True, "server": self._view(server), "tools": self._tool_views(server)}
+
+    def _code_sender(self, server: ServerConfig) -> Any:
+        """What tells the window the code of a device login (nothing is logged)."""
+
+        async def send(code: Any) -> None:
+            if self._notify is not None:
+                self._notify(
+                    "integrations.device_code",
+                    {
+                        "catalog_id": server.catalog_id,
+                        "user_code": code.user_code,
+                        "verification_uri": code.verification_uri,
+                        "expires_in": code.expires_in,
+                    },
+                )
+
+        return send
 
     async def _join_public(self, server: ServerConfig) -> LoginResult:
         return LoginResult(await self._connector.list_tools(server))
@@ -297,7 +359,7 @@ class IntegrationsService:
         except Exception as exc:
             logger.warning("Could not remove a plugin's login: %s", type(exc).__name__)
         if not new:
-            self._failure[server.id] = "auth"
+            self._fail(server.id, "auth")
 
     def _login_failed(self, server: ServerConfig, new: bool, kind: str) -> dict:
         self._wipe_login(server, new)
@@ -314,7 +376,7 @@ class IntegrationsService:
         try:
             new = parse_new_server(params, [s.name for s in self._config.servers()])
         except ValueError as exc:  # says what is wrong, never a value
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         server = new.config
         stored: list[str] = []
         try:
@@ -327,10 +389,10 @@ class IntegrationsService:
             self._config.add(server)
         except SecretTooLong as exc:
             self._forget(stored)
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         except ValueError as exc:  # too many plugins
             self._forget(stored)
-            raise _invalid(str(exc)) from None
+            raise invalid_params(str(exc)) from None
         except OSError as exc:
             self._forget(stored)
             raise _not_saved(exc) from None
@@ -338,7 +400,118 @@ class IntegrationsService:
             self._forget(stored)
             logger.warning("Could not store a plugin's secrets: %s", type(exc).__name__)
             raise RpcError(INTERNAL_ERROR, "Could not store the secrets") from None
+        self._changed()
         return {"server": self._view(server)}
+
+    def _draft(self, params: dict) -> tuple[Any, ServerConfig | None]:
+        """Validate an edit without revealing saved values to the page. Blank keeps a named
+        secret, omission removes it. Validation and vault reads precede every mutation."""
+        old = self._server(params) if params.get("id") else None
+        raw = copy.deepcopy(params)
+        if old:
+            for field, kind in (("env", "env"), ("headers", "header")):
+                for pair in raw.get(field, []):
+                    if isinstance(pair, dict) and pair.get("value") == "" and pair.get("name") in getattr(old, field):
+                        pair["value"] = self._vault.get(secret_name(old.id, kind, pair["name"])) or ""
+        try:
+            new = parse_new_server(raw, [s.name for s in self._config.servers() if s is not old])
+        except (TypeError, ValueError) as exc:
+            raise invalid_params(str(exc)) from None
+        return new, old
+
+    async def _update(self, params: dict) -> dict:
+        new, old = self._draft(params)
+        if old is None or old.auth != "none" or old.catalog_id:
+            raise invalid_params("Only a custom MCP server may be edited")
+        async with self._locks.setdefault(old.id, asyncio.Lock()):
+            previous = copy.deepcopy(old)
+            new.config.id, new.config.enabled = old.id, old.enabled
+            before = {secret_name(old.id, kind, key): self._vault.get(secret_name(old.id, kind, key))
+                      for field, kind in (("env", "env"), ("headers", "header"))
+                      for key in set(getattr(old, field)) | set(getattr(new.config, field))}
+            try:
+                for values, kind in ((new.env, "env"), (new.headers, "header")):
+                    for key, value in values.items():
+                        self._vault.set(secret_name(old.id, kind, key), value)
+                old.__dict__.update(new.config.__dict__)
+                self._config.save()
+            except Exception as exc:
+                old.__dict__.update(previous.__dict__)
+                for name, value in before.items():
+                    try:
+                        self._vault.delete(name) if value is None else self._vault.set(name, value)
+                    except Exception:
+                        logger.warning("Could not restore an MCP secret")
+                raise RpcError(INTERNAL_ERROR, "Could not save the MCP server") from None
+            removed = [secret_name(old.id, kind, key)
+                       for field, kind in (("env", "env"), ("headers", "header"))
+                       for key in set(getattr(previous, field)) - set(getattr(old, field))]
+            self._forget(removed)
+            self._connector.invalidate(old.id)
+            self._failure.pop(old.id, None)
+            self._changed()
+            return {"server": self._view(old)}
+
+    async def _test(self, params: dict) -> dict:
+        if params.get("id") and "name" not in params:
+            server = self._server(params)
+            try:
+                tools = await self._connector.list_tools(server)
+                return {"ok": True, "tools": [tool.name for tool in tools]}
+            except McpFailure as failure:
+                return {"ok": False, "error": failure.kind, "tools": []}
+        new, _ = self._draft(params)
+        server, stored = new.config, []
+        try:
+            for values, kind in ((new.env, "env"), (new.headers, "header")):
+                for key, value in values.items():
+                    name = secret_name(server.id, kind, key)
+                    self._vault.set(name, value)
+                    stored.append(name)
+            tools = await self._connector.list_tools(server)
+            return {"ok": True, "tools": [tool.name for tool in tools]}
+        except McpFailure as failure:
+            return {"ok": False, "error": failure.kind, "tools": []}
+        except Exception:
+            raise RpcError(INTERNAL_ERROR, "Could not test the MCP server") from None
+        finally:
+            self._connector.invalidate(server.id)
+            self._forget(stored)
+
+    async def _preview(self, params: dict) -> dict:
+        return self._imports.pasted(params.get("text"), [s.name for s in self._config.servers()])
+
+    async def _discover(self, params: dict) -> dict:
+        return self._imports.discover([s.name for s in self._config.servers()])
+
+    async def _import(self, params: dict) -> dict:
+        ids = params.get("ids")
+        if not isinstance(ids, list) or not ids or len(ids) > 20 or any(not isinstance(i, str) for i in ids) or len(set(ids)) != len(ids):
+            raise invalid_params("Select between one and twenty MCP servers")
+        try:
+            drafts = [self._imports.pending[i] for i in ids]
+        except KeyError:
+            raise invalid_params("Preview the MCP definitions again") from None
+        names = [s.name for s in self._config.servers()]
+        if len(names) + len(ids) > 20:
+            raise invalid_params("At most twenty MCP servers")
+        for draft in drafts:
+            try:
+                parse_new_server(draft, names)
+            except ValueError as exc:
+                raise invalid_params(str(exc)) from None
+            names.append(draft["name"])
+        added = []
+        try:
+            for draft in drafts:
+                added.append((await self._add(draft))["server"])
+        except BaseException:
+            for server in added:
+                await self._disconnect({"id": server["id"]})
+            raise
+        for ident in ids:
+            self._imports.pending.pop(ident, None)
+        return {"servers": added}
 
     def _forget(self, names: list[str]) -> None:
         """Take secrets out of the vault again (best effort: a failure is logged by its type)."""
@@ -352,7 +525,7 @@ class IntegrationsService:
         server = self._server(params)
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         server.enabled = enabled
         self._save()
         return {"server": self._view(server)}
@@ -370,8 +543,12 @@ class IntegrationsService:
             return {"removed": False, "revoked": False}
         self._failure.pop(server.id, None)
         self._locks.pop(server.id, None)
+        self._connector.invalidate(server.id)
+        # The server is out of the list and its tools are gone from every offer: say so now, not after the
+        # provider has answered the revocation, which can take a while.
+        self._changed()
         revoked = False
-        if server.auth == "oauth":
+        if server.auth in ("oauth", "device"):
             storage = VaultTokenStorage(self._vault, server.id)
             revoked = await revoke(storage, server.revocation_url) if server.revocation_url else False
             try:
@@ -391,30 +568,45 @@ class IntegrationsService:
             try:
                 tools = await self._connector.list_tools(server)
             except McpFailure as failure:
-                self._failure[server.id] = failure.kind
+                self._fail(server.id, failure.kind)
             else:
                 self._failure.pop(server.id, None)
                 if self._config.get(server.id) is server:  # not removed while it was away
                     server.tools = tools
                     server.tools_checked_at_ms = self._now_ms()
                     self._save()
+                    # A connection kept open knows the tools of before.
+                    self._connector.invalidate(server.id)
         return {"server": self._view(server), "tools": self._tool_views(server)}
+
+    def kind_of(self, server_name: str, tool_name: str) -> str:
+        """`"read"` for a tool its server says only reads (`readOnlyHint` true and not destructive),
+        `"write"` for any other, one not known too. The screen groups by a guess from the name as
+        well (`toolsets.tool_kind`); here a guess would let a task repeat a call that changed
+        something, so only the server's own word counts."""
+        for server in self._config.servers():
+            if server.name == server_name:
+                if server.managed_by and self.managed is not None:
+                    return "read" if self.managed.tier(server.id, tool_name) < Tier.T2 else "write"
+                for tool in server.tools:
+                    if tool.name == tool_name:
+                        said = tool.read_only_hint is True and tool.destructive_hint is not True
+                        return "read" if said else "write"
+        return "write"
 
     def _tool_views(self, server: ServerConfig) -> list[dict[str, Any]]:
         return [self._tool_view(server, tool) for tool in server.tools]
 
-    async def _tools(self, params: dict) -> dict:
-        return {"tools": self._tool_views(self._server(params))}
 
     async def _set_tool_enabled(self, params: dict) -> dict:
         server = self._server(params)
         name = _str(params, "tool")
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         tool = server.tool(name)
         if tool is None:
-            raise _invalid("There is no such tool")
+            raise invalid_params("There is no such tool")
         (server.disabled_tools.discard if enabled else server.disabled_tools.add)(name)
         self._save()
         return {"tool": self._tool_view(server, tool)}
@@ -426,16 +618,16 @@ class IntegrationsService:
         names = params.get("tools")
         enabled = params.get("enabled")
         if type(enabled) is not bool:
-            raise _invalid("enabled must be true or false")
+            raise invalid_params("enabled must be true or false")
         if not isinstance(names, list) or not names:
-            raise _invalid("tools must be a list of names")
+            raise invalid_params("tools must be a list of names")
         tools = []
         for name in names:
             if not isinstance(name, str) or not name:
-                raise _invalid("tools must be a list of names")
+                raise invalid_params("tools must be a list of names")
             tool = server.tool(name)
             if tool is None:
-                raise _invalid("There is no such tool")
+                raise invalid_params("There is no such tool")
             tools.append(tool)
         for tool in tools:
             (server.disabled_tools.discard if enabled else server.disabled_tools.add)(tool.name)
@@ -443,7 +635,84 @@ class IntegrationsService:
         return {"tools": [self._tool_view(server, tool) for tool in tools]}
 
     def _group(self, server: ServerConfig) -> dict[str, Any]:
+        if server.managed_by:
+            return {**self._view(server), "tools": [], "tool_toggle_source": "connectors.tools", "tools_locked": True}
         return {**self._view(server), "tools": self._tool_views(server)}
+
+    def connections(self) -> list[dict[str, Any]]:
+        """The connections, as the 工具 tab of a member and the roster list them: each one's id, name,
+        whether it is on, how many of its tools can be used now and its `state`, the one word the count of the
+        owner's apps is made from (`inventory.py`). `services` and `source` are for finding duplicates and
+        stay here. Nothing secret."""
+        entries = [self._server_entry(server) for server in self._config.servers() if not server.managed_by]
+        if self.managed is not None:
+            entries += [self._managed_entry(entry) for entry in self.managed.store.connectors.values()]
+        return mark_duplicates(entries)
+
+    def _server_entry(self, server: ServerConfig) -> dict[str, Any]:
+        failure = self._failure.get(server.id)
+        status = self._status(server)
+        tools = sum(1 for tool in server.tools if server.tool_on(tool)) if server.enabled else 0
+        return {"id": server.id, "name": server.name, "enabled": server.enabled, "status": status, "error": failure,
+                "tools": tools, "state": app_state(enabled=server.enabled, status=status, error=failure, tools=tools),
+                "services": [server.catalog_id] if server.catalog_id else [], "source": None}
+
+    def _managed_entry(self, entry: Any) -> dict[str, Any]:
+        """A Composio toolkit or the owner's own Google, by what the gate would let through now."""
+        name = entry.name or ("Google" if entry.kind == "google" else entry.id)
+        try:
+            ready = self.managed.ready_tools_of(entry) if entry.enabled and entry.status == "ACTIVE" else []
+            services = self.managed.services_of(entry, ready)
+        except Exception as exc:  # a vault that cannot be read: what is unknown is never counted
+            logger.warning("Could not read a connection: %s", type(exc).__name__)
+            return unreadable(entry.id, name, entry.enabled)
+        failed = entry.status == "FAILED"
+        status = ("disabled" if not entry.enabled else "error" if failed
+                  else "ready" if entry.status == "ACTIVE" else "unchecked")
+        error = "auth" if entry.status in ("EXPIRED", "REVOKED", "INACTIVE") else None
+        waiting = entry.status in ("INITIALIZING", "INITIATED")
+        return {"id": entry.id, "name": name, "enabled": entry.enabled, "status": status, "error": error,
+                "tools": len(ready),
+                "state": app_state(enabled=entry.enabled, status=status, error=error, tools=len(ready), waiting=waiting),
+                "services": services, "source": entry.kind}
+
+    async def _inventory(self, params: dict) -> dict:
+        return read_inventory(self.connections).wire()
+
+    def missing_secrets(self, ref: str) -> tuple[ServerConfig, list[tuple[str, str]]] | None:
+        """The connection of the owner's own that `ref` names (its id, else its name), and which of
+        the secrets it declares the vault holds no value for, as (kind, name) in the order they are
+        declared; None when there is no such connection. Only names are read here, never a value;
+        a vault that cannot be read raises, since unknown is not missing."""
+        servers = [server for server in self._config.servers() if not server.managed_by]
+        server = next((s for s in servers if s.id == ref), None) or next(
+            (s for s in servers if s.name.casefold() == ref.strip().casefold()), None
+        )
+        if server is None:
+            return None
+        declared = [("env", key) for key in server.env] + [("header", key) for key in server.headers]
+        return server, [(kind, key) for kind, key in declared if self._vault.get(secret_name(server.id, kind, key)) is None]
+
+    def fill_secret(self, server_id: str, kind: str, key: str, value: str) -> None:
+        """Keep the value of a secret a connection of the owner's declares, in the vault and nowhere
+        else, and forget what the connection's last failure said: its next call is made with it.
+        NoSuchSecret when the connection or the secret is not declared; SecretTooLong for a value the
+        vault cannot hold; any other failure is the vault's, whose message could hold anything.
+
+        An Authorization header given as a bare token is kept as a bearer, which is what a token
+        is for there; a value with a scheme in it (a space) is kept as it was typed."""
+        server = self._config.get(server_id)
+        if server is None or server.managed_by:
+            raise NoSuchSecret(kind)
+        declared = server.env if kind == "env" else server.headers if kind == "header" else []
+        if key not in declared:
+            raise NoSuchSecret(kind)
+        if kind == "header" and key.casefold() == "authorization" and not any(c.isspace() for c in value):
+            value = "Bearer " + value
+        self._vault.set(secret_name(server.id, kind, key), value)
+        self._connector.invalidate(server.id)  # a connection kept open was made without it
+        self._failure.pop(server.id, None)
+        self._changed()
 
     async def _toolsets(self, params: dict) -> dict:
         return {"groups": [self._group(server) for server in self._config.servers()]}
@@ -451,7 +720,7 @@ class IntegrationsService:
     async def _audit_list(self, params: dict) -> dict:
         limit = params.get("limit", LIST_DEFAULT)
         if type(limit) is not int:
-            raise _invalid("limit must be a whole number")
+            raise invalid_params("limit must be a whole number")
         return {
             "entries": [
                 {
@@ -486,6 +755,8 @@ class IntegrationsService:
         tool = server.tool(parsed[1])
         if tool is None or not server.tool_on(tool):
             return None
+        if server.managed_by and (self.managed is None or not self.managed.tool_available(server.id, tool.name)):
+            return None
         return server, tool
 
     def offered(self) -> list[PluginTool]:
@@ -494,7 +765,9 @@ class IntegrationsService:
             if not server.enabled:
                 continue
             for tool in server.tools:
-                if server.tool_on(tool):
+                if server.tool_on(tool) and (not server.managed_by or (
+                    self.managed is not None and self.managed.tool_available(server.id, tool.name)
+                )):
                     tools.append(
                         PluginTool(
                             key=tool_key(server.id, tool.name),
@@ -502,14 +775,17 @@ class IntegrationsService:
                             name=tool.name,
                             description=tool.description,
                             schema=tool.input_schema,
-                            tier=self._tier_for(tool),
+                            tier=self.managed.tier(server.id, tool.name) if server.managed_by else self._tier_for(tool),
                         )
                     )
         return tools
 
     def tier_of(self, key: str) -> Tier | None:
         usable = self._usable(key)
-        return None if usable is None else self._tier_for(usable[1])
+        if usable is None:
+            return None
+        server, tool = usable
+        return self.managed.tier(server.id, tool.name) if server.managed_by else self._tier_for(tool)
 
     def _names(self, key: str) -> tuple[str, str]:
         """What the audit calls a tool: its server's name and its own, as far as they are known."""
@@ -537,6 +813,7 @@ class IntegrationsService:
         *,
         approver: str,
         task_id: int | None = None,
+        pool: "McpPool | None" = None,
     ) -> PluginResult:
         server_name, tool_name = self._names(key)
         usable = self._usable(key)
@@ -563,6 +840,10 @@ class IntegrationsService:
             json.dumps(arguments, ensure_ascii=False, default=str)
         ) > MAX_ARGUMENT_CHARS:
             return end("blocked", PluginResult(False, "blocked"))
+        if server.managed_by and not self.managed.allow_call(server.id, tool.name, arguments, approver):
+            return end("blocked", PluginResult(False, "blocked"))
+        # A pool is passed on only when there is one: a connector of a test may not know it.
+        kept = {} if pool is None else {"pool": pool}
         try:
             outcome = await self._connector.call_tool(
                 server,
@@ -570,25 +851,36 @@ class IntegrationsService:
                 clean_arguments(tool.input_schema, arguments),
                 expected=tool.fingerprint,
                 timeout_s=self._call_timeout_s,
+                **kept,
             )
         except asyncio.CancelledError:
             # Esc, or the core closing, ended the call part way: whether it was done is not known.
             end("error", PluginResult(False, "cancelled"))
             raise
         except McpFailure as failure:
+            if server.managed_by and failure.kind == "auth":
+                await self.managed.auth_failed(server.id)
             if failure.kind == "gone":
                 return end("blocked", PluginResult(False, failure.kind))
-            self._failure[server.id] = failure.kind
+            if failure.kind == "cancelled":  # sent, and the connection ended: not known to have failed
+                return end("error", PluginResult(False, failure.kind))
+            self._fail(server.id, failure.kind)
             result = PluginResult(False, failure.kind)
             return end("timeout" if failure.kind == "timeout" else "error", result)
-        self._failure.pop(server.id, None)
-        if outcome.fresh is not None and self._config.get(server.id) is server:
-            # The server describes the tool differently now: it is kept as it is (and stays on).
-            server.tools = [outcome.fresh if t.name == tool.name else t for t in server.tools]
-            try:
-                self._config.save()
-            except OSError as exc:
-                logger.warning("Could not save the plugins: %s", type(exc).__name__)
+        self._recover(server.id)
+        if self._config.get(server.id) is server:
+            # The server describes tools differently now: they are kept as they are (and stay on).
+            # The whole list read for this call is compared, not only the tool that was called.
+            newest = {t.name: t for t in outcome.listed or []}
+            if outcome.fresh is not None:
+                newest[outcome.fresh.name] = outcome.fresh
+            changed = [t for t in server.tools if t.name in newest and newest[t.name].fingerprint != t.fingerprint]
+            if changed:
+                server.tools = [newest[t.name] if t in changed else t for t in server.tools]
+                try:
+                    self._config.save()
+                except OSError as exc:
+                    logger.warning("Could not save the plugins: %s", type(exc).__name__)
         if outcome.is_error:
             result = PluginResult(False, "tool_error", outcome.text, outcome.truncated)
             return end("error", result)

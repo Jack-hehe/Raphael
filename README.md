@@ -9,6 +9,7 @@ Speak anywhere you can type: Raphael turns your voice into clean text and answer
 - **A dictionary that learns.** Names and jargon keep your spelling, and corrections you make after a dictation are remembered.
 - **Cloud or on-device speech recognition.** Use a cloud model through OpenRouter or a free local model.
 - **A voice assistant.** Ask a question, open an app or a website, control volume and media, or hand over a task that takes several steps.
+- **Memory that stays on your PC.** The assistant remembers what you tell it to as plain Markdown files you can read, edit or delete, and it can search past conversations.
 - **Connected services.** Sign in to services such as Notion, Linear and Todoist so the assistant can work with them.
 - **Multilingual.** Dictation in Chinese, Cantonese, English, Japanese and Korean; the interface in English, Traditional Chinese and Japanese.
 
@@ -34,6 +35,8 @@ cd ..\app
 npm ci
 npm run tauri -- dev
 ```
+
+Development builds run as a separate app next to an installed release: they keep their settings, database, memory, logs and webview data in `Raphael Dev` folders, and they share only the downloaded speech models. Set `RAPHAEL_DATA_DIR` to point a build at another data folder.
 
 Run the tests:
 

@@ -47,8 +47,8 @@ def spend_rows(conn):
 # --- the questions ---------------------------------------------------------------------------------
 
 
-def test_the_six_routes_are_these():
-    assert ROUTES == ("command", "answer", "delegate", "discuss", "chat", "unclear")
+def test_the_seven_routes_are_these():
+    assert ROUTES == ("command", "answer", "operate", "delegate", "discuss", "chat", "unclear")
     assert JEV_MODEL == "typesafe/jev-1.14"
     assert CONFIDENCE_FLOOR == 0.55
 
@@ -59,9 +59,15 @@ def test_the_criteria_of_the_routes_are_these():
         "website, app or Windows settings page (or search on a site), change the volume, pause or "
         "play media, lock the screen.",
         "answer": "A question Raphael can answer in a few sentences, possibly after one quick "
-        "lookup (weather, time, a web search, a definition, a calculation).",
+        "lookup (weather, time, a web search, a definition, a calculation), including how a "
+        "background task is going or what it did (state.background lists them).",
+        "operate": "A task done by using a desktop app on this computer's screen: clicking, typing "
+        "or choosing inside an app such as Calculator, Excel, File Explorer or the Settings app (for "
+        "example: compute something in Calculator, type a line into a document, turn on a switch in "
+        "Settings), which no fixed command covers.",
         "delegate": "A multi-step task, or one that needs a connected service such as email, "
-        "calendar, Notion or GitHub, or that will take more than a few seconds.",
+        "calendar, Notion or GitHub, or that will take more than a few seconds, and that is not done "
+        "by operating an app on the screen. Not a question about a task that was already handed over.",
         "discuss": "The speaker wants to think something through together or plan, an "
         "open-ended conversation rather than one answer.",
         "chat": "Small talk, a greeting or thanks, needing no action and no facts.",
@@ -100,6 +106,35 @@ def test_the_questions_do_not_change_between_requests():
 
 def test_the_state_is_the_utterance():
     assert build_state("打開 YouTube") == {"utterance": "打開 YouTube"}
+
+
+def test_the_state_has_one_line_about_the_background_when_there_is_something_to_say():
+    assert build_state("好了嗎", "1 running (step 4)") == {
+        "utterance": "好了嗎",
+        "background": "1 running (step 4)",
+    }
+    assert build_state("好了嗎", "") == {"utterance": "好了嗎"}
+    assert build_state("好了嗎", None) == {"utterance": "好了嗎"}
+
+
+async def test_jev_is_told_about_the_background_in_the_state_and_asked_nothing_more(
+    router, client, ledger
+):
+    client.decisions.append(decision("answer"))
+    await router.classify("寄出去了嗎", "m", ledger, background="1 done 3 min ago")
+    [call] = client.decide_calls
+    assert call["state"] == {"utterance": "寄出去了嗎", "background": "1 done 3 min ago"}
+    assert list(call["questions"]) == list(build_questions())  # no new question, no new call
+
+
+async def test_the_language_model_reads_the_background_too_as_data(router, client, ledger):
+    client.decisions.extend([Decision(answers={}, cost_usd=0.0, latency_ms=1)])
+    client.replies.append(completion(classification(route="answer")))
+    await router.classify("寄出去了嗎", "m", ledger, background="1 done 3 min ago")
+    assert "<background>\n1 done 3 min ago\n</background>" in client.json_calls[0]["user"]
+    client.replies.append(completion(classification(route="answer")))
+    await router.ask_luna("寄出去了嗎", "m", ledger)  # nothing to say: nothing is added
+    assert "background" not in client.json_calls[1]["user"]
 
 
 # --- reading Jev's answers --------------------------------------------------------------------------
@@ -469,8 +504,8 @@ async def test_what_the_language_model_cost_is_written_to_the_spend(router, clie
         (OpenRouterError(401, "auth", "no"), "auth"),
         (OpenRouterError(402, "credits", "broke"), "credits"),
         (OpenRouterError(0, "network", "offline"), "offline"),
-        (OpenRouterError(0, "timeout", "slow"), "offline"),
-        (OpenRouterError(503, "server", "down"), "offline"),
+        (OpenRouterError(0, "timeout", "slow"), "timeout"),
+        (OpenRouterError(503, "server", "down"), "error"),
         (OpenRouterError(400, "bad_request", "no"), "error"),
         (RuntimeError("boom"), "error"),
     ],
@@ -492,7 +527,7 @@ async def test_a_language_model_that_hangs_is_a_timeout(client, ledger):
     router = Router(client, luna_s=0.1)
     with pytest.raises(AgentFailure) as failure:
         await router.ask_luna("hi", "m", ledger)
-    assert failure.value.kind == "offline"
+    assert failure.value.kind == "timeout"
 
 
 # --- both together ----------------------------------------------------------------------------------
@@ -503,6 +538,15 @@ async def test_jev_decides_and_the_language_model_is_not_asked(router, client, l
     result = await router.classify("明天會下雨嗎", "m", ledger)
     assert result.source == "jev" and result.route == "answer" and result.needs_weather
     assert client.json_calls == []
+
+
+async def test_another_provider_classifies_without_an_openrouter_decision(router, client, ledger):
+    client.decisions.append(OpenRouterError(401, "auth", "no OpenRouter key"))
+    client.replies.append(completion(classification(route="discuss")))
+    result = await router.classify("hello", "@local:llama3.1:8b", ledger)
+    assert result.route == "discuss" and result.source == "luna"
+    assert len(client.decisions) == 1
+    assert client.json_calls[0]["model"] == "@local:llama3.1:8b"
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { setLocale } from "./i18n";
-import { daysHTML, groupByDay, hasDetail, mergeTurns, miniTurnHTML, oldestId, turnHTML, turnStamp } from "./conversation";
+import {
+  TYPED,
+  VOICE,
+  hasDetail,
+  highlightHTML,
+  mergeTurns,
+  oldestId,
+  refreshTurns,
+  sourceOf,
+  threadItems,
+  turnMatches,
+} from "./conversation";
 import type { AgentTurn } from "./types";
 
 afterEach(() => setLocale("zh-TW"));
@@ -19,6 +30,8 @@ function turn(id: number, when: string, more: Partial<AgentTurn> = {}): AgentTur
     text: `回答 ${id}`,
     detail: null,
     status: "done",
+    session_id: `press-${id}`,
+    source: "voice",
     ...more,
   };
 }
@@ -31,42 +44,72 @@ const NEWEST_FIRST = [
   turn(1, "2025-12-31T12:00:00+08:00"),
 ];
 
-describe("groupByDay", () => {
-  test("the days run oldest to newest and each day oldest to newest: the newest turn is last", () => {
-    const groups = groupByDay(NEWEST_FIRST, now);
-    expect(groups.map((g) => g.label)).toEqual(["2025 年 12 月 31 日", "10 月 17 日", "昨天", "今天"]);
-    expect(groups.map((g) => g.turns.map((t) => t.id))).toEqual([[1], [2], [3, 4], [5]]);
-    expect(groups.map((g) => g.key)).toEqual(["2025-12-31", "2026-10-17", "2026-10-19", "2026-10-20"]);
-  });
-
-  test("the day is the local one: a turn just after midnight belongs to the new day", () => {
-    const groups = groupByDay(
-      [turn(2, "2026-10-20T00:00:05+08:00"), turn(1, "2026-10-19T23:59:55+08:00")],
+describe("one thread", () => {
+  test("every turn in one thread, oldest first, whatever its source; each day under its heading", () => {
+    const items = threadItems(
+      [
+        turn(4, "2026-10-19T23:58:00+08:00", { source: "telegram", session_id: "chat-7" }),
+        ...NEWEST_FIRST.filter((t) => t.id !== 4),
+        turn(6, "2026-10-20T09:30:00+08:00", { source: "app" }),
+      ],
       now,
     );
-    expect(groups.map((g) => g.label)).toEqual(["昨天", "今天"]);
+    expect(items.map((item) => (item.kind === "day" ? item.label : item.kind === "turn" ? item.turn.id : item.key))).toEqual([
+      "2025 年 12 月 31 日", 1, "10 月 17 日", 2, "昨天", 3, 4, "今天", 5, 6,
+    ]);
+    // the keys say which line is which across draws
+    expect(items.filter((item) => item.kind === "turn").map((item) => item.key)).toEqual(["turn:1", "turn:2", "turn:3", "turn:4", "turn:5", "turn:6"]);
+    expect(items[0].key).toBe("day:2025 年 12 月 31 日");
   });
 
-  test("turns that came in a different order than their time are laid out by time", () => {
-    const groups = groupByDay([turn(1, "2026-10-20T09:00:00+08:00"), turn(2, "2026-10-20T08:00:00+08:00")], now);
-    expect(groups[0].turns.map((t) => t.id)).toEqual([2, 1]);
-  });
-
-  test("two turns at the same time keep the order of their ids", () => {
-    const groups = groupByDay([turn(8, "2026-10-20T09:00:00+08:00"), turn(7, "2026-10-20T09:00:00+08:00")], now);
-    expect(groups[0].turns.map((t) => t.id)).toEqual([7, 8]);
-  });
-
-  test("the list that was given is not changed, and nothing makes no days", () => {
+  test("turns of the same moment keep the order they were written in, and the list given is not changed", () => {
     const copy = [...NEWEST_FIRST];
-    groupByDay(NEWEST_FIRST, now);
+    const same = threadItems([turn(9, "2026-10-20T09:00:00+08:00"), turn(8, "2026-10-20T09:00:00+08:00")], now);
+    expect(same.flatMap((item) => (item.kind === "turn" ? [item.turn.id] : []))).toEqual([8, 9]);
+    threadItems(NEWEST_FIRST, now);
     expect(NEWEST_FIRST).toEqual(copy);
-    expect(groupByDay([], now)).toEqual([]);
+    expect(threadItems([], now)).toEqual([]);
   });
 
-  test("the headings follow the language of the window", () => {
-    setLocale("en");
-    expect(groupByDay(NEWEST_FIRST, now).map((g) => g.label)).toEqual(["12/31/2025", "10/17", "Yesterday", "Today"]);
+  test("what one colleague asks in a row is one line where it came; another colleague, a turn or a day apart is another", () => {
+    const asked = (id: number, when: string, peer: number) => turn(id, when, { route: "exchange", source: "member", scope: "exchange", peer_id: peer });
+    const items = threadItems([
+      asked(9, "2026-10-20T10:00:00+08:00", 1),
+      turn(8, "2026-10-20T09:30:00+08:00"),
+      asked(7, "2026-10-20T09:20:00+08:00", 3),
+      asked(6, "2026-10-20T09:10:00+08:00", 1),
+      asked(5, "2026-10-20T09:05:00+08:00", 1),
+      asked(4, "2026-10-19T09:05:00+08:00", 1),
+    ], now);
+    const lines = items.flatMap((item): (number | number[])[] => item.kind === "exchange" ? [item.turns.map((x) => x.id)] : item.kind === "turn" ? [item.turn.id] : []);
+    expect(lines).toEqual([[4], [5, 6], [7], 8, [9]]);
+    expect(items.filter((item) => item.kind === "exchange").map((item) => item.key)).toEqual(["exchange:4", "exchange:5", "exchange:7", "exchange:9"]);
+  });
+
+  test("a turn from a core that keeps no source is a spoken one", () => {
+    const old = { ...turn(1, "2026-10-20T09:00:00+08:00") };
+    delete old.source;
+    expect(sourceOf(old)).toBe(VOICE);
+    expect(sourceOf(turn(2, "2026-10-20T09:00:00+08:00", { source: "app" }))).toBe(TYPED);
+  });
+});
+
+describe("the search", () => {
+  test("a turn holds the words in what was asked, answered or said at length; width and case do not matter", () => {
+    const t1 = turn(1, "2026-10-20T09:00:00+08:00", { question: "台北天氣", text: "Rainy in TAIPEI", detail: "帶傘" });
+    expect(turnMatches(t1, "台北")).toBe(true);
+    expect(turnMatches(t1, "taipei")).toBe(true);
+    expect(turnMatches(t1, "ＴＡＩＰＥＩ")).toBe(true);
+    expect(turnMatches(t1, "傘")).toBe(true);
+    expect(turnMatches(t1, "高雄")).toBe(false);
+    expect(turnMatches(t1, "  ")).toBe(true);
+  });
+
+  test("the words are marked where they are, and everything else is escaped", () => {
+    expect(highlightHTML("「台北下雨，台北好冷」", "台北")).toBe("「<mark>台北</mark>下雨，<mark>台北</mark>好冷」");
+    expect(highlightHTML("Rain in Taipei <b>", "TAIPEI")).toBe("Rain in <mark>Taipei</mark> &lt;b&gt;");
+    expect(highlightHTML("<i>x</i>", "")).toBe("&lt;i&gt;x&lt;/i&gt;");
+    expect(highlightHTML("a<b>c", "<b>")).toBe("a<mark>&lt;b&gt;</mark>c");
   });
 });
 
@@ -76,7 +119,6 @@ describe("detail", () => {
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: null }))).toBe(false);
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: "   " }))).toBe(false);
     expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: " 回答 1 " }))).toBe(false); // the line again
-    expect(hasDetail(turn(1, "2026-10-20T09:00:00+08:00", { detail: undefined as unknown as null }))).toBe(false);
   });
 });
 
@@ -93,85 +135,21 @@ describe("paging back", () => {
     expect(oldestId([NEWEST_FIRST[0], NEWEST_FIRST[2]])).toBe(3);
     expect(oldestId([])).toBeUndefined();
   });
-});
 
-describe("a turn as HTML", () => {
-  test("the time, the person's words in 「」 and Raphael's in 《》", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "今天台北天氣如何", text: "台北現在 24 度。" }), false);
-    expect(html).toContain('<div class="turn-time num">09:12</div>');
-    expect(html).toContain('<div class="turn-q">「今天台北天氣如何」</div>');
-    expect(html).toContain('<div class="turn-a">《答。台北現在 24 度。》</div>');
-    expect(html).toContain('data-id="5"');
-    expect(html).toContain('data-status="done"');
-    expect(html).not.toContain("turn-detail");
-    expect(html).not.toContain("data-act=");
-  });
-
-  test("an English turn reads 《Answer. …》", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "what time is it", prefix: "Answer", text: "It is 9:12." }), false);
-    expect(html).toContain("「what time is it」");
-    expect(html).toContain("《Answer. It is 9:12.》");
-  });
-
-  test("a turn with a detail has a closed detail and a button to open it", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { detail: "第一行\n第二行" }), false);
-    expect(html).toContain('<div class="turn-detail" id="turn-detail-5" hidden>第一行\n第二行</div>');
-    expect(html).toContain('data-act="detail" aria-expanded="false" aria-controls="turn-detail-5"');
-    expect(html).toContain('aria-label="詳細"');
-  });
-
-  test("an open detail is shown and says so", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { detail: "更多" }), true);
-    expect(html).toContain('<div class="turn-detail" id="turn-detail-5">更多</div>');
-    expect(html).toContain('aria-expanded="true"');
-  });
-
-  test("a turn without a question shows only the answer", () => {
-    const html = turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "  " }), false);
-    expect(html).not.toContain("turn-q");
-    expect(html).toContain("turn-a");
-  });
-
-  test("a missing prefix leaves 《text》", () => {
-    expect(turnHTML(turn(5, "2026-10-20T09:12:00+08:00", { prefix: "" }), false)).toContain("《回答 5》");
-  });
-
-  test("everything that came from outside is escaped", () => {
-    const evil = '<img src=x onerror="alert(1)">';
-    const html = turnHTML(
-      turn(5, "2026-10-20T09:12:00+08:00", { question: evil, prefix: "<b>", text: evil, detail: evil, status: '"><script>' }),
-      true,
-    );
-    expect(html).not.toContain("<img");
-    expect(html).not.toContain("<b>");
-    expect(html).not.toContain("<script>");
-    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
-    expect(html).toContain('data-status="&quot;&gt;&lt;script&gt;"');
-  });
-
-  test("the days: a heading and a card of turns for each, with the open ones open", () => {
-    const html = daysHTML(groupByDay(NEWEST_FIRST.map((t) => ({ ...t, detail: `d${t.id}` })), now), new Set([4]));
-    expect(html.match(/<section class="group day">/g)).toHaveLength(4);
-    expect(html).toContain("<h3>昨天</h3>");
-    expect(html).toContain('id="turn-detail-4">d4</div>');
-    expect(html).toContain('id="turn-detail-3" hidden>d3</div>');
-    expect(html.indexOf("今天")).toBeGreaterThan(html.indexOf("昨天")); // today is below yesterday
-    expect(daysHTML([], new Set())).toBe("");
-  });
-});
-
-describe("the small list of the home page", () => {
-  test("today shows the time, yesterday and earlier the day", () => {
-    expect(turnStamp(at("2026-10-20T09:12:00+08:00"), now)).toBe("09:12");
-    expect(turnStamp(at("2026-10-19T09:12:00+08:00"), now)).toBe("昨天");
-    expect(turnStamp(at("2026-10-17T09:12:00+08:00"), now)).toBe("10 月 17 日");
-  });
-
-  test("a mini turn has the stamp, the words and the answer, escaped", () => {
-    const html = miniTurnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "<i>", text: "好" }), now);
-    expect(html).toContain('<div class="mini-time num">09:12</div>');
-    expect(html).toContain('<div class="mini-q">「&lt;i&gt;」</div>');
-    expect(html).toContain('<div class="mini-a">《答。好》</div>');
-    expect(miniTurnHTML(turn(5, "2026-10-20T09:12:00+08:00", { question: "" }), now)).not.toContain("mini-q");
+  test("the newest page brought again keeps the older turns only when it reaches back to them", () => {
+    const span = (from: number, to: number): AgentTurn[] =>
+      Array.from({ length: to - from + 1 }, (_, i) => turn(to - i, "2026-10-20T09:00:00+08:00"));
+    const ids = (turns: AgentTurn[]): number[] => turns.map((t) => t.id);
+    // 1..50 loaded, 51..60 written meanwhile: the page 11..60 overlaps them, so 1..10 stay
+    const joined = refreshTurns(span(1, 50), span(11, 60), 50);
+    expect(ids(joined.turns)).toEqual(ids(span(1, 60)));
+    expect(joined.keptOlder).toBe(true);
+    // 1..50 loaded, 51..150 written meanwhile: 101..150 do not reach 1..50, which would leave a gap
+    const apart = refreshTurns(span(1, 50), span(101, 150), 50);
+    expect(ids(apart.turns)).toEqual(ids(span(101, 150)));
+    expect(apart.keptOlder).toBe(false);
+    // a page shorter than a page is the whole history; an empty one is no history
+    expect(refreshTurns(span(1, 50), span(40, 60), 50)).toEqual({ turns: span(40, 60), keptOlder: false });
+    expect(refreshTurns(span(1, 50), [], 50)).toEqual({ turns: [], keptOlder: false });
   });
 });

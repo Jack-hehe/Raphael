@@ -14,6 +14,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use self::windows::WindowsPaster;
+#[cfg(windows)]
+pub(crate) use self::windows::describe_process;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;

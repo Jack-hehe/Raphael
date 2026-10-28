@@ -68,14 +68,9 @@ def test_a_step_has_no_column_for_an_argument_or_a_result(conn):
     columns = [row["name"] for row in conn.execute("PRAGMA table_info(worker_steps)")]
     assert columns == [
         "id", "task_id", "n", "at_ms", "kind", "tool", "server", "tier", "outcome", "cost_usd", "ms",
+        "reason", "detail",
     ]  # fmt: skip
 
-
-def test_the_newest_task_comes_first_and_the_list_is_limited(store):
-    ids = [make(store, f"task {n}") for n in range(5)]
-    assert [t.id for t in store.list(3)] == ids[::-1][:3]
-    assert len(store.list(1000)) == 5
-    assert len(store.list(0)) == 1  # a limit is clamped, not obeyed to the letter
 
 
 def test_tasks_left_unfinished_by_the_last_process_are_interrupted_and_the_rest_are_not(store):
@@ -83,26 +78,16 @@ def test_tasks_left_unfinished_by_the_last_process_are_interrupted_and_the_rest_
     store.start(running)
     store.start(done)
     store.finish(done, "done", prefix="告", text="x", detail=None, reason=None)
-    assert store.interrupt_unfinished() == 2
+    assert len(store.interrupt_unfinished()) == 2
     assert store.get(queued).state == store.get(running).state == "interrupted"
     assert store.get(queued).reason == "restart" and store.get(queued).finished_at_ms is not None
     assert store.get(done).state == "done"
-    assert store.interrupt_unfinished() == 0
+    assert store.interrupt_unfinished() == []
 
 
-def test_old_finished_tasks_are_pruned_with_their_steps_and_one_that_runs_is_not(store):
-    old, young, running = make(store, "old"), make(store, "young"), make(store, "running")
-    for task_id in (old, young):
-        store.add_step(task_id, kind="model", outcome="ok")
-        store.finish(task_id, "done", prefix="告", text="x", detail=None, reason=None)
-    store.add_step(running, kind="model", outcome="ok")
-    store.start(running)
-    cutoff = store.get(young).created_at_ms
-    assert store.prune(cutoff) == 1
-    assert store.get(old) is None and store.steps(old) == []
-    assert store.get(young) is not None and store.steps(young)
-    assert store.prune(10**12) == 1  # everything finished; `running` stays
-    assert store.get(running) is not None and store.steps(running)
+def test_the_tasks_are_never_pruned_by_age(store):
+    # They are part of the one conversation, which stays until the user clears it.
+    assert not hasattr(store, "prune")
 
 
 def test_clearing_deletes_what_is_finished_and_leaves_what_runs(store):
@@ -113,3 +98,20 @@ def test_clearing_deletes_what_is_finished_and_leaves_what_runs(store):
     assert store.clear() == 1
     assert store.get(done) is None and store.steps(done) == []
     assert store.get(running) is not None
+
+
+def test_a_step_that_failed_keeps_its_reason(store):
+    task_id = make(store)
+    store.add_step(task_id, kind="tool", outcome="error", tool="look", reason="auth")
+    store.add_step(task_id, kind="tool", outcome="ok", tool="look")
+    assert [s.reason for s in store.steps(task_id)] == ["auth", None]
+
+
+def test_the_task_of_each_turn_is_found_by_the_turn(store):
+    first, second, alone = make(store), make(store), make(store)
+    store.attach_turn(first, 11)
+    store.attach_turn(second, 12)
+    found = store.for_turns([11, 12, 13])
+    assert {turn: task.id for turn, task in found.items()} == {11: first, 12: second}
+    assert store.for_turns([]) == {}
+    assert alone not in {task.id for task in found.values()}

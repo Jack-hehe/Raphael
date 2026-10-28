@@ -1,7 +1,7 @@
 {
   "name": "app",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -9,7 +9,10 @@
     "build": "tsc && vite build",
     "tauri": "node scripts/tauri.mjs",
     "test": "vitest run",
-    "check:contrast": "node scripts/check-palette.mjs"
+    "check:contrast": "node scripts/check-palette.mjs",
+    "look": "node scripts/look/index.mjs",
+    "verify": "node scripts/verify.mjs",
+    "judge": "node scripts/guardian.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0"
@@ -17,6 +20,8 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.0",
     "@types/node": "^26.6.5",
+    "happy-dom": "^21.0.4",
+    "puppeteer-core": "25.13.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.16",
     "vitest": "^5.0.5"

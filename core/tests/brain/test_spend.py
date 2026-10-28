@@ -49,6 +49,56 @@ def test_daily_totals_has_today_last(conn):
 # Recording.
 
 
+@pytest.mark.parametrize("period, expected", [
+    ("week", 1.7), ("month", 2.0), ("last_month", 5.0), ("all", 7.0),
+])
+def test_bill_uses_ledger_calendar_and_groups_every_purpose(conn, period, expected):
+    for when, cost, purpose in [
+        (ms(2026, 9, 30), 5.0, "agent"),
+        (ms(2026, 10, 1, 1), .3, "agent"),
+        (ms(2026, 10, 19), .8, "stt"),
+        (ms(2026, 10, 20), .4, "cleanup"),
+        (ms(2026, 10, 21), .2, "memory"),
+        (ms(2026, 10, 22), .1, "future-purpose"),
+        (ms(2026, 10, 23), .2, "another-purpose"),
+    ]:
+        add(conn, when, cost, purpose=purpose)
+    ledger = tracker_at(conn, ms(2026, 10, 24))
+    bill = ledger.bill(period)
+    assert bill["cost_usd"] == pytest.approx(expected)
+    assert sum(row["share"] for row in bill["purposes"]) == pytest.approx(1)
+    if period == "month":
+        assert bill["cost_usd"] == ledger.month_total()
+        amounts = {row["purpose"]: row["cost_usd"] for row in bill["purposes"]}
+        assert amounts == pytest.approx(dict(agent=.3, stt=.8, cleanup=.4, memory=.2, other=.3))
+
+
+def test_empty_bill_has_finite_zero_shares(conn):
+    bill = tracker_at(conn, ms(2026, 10, 24)).bill("all")
+    assert bill["cost_usd"] == 0
+    assert len(bill["purposes"]) == 4
+    assert all(row["cost_usd"] == row["share"] == 0 for row in bill["purposes"])
+
+
+def test_month_bill_matches_sidebar_at_local_boundary_with_future_rows(conn):
+    ledger = tracker_at(conn, ms(2026, 10, 1, 1))
+    for when, cost in [(ms(2026, 9, 30), 9), (ms(2026, 10, 1, 0), .1),
+                       (ms(2026, 10, 31), .2), (ms(2026, 11, 1, 0), 8)]:
+        add(conn, when, cost)
+    assert ledger.bill("month")["cost_usd"] == ledger.month_total() == .1 + .2
+
+
+def test_bill_uses_dst_aware_calendar_month(conn):
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("America/New_York")
+    now = int(datetime(2026, 11, 20, tzinfo=zone).timestamp() * 1000)
+    ledger = tracker_at(conn, now, tz=zone)
+    for day in [datetime(2026, 11, 1, tzinfo=zone), datetime(2026, 12, 1, tzinfo=zone)]:
+        add(conn, int(day.timestamp() * 1000), .2)
+    assert ledger.bill("month")["cost_usd"] == ledger.month_total() == .2
+
+
 def test_record_saves_what_it_is_given_and_the_time_of_the_clock(conn):
     s = SpendTracker(conn, now_ms=lambda: 1_700_000_000_123, tz=TPE)
     s.record(

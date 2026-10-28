@@ -1,10 +1,10 @@
-"""Plugins: MCP servers the user connects, and the permission tiers that decide what they may do.
+"""Plugins: MCP servers the user connects, and which of their tools the assistant may use.
 
 See `service` for the RPC methods and how the assistant reaches the tools; the other modules are
 the parts it uses:
 
-- `config` keeps the servers, the tool lists they reported and the tier the user gave each tool,
-  in a JSON file that never holds a secret.
+- `config` keeps the servers, the tool lists they reported and the tools the user turned off, in
+  a JSON file that never holds a secret.
 - `vault` keeps the secrets (environment values and headers) in Windows Credential Manager.
 - `client` talks to a server: connects on demand, lists tools, calls one with a timeout and a limit
   on the size of what comes back.

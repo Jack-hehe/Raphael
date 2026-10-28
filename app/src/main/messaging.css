@@ -1,0 +1,19 @@
+/* Telegram in the 「訊息平台」 tab of the settings: the rows are the panel's own (styles.css); these are
+   the few things only this group has. Colours are the app's tokens; the mark is Telegram's official blue (--brand-telegram). */
+.msg-name, .msg-pair { display: inline-flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.msg .mono.msg-mark { width: 22px; height: 22px; color: var(--brand-telegram); }
+.msg-bot { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-head .msg-bot { font-weight: 600; }
+.msg-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 var(--sp-1); border-radius: var(--r-pill); background: var(--accent); color: var(--on-accent); font-size: var(--fs-xs); font-weight: 600; }
+.msg .ctl { gap: var(--sp-2); align-items: center; }
+.msg .btn.icon { width: 32px; min-height: 32px; padding: 0; }
+.msg-more .i { transition: transform 0.22s ease; }
+.msg-more[aria-expanded="true"] .i { transform: rotate(180deg); }
+/* the pairing codes and the people sit under the bot's row, set in as its own */
+.slist > .row.msg-sub > .lbl { padding-left: var(--sp-6); }
+.msg-code { font-size: var(--fs-md); font-weight: 600; letter-spacing: 0.14em; }
+.msg-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.msg-mins { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-xs); color: var(--text-3); }
+.msg-avatar { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: var(--r-pill); background: var(--accent-soft); color: var(--accent-text); font: 600 var(--fs-2xs)/1 var(--display); }
+.msg-token { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--sp-2); }
+.msg-token .field { width: 240px; max-width: 100%; }

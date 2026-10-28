@@ -19,9 +19,9 @@ from raphael_core.background.service import MAX_QUEUED, report_from
 from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import OpenRouterError
 from raphael_core.brain.settings import SettingsStore
-from raphael_core.protocol import INVALID_PARAMS, NOT_FOUND, RpcError
+from raphael_core.protocol import INVALID_PARAMS, RpcError
 
-from .conftest import ARGUMENT, RESULT, TASK_TEXT, call, report, turn, until
+from .conftest import ARGUMENT, RESULT, TASK_TEXT, Links, call, report, turn, until
 
 
 async def look_twice_then_report(rig):
@@ -34,6 +34,16 @@ async def look_twice_then_report(rig):
 
 
 # --- a task from start to end ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", ["cli:codex:gpt-5.6-terra?effort=high", "@local:text"])
+async def test_background_tasks_use_auxiliary_api_model(make_rig, model):
+    rig = make_rig()
+    SettingsStore(rig.conn).set("assistant_model", "anthropic/claude-haiku-5.5")
+    rig.client.replies = [report("Finished.")]
+    rig.submit(model=model)
+    await rig.wait_for_reports()
+    assert rig.client.chat_calls[0]["model"] == "anthropic/claude-haiku-5.5"
 
 
 async def test_a_task_is_carried_out_step_by_step_and_reported(make_rig, plugins, calls):
@@ -63,11 +73,11 @@ async def test_the_model_is_given_the_task_the_tools_of_the_snapshot_and_the_res
     first, second = rig.client.chat_calls
     system, user = first["messages"]
     assert system["role"] == "system" and "background worker" in system["content"]
-    assert "15 model calls" in system["content"] and "25 tool calls" in system["content"]
+    assert "80 model calls" in system["content"] and "200 tool calls" in system["content"]
     assert user["role"] == "user" and f"<task>\n{TASK_TEXT}\n</task>" in user["content"]
     assert "2026-10-21 14:05" in user["content"] and user["content"].rstrip().endswith("English only.")
     assert [t["function"]["name"] for t in first["tools"]] == [
-        "weather", "web_search", "local_time", "Notes__look",
+        "weather", "web_search", "local_time", "web_read", "Notes__look",
     ]  # fmt: skip
     result = second["messages"][-1]
     assert result["role"] == "tool" and result["tool_call_id"] == "c1"
@@ -134,6 +144,32 @@ async def test_the_turn_of_the_history_that_handed_the_task_over_is_completed_wi
     )  # fmt: skip
     assert done.cost_usd == pytest.approx(0.0001 + 0.005)
     assert done.question == TASK_TEXT
+    assert done.model == "fake/model"
+
+
+async def test_retracting_a_running_turn_cannot_write_its_late_report_into_a_reused_id(make_rig, conn):
+    rig = make_rig()
+    history = AgentHistory(conn, rig.wall)
+    entered = asyncio.Event()
+
+    async def hold(**kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+
+    rig.client.replies = [hold]
+    old = history.add(session_id="s1", question="Old", route="delegate", prefix="",
+                      text="Working", status="done")
+    task_id = rig.submit()
+    rig.service.attach_turn(task_id, old)
+    await asyncio.wait_for(entered.wait(), 5)
+    await rig.service.cancel_session("s1")
+    history.delete(old)
+    new = history.add(session_id="new", question="New", route="chat", prefix="",
+                      text="New answer", status="done")
+    assert new == old
+    await rig.wait_for_reports()
+    assert history.get(new).text == "New answer"
+    assert history.messages([new]) == {}
 
 
 async def test_the_report_is_in_the_language_of_the_request(make_rig):
@@ -144,6 +180,25 @@ async def test_the_report_is_in_the_language_of_the_request(make_rig):
     [done] = await rig.wait_for_reports()
     assert (done["prefix"], done["text"]) == ("告", "已整理完畢。")
     assert "Traditional Chinese" in rig.client.chat_calls[0]["messages"][0]["content"]
+
+
+async def test_public_progress_reaches_status_only_before_the_next_model_call(make_rig, conn):
+    rig = make_rig()
+    history = AgentHistory(conn, rig.wall)
+    turn_id = history.add(session_id="s", question=TASK_TEXT, route="delegate", prefix="",
+                          text="", status="running")
+
+    async def finish(**kwargs):
+        assert not history.messages([turn_id])[turn_id]
+        assert any(method == "worker.progress" and data["turn_id"] == turn_id for method, data in rig.notifications)
+        assert "I will check the time." in str(kwargs["messages"])
+        return report("Done.")
+
+    rig.client.replies = [turn("I will check the time.", [call("local_time", {}, "t")]), finish]
+    task_id = rig.submit()
+    rig.service.attach_turn(task_id, turn_id)
+    await rig.wait_for_reports()
+    assert [m["kind"] for m in history.messages([turn_id])[turn_id]] == ["reply"]
 
 
 async def test_the_context_is_the_last_turns_of_the_conversation_without_the_task_itself(
@@ -176,6 +231,7 @@ async def test_the_context_is_the_last_turns_of_the_conversation_without_the_tas
         ('Here it is: {"prefix": "否", "text": "Cannot.", "detail": ""} Bye.', ("Negative", "Cannot.", None)),
         ("A plain sentence.", ("Notice", "A plain sentence.", None)),
         ('{"text": "No prefix."}', ("Answer", "No prefix.", None)),
+        ('"text"：「收到。」\n"messages":["收到。"],"need":}', ("Answer", "收到。", None)),
     ],
 )
 def test_the_report_of_the_model_is_read_in_the_shapes_it_comes_in(final, expected):
@@ -183,7 +239,8 @@ def test_the_report_of_the_model_is_read_in_the_shapes_it_comes_in(final, expect
     assert (reply.prefix, reply.text, reply.detail) == expected
 
 
-@pytest.mark.parametrize("final", ["", "   ", "{", '{"prefix": "告", "text": ""}', '```json\n{broken', "[]"])
+@pytest.mark.parametrize("final", ["", "   ", "{", '{"prefix": "告", "text": ""}', '```json\n{broken', "[]",
+                                   '"thinking":"","memory":[],"need":}'])
 def test_a_report_that_says_nothing_usable_is_none(final):
     assert report_from(final, "en") is None
 
@@ -193,12 +250,13 @@ def test_a_long_report_is_one_line_and_the_rest_goes_to_the_detail():
     assert len(reply.text) <= 81 and reply.detail == "字" * 200
 
 
-async def test_a_report_with_no_words_is_the_fixed_line_that_the_task_is_complete(make_rig):
+async def test_a_report_with_no_words_is_incomplete_instead_of_claiming_success(make_rig):
     rig = make_rig()
     rig.client.replies = [turn("   ")]
-    rig.submit()
+    task_id = rig.submit()
     [done] = await rig.wait_for_reports()
-    assert (done["state"], done["text"]) == ("done", phrase("en", "worker_done"))
+    assert (done["state"], done["text"]) == ("failed", phrase("en", "error"))
+    assert rig.task(task_id).reason == 'missing_terminal'
 
 
 # --- the limits -----------------------------------------------------------------------------------
@@ -213,7 +271,7 @@ def endless(rig, count=40, **extra):
 
 
 async def test_at_fifteen_model_calls_the_task_stops_and_says_so_with_a_fixed_line(make_rig):
-    rig = make_rig()
+    rig = make_rig(limits=RunLimits(model_calls=15))
     endless(rig)
     task_id = rig.submit()
     [done] = await rig.wait_for_reports()
@@ -237,17 +295,16 @@ async def test_at_twenty_five_tool_calls_the_task_stops_before_the_twenty_sixth(
     assert rig.task(task_id).tool_calls == 25
 
 
-async def test_the_money_one_task_may_spend_is_a_limit(make_rig):
+async def test_spending_does_not_stop_a_task(make_rig):
     rig = make_rig()
-    endless(rig, cost=0.09)
+    rig.client.replies = [turn("", [call("local_time", {}, "c0")], cost=0.3), report("Done", cost=0.4)]
     task_id = rig.submit()
     [done] = await rig.wait_for_reports()
-    assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_cost", steps="3")
-    assert len(rig.client.chat_calls) == 3  # 0.09, 0.18, 0.27: stopped before a fourth
-    assert rig.task(task_id).cost_usd == pytest.approx(0.27)
+    assert done["state"] == "done" and done["text"] == "Done"
+    assert rig.task(task_id).cost_usd == pytest.approx(0.7)
 
 
-async def test_the_month_limit_stops_a_task_in_the_middle(make_rig, conn):
+async def test_the_month_limit_does_not_stop_a_task_in_the_middle(make_rig, conn):
     rig = make_rig()
     SettingsStore(conn).set("monthly_limit_usd", 0.5)
     rig.client.replies = [
@@ -256,12 +313,12 @@ async def test_the_month_limit_stops_a_task_in_the_middle(make_rig, conn):
             rig.service._spend.record(purpose="cleanup", model="m", cost_usd=1.0, prompt_tokens=1, completion_tokens=1)
             or turn("", [call("local_time", {"n": 1}, "c1")], cost=0.01)
         ),
-        turn("", [call("local_time", {"n": 2}, "c2")]),
+        report("Done"),
     ]
     rig.submit()
     [done] = await rig.wait_for_reports()
-    assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_month", steps="2")
-    assert len(rig.client.chat_calls) == 2
+    assert done["state"] == "done" and done["text"] == "Done"
+    assert len(rig.client.chat_calls) == 3
 
 
 async def test_ten_minutes_is_a_limit_and_a_task_that_takes_longer_is_stopped(make_rig):
@@ -292,12 +349,44 @@ async def test_a_worker_that_does_not_answer_in_time_is_ended_by_the_core_alone(
         def kill(self):
             self.killed = True
 
-    host = Stuck()
+    host = Stuck(hello_timeout_s=0.1)
     rig = make_rig(limits=RunLimits(seconds=0.2), host=host)
     rig.submit()
     [done] = await rig.wait_for_reports()
     assert done["state"] == "limit" and done["text"] == phrase("en", "worker_limit_time", steps="0")
     assert host.killed is True
+
+
+async def test_a_worker_that_is_slow_to_start_is_waited_for_as_long_as_its_hello(
+    make_rig, monkeypatch
+):
+    # A worker that takes longer to start than the task's time and the net under it, but not
+    # longer than its hello is given: the core does not give up on it and end it half-started.
+    # The task's time is counted from when it was handed to the host, start included, so this one
+    # has run out by then: the worker reports that, and it is kept for the next task.
+    import raphael_core.background.service as module
+
+    monkeypatch.setattr(module, "TIME_NET_S", 0.3)
+
+    class SlowStart(WorkerHost):
+        killed = 0
+
+        async def _ensure(self, run=None):
+            await asyncio.sleep(0.8)  # well within the hello it is given
+            return await super()._ensure(run)
+
+        def kill(self):
+            self.killed += 1
+            super().kill()
+
+    links = Links()
+    host = SlowStart(connect=links, grace_s=0.3, hello_timeout_s=2.0)
+    rig = make_rig(limits=RunLimits(seconds=0.2), host=host, links=links)
+    rig.submit()
+    [done] = await rig.wait_for_reports()
+    assert done["state"] == "limit"
+    assert host.killed == 0  # the core did not end it on its own
+    assert len(links.made) == 1 and host.running  # it started, said hello, and stays
 
 
 # --- when the model fails -------------------------------------------------------------------------
@@ -342,7 +431,7 @@ async def test_a_task_the_user_stops_ends_at_once_with_what_was_done(make_rig, c
     assert done["state"] == "cancelled"
     assert done["text"] == phrase("en", "worker_cancelled_unsure", steps="2")
     assert rig.task(task_id).state == "cancelled" and len(rig.client.chat_calls) == 2
-    assert [s.outcome for s in rig.steps(task_id) if s.kind == "tool"] == ["ok"]
+    assert [s.outcome for s in rig.steps(task_id) if s.kind == "tool"] == ["ok", "cancelled"]  # the cut-off call is a step
 
 
 async def test_a_task_stopped_in_the_middle_of_a_model_call_has_nothing_cut_off(make_rig):
@@ -377,6 +466,24 @@ async def test_the_worker_comes_back_for_the_next_task_after_one_was_stopped(mak
     reports = await rig.wait_for_reports(2)
     assert [r["state"] for r in reports] == ["cancelled", "done"]
     assert reports[1]["text"] == "Second task." and (first, second) == (reports[0]["task_id"], reports[1]["task_id"])
+
+
+async def test_the_queue_goes_on_after_a_task_whose_failure_handling_raises(make_rig):
+    rig = make_rig()
+    rig.client.replies = [report("First task."), report("Second task.")]
+    first = rig.submit()
+    second = rig.submit()
+    told = rig.service._notify
+
+    def notify(method, params):
+        if method == "worker.report" and params["task_id"] == first:
+            raise RuntimeError("fixture notification failure")
+        told(method, params)
+
+    rig.service._notify = notify
+    await until(lambda: rig.task(second).state == "done")
+    assert rig.task(first).state == "done" and rig.task(first).report_text == "First task."
+    assert [r["task_id"] for r in rig.reports()] == [second]
 
 
 async def test_a_task_that_waits_can_be_taken_out_of_the_queue(make_rig):
@@ -530,42 +637,35 @@ async def test_tasks_left_unfinished_by_the_last_process_are_interrupted_when_th
     assert second.client.chat_calls == [] and second.notifications == []  # nothing was started again
 
 
-async def test_the_app_lists_the_tasks_and_reads_one_with_its_steps_and_never_its_arguments(make_rig):
+async def test_the_conversation_shows_a_task_with_its_steps_and_never_its_arguments(make_rig):
     rig = make_rig()
     await look_twice_then_report(rig)
     task_id = rig.submit()
     await rig.wait_for_reports()
-    listed = (await rig.rpc.call("worker.list", {}))["tasks"]
-    assert [t["id"] for t in listed] == [task_id] and listed[0]["state"] == "done"
-    assert listed[0]["report"] == {"prefix": "Notice", "text": "All looked up.", "detail": "Two things were found."}
-    got = (await rig.rpc.call("worker.get", {"id": task_id}))["task"]
-    assert [(s["n"], s["kind"], s["tool"], s["tier"], s["outcome"]) for s in got["steps"]] == [
-        (1, "model", None, None, "ok"),
-        (2, "tool", "look", "T1", "ok"),
-        (3, "model", None, None, "ok"),
+    rig.service.attach_turn(task_id, 7)
+    brief, steps = rig.service.tasks_for_turns([7, 8])[7]
+    assert (brief["id"], brief["state"], brief["tool_calls"]) == (task_id, "done", 1)
+    assert [(s["kind"], s["tool"], s["server"], s["outcome"]) for s in steps] == [
+        ("model", None, None, "ok"),
+        ("tool", "look", "Notes", "ok"),
+        ("model", None, None, "ok"),
     ]
-    assert ARGUMENT not in json.dumps(got) and RESULT not in json.dumps(got)
-    with pytest.raises(RpcError) as error:
-        await rig.rpc.call("worker.get", {"id": 999})
-    assert error.value.code == NOT_FOUND
-    for method, params in (("worker.get", {"id": "1"}), ("worker.list", {"limit": "3"})):
-        with pytest.raises(RpcError) as error:
-            await rig.rpc.call(method, params)
-        assert error.value.code == INVALID_PARAMS
+    shown = json.dumps([brief, steps])
+    assert ARGUMENT not in shown and RESULT not in shown and TASK_TEXT not in shown
 
 
-async def test_old_tasks_are_pruned_and_cleared_but_one_that_runs_is_kept(make_rig):
+async def test_old_tasks_are_kept_and_go_when_the_history_is_cleared(make_rig):
     rig = make_rig()
     rig.client.replies = [report("one"), report("two")]
     first = rig.submit()
     await rig.wait_for_reports()
-    rig.wall.now += 60_000
+    rig.wall.now += 400 * 86_400_000
     second = rig.submit()
     await rig.wait_for_reports(2)
-    rig.service.prune(rig.task(second).created_at_ms)
-    assert rig.task(first) is None and rig.task(second) is not None
+    assert not hasattr(rig.service, "prune")  # part of the one conversation: never pruned by age
+    assert rig.task(first) is not None and rig.task(second) is not None
     rig.service.clear()
-    assert rig.task(second) is None
+    assert rig.task(first) is None and rig.task(second) is None
 
 
 async def test_the_tray_is_told_a_task_runs_while_another_one_waits(make_rig):
@@ -721,3 +821,40 @@ async def test_closing_the_service_interrupts_the_task_that_runs_and_the_ones_th
     assert rig.reports() == []  # nobody is left to report to
     assert rig.host.running is False and rig.service.running is False
     await rig.service.aclose()  # safe twice
+
+
+async def test_stopping_a_session_stops_only_its_own_tasks(make_rig):
+    rig = make_rig()
+    started = asyncio.Event()
+
+    async def slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    rig.client.replies = [slow]
+    mine = rig.submit(session="other")
+    queued = rig.submit(session="telegram:42")
+    await asyncio.wait_for(started.wait(), 5)
+    assert await rig.service.cancel_session("telegram:42") is True  # the queued one only
+    [gone] = await rig.wait_for_reports()
+    assert (gone["task_id"], gone["state"]) == (queued, "cancelled")
+    assert rig.service.running and rig.task(mine).state == "running"
+    assert await rig.service.cancel_session("telegram:42") is False
+    assert await rig.service.cancel_session("other") is True
+    await rig.wait_for_reports(2)
+
+
+async def test_stopping_a_session_stops_the_task_that_runs_when_it_is_the_sessions(make_rig):
+    rig = make_rig()
+    started = asyncio.Event()
+
+    async def slow(**kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    rig.client.replies = [slow]
+    task_id = rig.submit(session="telegram:42")
+    await asyncio.wait_for(started.wait(), 5)
+    assert await rig.service.cancel_session("telegram:42") is True
+    [done] = await rig.wait_for_reports()
+    assert (done["task_id"], done["state"]) == (task_id, "cancelled")

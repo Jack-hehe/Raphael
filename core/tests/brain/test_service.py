@@ -22,7 +22,7 @@ from raphael_core.brain.openrouter import Completion, KeyInfo, OpenRouterClient,
 from raphael_core.brain.secrets import MemoryKeyStore
 from raphael_core.brain.service import Brain
 from raphael_core.brain.settings import DEFAULTS, SettingsStore
-from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from raphael_core.protocol import INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, RpcError
 from raphael_core.router import Router
 
 from .conftest import item
@@ -40,12 +40,11 @@ METHODS = [
     "history.list",
     "history.latest",
     "history.delete",
+    "history.clear",
     "dictionary.list",
     "dictionary.add",
     "dictionary.import",
     "dictionary.delete",
-    "dictionary.auto_add",
-    "dictionary.dismiss",
     "dictionary.learn",
     "settings.get",
     "settings.set",
@@ -57,7 +56,53 @@ METHODS = [
     "status.check_openrouter",
     "models.catalog",
     "stats.summary",
+    "usage.analytics",
+    "usage.runs",
+    "usage.export",
 ]
+
+
+@pytest.mark.parametrize(("language", "marker"), [
+    ("zh-TW", "（這段沒有聽清楚）"),
+    ("ja", "（この部分は聞き取れませんでした）"),
+    ("en", "(this part was not heard)"),
+])
+async def test_incomplete_transcript_keeps_gap_marker_in_paste_and_history(
+    router, fake_client, keys, language, marker,
+):
+    keys.set(KEY)
+    await router.call("settings.set", {"key": "languages", "value": ["zh-CN"]})
+    await router.call("dictionary.add", {"word": "replacement", "misheard": [marker]})
+    result = await finalize(
+        router, raw_text=f"Before. {marker} After.", incomplete=True, ui_language=language,
+    )
+    assert result["text"] == f"Before. {marker} After."
+    assert result["fallback_reason"] == "incomplete_stt"
+    assert fake_client.calls == []
+    latest = await router.call("history.latest", {})
+    assert latest["item"]["text"] == result["text"]
+
+
+@pytest.mark.parametrize("text", ["Hello world.", "明天見。", "Is this ready?", "準備好了！"])
+async def test_short_punctuated_sentence_needs_no_model(router, fake_client, keys, text):
+    keys.set(KEY)
+    result = await finalize(router, raw_text=text)
+    assert result["text"] == text
+    assert result["cleaned"]
+    assert result["llm_ms"] == 0
+    assert fake_client.calls == []
+
+
+@pytest.mark.parametrize("text", [
+    "hello world", "Um, hello world.", "不對，明天見。", "I I agree.",
+    "First, open it. Second, close it.", "Run `rm`.", "A sentence. Another sentence.",
+    "One\ntwo.", "x" * 81 + ".",
+])
+async def test_uncertain_short_text_still_uses_cleanup(router, fake_client, keys, text):
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": text})
+    await finalize(router, raw_text=text)
+    assert fake_client.calls
 
 
 def completion(data, cost=0.0002, model="google/gemini-3.1-flash-lite"):
@@ -196,6 +241,12 @@ def seed_history(conn, count, start_ms=1_000):
     store = HistoryStore(conn)
     for i in range(count):
         store.add(item(created_at_ms=start_ms + i, text=f"第{i}句", raw_text=f"原{i}"))
+
+
+def dismiss(conn, word):
+    """Dismiss `word` the one way the user can: by deleting it after it was learned."""
+    store = DictionaryStore(conn)
+    store.delete(store.add(word, source="learned").id)
 
 
 def assert_no_traceback_logged(caplog):
@@ -392,11 +443,11 @@ async def test_a_fallback_after_the_call_pastes_the_converted_raw_text(router, f
         "我們只要有一個干擾，就會停下來。",
     ],
 )
-async def test_a_fallback_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
+async def test_short_clean_text_pastes_and_saves_traditional_speech_as_it_is(router, spoken):
     # No key: the text that is pasted is the speech-to-text result. It is Traditional Chinese
     # already, and OpenCC over the whole sentence would write 隻要, 幹擾 and 釋出 into it.
     r = await finalize(router, spoken)
-    assert (r["cleaned"], r["fallback_reason"]) == (False, "no_key")
+    assert (r["cleaned"], r["fallback_reason"]) == (True, None)
     assert r["text"] == r["raw_text"] == spoken
     row = (await router.call("history.latest", {}))["item"]
     assert (row["text"], row["raw_text"]) == (spoken, spoken)
@@ -544,15 +595,16 @@ def gated(fake_client):
     return entered, gate.set
 
 
+@pytest.mark.parametrize("purpose", ["dictation", "agent"])
 async def test_a_dictation_cancelled_while_it_is_cleaned_is_paid_for_and_not_kept(
-    router, fake_client, keys
+    router, fake_client, keys, purpose
 ):
     keys.set(KEY)
     fake_client.next_completion = completion({"text": "早安，你好嗎。"}, cost=0.0004)
     await finalize(router, "早安你好嗎", session_id="s0")  # the dictation "paste last" should find
     fake_client.next_completion = completion({"text": "你好嗎我很好。"}, cost=0.0004)
     entered, open_gate = gated(fake_client)
-    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1"))
+    pending = asyncio.create_task(finalize(router, "你好嗎我很好", session_id="s1", purpose=purpose))
     await entered.wait()
     assert await router.call("brain.cancel_dictation", {"session_id": "s1"}) == {}
     open_gate()
@@ -690,11 +742,9 @@ BAD_PARAMS = [
     ("dictionary.learn", {"corrections": [{"word": "x"}]}, "dictionary.learn: no misheard"),
     ("dictionary.learn", {"corrections": [{"word": 1, "misheard": "y"}]}, "learn: word number"),
     ("dictionary.learn", {"corrections": ["x"]}, "dictionary.learn: item str"),
-    ("dictionary.dismiss", {}, "dictionary.dismiss: no word"),
-    ("dictionary.dismiss", {"word": 5}, "dictionary.dismiss: word number"),
-    ("dictionary.dismiss", {"word": " "}, "dictionary.dismiss: blank word"),
+
     ("settings.set", {}, "settings.set: nothing"),
-    ("settings.set", {"key": "language"}, "settings.set: no value"),
+    ("settings.set", {"key": "languages"}, "settings.set: no value"),
     ("settings.set", {"value": "ja"}, "settings.set: no key"),
     ("settings.set", {"key": 5, "value": 1}, "settings.set: key number"),
     ("settings.set", {"key": "no_such_setting", "value": 1}, "settings.set: unknown key"),
@@ -773,6 +823,13 @@ async def test_history_latest_and_delete(router, conn):
     assert (await router.call("history.latest", {}))["item"]["text"] == "第1句"
 
 
+async def test_history_clear_deletes_every_item_and_counts_them(router, conn):
+    seed_history(conn, 3)
+    assert await router.call("history.clear", {}) == {"deleted": 3}
+    assert (await router.call("history.list", {}))["items"] == []
+    assert await router.call("history.clear", {}) == {"deleted": 0}
+
+
 # --- dictionary ---------------------------------------------------------------------------------
 
 
@@ -823,8 +880,8 @@ async def test_dictionary_learn_adds_the_corrected_words(router):
     }
 
 
-async def test_dictionary_learn_reports_only_what_changed(router):
-    await router.call("dictionary.dismiss", {"word": "Typeless"})
+async def test_dictionary_learn_reports_only_what_changed(router, conn):
+    dismiss(conn, "Typeless")
     await router.call("dictionary.add", {"word": "手機", "misheard": ["首機"]})
     learned = await router.call(
         "dictionary.learn",
@@ -860,6 +917,24 @@ async def test_dictionary_learn_makes_a_rule_only_when_a_pair_is_seen_again(rout
     assert second == {"learned": ["Claude"], "rules": ["Claude"]}
     assert (await router.call("dictionary.list", {}))["entries"][0]["misheard"] == ["cloud"]
     assert await learn(router, "Claude", "cloud") == {"learned": []}
+
+
+async def test_a_single_name_correction_adds_the_term_and_repeated_forms_are_not_missed(router):
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {"learned": ["OpenMausBot"]}
+    entry = (await router.call("dictionary.list", {}))["entries"][0]
+    assert entry["word"] == "OpenMausBot" and entry["source"] == "learned"
+    assert entry["misheard"] == []  # First sighting is already a term, without a risky rule.
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {
+        "learned": ["OpenMausBot"], "rules": ["OpenMausBot"]
+    }
+    assert await learn(router, "OpenMausBot", "open maus bot") == {"learned": ["OpenMausBot"]}
+    assert await learn(router, "OpenMausBot", "open maus bot") == {
+        "learned": ["OpenMausBot"], "rules": ["OpenMausBot"]
+    }
+    assert await learn(router, "OpenMausBot", "Open Mouse Bot") == {"learned": []}
+    entries = (await router.call("dictionary.list", {}))["entries"]
+    assert len(entries) == 1
+    assert entries[0]["misheard"] == ["Open Mouse Bot", "open maus bot"]
 
 
 async def test_dictionary_learn_counts_the_same_pair_once_in_a_dictation(router):
@@ -900,7 +975,7 @@ async def test_the_hints_of_the_dictionary_reach_the_cleanup_prompt(router, fake
     await router.call("dictionary.add", {"word": "拉斐爾", "misheard": ["拉菲爾"]})
     await learn(router, "Claude", "cloud")
     await learn(router, "手機", "首機")
-    await finalize(router, "好")
+    await finalize(router, "好，用 cloud 寫")
     system = fake_client.calls[0]["system"]
     assert "- 拉斐爾（常被聽成：拉菲爾）" in system
     assert "- Claude（常被聽成：cloud）" in system, "a hint is told to the model like a rule"
@@ -927,74 +1002,49 @@ async def test_dictionary_learn_does_not_log_the_words(router, caplog):
     assert "手機" not in caplog.text and "首機" not in caplog.text
 
 
-def seed_mentions(conn, word, count, created_at_ms):
-    store = HistoryStore(conn)
-    for i in range(count):
-        store.add(item(created_at_ms=created_at_ms + i, text=f"今天用 {word} 連回家"))
+# --- what puts a word in the dictionary ----------------------------------------------------------
+#
+# A word joins the dictionary when the user adds or imports it, or when they corrected it in a
+# pasted dictation (`dictionary.learn`). Never because it is said often: a word that speech-to-text
+# writes right every time needs no entry.
 
 
-async def auto_added(router):
-    return (await router.call("dictionary.auto_add", {}))["words"]
+async def test_a_word_said_ten_times_right_is_never_added(router, conn):
+    for _ in range(10):
+        result = await finalize(router, raw_text="今天用 Tailscale 連回家")
+        assert "Tailscale" in result["text"]
+    assert len(HistoryStore(conn).list(limit=50)) == 10
+    assert (await router.call("dictionary.list", {}))["entries"] == []
+    assert DictionaryStore(conn).hint_forms() == []
 
 
-async def test_auto_add_adds_the_words_of_the_last_seven_days_as_learned(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - 2 * DAY_MS)
-    seed_mentions(conn, "OpenRouter", 3, NOW_MS - 8 * DAY_MS)
-    assert await auto_added(router) == ["Tailscale"]
+async def test_there_is_no_method_that_adds_words_by_how_often_they_are_said(router):
+    with pytest.raises(RpcError) as raised:
+        await router.call("dictionary.auto_add", {})
+    assert raised.value.code == METHOD_NOT_FOUND
+
+
+async def test_a_corrected_word_is_added_once_with_its_misheard_form(router, conn):
+    assert await learn(router, "Tailscale", "tail scale") == {"learned": ["Tailscale"]}
     entries = (await router.call("dictionary.list", {}))["entries"]
     assert [(e["word"], e["source"]) for e in entries] == [("Tailscale", "learned")]
-
-
-async def test_auto_add_window_is_exactly_seven_days(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - 7 * DAY_MS)  # from the very start of the window
-    stale = HistoryStore(conn)
-    for _ in range(3):
-        stale.add(item(created_at_ms=NOW_MS - 7 * DAY_MS - 1, text="今天用 OpenRouter"))
-    assert await auto_added(router) == ["Tailscale"]
-
-
-async def test_auto_add_adds_a_word_only_once(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    assert await auto_added(router) == ["Tailscale"]
-    assert await auto_added(router) == []
-    assert len((await router.call("dictionary.list", {}))["entries"]) == 1
-
-
-async def test_auto_add_skips_known_words_in_any_letter_case(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await router.call("dictionary.add", {"word": "tailscale"})
-    assert await auto_added(router) == []
+    # The misheard form is kept with the word: a hint for the cleanup model from the first
+    # sighting, a replacement rule from the second.
+    assert DictionaryStore(conn).hint_forms() == [("tail scale", "Tailscale")]
+    assert await learn(router, "Tailscale", "tail scale") == {
+        "learned": ["Tailscale"],
+        "rules": ["Tailscale"],
+    }
     entries = (await router.call("dictionary.list", {}))["entries"]
-    assert [(e["word"], e["source"]) for e in entries] == [("tailscale", "manual")]
+    assert [(e["word"], e["misheard"]) for e in entries] == [("Tailscale", ["tail scale"])]
 
 
-async def test_auto_add_skips_a_word_the_user_dismissed(router, conn):
-    seed_mentions(conn, "OpenRouter", 3, NOW_MS - DAY_MS)
-    DictionaryStore(conn).dismiss("OpenRouter")
-    assert await auto_added(router) == []
-
-
-async def test_a_deleted_auto_word_is_not_added_again(router, conn):
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await auto_added(router)
-    entry = (await router.call("dictionary.list", {}))["entries"][0]
-    await router.call("dictionary.delete", {"id": entry["id"]})
-    assert await auto_added(router) == []
+async def test_retyping_the_same_word_is_no_correction(router, conn):
+    assert await learn(router, "Tailscale", "Tailscale") == {"learned": []}
+    assert await learn(router, "手機", " 手機 ") == {"learned": []}
+    assert await learn(router, "Tailscale", "tailscale") == {"learned": []}, "letter case only"
     assert (await router.call("dictionary.list", {}))["entries"] == []
-
-
-async def test_auto_add_takes_at_most_five_words_a_time(router, conn):
-    for word in ("Alpha1", "Beta2", "Gamma3", "Delta4", "Epsilon5", "Zeta6"):
-        seed_mentions(conn, word, 3, NOW_MS - DAY_MS)
-    assert len(await auto_added(router)) == 5
-    assert len(await auto_added(router)) == 1
-
-
-async def test_auto_add_does_not_log_the_words(router, conn, caplog):
-    caplog.set_level(logging.DEBUG)
-    seed_mentions(conn, "Tailscale", 3, NOW_MS - DAY_MS)
-    await auto_added(router)
-    assert "Tailscale" not in caplog.text
+    assert DictionaryStore(conn).hint_forms() == []
 
 
 # --- settings -----------------------------------------------------------------------------------
@@ -1003,12 +1053,9 @@ async def test_auto_add_does_not_log_the_words(router, conn, caplog):
 async def test_settings_get_and_set_round_trip(router):
     assert await router.call("settings.get", {}) == {"settings": DEFAULTS}
     after = await router.call("settings.set", {"key": "languages", "value": ["ja-JP", "en-GB"]})
-    expected = {**DEFAULTS, "languages": ["ja-JP", "en-GB"], "language": "auto"}
+    expected = {**DEFAULTS, "languages": ["ja-JP", "en-GB"]}
     assert after == {"settings": expected}
     assert (await router.call("settings.get", {}))["settings"] == expected
-    # The old key still works, and sets the new one.
-    old = await router.call("settings.set", {"key": "language", "value": "ja"})
-    assert old["settings"]["languages"] == ["ja-JP"] and old["settings"]["language"] == "ja"
     # A whole number is a valid float setting.
     limit = await router.call("settings.set", {"key": "monthly_limit_usd", "value": 5})
     assert limit["settings"]["monthly_limit_usd"] == 5.0
@@ -1406,11 +1453,10 @@ async def test_status_recovers_when_a_later_call_succeeds(router, fake_client, c
 async def test_status_ignores_dictations_that_never_asked_the_model(
     router, fake_client, keys, conn
 ):
-    keys.set(KEY)
-    SettingsStore(conn).set("monthly_limit_usd", 0.0)  # the budget is used up
+    keys.clear()
     r = await finalize(router)
-    assert r["fallback_reason"] == "budget" and fake_client.calls == []
-    assert (await router.call("status.get", {}))["openrouter"]["state"] == "unknown"
+    assert r["fallback_reason"] == "no_key" and fake_client.calls == []
+    assert (await router.call("status.get", {}))["openrouter"]["state"] == "no_key"
 
 
 async def test_a_valid_key_makes_the_status_ok(router):
@@ -1718,7 +1764,7 @@ async def test_import_counts_blank_words_as_invalid(router):
 
 
 async def test_import_takes_a_word_the_user_dismissed_and_forgets_the_dismissal(router, conn):
-    DictionaryStore(conn).dismiss("OpenRouter")
+    dismiss(conn, "OpenRouter")
     assert await imported(router, ["openrouter"]) == {"added": 1, "skipped": 0, "invalid": 0}
     assert DictionaryStore(conn).dismissed() == set()
 
@@ -1759,3 +1805,43 @@ async def test_import_refuses_bad_params(router, params):
     with pytest.raises(RpcError) as err:
         await router.call("dictionary.import", params)
     assert err.value.code == INVALID_PARAMS
+
+
+@pytest.mark.parametrize("purpose", ["dictation", "agent"])
+async def test_cleanup_contract_and_cost_are_shared_but_agent_keeps_paste_last(
+    router, fake_client, keys, conn, purpose,
+):
+    seed_history(conn, 1, start_ms=NOW_MS)
+    previous = (await router.call("history.latest", {}))["item"]
+    keys.set(KEY)
+    fake_client.next_completion = completion({"text": "Please open YouTube."}, cost=0.0002)
+    result = await finalize(router, "um please open YouTube", purpose=purpose)
+    assert result["text"] == "Please open YouTube."
+    assert result["cleaned"]
+    assert fake_client.calls
+    spend = conn.execute("SELECT purpose, cost_usd FROM spend").fetchall()
+    assert [(row[0], row[1]) for row in spend] == [("cleanup", 0.0002)]
+    latest = (await router.call("history.latest", {}))["item"]
+    if purpose == "agent":
+        assert result["id"] is None
+        assert latest == previous
+    else:
+        assert latest["text"] == result["text"]
+
+
+async def test_agent_cleanup_retains_the_short_sentence_shortcut(router, fake_client, keys, conn):
+    keys.set(KEY)
+    result = await finalize(router, "Hello world.", purpose="agent")
+    assert result["text"] == "Hello world." and result["cleaned"]
+    assert result["llm_ms"] == 0 and result["id"] is None
+    assert fake_client.calls == []
+    assert conn.execute("SELECT COUNT(*) FROM spend").fetchone()[0] == 0
+    assert (await router.call("history.latest", {}))["item"] is None
+
+
+async def test_agent_cleanup_without_a_key_retains_normalization_without_history(router):
+    await router.call("dictionary.add", {"word": "Raphael", "misheard": ["Rafael"]})
+    result = await finalize(router, "Rafael \u6211\u4eec\u5f00\u4f1a", purpose="agent")
+    assert result["text"] == "Raphael \u6211\u5011\u958b\u6703"
+    assert not result["cleaned"] and result["id"] is None
+    assert (await router.call("history.latest", {}))["item"] is None

@@ -10,7 +10,6 @@ import logging
 
 import pytest
 
-from raphael_core.agent.persona import phrase
 from raphael_core.agent.plugins import TOOL_REFUSAL_TTL_S, ToolSupport
 from raphael_core.brain.catalog import CatalogEntry, ModelPrice
 from raphael_core.brain.openrouter import OpenRouterError
@@ -152,28 +151,6 @@ async def test_a_model_that_takes_no_tools_leaves_the_plugins_out_of_an_answer(
     assert PRIVATE not in caplog.text
 
 
-async def test_a_task_for_a_service_says_that_the_model_cannot_use_one(
-    rig, plugins, client, catalog, calls
-):
-    await plugins.connect(look="T0")
-    catalog.entries = [llm(DEFAULT, tools=False)]
-    route(client, "delegate")
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert (result["status"], result["prefix"]) == ("done", "否")
-    assert result["text"] == phrase("zh-TW", "plugin_model")
-    assert client.plan_calls == [] and client.replies == [] and calls == []
-    assert (await rig.turns())[0]["status"] == "done"
-
-
-@pytest.mark.parametrize("language", ["en", "ja"])
-async def test_it_says_so_in_the_language_of_the_window(rig, plugins, client, catalog, language):
-    await plugins.connect(look="T0")
-    catalog.entries = [llm(DEFAULT, tools=False)]
-    route(client, "delegate")
-    result = await rig.ask("check my notes", language=language)
-    assert result["text"] == phrase(language, "plugin_model")
-
-
 async def test_each_request_is_decided_by_the_catalog_as_it_is_then(
     rig, plugins, client, catalog, calls
 ):
@@ -245,7 +222,7 @@ async def test_changing_the_model_changes_what_is_known_about_it(
 async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
     rig, plugins, client, catalog
 ):
-    # Small talk, a discussion and a command never ask whether a model takes tools...
+    # Small talk and discussion read effort support; a command needs no catalog.
     await plugins.connect(look="T0")
     for kind in ("chat", "discuss"):
         client.decisions.append(decision(kind))
@@ -253,14 +230,14 @@ async def test_the_catalog_is_read_only_for_a_request_that_may_use_a_plugin(
         await rig.ask("你好嗎")
     client.decisions.append(decision("command", "volume_up"))
     await rig.ask("大聲一點")
-    assert catalog.reads == 0
-    # ...and neither does an answer when no plugin tool has a tier: nothing would be offered.
-    [server] = (await plugins.rpc.call("integrations.list"))["servers"]
+    assert catalog.reads == 2
+    # ...and neither does an answer when every plugin tool is off: nothing would be offered.
+    [server] = (await plugins.rpc.call("toolsets.list"))["groups"]
     await plugins.set_on(server["id"], "look", False)
     route(client)
     client.replies.append(spoken("答", "好。"))
     await rig.ask("你好嗎")
-    assert catalog.reads == 0 and client.plan_calls == []
+    assert catalog.reads == 3 and client.plan_calls == []
 
 
 # --- a model that refuses tools although the catalog said it takes them ------------------------
@@ -291,16 +268,6 @@ async def test_a_refusal_of_the_tools_leaves_the_plugins_out_and_is_remembered(
     client.replies.append(spoken("答", "查到茶了。"))
     await rig.ask("幫我查茶")
     assert len(client.plan_calls) == 2 and calls == ["look"]
-
-
-async def test_a_refusal_for_a_task_for_a_service_says_that_the_model_cannot_use_one(
-    rig, plugins, client
-):
-    await plugins.connect(look="T0")
-    client.plans.append(OpenRouterError(404, "bad_request", "No endpoints found"))
-    route(client, "delegate")
-    result = await rig.ask("幫我在筆記裡查茶")
-    assert result["text"] == phrase("zh-TW", "plugin_model")
 
 
 async def test_a_request_the_provider_found_wrong_is_not_a_model_without_tools(

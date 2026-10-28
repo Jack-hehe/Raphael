@@ -1,8 +1,9 @@
 //! Raphael's notices: the short reports the overlay shows as subtitles when a dictation could not
-//! go the usual way, the word list after learning from the user's corrections, his greeting when a
-//! question to him begins, and the announcements beside the emblem while he thinks about it. Each
-//! one is wrapped in 《》 and starts with its prefix: 告 (report) or 否 (refusal) in Chinese and
-//! Japanese, 了 for the learned words, and `Notice.`, `Negative.` or `Understood.` in English.
+//! go the usual way, the word list after learning from the user's corrections, the line that says he
+//! wrote down what he was told to remember, his greeting when a question to him begins, and the
+//! announcements beside the emblem while he thinks about it. Each one is wrapped in 《》 and starts
+//! with its prefix: 告 (report) or 否 (refusal) in Chinese and Japanese, 了 for the learned words and
+//! for a memory, and `Notice.`, `Negative.` or `Understood.` in English.
 //!
 //! They are written in his manner: calm, exact and brief. A report states what happened and what
 //! was done about it, a refusal states why, and neither apologises, jokes or exclaims. He calls the
@@ -117,6 +118,21 @@ pub const NOT_READY: Notice = Notice {
     ja: "《否。音声モデルの準備が完了していません。》",
 };
 
+/// The cloud could not transcribe the speech and no local model is left to take over
+/// (`NO_LOCAL_MODEL`).
+pub const NO_LOCAL_MODEL: Notice = Notice {
+    zh: "《否。雲端辨識失敗，且沒有本機模型。》",
+    en: "《Negative. Cloud transcription failed and there is no local model.》",
+    ja: "《否。クラウド認識に失敗しました。ローカルモデルがありません。》",
+};
+
+/// Some segments still failed after the final retry; the pasted text marks each gap.
+pub const INCOMPLETE: Notice = Notice {
+    zh: "《否。部分語音無法辨識，文字已標示缺漏。》",
+    en: "《Negative. Some speech could not be transcribed. Gaps are marked in the text.》",
+    ja: "《否。一部の音声を認識できませんでした。欠落箇所を表示しました。》",
+};
+
 /// The core is not running, so nothing can be dictated.
 pub const CORE_DOWN: Notice = Notice {
     zh: "《否。核心未在運作。請重新啟動拉斐爾。》",
@@ -132,6 +148,14 @@ pub const ASK_FAILED: Notice = Notice {
     ja: "《否。現在は回答できません。》",
 };
 
+/// Raphael wrote down what he was told to remember, in the same turn as his answer, which said
+/// something else (`"notice": "remembered"` in the reply of `agent.ask`). It follows the answer.
+pub const REMEMBERED: Notice = Notice {
+    zh: "《了。已記下。》",
+    en: "《Understood. Noted.》",
+    ja: "《了。記憶しました。》",
+};
+
 /// A question to Raphael has begun: his greeting beside the emblem while he listens. A dictation
 /// shows the emblem alone, so the two are never mistaken for each other. He stands by for an
 /// order, as a report rather than a question (問 is for what takes a yes or a no), and it is the
@@ -140,89 +164,6 @@ pub const GREETING: Notice = Notice {
     zh: "《告。主人，請下達指示。》",
     en: "《Notice. Standing by, Master.》",
     ja: "《告。マスター、ご指示をどうぞ。》",
-};
-
-/// A phrase book in Traditional Chinese (Taiwan), English and Japanese. The overlay is sent the
-/// book of one language, as it is sent one text of a [`Notice`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Phrases {
-    pub zh: &'static [&'static str],
-    pub en: &'static [&'static str],
-    pub ja: &'static [&'static str],
-}
-
-impl Phrases {
-    /// The lines for `language` (`"zh-TW"`, `"en"` or `"ja"`). A language the book does not have
-    /// gets the Traditional Chinese ones, as in [`Notice::text`].
-    pub fn lines(&self, language: &str) -> &'static [&'static str] {
-        match language {
-            "en" => self.en,
-            "ja" => self.ja,
-            _ => self.zh,
-        }
-    }
-}
-
-/// What the overlay writes beside the emblem, one line after another, while Raphael thinks about a
-/// question: like the percentage of a dictation it tells the person that he is at work. Each is a
-/// short report of his own (告, `Notice.`) on the analysis that runs, trailing off because it is
-/// still running: no jokes, no tips, no results. Short, so that it stays one line in the room
-/// beside the largest emblem at 14 px. Generic words only, nothing quoted from anywhere.
-pub const WAITING: Phrases = Phrases {
-    zh: &[
-        "《告。解析中……》",
-        "《告。並列演算中……》",
-        "《告。檢索最適解……》",
-        "《告。思考加速中……》",
-        "《告。整理情報中……》",
-        "《告。比對已知條件……》",
-        "《告。驗證推論中……》",
-        "《告。統合各項資料……》",
-        "《告。重新評估前提……》",
-        "《告。計算成功率……》",
-        "《告。篩選有效資訊……》",
-        "《告。構築回答中……》",
-        "《告。演算持續中……》",
-        "《告。確認可行路徑……》",
-        "《告。比較候補方案……》",
-        "《告。推演中……》",
-    ],
-    en: &[
-        "《Notice. Analyzing…》",
-        "《Notice. Computing in parallel…》",
-        "《Notice. Seeking the optimum…》",
-        "《Notice. Accelerating thought…》",
-        "《Notice. Sorting the data…》",
-        "《Notice. Checking known facts…》",
-        "《Notice. Verifying the logic…》",
-        "《Notice. Integrating findings…》",
-        "《Notice. Rechecking premises…》",
-        "《Notice. Estimating the odds…》",
-        "《Notice. Discarding noise…》",
-        "《Notice. Composing the answer…》",
-        "《Notice. Calculation continues…》",
-        "《Notice. Tracing viable paths…》",
-        "《Notice. Comparing options…》",
-        "《Notice. Running inference…》",
-    ],
-    ja: &[
-        "《告。解析を実行中……》",
-        "《告。並列演算を実行中……》",
-        "《告。最適解を検索中……》",
-        "《告。思考を加速中……》",
-        "《告。情報を整理中……》",
-        "《告。既知の条件を照合中……》",
-        "《告。推論を検証中……》",
-        "《告。情報を統合中……》",
-        "《告。前提を再評価中……》",
-        "《告。成功率を算出中……》",
-        "《告。有効な情報を選別中……》",
-        "《告。回答を構築中……》",
-        "《告。演算を継続中……》",
-        "《告。実行可能な経路を確認中……》",
-        "《告。候補を比較中……》",
-        "《告。推論を展開中……》",
-    ],
 };
 
 /// Words learned from the user's corrections after a paste, in one notice, in `language`:
@@ -246,37 +187,6 @@ pub fn learned(words: &[String], language: &str) -> String {
     }
 }
 
-/// The most words an [`auto_added`] notice names; more are counted.
-const AUTO_ADDED_NAMED: usize = 3;
-
-/// Words the dictionary took in by itself, because they kept coming up in the dictation, in one
-/// notice, in `language`: 《了。已加入「Tailscale」至辭典。》, or for more than three words
-/// 《了。已加入「Tailscale」等 5 個詞至辭典。》.
-pub fn auto_added(words: &[String], language: &str) -> String {
-    let quoted = |open: &str, close: &str, separator: &str| {
-        words
-            .iter()
-            .map(|word| format!("{open}{word}{close}"))
-            .collect::<Vec<_>>()
-            .join(separator)
-    };
-    let many = words.len() > AUTO_ADDED_NAMED;
-    let (first, count) = (words.first().map_or("", String::as_str), words.len());
-    match language {
-        "en" if many => format!(
-            "《Understood. {count} words added to the dictionary, among them \u{201c}{first}\u{201d}.》"
-        ),
-        "en" => format!(
-            "《Understood. {} added to the dictionary.》",
-            quoted("\u{201c}", "\u{201d}", ", ")
-        ),
-        "ja" if many => format!("《了。「{first}」など{count}語を辞書に追加しました。》"),
-        "ja" => format!("《了。{}を辞書に追加しました。》", quoted("「", "」", "、")),
-        _ if many => format!("《了。已加入「{first}」等 {count} 個詞至辭典。》"),
-        _ => format!("《了。已加入{}至辭典。》", quoted("「", "」", "、")),
-    }
-}
-
 /// The notice for the `fallback_reason` of a `dictation.stop` result, if it gets one. A plain
 /// `"timeout"` (the cleanup took too long) and the other reasons are not worth a notice.
 pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
@@ -292,7 +202,7 @@ pub fn notice_for_fallback(reason: Option<&str>) -> Option<Notice> {
 mod tests {
     use super::*;
 
-    const ALL: [Notice; 11] = [
+    const ALL: [Notice; 13] = [
         ELEVATED,
         FOCUS_CHANGED,
         BUDGET,
@@ -301,6 +211,8 @@ mod tests {
         NO_MIC,
         NO_SOUND,
         NOT_READY,
+        NO_LOCAL_MODEL,
+        INCOMPLETE,
         CORE_DOWN,
         ASK_FAILED,
         GREETING,
@@ -349,50 +261,6 @@ mod tests {
             learned(&two, "en"),
             "《Understood. \u{201c}手機\u{201d}, \u{201c}Typeless\u{201d} added to the dictionary.》"
         );
-    }
-
-    #[test]
-    fn the_auto_added_notice_names_up_to_three_words_and_counts_more() {
-        let words = |n: usize| {
-            ["Tailscale", "OpenRouter", "Kokoro", "GPT-SoVITS", "Tauri"][..n]
-                .iter()
-                .map(|word| (*word).to_owned())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            auto_added(&words(1), "zh-TW"),
-            "《了。已加入「Tailscale」至辭典。》"
-        );
-        assert_eq!(
-            auto_added(&words(3), "zh-TW"),
-            "《了。已加入「Tailscale」、「OpenRouter」、「Kokoro」至辭典。》"
-        );
-        assert_eq!(
-            auto_added(&words(5), "zh-TW"),
-            "《了。已加入「Tailscale」等 5 個詞至辭典。》"
-        );
-        assert_eq!(
-            auto_added(&words(2), "ja"),
-            "《了。「Tailscale」、「OpenRouter」を辞書に追加しました。》"
-        );
-        assert_eq!(
-            auto_added(&words(4), "ja"),
-            "《了。「Tailscale」など4語を辞書に追加しました。》"
-        );
-        assert_eq!(
-            auto_added(&words(2), "en"),
-            "《Understood. \u{201c}Tailscale\u{201d}, \u{201c}OpenRouter\u{201d} added to the dictionary.》"
-        );
-        assert_eq!(
-            auto_added(&words(4), "en"),
-            "《Understood. 4 words added to the dictionary, among them \u{201c}Tailscale\u{201d}.》"
-        );
-        for language in ["", "fr", "EN"] {
-            assert_eq!(
-                auto_added(&words(1), language),
-                auto_added(&words(1), "zh-TW")
-            );
-        }
     }
 
     #[test]
@@ -515,89 +383,19 @@ mod tests {
     }
 
     #[test]
-    fn the_waiting_lines_are_a_book_of_twelve_to_twenty_in_every_language() {
-        for (language, book) in [
-            ("zh-TW", WAITING.zh),
-            ("en", WAITING.en),
-            ("ja", WAITING.ja),
-        ] {
+    fn the_memory_notice_is_an_acknowledgement_in_each_language_on_one_line() {
+        assert_eq!(REMEMBERED.text("zh-TW"), "《了。已記下。》");
+        assert_eq!(REMEMBERED.text("en"), "《Understood. Noted.》");
+        assert_eq!(REMEMBERED.text("ja"), "《了。記憶しました。》");
+        assert_eq!(REMEMBERED.text("fr"), REMEMBERED.zh);
+        assert!(!has_kana(REMEMBERED.zh) && has_kana(REMEMBERED.ja));
+        for line in [REMEMBERED.zh, REMEMBERED.en, REMEMBERED.ja] {
             assert!(
-                (12..=20).contains(&book.len()),
-                "{language}: {}",
-                book.len()
-            );
-            let mut seen = std::collections::HashSet::new();
-            for line in book {
-                assert!(seen.insert(line), "{language}: {line} twice");
-                assert!(
-                    !line.is_empty() && line.trim() == *line,
-                    "{language}: {line:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn the_waiting_lines_are_sent_in_one_language_only() {
-        assert_eq!(WAITING.lines("zh-TW"), WAITING.zh);
-        assert_eq!(WAITING.lines("en"), WAITING.en);
-        assert_eq!(WAITING.lines("ja"), WAITING.ja);
-        // A language nobody chose is the default one, never a mix.
-        for other in ["", "fr", "zh-CN", "EN", "zh"] {
-            assert_eq!(WAITING.lines(other), WAITING.zh, "{other:?}");
-        }
-    }
-
-    #[test]
-    fn every_waiting_line_is_a_report_of_raphael_that_trails_off() {
-        // 《告。…》, still running: the work goes on while it is shown.
-        for line in WAITING.zh.iter().chain(WAITING.ja) {
-            assert!(line.starts_with("《告。"), "{line}");
-            assert!(line.ends_with("……》"), "{line}");
-        }
-        for line in WAITING.en {
-            assert!(line.starts_with("《Notice. "), "{line}");
-            assert!(line.ends_with("…》") && !line.ends_with("……》"), "{line}");
-        }
-    }
-
-    #[test]
-    fn each_waiting_book_stays_in_its_own_script() {
-        for line in WAITING.zh {
-            assert!(!has_kana(line), "{line}");
-        }
-        for line in WAITING.ja {
-            assert!(has_kana(line), "{line}");
-        }
-        for line in WAITING.en {
-            assert!(
-                line.chars()
-                    .all(|c| c.is_ascii() || matches!(c, '《' | '》' | '…')),
+                line.ends_with('》') && !line.contains(['!', '！', '?', '？']),
                 "{line}"
             );
-        }
-    }
-
-    #[test]
-    fn no_waiting_line_jokes_quotes_or_reports_a_result() {
-        // The analysis is under way: no tip about a key, no figure, no quotation, no address.
-        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
-            assert!(!line.contains("Esc"), "{line}");
-            assert!(
-                !line.chars().any(|c| c.is_ascii_digit() || c == '%'),
-                "{line}"
-            );
-            assert!(!line.contains(['「', '」', '『', '』', '"']), "{line}");
-            assert!(!line.contains(['!', '！', '?', '？']), "{line}");
+            assert!(width_at_14px(line) <= CAPTION_ROOM_PX, "{line}");
             assert!(!ADDRESS.iter().any(|word| line.contains(word)), "{line}");
-        }
-    }
-
-    #[test]
-    fn the_waiting_lines_fit_beside_the_largest_emblem() {
-        for line in WAITING.zh.iter().chain(WAITING.en).chain(WAITING.ja) {
-            let width = width_at_14px(line);
-            assert!(width <= CAPTION_ROOM_PX, "{line}: about {width} px");
         }
     }
 

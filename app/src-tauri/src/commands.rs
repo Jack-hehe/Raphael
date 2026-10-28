@@ -3,14 +3,33 @@
 //! - `core_call` passes a call on to the core, but only the methods the main window needs; the
 //!   dictation methods and the ones that ask Raphael something (`agent.ask`, `agent.confirm`,
 //!   `agent.cancel`) are the controller's alone. The main window may read and clear the record of
-//!   the conversations (`agent.history.`).
+//!   the conversations (`agent.history.`), and stop one background task it names
+//!   (`worker.cancel {task_id}`) or run one that did not finish again (`worker.rerun {task_id}`), the
+//!   way the tray stops the one that runs. It may list, read, edit and delete Raphael's memories and
+//!   clear the summary of the conversation (`memory.list`, `memory.get`, `memory.update`,
+//!   `memory.delete`, `memory.clear`, `memory.move`, `memory.summary_clear`), each by its name and
+//!   with its params checked here first; and manage the members of the owner's team, their groups
+//!   and their routines (`members.*`, `groups.*`, `routines.*`, each by its name).
+//! - `agent_ask_text`, `agent_question_open` and `agent_question_answer` are the 拉斐爾 page's own
+//!   way to Raphael, through the dictation controller rather than the core
+//!   ([`crate::dictation::Desk`]): a question typed in its composer (some text, of a bounded
+//!   length), and the YES/NO question that is open, which the page shows on a card and may answer
+//!   by its id, as the overlay's buttons do, while the window has the focus. `agent_page_shown`
+//!   says whether the page is on screen: while it is, and the window is in front, a question to
+//!   Raphael is shown there alone, not on the overlay too.
 //! - `device_settings_get` and `device_settings_set` read and change `device.json`
 //!   ([`crate::device_settings`]). A change takes effect at once: the hotkeys, the microphone,
 //!   autostart, the overlay, the window's theme and the dictation mode are updated, and only then
 //!   is the file written. (A dictation that is under way finishes in the mode it began in.)
+//!   `device_computer_app_remove` takes one app off the always-allowed list of 電腦操作, from the
+//!   list as it is under the settings' lock.
 //! - `keyboard_has_altgr` and `hotkeys_pause` are small helpers of the settings page.
+//! - `hotkeys_practice` lets the first-run guide's lessons hear the keys without a dictation
+//!   starting; `mic_access` says whether the privacy settings let desktop apps use the microphone.
 //! - `main_events` is the channel on which the main window hears the core and the app (the
-//!   microphone's loudness, a model's download, learning that is limited, the tray's pages).
+//!   microphone's loudness, a model's download, a turn of the conversations written or completed, a
+//!   background task that moved on, learning that is limited, the tray's pages, the hotkeys that
+//!   were pressed and where a dictation is).
 //! - `window_hotkey` hands the hotkeys that the main window sees while it has the focus, and the
 //!   keyboard hook may not, to the hotkey service, which treats them as the hook's.
 //!
@@ -21,7 +40,13 @@
 //! what it needs from the app state with `try_state`: after a failure to start, the core, the
 //! hotkeys or the overlay may not be there, and the settings page still has to work.
 //!
-//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key.
+//! The window may also read and set the services of Raphael's tools (`services.status`,
+//! `services.set_key`, `services.clear_key`), try Raphael's voice (`tts.preview`, `tts.stop`), and
+//! a typed question may carry images and PDFs
+//! (`agent_ask_text`'s `attachments`, which go on to `agent.ask` untouched).
+//!
+//! Never log the params of a call: `secrets.set_openrouter_key` carries the OpenRouter key,
+//! `services.set_key` a service's key, and a typed question's attachments the owner's files.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -40,10 +65,11 @@ use crate::core_process::{CORE_RESTARTED, CoreApi, CoreProcess};
 use crate::device_settings::{
     self, Appearance, DeviceSettings, DeviceStore, DictationMode, FILE_NAME, Subtitles,
 };
-use crate::dictation::ModeCell;
-use crate::hotkey::{Bindings, HotkeyService, WindowHotkey};
+use crate::dictation::{DeskHandle, ModeCell, QuestionNews, TypedQuestion};
+use crate::hotkey::{Bindings, HotkeyEvent, HotkeyService, WindowHotkey};
+use crate::mic_access::{self, MicAccess};
 use crate::notices::LanguageCell;
-use crate::overlay::Overlay;
+use crate::overlay::{AskPrompt, ConfirmSender, Confirmation, Overlay};
 use crate::rpc::{CORE_EXITED, Notification, RpcError, TIMEOUT};
 
 /// What `core_call` says when there is no core to call.
@@ -53,6 +79,16 @@ const CORE_NOT_RUNNING: &str = "Raphael's core is not running";
 /// successful `audio.monitor` from the page. When the core restarts it is switched on again in
 /// the new core ([`restore_core`]), so the page need not know about restarts.
 static MONITORING: AtomicBool = AtomicBool::new(false);
+/// Whether the first-run guide is practising: the keys are reported to the page (`MainEvent::Hotkey`)
+/// but start no dictation and no question. Set by `hotkeys_practice`; a page that subscribes again
+/// (it was reloaded) ends it, so that a lesson that was lost cannot leave the keys dead.
+static PRACTICE: AtomicBool = AtomicBool::new(false);
+/// Whether the main window shows the 拉斐爾 page, with neither the settings over it nor the
+/// first-run guide in its place. Set by `agent_page_shown` each time that changes; a page that
+/// subscribes again (it was reloaded) starts without it, until it says so. While it is set and the
+/// window is in front, a question to Raphael is shown on that page alone, not on the overlay too
+/// ([`crate::dictation::AppFront`]).
+static AGENT_PAGE: AtomicBool = AtomicBool::new(false);
 /// The task that passes the core's notifications on to the page that last called `main_events`.
 static FORWARDER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
@@ -74,15 +110,67 @@ pub enum TrayAction {
     AddWord,
 }
 
+/// A key of Raphael that was pressed, as the first-run guide hears of it (`MainEvent::Hotkey`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HotkeyKind {
+    DictationDown,
+    DictationUp,
+    AgentDown,
+    AgentUp,
+    PasteLast,
+    Cancel,
+}
+
+impl From<HotkeyEvent> for HotkeyKind {
+    fn from(event: HotkeyEvent) -> Self {
+        match event {
+            HotkeyEvent::DictationDown => Self::DictationDown,
+            HotkeyEvent::DictationUp => Self::DictationUp,
+            HotkeyEvent::AgentDown | HotkeyEvent::MemberDown(_) => Self::AgentDown,
+            HotkeyEvent::AgentUp => Self::AgentUp,
+            HotkeyEvent::PasteLast => Self::PasteLast,
+            HotkeyEvent::Cancel => Self::Cancel,
+        }
+    }
+}
+
+/// Where a dictation or a question is, as the first-run guide hears of it (`MainEvent::Dictation`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DictationPhase {
+    /// The microphone is open.
+    Listening,
+    /// The key was released and the text is being made.
+    Processing,
+    /// The text reached the window that had the focus.
+    Pasted,
+    /// The person cancelled it.
+    Cancelled,
+    /// It ended without text in the window: an error, silence, or a copy only.
+    Failed,
+}
+
 /// What the main window is told about the core, and about the app's own side of learning and
 /// of the tray.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum MainEvent {
+    /// A successful dictation delivered to our own process, for in-memory composer learning.
+    /// Never logged or replayed to a later subscriber.
+    DictationPasted {
+        text: String,
+    },
     /// Loudness of the microphone, 0 to 1, while the microphone is being monitored.
-    Level { value: f32 },
+    Level {
+        value: f32,
+    },
     /// A speech model is being downloaded.
-    ModelProgress { name: String, done: u64, total: u64 },
+    ModelProgress {
+        name: String,
+        done: u64,
+        total: u64,
+    },
     /// Learning from corrections cannot read what the user types in `app`, so it learns less
     /// there. Sent at most once per `app` and `reason` while the app runs, whenever the main
     /// window is listening (a window that subscribes later is told then). The identifiers are
@@ -90,7 +178,10 @@ pub enum MainEvent {
     /// `reason` is `accessibility_off` (the editor's `editor.accessibilitySupport` is off, so
     /// its text box is empty to other programs, and only ASCII typed on the US layout can be
     /// followed; setting it to `"on"` fixes that).
-    LearnLimited { app: String, reason: String },
+    LearnLimited {
+        app: String,
+        reason: String,
+    },
     /// A tray menu item asks for a page, and perhaps one thing to do there. It is sent before the
     /// window is shown, so that the window opens on that page. The first-run guide ignores it.
     TrayOpen {
@@ -98,6 +189,85 @@ pub enum MainEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         action: Option<TrayAction>,
     },
+    /// A turn of the conversations was written or completed (`agent.turn`): the page of the
+    /// conversations reads it again. Only its id and the thread it is in (`member_id`: 0 is
+    /// Raphael's, and a core from before the members names none): what was said stays in the core.
+    AgentTurn {
+        turn_id: u64,
+        member_id: u64,
+    },
+    ConversationsChanged {
+        member_id: u64,
+    },
+    QuotaChanged,
+    ActionModeChanged,
+    /// Data changed: the window re-reads it without receiving private content.
+    RoutinesChanged {
+        member_id: u64,
+    },
+    RoomsChanged {
+        room_id: u64,
+    },
+    MembersChanged,
+    ProvidersChanged,
+    SettingsChanged,
+    ConnectionsChanged,
+    BrainsChanged,
+    MemoryChanged {
+        member_id: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        space: Option<String>,
+    },
+    /// A background task moved on (`worker.changed`): a step was taken, or it started or ended.
+    /// `running` is whether any task is under way.
+    WorkerChanged {
+        task_id: u64,
+        state: String,
+        running: bool,
+    },
+    /// A service is signed in to with a code typed at its own page (`integrations.device_code`):
+    /// the window shows `user_code` and opens `verification_uri`. The code is not logged.
+    DeviceCode {
+        catalog_id: String,
+        user_code: String,
+        verification_uri: String,
+        expires_in: u64,
+    },
+    /// A key of Raphael went down or up, from the global hook or from the window itself. Sent for
+    /// every key event, whether or not the guide is practising; the keys are never named.
+    Hotkey {
+        kind: HotkeyKind,
+    },
+    /// A dictation (`agent: false`) or a question to Raphael (`agent: true`) moved on. Only the
+    /// phase: what was said stays in the core.
+    Dictation {
+        phase: DictationPhase,
+        agent: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        member_id: Option<u64>,
+    },
+    /// Raphael asks a YES/NO question, which the overlay shows: the 拉斐爾 page shows it on its card
+    /// too and may answer it (`agent_question_answer`). Its words are shown, never logged.
+    AgentQuestion(AskPrompt),
+    /// The question `id` was answered (on the overlay or the page), ran out, or was dropped with
+    /// its session: the card goes.
+    AgentQuestionClosed {
+        id: String,
+    },
+    /// The microphone's loudness, 0 to 1, while a question to Raphael is recorded: the ring around
+    /// the person's picture in the 拉斐爾 page's voice mode follows it. Never a dictation's.
+    VoiceLevel {
+        value: f32,
+    },
+}
+
+impl From<QuestionNews> for MainEvent {
+    fn from(news: QuestionNews) -> Self {
+        match news {
+            QuestionNews::Open(prompt) => Self::AgentQuestion(*prompt),
+            QuestionNews::Closed(id) => Self::AgentQuestionClosed { id },
+        }
+    }
 }
 
 /// The most events kept for a main window that has not subscribed yet.
@@ -126,6 +296,10 @@ impl Page {
             }
             self.channel = None;
         }
+        // Dictation text is only for the currently focused composer, never a later page.
+        if matches!(event, MainEvent::DictationPasted { .. }) {
+            return;
+        }
         if self.waiting.len() < WAITING_MAX {
             self.waiting.push(event);
         }
@@ -149,6 +323,25 @@ pub fn tell_main_window(event: MainEvent) {
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .deliver(event);
+}
+
+/// Whether the guide is practising the keys (see [`PRACTICE`]).
+pub fn practising() -> bool {
+    PRACTICE.load(Ordering::SeqCst)
+}
+
+/// What the dictation task does with a key event: tells the main window about it, and says whether
+/// the controller is to act on it. While the guide practises, the keys that would start or end a
+/// dictation, a question or a paste are only reported; Esc always goes on, so that nothing can get
+/// stuck.
+pub fn report_hotkey(event: HotkeyEvent) -> bool {
+    tell_main_window(MainEvent::Hotkey { kind: event.into() });
+    acts_on(event, practising())
+}
+
+/// Whether the controller acts on `event` while the guide `practising` or not.
+fn acts_on(event: HotkeyEvent, practising: bool) -> bool {
+    !practising || matches!(event, HotkeyEvent::Cancel)
 }
 
 // ---------- who may call ----------
@@ -185,7 +378,21 @@ const ALLOWED_PREFIXES: [&str; 8] = [
 // `models.local_use`, `models.local_cancel`, `models.local_delete`) as well as OpenRouter's catalog
 // (`models.catalog`), and each is let through by name, so that a method added there later is not
 // opened to the page by accident.
-const ALLOWED_METHODS: [&str; 11] = [
+// The messaging connections are named one by one, for the same reason. A message that arrives from
+// a messaging app has no way to reach any of them: only this window does.
+// A slice, not a fixed-length array: branches that each add a method merge without a count to fix.
+const ALLOWED_METHODS: &[&str] = &[
+    "home.overview",
+    "connectors.catalog",
+    "connectors.categories",
+    "connectors.connect",
+    "connectors.status",
+    "connectors.disconnect",
+    "connectors.tools",
+    "connectors.set_tools",
+    "connectors.set_key",
+    "connectors.google.configure",
+    "connectors.google.connect",
     "audio.devices",
     "audio.monitor",
     "languages.list",
@@ -196,15 +403,212 @@ const ALLOWED_METHODS: [&str; 11] = [
     "models.local_cancel",
     "models.local_delete",
     "models.catalog",
+    "providers.kinds",
+    "providers.list",
+    "brains.cli",
+    "brains.cli_login",
+    "brains.cli_disconnect",
+    "providers.add",
+    "providers.update",
+    "providers.remove",
+    "providers.test",
+    "providers.models",
     "stats.summary",
+    "usage.analytics",
+    "usage.runs",
+    "usage.export",
+    "usage.allowances",
+    "messaging.telegram.status",
+    "messaging.telegram.connect",
+    "messaging.telegram.set_enabled",
+    "messaging.telegram.approve",
+    "messaging.telegram.reject",
+    "messaging.telegram.remove_user",
+    "messaging.telegram.disconnect",
+    // The conversation view stops the task it shows, by its id (`validate_core_call`). The other
+    // methods of the worker stay closed (a task's question is answered by `background.answer`).
+    "worker.cancel",
+    // ... and runs one that did not finish again, by its id.
+    "worker.rerun",
+    // Raphael's memory, in the settings (`validate_core_call` checks the name and the text). Named
+    // one by one, like the messaging methods: a method added to the memory later stays closed.
+    "memory.list",
+    "memory.create",
+    "memory.get",
+    "memory.update",
+    "memory.delete",
+    "memory.clear",
+    "memory.move",
+    "memory.summary_clear",
+    // The services of the tools, in the settings: what is chosen and whether each key is stored
+    // (never a key), and a key put in or taken out of the vault. Named one by one as well.
+    "services.status",
+    "links.preview",
+    "attachments.get",
+    "services.set_key",
+    "services.clear_key",
+    // The members of the owner's team, their groups and their routines (the 拉斐爾 page's member
+    // column and details panel). Named one by one as well; the core checks their params. A member
+    // is asked something only by `agent_ask_text`, like Raphael: `agent.ask` stays closed.
+    "members.list",
+    "conversations.list",
+    "conversations.create",
+    "conversations.rename",
+    "conversations.delete",
+    "agent.history.delete",
+    "messages.search",
+    "quota.list",
+    "agent.speech.status",
+    "agent.speak",
+    "members.create",
+    "members.update",
+    "members.delete",
+    "members.set_primary",
+    "members.set_avatar",
+    "members.presets",
+    "members.read",
+    "members.viewing",
+    "members.tool_choices",
+    "members.skills.list",
+    "members.skills.read",
+    "members.skills.import",
+    "members.skills.update",
+    "members.skills.delete",
+    "members.commands.list",
+    "members.commands.save",
+    "members.commands.delete",
+    "members.voices",
+    "members.duplicate",
+    "members.mark_all_read",
+    "members.unread",
+    "groups.create",
+    "groups.update",
+    "groups.delete",
+    "routines.list",
+    "routines.create",
+    "routines.update",
+    "routines.delete",
+    "routines.template",
+    "routines.runs",
+    "rooms.list",
+    "rooms.create",
+    "rooms.delete",
+    "rooms.messages",
+    "rooms.send",
+    "rooms.stop",
+    "rooms.transcribe",
+    "rooms.update",
+    // The owner's safety rules, in Settings › 拉斐爾 (the core checks the words and the verdict).
+    "safety.rules.list",
+    "safety.rules.create",
+    "safety.rules.update",
+    "safety.rules.delete",
+    // The questions a background task waits on, as the gold card of a thread shows them, and the
+    // owner's answer from that card: the one place such a question is answered
+    // (`validate_core_call` checks it names its task and question and says yes or no).
+    "background.questions.list",
+    "background.answer",
+    // Raphael's voice, in the settings: the 「Try it」 line is spoken in the voice that is set up,
+    // and stopped by `tts.stop`. His answers are spoken by the core itself and need neither.
+    "tts.preview",
+    "tts.stop",
 ];
+
+/// The types a memory's name starts with (the core's `memory.store.TYPES`).
+const MEMORY_TYPES: [&str; 5] = ["user", "preference", "person", "ongoing", "reference"];
+/// The longest name of a memory, and the most a memory's body and description may hold, in
+/// characters (the core's limits; it checks them again).
+const MEMORY_NAME_MAX: usize = 64;
+const MEMORY_BODY_MAX: usize = 1_200;
+const MEMORY_DESCRIPTION_MAX: usize = 80;
+
+/// Whether `name` is the name of a memory: its type, then an ASCII slug of lower-case letters and
+/// digits in words joined by single hyphens (`preference-answer-length`). Nothing else, so no name
+/// can reach outside the memory's folder.
+pub fn is_memory_name(name: &str) -> bool {
+    if name.len() > MEMORY_NAME_MAX {
+        return false;
+    }
+    let Some((kind, slug)) = name.split_once('-') else {
+        return false;
+    };
+    MEMORY_TYPES.contains(&kind)
+        && slug.split('-').all(|word| {
+            !word.is_empty()
+                && word
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}
+
+/// The longest words the search of the conversation takes, in characters (the core's limit too).
+const HISTORY_QUERY_MAX: usize = 200;
+
+/// The params of `agent.history.search`: a `query` of words (not blank, at most
+/// [`HISTORY_QUERY_MAX`] characters) and, if given, a `limit` that is a whole number of 0 or more
+/// (the core clamps it to its own range).
+fn validate_history_search(params: &Value) -> Result<(), String> {
+    let words = params.get("query").and_then(Value::as_str).map(str::trim);
+    if !words.is_some_and(|words| (1..=HISTORY_QUERY_MAX).contains(&words.chars().count())) {
+        return Err(format!(
+            "agent.history.search needs a query of 1 to {HISTORY_QUERY_MAX} characters"
+        ));
+    }
+    match params.get("limit") {
+        None | Some(Value::Null) => Ok(()),
+        Some(limit) if limit.as_u64().is_some() => Ok(()),
+        Some(_) => Err("agent.history.search takes a whole number as its limit".to_owned()),
+    }
+}
+
+/// The params of a memory method: `name` a memory's name where one is needed, and for
+/// `memory.update` or `memory.create` a `body` within the limit and an optional short description.
+fn validate_memory_call(method: &str, params: &Value) -> Result<(), String> {
+    let needs_name = matches!(
+        method,
+        "memory.get" | "memory.update" | "memory.delete" | "memory.move"
+    );
+    if needs_name
+        && !params
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(is_memory_name)
+    {
+        return Err(format!("{method} needs the name of a memory"));
+    }
+    if !matches!(method, "memory.update" | "memory.create") {
+        return Ok(());
+    }
+    let chars = |value: &Value| value.as_str().map(|text| text.chars().count());
+    if method == "memory.create"
+        && params
+            .get("body")
+            .and_then(Value::as_str)
+            .is_some_and(|body| body.trim().is_empty())
+    {
+        return Err("memory.create needs a non-empty body".to_owned());
+    }
+    match params.get("body").and_then(chars) {
+        Some(count) if count <= MEMORY_BODY_MAX => {}
+        Some(_) => return Err("記憶內容最多 1,200 字".to_owned()),
+        None => return Err(format!("{method} needs the body of the memory")),
+    }
+    match params.get("description") {
+        None | Some(Value::Null) => Ok(()),
+        Some(value) => match chars(value) {
+            Some(count) if (1..=MEMORY_DESCRIPTION_MAX).contains(&count) => Ok(()),
+            _ => Err("記憶的說明最多 80 字".to_owned()),
+        },
+    }
+}
 
 /// Whether the main window may call `m` on the core: the history, the dictionary, the brain's
 /// settings (the `languages` setting too), the key, the status, the usage numbers, OpenRouter's
 /// catalog of models with their prices, the list of languages, the record of the conversations
 /// with Raphael, the plugins (the store, the servers the user connects and whether each of their tools is on),
-/// and the few device methods the settings page needs. Everything else is refused, the dictation
-/// methods and the ones that ask Raphael something above all.
+/// stopping a background task, the owner's safety rules, the questions a background task waits on
+/// and the answer to one, and the few device methods the settings page needs. Everything else
+/// is refused, the dictation methods and the ones that ask Raphael something above all.
 pub fn is_allowed_method(m: &str) -> bool {
     ALLOWED_METHODS.contains(&m)
         || ALLOWED_PREFIXES
@@ -213,11 +617,37 @@ pub fn is_allowed_method(m: &str) -> bool {
 }
 
 /// Checks a few values of `settings.set` before the core sees them: a monthly limit of 0 or more
-/// and a history retention of at least one day, which the core only type-checks; and a language,
-/// a cleanup model and a speech-to-text engine, which the core checks as well (each model against
-/// OpenRouter's list), so that the settings page gets these refusals in its own words. `Err` says
-/// what is wrong. Calls other than `settings.set` pass.
+/// and a history retention of at least one day, which the core only type-checks; and a cleanup
+/// model, a background task's cost cap and a speech-to-text engine, which the core checks as well
+/// (each model against OpenRouter's list), so that the settings page gets these refusals in its
+/// own words. `Err` says what is wrong. The window's `worker.cancel` and `worker.rerun` must name
+/// their task, the memory's methods a memory by a name that is one, with a text within the
+/// limits, the search of the conversation its words and a whole limit, and the answer to a question
+/// of the background its task, its question and a yes or a no (`validate_background_answer`). Other
+/// calls pass.
 pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
+    if method == "worker.cancel" {
+        // Without an id the core stops whichever task runs: the window stops only the one it shows.
+        return match params.get("task_id").and_then(Value::as_u64) {
+            Some(_) => Ok(()),
+            None => Err("worker.cancel needs the task_id of the task to stop".to_owned()),
+        };
+    }
+    if method == "worker.rerun" {
+        return match params.get("task_id").and_then(Value::as_u64) {
+            Some(_) => Ok(()),
+            None => Err("worker.rerun needs the task_id of the task to run again".to_owned()),
+        };
+    }
+    if method == "background.answer" {
+        return validate_background_answer(params);
+    }
+    if method.starts_with("memory.") {
+        return validate_memory_call(method, params);
+    }
+    if method == "agent.history.search" {
+        return validate_history_search(params);
+    }
     if method != "settings.set" {
         return Ok(());
     }
@@ -230,10 +660,12 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     let fine = match key {
         "monthly_limit_usd" => value.as_f64().is_some_and(|limit| limit >= 0.0),
         "history_retention_days" => value.as_i64().is_some_and(|days| days >= 1),
-        "language" => value
-            .as_str()
-            .is_some_and(|language| ["auto", "zh", "ja", "en"].contains(&language)),
         "cleanup_model" => value.as_str().is_some_and(|model| !model.trim().is_empty()),
+        "worker_cost_cap_usd" => value.as_f64().is_some_and(|cap| {
+            [0.1, 0.2, 0.5, 1.0]
+                .iter()
+                .any(|ok| (cap - ok).abs() < 1e-9)
+        }),
         "stt_engine" => value
             .as_str()
             .is_some_and(|engine| ["cloud", "local"].contains(&engine)),
@@ -245,11 +677,36 @@ pub fn validate_core_call(method: &str, params: &Value) -> Result<(), String> {
     Err(match key {
         "monthly_limit_usd" => "每月上限要是 0 以上的數字",
         "history_retention_days" => "歷史紀錄至少要保留 1 天",
-        "language" => "語言只能是 auto、zh、ja 或 en",
         "stt_engine" => "語音轉文字只能選雲端或本機",
+        "worker_cost_cap_usd" => "背景任務的花費上限只能是 0.10、0.20、0.50 或 1.00 美元",
         _ => "沒有指定整理用的模型",
     }
     .to_owned())
+}
+
+/// The params of `background.answer`: the task's whole id, the question's id (a short word of
+/// letters, digits, `-` and `_`, as the core makes them: [`is_question_id`]) and `approved`, true
+/// or false. A `source` other than this window's ("app") is refused here as the core refuses it:
+/// the answer to a question of the background is given at this computer, in the app, alone.
+fn validate_background_answer(params: &Value) -> Result<(), String> {
+    if params.get("task_id").and_then(Value::as_u64).is_none() {
+        return Err("background.answer needs the task_id of the task that waits".to_owned());
+    }
+    if !params
+        .get("question_id")
+        .and_then(Value::as_str)
+        .is_some_and(is_question_id)
+    {
+        return Err("background.answer needs the question_id of the question".to_owned());
+    }
+    if !params.get("approved").is_some_and(Value::is_boolean) {
+        return Err("background.answer needs approved, true or false".to_owned());
+    }
+    match params.get("source") {
+        None => Ok(()),
+        Some(source) if source.as_str() == Some("app") => Ok(()),
+        Some(_) => Err("a question of the background is answered in the app alone".to_owned()),
+    }
 }
 
 /// Passes `method` on to the core and returns its answer. Fails with the core's own error (code
@@ -282,6 +739,257 @@ pub async fn core_call(
     Ok(result)
 }
 
+/// Saves an already exported CSV only at the location chosen in the native save dialog. The
+/// webview cannot supply a path. Cancel is a normal result and writes nothing.
+#[tauri::command]
+pub async fn save_usage_csv(app: AppHandle, webview: Webview, csv: String) -> Result<bool, String> {
+    require_main(&webview)?;
+    if csv.len() > 32 * 1024 * 1024 || !csv.starts_with("time,member,title,model,provider,") {
+        return Err("invalid usage CSV".to_owned());
+    }
+    let window = webview.window();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let chosen = app
+            .dialog()
+            .file()
+            .set_parent(&window)
+            .add_filter("CSV", &["csv"])
+            .set_file_name("raphael-usage.csv")
+            .blocking_save_file();
+        let Some(chosen) = chosen else {
+            return Ok(false);
+        };
+        let path = chosen
+            .into_path()
+            .map_err(|_| "invalid save location".to_owned())?;
+        std::fs::write(path, format!("\u{feff}{csv}")).map_err(|err| err.to_string())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|err| format!("a background task failed: {err}"))?
+}
+
+// ---------- questions to Raphael from the window ----------
+
+/// The longest question the composer may send, in characters (`TYPED_MAX_CHARS` of
+/// pages/agent.ts, which counts an attached file too). The core takes any length; this only keeps
+/// one message between the window and the app within reason.
+pub const TYPED_MAX_CHARS: usize = 100_000;
+
+/// "拉斐爾現在無法回答問題": there is no controller (the core did not start) or it is gone.
+const AGENT_OFF: &str = "拉斐爾現在無法回答問題";
+
+/// The most images and PDFs one typed question may take (`MAX_ATTACHMENTS` of the core's
+/// services/attachments.py, and `ATTACH_MAX` of pages/agent.ts).
+pub const TYPED_MAX_ATTACHMENTS: usize = 4;
+
+/// A typed question as it is asked: its words without the blanks around them, or why it is not
+/// asked (nothing to ask, or too long). With files (`with_files`), no words at all is a question
+/// too, which the core reads as 「看這個」.
+pub fn typed_question_with(text: &str, with_files: bool) -> Result<&str, String> {
+    let text = text.trim();
+    if text.is_empty() && !with_files {
+        return Err("沒有要問的內容".to_owned());
+    }
+    if text.chars().count() > TYPED_MAX_CHARS {
+        return Err("問題太長了".to_owned());
+    }
+    Ok(text)
+}
+
+/// Whether `id` may be the id of one of the core's questions (a UUID today): a short word of
+/// letters, digits, `-` and `_`. Anything else never reaches the controller.
+pub fn is_question_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+/// The images and PDFs of a typed question as they go on: at most [`TYPED_MAX_ATTACHMENTS`], each
+/// an object of three strings, `name`, `mime` and `data`. Everything else about them (the types,
+/// the sizes, the bytes) is the core's to check; a list that is not even this is refused here.
+pub fn typed_attachments(attachments: Option<Vec<Value>>) -> Result<Vec<Value>, String> {
+    let attachments = attachments.unwrap_or_default();
+    if attachments.len() > TYPED_MAX_ATTACHMENTS {
+        return Err("附加的檔案太多了".to_owned());
+    }
+    let whole = |item: &Value| {
+        ["name", "mime", "data"]
+            .iter()
+            .all(|key| item.get(key).is_some_and(Value::is_string))
+    };
+    if !attachments.iter().all(whole) {
+        return Err("附加的檔案無法讀取".to_owned());
+    }
+    Ok(attachments)
+}
+
+/// Whether a typed question names the quick conversation: the only destination the page may name.
+pub fn typed_quick(destination: Option<&str>) -> Result<bool, String> {
+    match destination {
+        None => Ok(false),
+        Some(crate::dictation::QUICK_DESTINATION) => Ok(true),
+        Some(_) => Err("invalid destination".to_owned()),
+    }
+}
+
+/// The quote is data, never appended to the owner's question by the shell.
+pub fn typed_quote(quote: Option<Value>) -> Result<Option<Value>, String> {
+    let Some(quote) = quote else {
+        return Ok(None);
+    };
+    let bounded = |key: &str, max: usize| {
+        quote
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty() && text.chars().count() <= max)
+    };
+    if !bounded("text", 20_000) || !bounded("author", 256) {
+        return Err("invalid quote".to_owned());
+    }
+    Ok(Some(
+        json!({"text": quote["text"], "author": quote["author"]}),
+    ))
+}
+
+/// Asks Raphael a question typed in the composer, with optional images/PDFs and a selected
+/// passage as separate bounded context (never logged), or, with a `member_id`
+/// that is not 0, the member whose thread it was typed in (a member is reached only this way, with
+/// the source `app`). It goes the way a spoken one goes once its words are heard (`agent.ask` with
+/// the source `app`; the overlay shows the answer and any YES/NO question), and the call settles
+/// when the turn is over, its answer in the history or its failure shown. `destination` is
+/// `"quick"` for a question typed in Raphael's quick conversation, and nothing else. Refused while
+/// Raphael is busy with a recording or another question.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri receives each named argument separately from IPC.
+pub async fn agent_ask_text(
+    app: AppHandle,
+    webview: Webview,
+    text: String,
+    attachments: Option<Vec<Value>>,
+    member_id: Option<u64>,
+    request_id: Option<String>,
+    replace_turn_id: Option<u64>,
+    quote: Option<Value>,
+    conversation_id: Option<u64>,
+    destination: Option<String>,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    if request_id.as_deref().is_some_and(|id| !is_question_id(id)) {
+        return Err("invalid request id".to_owned());
+    }
+    let quick = typed_quick(destination.as_deref())?;
+    let attachments = typed_attachments(attachments)?;
+    let quote = typed_quote(quote)?;
+    let text = typed_question_with(&text, !attachments.is_empty())?;
+    let desk = app
+        .try_state::<DeskHandle>()
+        .map(|desk| desk.inner().clone())
+        .ok_or(AGENT_OFF)?;
+    let turn = desk
+        .0
+        .ask_conversation(TypedQuestion {
+            text,
+            attachments,
+            member: member_id.unwrap_or(0),
+            request_id,
+            replace_turn_id,
+            quote,
+            conversation_id,
+            quick,
+        })
+        .map_err(|_| "拉斐爾正在忙，請稍後再問".to_owned())?;
+    // The page waits for the turn, so that it knows when to stop waiting for its answer.
+    if let Err(err) = turn.await {
+        log::warn!("a typed question's task ended badly: {err}");
+    }
+    Ok(())
+}
+
+/// The YES/NO question that waits for its answer now, if one does (the page's card when the page
+/// opens after it was asked), with the time it has left as its `timeout_ms`.
+#[tauri::command]
+pub fn agent_question_open(app: AppHandle, webview: Webview) -> Result<Option<AskPrompt>, String> {
+    require_main(&webview)?;
+    Ok(app
+        .try_state::<DeskHandle>()
+        .and_then(|desk| desk.0.open_question()))
+}
+
+/// Stop and remove a named owner message, leaving any newer request alone.
+#[tauri::command]
+pub async fn agent_retract(
+    app: AppHandle,
+    webview: Webview,
+    session_id: String,
+    member_id: u64,
+    turn_id: Option<u64>,
+) -> Result<Value, String> {
+    require_main(&webview)?;
+    if !is_question_id(&session_id) {
+        return Err("invalid request id".to_owned());
+    }
+    let desk = app
+        .try_state::<DeskHandle>()
+        .map(|desk| desk.inner().clone())
+        .ok_or(AGENT_OFF)?;
+    desk.0
+        .retract(session_id, member_id, turn_id)
+        .await
+        .map_err(|err| err.to_string())?
+        .map_err(|err| err.to_string())
+}
+
+/// The page's card answers the question `id` (YES when `approved`), as the overlay's buttons do:
+/// the controller takes it only for the question that is open now, and the YES to one that cannot
+/// be undone only after the long press. The window must have the focus: the person clicked in it.
+#[tauri::command]
+pub fn agent_question_answer(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    approved: bool,
+    always: Option<bool>,
+    drafts: Option<Vec<Value>>,
+    groups: Option<Vec<Value>>,
+) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_question_id(&id) {
+        return Err("這個問題已經結束了".to_owned());
+    }
+    if !webview.window().is_focused().unwrap_or(false) {
+        return Err("請先回到拉斐爾的視窗再回答".to_owned());
+    }
+    let answers = app.try_state::<ConfirmSender>().ok_or(AGENT_OFF)?;
+    answers
+        .0
+        .send(Confirmation {
+            id,
+            approved,
+            in_app: true,
+            always: approved && always == Some(true),
+            drafts: if approved { drafts } else { None },
+            groups: if approved { groups } else { None },
+        })
+        .map_err(|_| AGENT_OFF.to_owned())
+}
+
+/// The main window says whether it shows the 拉斐爾 page now (see [`AGENT_PAGE`]).
+#[tauri::command]
+pub fn agent_page_shown(webview: Webview, shown: bool) -> Result<(), String> {
+    require_main(&webview)?;
+    AGENT_PAGE.store(shown, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Whether the main window said it shows the 拉斐爾 page (see [`AGENT_PAGE`]). Whether the window
+/// itself is in front is for the caller to find out.
+pub fn agent_page_on_screen() -> bool {
+    AGENT_PAGE.load(Ordering::SeqCst)
+}
+
 // ---------- events ----------
 
 /// A whole number out of JSON, which may have written it as 380000000.0.
@@ -295,8 +1003,9 @@ fn whole(value: &Value) -> Option<u64> {
 }
 
 /// The event for a notification from the core, if the main window wants it: the loudness of the
-/// microphone while it is monitored, and the progress of a model download. The loudness of a
-/// dictation (it has a `session_id`) is the overlay's and not the meter's.
+/// microphone while it is monitored, the progress of a model download, a turn of the conversations
+/// and a background task that moved on. The loudness of a dictation (it has a `session_id`) is the
+/// overlay's and not the meter's.
 pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<MainEvent> {
     let params = &notification.params;
     match notification.method.as_str() {
@@ -314,6 +1023,56 @@ pub fn main_event_from(notification: &Notification, monitoring: bool) -> Option<
             done: whole(params.get("done")?)?,
             total: whole(params.get("total")?)?,
         }),
+        "agent.turn" => Some(MainEvent::AgentTurn {
+            turn_id: params.get("turn_id")?.as_u64()?,
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
+        }),
+        "routines.changed" => Some(MainEvent::RoutinesChanged {
+            member_id: params.get("member_id")?.as_u64()?,
+        }),
+        "rooms.changed" => Some(MainEvent::RoomsChanged {
+            room_id: params.get("room_id")?.as_u64()?,
+        }),
+        "members.changed" => Some(MainEvent::MembersChanged),
+        "conversations.changed" => Some(MainEvent::ConversationsChanged {
+            member_id: params.get("member_id").and_then(Value::as_u64).unwrap_or(0),
+        }),
+        "quota.changed" => Some(MainEvent::QuotaChanged),
+        "action_mode.changed" => Some(MainEvent::ActionModeChanged),
+        "providers.changed" => Some(MainEvent::ProvidersChanged),
+        "settings.changed" => Some(MainEvent::SettingsChanged),
+        "integrations.changed" | "connectors.changed" => Some(MainEvent::ConnectionsChanged),
+        "brains.changed" => Some(MainEvent::BrainsChanged),
+        "memory.changed" => {
+            let space = match params.get("space") {
+                None => None,
+                Some(value) => match value.as_str()? {
+                    "own" | "shared" => Some(value.as_str()?.to_owned()),
+                    _ => return None,
+                },
+            };
+            Some(MainEvent::MemoryChanged {
+                member_id: params.get("member_id")?.as_u64()?,
+                space,
+            })
+        }
+        "worker.changed" => Some(MainEvent::WorkerChanged {
+            task_id: params.get("task_id")?.as_u64()?,
+            state: params.get("state")?.as_str()?.to_owned(),
+            running: params.get("running")?.as_bool()?,
+        }),
+        "integrations.device_code" => {
+            let verification_uri = params.get("verification_uri")?.as_str()?;
+            if !verification_uri.starts_with("https://") {
+                return None;
+            }
+            Some(MainEvent::DeviceCode {
+                catalog_id: params.get("catalog_id")?.as_str()?.to_owned(),
+                user_code: params.get("user_code")?.as_str()?.to_owned(),
+                verification_uri: verification_uri.to_owned(),
+                expires_in: whole(params.get("expires_in")?)?,
+            })
+        }
         _ => None,
     }
 }
@@ -328,6 +1087,10 @@ pub async fn main_events(
     channel: Channel<MainEvent>,
 ) -> Result<(), String> {
     require_main(&webview)?;
+    // A page that subscribes is a new page: a practice of the one before is over, and the page it
+    // showed is gone until the new one says what it shows.
+    PRACTICE.store(false, Ordering::SeqCst);
+    AGENT_PAGE.store(false, Ordering::SeqCst);
     PAGE.lock()
         .unwrap_or_else(PoisonError::into_inner)
         .subscribe(channel.clone());
@@ -461,10 +1224,22 @@ pub async fn set_device_settings<E: Effects>(
     effects: &E,
     patch: &Value,
 ) -> Result<DeviceSettings, String> {
+    change_device_settings(store, effects, |_| Ok(patch.clone())).await
+}
+
+/// Changes the device settings by the patch `make` writes from them as they are, while they are
+/// locked: two changes that each build on the settings (an app added to the always-allowed list,
+/// another taken off) never undo each other, as a patch computed from an older read would.
+async fn change_device_settings<E: Effects>(
+    store: &DeviceStore,
+    effects: &E,
+    make: impl FnOnce(&DeviceSettings) -> Result<Value, String>,
+) -> Result<DeviceSettings, String> {
     let mut current = store.lock().await;
     let old = current.clone();
+    let patch = make(&old)?;
     let mut new = old.clone();
-    new.apply_patch(patch)?;
+    new.apply_patch(&patch)?;
     if new == old {
         return Ok(new);
     }
@@ -488,6 +1263,66 @@ pub async fn set_microphone(app: &AppHandle, name: Option<&str>) -> Result<(), S
     let effects = AppEffects { app: app.clone() };
     set_device_settings(&store, &effects, &json!({ "microphone": name })).await?;
     Ok(())
+}
+
+/// Adds an app to the ones Raphael may always operate (the 「一律允許」 of the question about it),
+/// as the settings page would with `device_settings_set`, for the shell's half of a run
+/// (`computer`). An app that is on the list already is left as it is.
+pub async fn allow_computer_app(app: &AppHandle, exe: &str, name: &str) -> Result<(), String> {
+    let entry = crate::device_settings::ComputerApp {
+        exe: exe.to_owned(),
+        name: crate::computer::policy::clean(name, 60),
+    };
+    if !entry.is_valid() {
+        return Err("this app cannot be kept".to_owned());
+    }
+    let store = app
+        .try_state::<DeviceStore>()
+        .ok_or("the device settings are not loaded")?;
+    let effects = AppEffects { app: app.clone() };
+    change_device_settings(&store, &effects, |now| {
+        let mut apps = now.computer_apps.clone();
+        if apps.iter().any(|known| known.exe == entry.exe) {
+            return Ok(json!({}));
+        }
+        apps.push(entry);
+        Ok(json!({ "computer_apps": apps }))
+    })
+    .await?;
+    Ok(())
+}
+
+/// Takes the app `exe` off the ones Raphael may always operate, from the list as it is when the
+/// settings are locked (an app that is not on it changes nothing), and returns the settings.
+pub async fn remove_computer_app<E: Effects>(
+    store: &DeviceStore,
+    effects: &E,
+    exe: &str,
+) -> Result<DeviceSettings, String> {
+    change_device_settings(store, effects, |now| {
+        let apps: Vec<_> = now
+            .computer_apps
+            .iter()
+            .filter(|known| known.exe != exe)
+            .cloned()
+            .collect();
+        Ok(json!({ "computer_apps": apps }))
+    })
+    .await
+}
+
+/// Takes one app off the always-allowed list of 電腦操作 (its trash button) and returns all the
+/// device settings afterwards. One app at a time, under the settings' lock: a whole list the page
+/// computed could put back an app that another quick removal took away.
+#[tauri::command]
+pub async fn device_computer_app_remove(
+    app: AppHandle,
+    webview: Webview,
+    store: State<'_, DeviceStore>,
+    exe: String,
+) -> Result<DeviceSettings, String> {
+    require_main(&webview)?;
+    remove_computer_app(&store, &AppEffects { app }, &exe).await
 }
 
 /// The device settings as they are now.
@@ -644,8 +1479,12 @@ pub fn window_hotkey(
     webview: Webview,
     hotkeys: State<'_, Arc<HotkeyService>>,
     kind: WindowHotkey,
+    member_id: Option<u64>,
 ) -> Result<(), String> {
     require_main(&webview)?;
+    if let (WindowHotkey::AgentDown, Some(member)) = (kind, member_id) {
+        return hotkeys.member_voice(member);
+    }
     hotkeys.window_hotkey(kind)
 }
 
@@ -659,6 +1498,144 @@ pub fn hotkeys_pause(app: AppHandle, webview: Webview, paused: bool) -> Result<(
         .ok_or("全域快捷鍵沒有啟動")?;
     hotkeys.set_paused(paused);
     Ok(())
+}
+
+/// Starts (`true`) or ends (`false`) the first-run guide's practice of the keys: they are reported
+/// as `MainEvent::Hotkey` and start nothing, so that a lesson can show a key being pressed without
+/// recording a thing. Unlike `hotkeys_pause` the keys are still heard.
+#[tauri::command]
+pub fn hotkeys_practice(webview: Webview, on: bool) -> Result<(), String> {
+    require_main(&webview)?;
+    PRACTICE.store(on, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Whether the privacy settings of Windows let desktop apps use the microphone, and if not, which
+/// switch is off (`system`, `user` or `desktop_apps`). Always allowed off Windows.
+#[tauri::command]
+pub fn mic_access(webview: Webview) -> Result<MicAccess, String> {
+    require_main(&webview)?;
+    #[cfg(windows)]
+    {
+        Ok(mic_access::microphone_access(&mic_access::WindowsConsent))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(MicAccess {
+            allowed: true,
+            blocked_by: None,
+        })
+    }
+}
+
+/// The few addresses the main window may open in the browser: the page is not trusted with a
+/// general "open this link". The last is the microphone page of the privacy settings.
+const OPENABLE_LINKS: [&str; 4] = [
+    "https://t.me/BotFather",
+    "https://github.com/login/device",
+    "https://github.com/settings/applications",
+    "ms-settings:privacy-microphone",
+];
+
+fn is_openable_link(url: &str) -> bool {
+    OPENABLE_LINKS.contains(&url)
+}
+
+/// Provider links must come from the core's registry, never from an arbitrary page address.
+fn is_provider_docs_link(url: &str, registry: &Value) -> bool {
+    if url.bytes().any(|c| c <= b' ' || c == 127) {
+        return false;
+    }
+    let Ok(parsed) = tauri::Url::parse(url) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && registry
+            .get("kinds")
+            .and_then(Value::as_array)
+            .is_some_and(|kinds| {
+                kinds
+                    .iter()
+                    .any(|kind| kind.get("docs_url").and_then(Value::as_str) == Some(url))
+            })
+}
+
+/// Opens a fixed app link or an exact provider documentation URL in the default browser.
+#[tauri::command]
+pub async fn open_link(app: AppHandle, webview: Webview, url: String) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_openable_link(&url) {
+        let core = app
+            .try_state::<Arc<CoreProcess>>()
+            .ok_or(CORE_NOT_RUNNING)?;
+        let registry = core
+            .call("providers.kinds", json!({}))
+            .await
+            .map_err(|err| err.to_string())?;
+        if !is_provider_docs_link(&url, &registry) {
+            return Err("that link may not be opened".to_owned());
+        }
+    }
+    launch_link(&url)
+}
+
+fn is_external_url(url: &str) -> bool {
+    if url.len() > 8192 || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return false;
+    }
+    let Ok(parsed) = tauri::Url::parse(url) else {
+        return false;
+    };
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+}
+
+/// Open a stored copy by opaque ID. The core resolves it inside its attachment folder.
+#[tauri::command]
+pub async fn open_attachment(app: AppHandle, webview: Webview, id: String) -> Result<(), String> {
+    require_main(&webview)?;
+    let core = app
+        .try_state::<Arc<CoreProcess>>()
+        .ok_or(CORE_NOT_RUNNING)?;
+    let result = core
+        .call("attachments.path", json!({"id": id}))
+        .await
+        .map_err(|_| "attachment unavailable".to_owned())?;
+    let path = result
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or("attachment unavailable")?;
+    launch_link(path)
+}
+
+/// Chat links may open only a web address, and only at the main window's request.
+#[tauri::command]
+pub fn open_external_url(webview: Webview, url: String) -> Result<(), String> {
+    require_main(&webview)?;
+    if !is_external_url(&url) {
+        return Err("that link may not be opened".to_owned());
+    }
+    launch_link(&url)
+}
+
+fn launch_link(url: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("rundll32")
+            .args(["url.dll,FileProtocolHandler", url])
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("opening links is only available on Windows".to_owned())
+    }
 }
 
 /// Whether the keyboard layout in use has an AltGr key, which is the Right Alt key. A hotkey on
@@ -875,6 +1852,19 @@ async fn restore_core<C: CoreApi>(core: &C, microphone: Option<&str>, monitoring
     }
 }
 
+/// The scheduler's persistent system-awake request is applied on its own OS thread.
+#[tauri::command]
+pub fn schedule_keep_awake_get(webview: Webview) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::get()
+}
+
+#[tauri::command]
+pub fn schedule_keep_awake_set(webview: Webview, enabled: bool) -> Result<bool, String> {
+    require_main(&webview)?;
+    crate::schedule_awake::set(enabled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -919,14 +1909,302 @@ mod tests {
         assert_eq!(
             checked,
             [
+                "agent_ask_text",
+                "agent_page_shown",
+                "agent_question_answer",
+                "agent_question_open",
+                "agent_retract",
                 "core_call",
+                "device_computer_app_remove",
                 "device_settings_get",
                 "device_settings_set",
                 "hotkeys_pause",
+                "hotkeys_practice",
                 "keyboard_has_altgr",
                 "main_events",
+                "mic_access",
+                "open_attachment",
+                "open_external_url",
+                "open_link",
+                "save_usage_csv",
+                "schedule_keep_awake_get",
+                "schedule_keep_awake_set",
                 "window_hotkey",
             ]
+        );
+    }
+
+    // ---- the window's own way to Raphael ----
+
+    #[test]
+    fn quotes_are_bounded_data_and_do_not_accept_a_malformed_author_or_passage() {
+        assert_eq!(typed_quote(None).unwrap(), None);
+        let quote = json!({"text":"しかねません", "author":"Teacher"});
+        assert_eq!(typed_quote(Some(quote.clone())).unwrap(), Some(quote));
+        for bad in [
+            json!({}),
+            json!({"text":"", "author":"Teacher"}),
+            json!({"text":"x", "author":1}),
+            json!({"text":"x".repeat(20_001), "author":"Teacher"}),
+        ] {
+            assert!(typed_quote(Some(bad)).is_err());
+        }
+    }
+
+    #[test]
+    fn a_typed_question_names_the_quick_destination_or_none() {
+        assert_eq!(typed_quick(None), Ok(false));
+        assert_eq!(typed_quick(Some("quick")), Ok(true));
+        for bad in ["", "Quick", "formal", "main"] {
+            assert!(typed_quick(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_typed_question_has_words_and_a_bounded_length() {
+        assert_eq!(
+            typed_question_with("  明天會下雨嗎？\n", false),
+            Ok("明天會下雨嗎？")
+        );
+        assert!(typed_question_with("", false).is_err());
+        assert!(typed_question_with(" \n\t ", false).is_err());
+        let longest = "字".repeat(TYPED_MAX_CHARS);
+        assert_eq!(typed_question_with(&longest, false), Ok(longest.as_str()));
+        assert!(typed_question_with(&format!("{longest}字"), false).is_err());
+        // with files, no words is a question too
+        assert_eq!(typed_question_with(" ", true), Ok(""));
+        assert!(typed_question_with(&format!("{longest}字"), true).is_err());
+    }
+
+    #[test]
+    fn a_typed_question_takes_at_most_four_whole_attachments() {
+        let file = json!({"name": "a.png", "mime": "image/png", "data": "iVBORw0KGgo="});
+        assert_eq!(typed_attachments(None), Ok(vec![]));
+        assert_eq!(
+            typed_attachments(Some(vec![file.clone(); 4])),
+            Ok(vec![file.clone(); 4])
+        );
+        assert!(typed_attachments(Some(vec![file.clone(); 5])).is_err());
+        assert!(
+            typed_attachments(Some(vec![json!({"name": "a.png", "mime": "image/png"})])).is_err()
+        );
+        assert!(
+            typed_attachments(Some(vec![
+                json!({"name": "a.png", "mime": "image/png", "data": 7})
+            ]))
+            .is_err()
+        );
+        assert!(typed_attachments(Some(vec![json!("C:/Users/me/a.png")])).is_err());
+    }
+
+    #[test]
+    fn the_main_window_answers_a_background_question_only_as_itself() {
+        let id = "0f6d8a52-1c3e-4c2b-9a51-7d1e2f3a4b5c";
+        let ok = json!({"task_id": 3, "question_id": id, "approved": true});
+        assert!(validate_core_call("background.answer", &ok).is_ok());
+        let from_app = json!({"task_id": 3, "question_id": id, "approved": false, "source": "app"});
+        assert!(validate_core_call("background.answer", &from_app).is_ok());
+        for bad in [
+            json!({"question_id": id, "approved": true}),
+            json!({"task_id": -1, "question_id": id, "approved": true}),
+            json!({"task_id": 3, "approved": true}),
+            json!({"task_id": 3, "question_id": "../x", "approved": true}),
+            json!({"task_id": 3, "question_id": id, "approved": "yes"}),
+            json!({"task_id": 3, "question_id": id, "approved": true, "source": "telegram"}),
+        ] {
+            assert!(
+                validate_core_call("background.answer", &bad).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_brains_are_main_window_methods_and_emit_no_private_payload() {
+        for method in ["brains.cli", "brains.cli_login", "brains.cli_disconnect"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        assert!(!is_allowed_method("brains.execute"));
+        let event = main_event_from(
+            &notification("brains.changed", json!({"token": "private"})),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "BrainsChanged"})
+        );
+    }
+
+    #[test]
+    fn connector_change_events_never_forward_private_payloads() {
+        let event = main_event_from(
+            &notification(
+                "connectors.changed",
+                json!({"key": "private", "mail": "private"}),
+            ),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "ConnectionsChanged"})
+        );
+    }
+
+    #[test]
+    fn providers_are_main_window_methods_and_emit_an_empty_change_event() {
+        for method in [
+            "providers.kinds",
+            "providers.list",
+            "providers.add",
+            "providers.update",
+            "providers.remove",
+            "providers.test",
+            "providers.models",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "providers",
+            "providers.proxy",
+            "providers.request",
+            "providers.models.extra",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+        let event = main_event_from(
+            &notification("providers.changed", json!({"key": "private"})),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({"type": "ProvidersChanged"})
+        );
+    }
+
+    #[test]
+    fn the_main_window_manages_the_members_by_their_names_only() {
+        for method in [
+            "memory.create",
+            "members.unread",
+            "members.skills.list",
+            "members.skills.read",
+            "members.skills.import",
+            "members.skills.update",
+            "members.skills.delete",
+            "members.commands.list",
+            "members.commands.save",
+            "members.commands.delete",
+            "members.voices",
+            "members.duplicate",
+            "members.mark_all_read",
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_primary",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "members.",
+            "members",
+            "members.skills.run",
+            "members.commands.execute",
+            "member.notice",
+            "members.ask",
+            "groups.",
+            "routines.run",
+            "Members.list",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+        assert!(validate_core_call("memory.move", &json!({"to_space": "shared"})).is_err());
+        assert!(
+            validate_core_call(
+                "memory.move",
+                &json!({"name": "user-city", "to_space": "shared", "member_id": 3})
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_main_window_reads_and_sets_the_services_by_their_names_only() {
+        for method in ["services.status", "services.set_key", "services.clear_key"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "services.",
+            "services",
+            "services.get_key",
+            "Services.status",
+        ] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_tries_the_voice_by_its_two_names_only() {
+        for method in ["tts.preview", "tts.stop"] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in ["tts.", "tts", "tts.say", "Tts.preview", "xtts.stop"] {
+            assert!(!is_allowed_method(method), "{method}");
+        }
+    }
+
+    #[test]
+    fn a_question_is_answered_only_by_an_id_that_could_be_one() {
+        for id in ["c-1", "6f1c2a9e-4b7d-4c1e-9f3a-2d5b8e7c0a11", "a_b"] {
+            assert!(is_question_id(id), "{id}");
+        }
+        for id in ["", "a b", "../x", "c-1\n", "問", &"a".repeat(65), "x;y"] {
+            assert!(!is_question_id(id), "{id:?}");
+        }
+    }
+
+    #[test]
+    fn the_window_hears_a_question_open_and_close() {
+        let prompt = AskPrompt {
+            member_id: None,
+            conversation_id: None,
+            always: None,
+            drafts: None,
+            groups: None,
+            id: "c-1".to_owned(),
+            tier: crate::overlay::Tier::T3,
+            prefix: "問".to_owned(),
+            text: "要寄出這封信嗎？".to_owned(),
+            yes: "寄出".to_owned(),
+            no: "取消".to_owned(),
+            timeout_ms: 30_000,
+        };
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Open(Box::new(prompt)))).unwrap(),
+            json!({
+                "type": "AgentQuestion", "id": "c-1", "tier": "T3", "prefix": "問",
+                "text": "要寄出這封信嗎？", "yes": "寄出", "no": "取消", "timeout_ms": 30_000,
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(MainEvent::from(QuestionNews::Closed("c-1".to_owned()))).unwrap(),
+            json!({ "type": "AgentQuestionClosed", "id": "c-1" })
         );
     }
 
@@ -941,9 +2219,28 @@ mod tests {
     }
 
     #[test]
+    fn usage_analytics_is_a_named_read_of_the_main_window_only() {
+        assert!(is_allowed_method("home.overview"));
+        assert!(validate_core_call("home.overview", &json!({"tz": "Asia/Taipei"})).is_ok());
+        assert!(is_allowed_method("usage.analytics"));
+        assert!(validate_core_call("usage.analytics", &json!({"range": "7d"})).is_ok());
+        assert!(!is_allowed_method("usage.clear"));
+        assert!(is_allowed_method("usage.export"));
+        assert!(is_allowed_method("usage.runs"));
+        assert!(is_allowed_method("usage.allowances"));
+        assert!(ensure_caller(crate::MAIN_WINDOW, crate::MAIN_WINDOW).is_ok());
+        assert!(ensure_caller("overlay", crate::MAIN_WINDOW).is_err());
+        assert!(ensure_caller("worker", crate::MAIN_WINDOW).is_err());
+    }
+
+    #[test]
     fn the_main_window_reads_the_conversations_but_never_asks_raphael() {
         // The record of the conversations is the main window's to read and clear...
-        for method in ["agent.history.list", "agent.history.clear"] {
+        for method in [
+            "agent.history.list",
+            "agent.history.search",
+            "agent.history.clear",
+        ] {
             assert!(is_allowed_method(method), "{method}");
         }
         // ...and the questions are the controller's alone: the main window cannot ask, approve
@@ -967,25 +2264,341 @@ mod tests {
     }
 
     #[test]
-    fn the_main_window_has_no_part_in_the_background_worker_yet() {
-        // The tray stops a task and the overlay answers its questions; the window has no way to
-        // list, read or stop a task. Whatever it gets one day, a yes to a question of the worker
-        // is the overlay's real click alone.
+    fn the_main_window_reaches_the_memory_by_its_six_methods_only() {
         for method in [
-            "worker.list",
-            "worker.get",
-            "worker.cancel",
-            "worker.confirm",
-            "worker.",
-            "worker",
+            "memory.",
+            "memory",
+            "memory.write",
+            "memory.reflect",
+            "memory.listx",
+            "Memory.list",
+            " memory.list",
+            "xmemory.list",
         ] {
             assert!(!is_allowed_method(method), "{method:?}");
         }
     }
 
     #[test]
+    fn a_memory_is_named_by_its_type_and_an_ascii_slug() {
+        for name in [
+            "user-city",
+            "preference-answer-length",
+            "ongoing-trip-2026",
+            "person-amy",
+        ] {
+            assert!(is_memory_name(name), "{name}");
+        }
+        let long = format!("user-{}", "a".repeat(60));
+        for name in [
+            "",
+            "user",
+            "user-",
+            "user--city",
+            "user-city-",
+            "-user-city",
+            "secret-city",
+            "User-city",
+            "user-City",
+            "user-台北",
+            "user-../raphael",
+            "user-a/b",
+            "user-a\\b",
+            "user-a.md",
+            "user-a b",
+            long.as_str(),
+        ] {
+            assert!(!is_memory_name(name), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn the_memory_methods_have_their_params_checked() {
+        let ok = |method: &str, params: Value| validate_core_call(method, &params).is_ok();
+        assert!(ok("memory.list", json!({})));
+        assert!(ok("memory.clear", json!({})));
+        assert!(ok("memory.summary_clear", json!({})));
+        assert!(ok("memory.get", json!({"name": "user-city"})));
+        assert!(ok("memory.delete", json!({"name": "user-city"})));
+        assert!(ok(
+            "memory.create",
+            json!({"member_id": 3, "space": "own", "body": "Owner note"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "主人住在台北。"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "", "description": "主人住在台北"})
+        ));
+        assert!(ok(
+            "memory.update",
+            json!({"name": "user-city", "body": "長".repeat(1200), "description": null})
+        ));
+        for (method, params) in [
+            ("memory.create", json!({"member_id": 3})),
+            ("memory.create", json!({"body": "  "})),
+            ("memory.create", json!({"body": 5})),
+            ("memory.create", json!({"body": "x".repeat(1201)})),
+            (
+                "memory.create",
+                json!({"body": "x", "description": "x".repeat(81)}),
+            ),
+            ("memory.get", json!({})),
+            ("memory.get", json!({"name": "../raphael"})),
+            ("memory.delete", json!({"name": 3})),
+            ("memory.update", json!({"name": "user-city"})),
+            ("memory.update", json!({"name": "user-city", "body": 5})),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "長".repeat(1201)}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": ""}),
+            ),
+            (
+                "memory.update",
+                json!({"name": "user-city", "body": "x", "description": "長".repeat(81)}),
+            ),
+            ("memory.update", json!({"name": "x", "body": "x"})),
+        ] {
+            assert!(
+                validate_core_call(method, &params).is_err(),
+                "{method} {params}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_main_window_may_stop_a_task_and_nothing_else_of_the_worker() {
+        // The conversation view stops the task it shows. A yes to a question of the worker is the
+        // overlay's real click alone, and the tasks are read with the conversations, not here.
+        assert!(is_allowed_method("worker.cancel"));
+        for method in [
+            "worker.list",
+            "worker.get",
+            "worker.confirm",
+            "worker.",
+            "worker",
+            "worker.cancelx",
+            "Worker.cancel",
+            " worker.cancel",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn the_main_window_manages_telegram_but_only_by_the_named_methods() {
+        for method in [
+            "messaging.telegram.status",
+            "messaging.telegram.connect",
+            "messaging.telegram.set_enabled",
+            "messaging.telegram.approve",
+            "messaging.telegram.reject",
+            "messaging.telegram.remove_user",
+            "messaging.telegram.disconnect",
+        ] {
+            assert!(is_allowed_method(method), "{method}");
+        }
+        for method in [
+            "messaging.telegram.",
+            "messaging.telegram",
+            "messaging.",
+            "messaging.telegram.send",
+            "messaging.telegram.statusx",
+            "Messaging.telegram.status",
+        ] {
+            assert!(!is_allowed_method(method), "{method:?}");
+        }
+    }
+
+    #[test]
+    fn only_the_fixed_links_may_be_opened() {
+        assert!(is_openable_link("https://t.me/BotFather"));
+        assert!(is_openable_link("https://github.com/login/device"));
+        assert!(is_openable_link("https://github.com/settings/applications"));
+        assert!(is_openable_link("ms-settings:privacy-microphone"));
+        for url in [
+            "https://github.com/login/device/",
+            "https://github.com/login/device?user_code=ABCD",
+            "http://github.com/login/device",
+            "https://github.com/login/oauth/authorize",
+            "https://github.com.evil.example/login/device",
+            "ms-settings:privacy-camera",
+            "ms-settings:privacy-microphone ",
+            "ms-settings:",
+            "MS-SETTINGS:privacy-microphone",
+            "https://t.me/BotFather/",
+            "http://t.me/BotFather",
+            "https://t.me/other",
+            "https://evil.example",
+            "file:///C:/Windows/System32/calc.exe",
+            "",
+        ] {
+            assert!(!is_openable_link(url), "{url:?}");
+        }
+    }
+
+    #[test]
+    fn chat_links_are_only_bounded_web_addresses_without_credentials() {
+        for url in [
+            "https://www.cwa.gov.tw/V8/C/P/Typhoon/TY_WARN.html?lang=zh-TW&full=1",
+            "http://example.com/a#part",
+        ] {
+            assert!(is_external_url(url), "{url}");
+        }
+        for url in [
+            "javascript:alert(1)",
+            "file:///C:/Windows/System32/calc.exe",
+            "ms-settings:privacy-microphone",
+            "data:text/html,hello",
+            "https://user:password@example.com/",
+            "https://example.com/\n",
+            "https://example.com/a b",
+            "",
+        ] {
+            assert!(!is_external_url(url), "{url:?}");
+        }
+        assert!(!is_external_url(&format!(
+            "https://example.com/{}",
+            "a".repeat(8192)
+        )));
+        assert!(is_allowed_method("links.preview"));
+        for method in ["links", "links.", "links.fetch", "Links.preview"] {
+            assert!(!is_allowed_method(method));
+        }
+    }
+
+    #[test]
+    fn provider_docs_must_be_an_exact_https_address_from_the_core_registry() {
+        let kinds = json!({"kinds": [
+            {"kind": "vertex", "docs_url": "https://console.cloud.google.com/iam-admin/serviceaccounts"},
+            {"kind": "custom", "docs_url": "file:///C:/Windows/System32/calc.exe"}
+        ]});
+        assert!(is_provider_docs_link(
+            "https://console.cloud.google.com/iam-admin/serviceaccounts",
+            &kinds
+        ));
+        for url in [
+            "https://evil.example/",
+            "https://console.cloud.google.com/iam-admin/serviceaccounts?extra=1",
+            "http://console.cloud.google.com/iam-admin/serviceaccounts",
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "",
+        ] {
+            assert!(!is_provider_docs_link(url, &kinds), "{url}");
+        }
+        for url in [
+            "https://user:password@example.com/",
+            "https://example.com/\n",
+        ] {
+            assert!(!is_provider_docs_link(
+                url,
+                &json!({"kinds": [{"docs_url": url}]})
+            ));
+        }
+        assert!(!is_provider_docs_link("https://example.com/", &json!({})));
+    }
+
+    #[test]
+    fn a_device_code_goes_to_the_window_and_a_bad_one_does_not() {
+        let issued = |uri: &str| {
+            notification(
+                "integrations.device_code",
+                json!({"catalog_id": "github", "user_code": "WDJB-MJHT",
+                       "verification_uri": uri, "expires_in": 900}),
+            )
+        };
+        assert_eq!(
+            main_event_from(&issued("https://github.com/login/device"), false),
+            Some(MainEvent::DeviceCode {
+                catalog_id: "github".to_owned(),
+                user_code: "WDJB-MJHT".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+                expires_in: 900
+            })
+        );
+        assert_eq!(
+            main_event_from(&issued("http://github.com/login/device"), false),
+            None
+        );
+        assert_eq!(
+            main_event_from(
+                &notification("integrations.device_code", json!({"catalog_id": "github"})),
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::DeviceCode {
+                catalog_id: "github".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+                verification_uri: "https://github.com/login/device".to_owned(),
+                expires_in: 900
+            })
+            .unwrap(),
+            r#"{"type":"DeviceCode","catalog_id":"github","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900}"#
+        );
+    }
+
+    #[test]
+    fn the_window_stops_only_the_task_it_names() {
+        assert_eq!(
+            validate_core_call("worker.cancel", &json!({ "task_id": 7 })),
+            Ok(())
+        );
+        for params in [
+            json!({}),
+            json!({ "task_id": null }),
+            json!({ "task_id": "7" }),
+            json!({ "task_id": -1 }),
+            json!({ "task_id": 1.5 }),
+        ] {
+            assert!(
+                validate_core_call("worker.cancel", &params).is_err(),
+                "{params}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_window_runs_again_only_the_task_it_names() {
+        assert!(is_allowed_method("worker.rerun"));
+        assert_eq!(
+            validate_core_call("worker.rerun", &json!({ "task_id": 7 })),
+            Ok(())
+        );
+        for params in [
+            json!({}),
+            json!({ "task_id": null }),
+            json!({ "task_id": "7" }),
+            json!({ "task_id": -1 }),
+            json!({ "task_id": 1.5 }),
+        ] {
+            assert!(
+                validate_core_call("worker.rerun", &params).is_err(),
+                "{params}"
+            );
+        }
+    }
+
+    #[test]
     fn the_whole_list_of_allowed_methods() {
         for method in [
+            "connectors.catalog",
+            "connectors.categories",
+            "connectors.connect",
+            "connectors.status",
+            "connectors.disconnect",
+            "connectors.tools",
+            "connectors.set_tools",
+            "connectors.set_key",
+            "connectors.google.configure",
+            "connectors.google.connect",
             "history.list",
             "history.latest",
             "history.delete",
@@ -993,7 +2606,6 @@ mod tests {
             "dictionary.add",
             "dictionary.import",
             "dictionary.delete",
-            "dictionary.dismiss",
             "settings.get",
             "settings.set",
             "secrets.status",
@@ -1011,10 +2623,10 @@ mod tests {
             "models.local_delete",
             "models.catalog",
             "stats.summary",
+            "usage.analytics",
             "languages.list",
             "agent.history.list",
             "agent.history.clear",
-            "integrations.list",
             "integrations.catalog",
             "integrations.connect",
             "integrations.connect_cancel",
@@ -1022,16 +2634,59 @@ mod tests {
             "integrations.set_enabled",
             "integrations.disconnect",
             "integrations.refresh",
-            "integrations.tools",
             "integrations.set_tool_enabled",
             "integrations.set_tools_enabled",
             "integrations.audit",
+            "integrations.inventory",
             "toolsets.list",
+            "worker.cancel",
+            "worker.rerun",
+            "memory.list",
+            "memory.get",
+            "memory.update",
+            "memory.delete",
+            "memory.clear",
+            "memory.move",
+            "memory.summary_clear",
+            "services.status",
+            "services.set_key",
+            "services.clear_key",
+            "members.list",
+            "members.create",
+            "members.update",
+            "members.delete",
+            "members.set_avatar",
+            "members.presets",
+            "members.read",
+            "members.viewing",
+            "members.tool_choices",
+            "groups.create",
+            "groups.update",
+            "groups.delete",
+            "routines.list",
+            "routines.create",
+            "routines.update",
+            "routines.delete",
+            "routines.template",
+            "safety.rules.list",
+            "safety.rules.create",
+            "safety.rules.update",
+            "safety.rules.delete",
+            "background.questions.list",
+            "background.answer",
         ] {
             assert!(is_allowed_method(method), "{method}");
         }
         for method in [
             "",
+            "connectors.",
+            "connectors.execute",
+            "connectors.google.revoke",
+            "xconnectors.status",
+            "safety.",
+            "safety.rules.",
+            "background.",
+            "background.cancel",
             "history",
             "history.",
             "dictation.start",
@@ -1043,8 +2698,8 @@ mod tests {
             "brain.finalize_dictation",
             "integrations", // the prefix alone is no method
             "integrations.",
-            "Integrations.list",
-            "xintegrations.list",
+            "Integrations.catalog",
+            "xintegrations.catalog",
             "toolsets", // the prefix alone is no method
             "toolsets.",
             "Toolsets.list",
@@ -1107,6 +2762,24 @@ mod tests {
     }
 
     #[test]
+    fn the_cost_of_one_background_task_is_one_of_four_amounts() {
+        for cap in [0.1, 0.2, 0.5, 1.0] {
+            assert!(set("worker_cost_cap_usd", json!(cap)).is_ok(), "{cap}");
+        }
+        assert!(set("worker_cost_cap_usd", json!(1)).is_ok());
+        for cap in [
+            json!(0),
+            json!(0.3),
+            json!(2),
+            json!(-1),
+            json!("0.5"),
+            json!(null),
+        ] {
+            assert!(set("worker_cost_cap_usd", cap.clone()).is_err(), "{cap}");
+        }
+    }
+
+    #[test]
     fn the_history_retention_is_at_least_a_day() {
         assert!(set("history_retention_days", json!(1)).is_ok());
         assert!(set("history_retention_days", json!(30)).is_ok());
@@ -1118,15 +2791,17 @@ mod tests {
     }
 
     #[test]
-    fn the_language_and_the_model_are_checked_too() {
-        for language in ["auto", "zh", "ja", "en"] {
-            assert!(set("language", json!(language)).is_ok(), "{language}");
-        }
-        assert!(set("language", json!("de")).is_err());
-        assert!(set("language", json!(1)).is_err());
+    fn the_model_is_checked_too() {
         assert!(set("cleanup_model", json!("google/gemini-3.1-flash-lite")).is_ok());
         assert!(set("cleanup_model", json!("")).is_err());
         assert!(set("cleanup_model", json!(3)).is_err());
+    }
+
+    #[test]
+    fn the_local_model_may_be_none_and_the_core_checks_the_rest() {
+        // None is "no local model": the core refuses it only while the engine is local.
+        assert!(set("stt_local_model", json!(null)).is_ok());
+        assert!(set("stt_local_model", json!("sensevoice")).is_ok());
     }
 
     #[test]
@@ -1141,6 +2816,26 @@ mod tests {
         // the core checks each model against OpenRouter's list
         assert!(set("stt_cloud_model", json!("openai/gpt-transcribe")).is_ok());
         assert!(set("stt_cloud_model", json!("deepgram/nova-3")).is_ok());
+    }
+
+    #[test]
+    fn the_search_of_the_conversation_takes_words_and_a_whole_limit() {
+        let search = |params: Value| validate_core_call("agent.history.search", &params);
+        assert!(search(json!({"query": "出差", "limit": 100})).is_ok());
+        assert!(search(json!({"query": "出差"})).is_ok());
+        assert!(search(json!({"query": "x".repeat(200)})).is_ok());
+        for params in [
+            json!({}),
+            json!({"query": ""}),
+            json!({"query": "   "}),
+            json!({"query": 5}),
+            json!({"query": "x".repeat(201)}),
+            json!({"query": "出差", "limit": "5"}),
+            json!({"query": "出差", "limit": 2.5}),
+            json!({"query": "出差", "limit": -1}),
+        ] {
+            assert!(search(params.clone()).is_err(), "{params}");
+        }
     }
 
     #[test]
@@ -1218,6 +2913,103 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_and_a_task_that_moved_on_are_forwarded_by_their_ids() {
+        let turn = notification("agent.turn", json!({"turn_id": 12}));
+        assert_eq!(
+            main_event_from(&turn, false),
+            Some(MainEvent::AgentTurn {
+                turn_id: 12,
+                member_id: 0
+            })
+        );
+        let theirs = notification("agent.turn", json!({"turn_id": 13, "member_id": 4}));
+        assert_eq!(
+            main_event_from(&theirs, false),
+            Some(MainEvent::AgentTurn {
+                turn_id: 13,
+                member_id: 4
+            })
+        );
+        let task = notification(
+            "worker.changed",
+            json!({"task_id": 3, "state": "running", "running": true, "model_calls": 2,
+                   "tool_calls": 1, "cost_usd": 0.004}),
+        );
+        assert_eq!(
+            main_event_from(&task, false),
+            Some(MainEvent::WorkerChanged {
+                task_id: 3,
+                state: "running".to_owned(),
+                running: true
+            })
+        );
+        for broken in [
+            notification("agent.turn", json!({})),
+            notification("agent.turn", json!({"turn_id": "12"})),
+            notification("worker.changed", json!({"task_id": 3, "state": "done"})),
+            notification(
+                "worker.changed",
+                json!({"task_id": -3, "state": "done", "running": false}),
+            ),
+        ] {
+            assert_eq!(main_event_from(&broken, true), None, "{:?}", broken.params);
+        }
+        // The report says what Raphael said: it is the overlay's, and the page reads the turn.
+        let report = notification(
+            "worker.report",
+            json!({"task_id": 3, "state": "done", "prefix": "告", "text": "x"}),
+        );
+        assert_eq!(main_event_from(&report, true), None);
+    }
+
+    #[test]
+    fn data_changes_are_forwarded_without_private_fields() {
+        for (method, params, expected) in [
+            (
+                "routines.changed",
+                json!({"member_id": 4, "prompt": "private"}),
+                json!({"type": "RoutinesChanged", "member_id": 4}),
+            ),
+            (
+                "members.changed",
+                json!({"name": "private"}),
+                json!({"type": "MembersChanged"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 4, "space": "own", "body": "private"}),
+                json!({"type": "MemoryChanged", "member_id": 4, "space": "own"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 0, "space": "shared"}),
+                json!({"type": "MemoryChanged", "member_id": 0, "space": "shared"}),
+            ),
+            (
+                "memory.changed",
+                json!({"member_id": 4}),
+                json!({"type": "MemoryChanged", "member_id": 4}),
+            ),
+        ] {
+            for monitoring in [false, true] {
+                let event = main_event_from(&notification(method, params.clone()), monitoring);
+                assert_eq!(serde_json::to_value(event).unwrap(), expected);
+            }
+        }
+        for (method, params) in [
+            ("routines.changed", json!({})),
+            ("routines.changed", json!({"member_id": -1})),
+            ("memory.changed", json!({"member_id": "4"})),
+            (
+                "memory.changed",
+                json!({"member_id": 4, "space": "invalid"}),
+            ),
+        ] {
+            assert_eq!(main_event_from(&notification(method, params), false), None);
+        }
+    }
+
+    #[test]
     fn other_notifications_are_not_forwarded() {
         for method in ["core.restarted", "core.down", "dictation.partial"] {
             assert_eq!(
@@ -1251,6 +3043,23 @@ mod tests {
             r#"{"type":"LearnLimited","app":"vscode","reason":"accessibility_off"}"#
         );
         assert_eq!(
+            serde_json::to_string(&MainEvent::AgentTurn {
+                turn_id: 4,
+                member_id: 2
+            })
+            .unwrap(),
+            r#"{"type":"AgentTurn","turn_id":4,"member_id":2}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&MainEvent::WorkerChanged {
+                task_id: 2,
+                state: "done".to_owned(),
+                running: false
+            })
+            .unwrap(),
+            r#"{"type":"WorkerChanged","task_id":2,"state":"done","running":false}"#
+        );
+        assert_eq!(
             serde_json::to_string(&MainEvent::TrayOpen {
                 page: TrayPage::Dictionary,
                 action: Some(TrayAction::AddWord)
@@ -1266,6 +3075,95 @@ mod tests {
             .unwrap(),
             r#"{"type":"TrayOpen","page":"history"}"#
         );
+    }
+
+    #[test]
+    fn the_keys_and_the_phases_of_a_dictation_have_the_shape_the_guide_expects() {
+        assert_eq!(
+            serde_json::to_string(&MainEvent::Hotkey {
+                kind: HotkeyKind::AgentDown
+            })
+            .unwrap(),
+            r#"{"type":"Hotkey","kind":"agent_down"}"#
+        );
+        for (phase, name) in [
+            (DictationPhase::Listening, "listening"),
+            (DictationPhase::Processing, "processing"),
+            (DictationPhase::Pasted, "pasted"),
+            (DictationPhase::Cancelled, "cancelled"),
+            (DictationPhase::Failed, "failed"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&MainEvent::Dictation {
+                    phase,
+                    agent: false,
+                    member_id: None,
+                })
+                .unwrap(),
+                format!(r#"{{"type":"Dictation","phase":"{name}","agent":false}}"#)
+            );
+        }
+        assert_eq!(
+            serde_json::to_string(&MainEvent::Dictation {
+                phase: DictationPhase::Listening,
+                agent: true,
+                member_id: None,
+            })
+            .unwrap(),
+            r#"{"type":"Dictation","phase":"listening","agent":true}"#
+        );
+        assert_eq!(
+            serde_json::to_value(MainEvent::Dictation {
+                phase: DictationPhase::Listening,
+                agent: true,
+                member_id: Some(3),
+            })
+            .unwrap(),
+            json!({"type": "Dictation", "phase": "listening", "agent": true, "member_id": 3})
+        );
+    }
+
+    #[test]
+    fn every_hotkey_event_has_a_kind() {
+        for (event, kind) in [
+            (HotkeyEvent::DictationDown, HotkeyKind::DictationDown),
+            (HotkeyEvent::DictationUp, HotkeyKind::DictationUp),
+            (HotkeyEvent::AgentDown, HotkeyKind::AgentDown),
+            (HotkeyEvent::AgentUp, HotkeyKind::AgentUp),
+            (HotkeyEvent::PasteLast, HotkeyKind::PasteLast),
+            (HotkeyEvent::Cancel, HotkeyKind::Cancel),
+        ] {
+            assert_eq!(HotkeyKind::from(event), kind);
+        }
+    }
+
+    #[test]
+    fn practising_reports_the_keys_but_starts_nothing_except_cancel() {
+        for event in [
+            HotkeyEvent::DictationDown,
+            HotkeyEvent::DictationUp,
+            HotkeyEvent::AgentDown,
+            HotkeyEvent::AgentUp,
+            HotkeyEvent::PasteLast,
+        ] {
+            assert!(acts_on(event, false), "{event:?} acts when not practising");
+            assert!(
+                !acts_on(event, true),
+                "{event:?} is only reported while practising"
+            );
+        }
+        assert!(acts_on(HotkeyEvent::Cancel, true));
+        assert!(acts_on(HotkeyEvent::Cancel, false));
+    }
+
+    #[test]
+    fn the_practice_flag_is_off_until_a_lesson_turns_it_on() {
+        // The only test that touches the flag, so that parallel tests cannot see it change.
+        assert!(!practising());
+        PRACTICE.store(true, Ordering::SeqCst);
+        assert!(practising());
+        PRACTICE.store(false, Ordering::SeqCst);
+        assert!(!practising());
     }
 
     // ---- events of the app itself ----
@@ -1308,6 +3206,30 @@ mod tests {
         let (second, seen_again) = page_channel(false);
         page.subscribe(second);
         assert!(seen_again.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn dictated_text_reaches_only_the_current_page_and_is_never_replayed() {
+        let mut page = Page::new();
+        page.deliver(MainEvent::DictationPasted {
+            text: "disposable dictation".into(),
+        });
+        assert!(page.waiting.is_empty());
+        let (channel, seen) = page_channel(false);
+        page.subscribe(channel);
+        assert!(seen.lock().unwrap().is_empty());
+        page.deliver(MainEvent::DictationPasted {
+            text: "disposable dictation".into(),
+        });
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        let (gone, _) = page_channel(true);
+        page.subscribe(gone);
+        page.deliver(MainEvent::DictationPasted {
+            text: "discard this text".into(),
+        });
+        let (next, seen) = page_channel(false);
+        page.subscribe(next);
+        assert!(seen.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1768,6 +3690,35 @@ mod tests {
             changed(json!({"ui_language": "en", "microphone": "x", "autostart": false}));
         assert!(apply_changes(&fake, &old, &new).await.is_err());
         assert!(!fake.done().contains(&"tray_menu".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn always_allowed_apps_removed_at_once_are_all_gone() {
+        let app = |exe: &str| crate::device_settings::ComputerApp {
+            exe: exe.to_owned(),
+            name: exe.trim_end_matches(".exe").to_owned(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("device.json");
+        let settings = DeviceSettings {
+            computer_apps: vec![app("a.exe"), app("b.exe"), app("c.exe")],
+            ..DeviceSettings::default()
+        };
+        let store = DeviceStore::new(path.clone(), settings);
+        let fake = Fake::default();
+        // two quick removals: each takes its app off the list as it is when it runs
+        let (first, second) = tokio::join!(
+            remove_computer_app(&store, &fake, "a.exe"),
+            remove_computer_app(&store, &fake, "b.exe"),
+        );
+        assert!(first.is_ok() && second.is_ok());
+        assert_eq!(store.get().await.computer_apps, [app("c.exe")]);
+        assert_eq!(DeviceSettings::load(&path).computer_apps, [app("c.exe")]);
+        // an app that is not on the list changes nothing
+        let same = remove_computer_app(&store, &fake, "nothing.exe")
+            .await
+            .unwrap();
+        assert_eq!(same.computer_apps, [app("c.exe")]);
     }
 
     #[tokio::test]

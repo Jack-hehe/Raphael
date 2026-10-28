@@ -39,6 +39,12 @@ use crate::rpc::{CORE_EXITED, Notification, RpcClient, RpcError, lock};
 pub const CORE_RESTARTED: &str = "core.restarted";
 /// Sent to the subscribers when the core has died too often and will not be started again.
 pub const CORE_DOWN: &str = "core.down";
+/// Sent to the subscribers the moment the core's output ends (it exited, or is about to), before
+/// any restart: what the core was doing is over, and nothing done for it may go on.
+pub const CORE_GONE: &str = "core.gone";
+
+/// What is called, on the thread that reads the core's output, the moment that output ends.
+type ExitHook = Box<dyn Fn() + Send + Sync>;
 
 /// The protocol version this app speaks (`PROTOCOL_VERSION` in the core's `protocol.py`).
 const PROTOCOL_VERSION: u64 = 1;
@@ -46,26 +52,45 @@ const PROTOCOL_VERSION: u64 = 1;
 /// How long a call to `method` may take before it fails with `TIMEOUT`.
 pub fn timeout_for(method: &str) -> Duration {
     let seconds = match method {
-        // The last chunk of speech-to-text, then the cleanup request to the LLM, which may take
-        // up to 90 s for a long dictation (cleanup.timeout_for). The first dictation after launch
-        // also waits for the speech engine to load (about 31 s).
+        // The last stretch of speech-to-text (the rest was transcribed while the recording went
+        // on), then the cleanup request to the LLM. The first dictation after launch also waits
+        // for the speech engine to load (about 31 s). The controller gives a long recording more
+        // ([`dictation_stop_timeout`]): its cleanup takes longer.
         "dictation.stop" => 150,
-        // The router and then the model that words the answer, and perhaps a web search or the
-        // weather in between. Nobody waits for it longer than that: Esc stops it earlier.
-        "agent.ask" => 60,
-        // Does what was approved, then words the reply.
-        "agent.confirm" => 30,
+        // A narrated conversation may work for thirty minutes before its final reply or next
+        // permission question. Leave time for routing and transport; Esc still stops it earlier.
+        "agent.ask" | "agent.confirm" => 1830,
         // Starts the plugin (a program that may first have to be fetched), reads its tools.
         "integrations.refresh" => 40,
         // Waits for the user to log in in the browser: up to five minutes (the core ends it at
-        // 330 s with a kind of failure), and then reads the tools.
-        "integrations.connect" => 360,
+        // 330 s with a kind of failure), or, for a login with a code (GitHub), until the code
+        // runs out: 900 s at most, and the core ends it at 930 s. Then reads the tools.
+        "integrations.connect" => 960,
+        // Managed app OAuth leaves time for a human browser round trip and final tool discovery.
+        "connectors.connect" => 780,
+        "connectors.google.connect" => 180,
+        "connectors.catalog"
+        | "connectors.categories"
+        | "connectors.status"
+        | "connectors.disconnect"
+        | "connectors.tools"
+        | "connectors.set_tools"
+        | "connectors.set_key" => 120,
         // Downloads speech models.
         "models.ensure" | "models.local_use" => 3600,
-        "secrets.set_openrouter_key" | "status.check_openrouter" => 15,
         _ => 15,
     };
     Duration::from_secs(seconds)
+}
+
+/// How long the `dictation.stop` of a recording that lasted `recorded` may take: the method's
+/// usual time, which covers a recording of a few minutes, and a second more for every 3 s it
+/// lasted. A recording has no limit, and its speech is transcribed while it goes on, so at the stop
+/// only the last stretch is left to transcribe whatever its length; but the cleanup of the whole
+/// text is given 10 s and a second for every 3 s of speech (`cleanup.timeout_for`, with no
+/// ceiling), and that wait has to fit in this one.
+pub fn dictation_stop_timeout(recorded: Duration) -> Duration {
+    timeout_for("dictation.stop") + recorded / 3
 }
 
 /// What to run to start the core.
@@ -349,6 +374,8 @@ struct Shared {
     child: Mutex<Option<Child>>,
     /// Set when the [`CoreProcess`] is dropped, so that nothing starts the core again.
     stopping: AtomicBool,
+    /// Called the moment the core's output ends ([`CoreProcess::on_exit`]).
+    exit_hooks: Mutex<Vec<ExitHook>>,
 }
 
 impl Shared {
@@ -489,13 +516,19 @@ fn read_stdout(shared: &Shared, stdout: ChildStdout, exits: &mpsc::Sender<()>) {
             }
         }
     }
-    // The core is gone. Nothing may be written to it any more, and the calls still waiting for an
-    // answer will never get one. This happens here, not in the supervisor, which may be busy:
-    // calls must not have to wait for the restart to learn that the core died.
+    // The core is gone. What was done for it stops first, here and now (a run on the desktop is
+    // revoked before any job queued for it can act), then nothing may be written to it any more,
+    // and the calls still waiting for an answer will never get one. This happens here, not in the
+    // supervisor, which may be busy or waiting to restart: nothing must wait for the restart to
+    // learn that the core died.
+    for hook in lock(&shared.exit_hooks).iter() {
+        hook();
+    }
     shared.rpc.set_writer(None);
     shared
         .rpc
         .fail_all(RpcError::new(CORE_EXITED, "the core exited"));
+    shared.rpc.notify_local(local_notification(CORE_GONE));
     // Err: the supervisor has stopped, because the app is shutting down or the core was given up.
     let _ = exits.send(());
 }
@@ -605,6 +638,7 @@ impl CoreProcess {
             job: Job::new()?,
             child: Mutex::new(None),
             stopping: AtomicBool::new(false),
+            exit_hooks: Mutex::new(Vec::new()),
         });
         let (exits_tx, exits_rx) = mpsc::channel();
         spawn_core(&shared, &exits_tx)?;
@@ -627,10 +661,18 @@ impl CoreProcess {
         Ok(Arc::new(Self { shared }))
     }
 
-    /// A receiver for the core's notifications (`audio.level`, ...) and for `core.restarted` and
-    /// `core.down`, which this app makes up. One that falls too far behind loses the oldest.
+    /// A receiver for the core's notifications (`audio.level`, ...) and for `core.gone`,
+    /// `core.restarted` and `core.down`, which this app makes up. One that falls too far behind
+    /// loses the oldest.
     pub fn subscribe(&self) -> broadcast::Receiver<Notification> {
         self.shared.rpc.subscribe()
+    }
+
+    /// Calls `hook` each time the core's output ends (it exited, or is about to), at once, on the
+    /// thread that reads it, before the calls waiting on the core fail and before any restart. A
+    /// hook must be quick and must not call the core.
+    pub fn on_exit(&self, hook: impl Fn() + Send + Sync + 'static) {
+        lock(&self.shared.exit_hooks).push(Box::new(hook));
     }
 }
 
@@ -646,6 +688,15 @@ impl CoreApi for CoreProcess {
             .rpc
             .call(method, params, timeout_for(method))
             .await
+    }
+
+    async fn call_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, RpcError> {
+        self.shared.rpc.call(method, params, timeout).await
     }
 }
 
@@ -802,15 +853,21 @@ mod tests {
 
     #[test]
     fn timeouts_follow_the_method() {
+        assert_eq!(timeout_for("connectors.connect"), Duration::from_secs(780));
+        assert_eq!(
+            timeout_for("connectors.google.connect"),
+            Duration::from_secs(180)
+        );
+        assert_eq!(timeout_for("connectors.status"), Duration::from_secs(120));
         assert_eq!(timeout_for("dictation.stop"), Duration::from_secs(150));
         assert_eq!(timeout_for("models.ensure"), Duration::from_secs(3600));
         assert_eq!(timeout_for("models.local_use"), Duration::from_secs(3600));
-        assert_eq!(timeout_for("agent.ask"), Duration::from_secs(60));
-        assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(30));
+        assert_eq!(timeout_for("agent.ask"), Duration::from_secs(1830));
+        assert_eq!(timeout_for("agent.confirm"), Duration::from_secs(1830));
         assert_eq!(timeout_for("integrations.refresh"), Duration::from_secs(40));
         assert_eq!(
             timeout_for("integrations.connect"),
-            Duration::from_secs(360)
+            Duration::from_secs(960)
         );
         for method in [
             "secrets.set_openrouter_key",
@@ -819,7 +876,6 @@ mod tests {
             "history.list",
             "agent.cancel",
             "agent.history.list",
-            "integrations.list",
             "integrations.add",
             "integrations.connect_cancel",
             "integrations.catalog",
@@ -827,6 +883,17 @@ mod tests {
         ] {
             assert_eq!(timeout_for(method), Duration::from_secs(15), "{method}");
         }
+    }
+
+    #[test]
+    fn the_stop_of_a_long_recording_is_given_time_for_its_cleanup() {
+        let stop = |seconds| dictation_stop_timeout(Duration::from_secs(seconds));
+        // A short dictation: the method's usual time.
+        assert_eq!(stop(0), Duration::from_secs(150));
+        assert_eq!(stop(30), Duration::from_secs(160));
+        // An hour: the cleanup alone is given 10 s + 3600 / 3 (cleanup.timeout_for), which fits.
+        assert_eq!(stop(3600), Duration::from_secs(1350));
+        assert!(stop(3600) > Duration::from_secs(10 + 3600 / 3));
     }
 
     // ---- how often the core may be restarted ----
@@ -1071,6 +1138,31 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    async fn what_was_done_for_a_core_that_died_stops_at_once_not_at_its_restart() {
+        // a long wait before the restart: the hooks and `core.gone` come long before it
+        let core =
+            CoreProcess::start_with(fake_core_command("serve"), quick_restarts(5_000)).unwrap();
+        let mut notifications = core.subscribe();
+        core.call("core.hello", json!({})).await.unwrap();
+        let revoked = Arc::new(AtomicBool::new(false));
+        let seen = revoked.clone();
+        core.on_exit(move || seen.store(true, Ordering::SeqCst));
+        let killed = Instant::now();
+
+        core.kill_child_for_test();
+
+        wait_for(&mut notifications, CORE_GONE, Duration::from_secs(4)).await;
+        assert!(
+            revoked.load(Ordering::SeqCst),
+            "the hook ran before core.gone"
+        );
+        assert!(killed.elapsed() < Duration::from_secs(4));
+        // nothing of the restart yet
+        assert!(matches!(notifications.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
     async fn restarts_a_core_that_was_killed() {
         let core = CoreProcess::start_with(fake_core_command("serve"), quick_restarts(50)).unwrap();
         let mut notifications = core.subscribe();
@@ -1093,19 +1185,22 @@ mod tests {
         let core = CoreProcess::start_with(fake_core_command("die"), quick_restarts(100)).unwrap();
         let mut notifications = core.subscribe();
 
-        let mut restarts = 0;
+        let (mut restarts, mut gone) = (0, 0);
         loop {
             let next = tokio::time::timeout(Duration::from_secs(20), notifications.recv())
                 .await
                 .expect("the core should be given up on within 20 s")
                 .unwrap();
             match next.method.as_str() {
+                CORE_GONE => gone += 1,
                 CORE_RESTARTED => restarts += 1,
                 CORE_DOWN => break,
                 other => panic!("unexpected notification {other}"),
             }
         }
         assert_eq!(restarts, 5);
+        // each death is told at once: the first core's, and each restarted one's
+        assert_eq!(gone, 6);
 
         // after that, calls fail at once and nothing starts the core again
         let err = core.call("core.hello", json!({})).await.unwrap_err();

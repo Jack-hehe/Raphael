@@ -12,9 +12,9 @@ handler below; what a handler alone does not show is here:
   int and a bool is no number.
 - A dictation is not lost to bookkeeping. If the history cannot be written, the text still comes
   back (with id None); if the key store fails, it comes back as spoken, without cleanup.
-- What the voice assistant is asked (`brain.normalize_transcript`) is a transcript with the
-  dictionary's replacements and the Chinese script of the chosen variant, as a dictation is
-  normalized before its cleanup. No model is asked, nothing is written and nothing is paid for.
+- Voice questions share dictation cleanup and spend accounting but never write a history row.
+  Transcript-only consumers still use `brain.normalize_transcript` for dictionary and script
+  normalization without model calls, history or cost.
 - A dictation that is cancelled while its text is being cleaned (`brain.cancel_dictation`, for the
   `session_id` that `brain.finalize_dictation` was given) is paid for, because the request to the
   model is made, but it is not saved: it would be the latest dictation, which "paste last" pastes,
@@ -25,10 +25,12 @@ handler below; what a handler alone does not show is here:
   after a minute, without making a dictation wait for that check.
 - A model is chosen (`settings.set` of `cleanup_model`, `agent_model` or `stt_cloud_model`) from
   the catalog OpenRouter gave last, as `models.catalog` showed it: any model it lists that the
-  role can use, or, before any list could be had, one of Raphael's own (catalog.choice_problem).
+  role can use (catalog.choice_problem). Before any list could be had, the catalog is the builtin
+  table of the models Raphael calls when nobody chose another (pricing.builtin_catalog).
   Choosing fetches nothing. When `models.catalog` finds a chosen model gone from OpenRouter's
   list, the setting goes back to its default, and the answer's `replaced` says so for the app to
-  tell the user, as it tells of a setting it could not change.
+  tell the user, as it tells of a setting it could not change. The model that reads images
+  (`vision_model`) is "" for the answer model, or a model of that list that reads images.
 - Nothing here logs the dictated text, a key or the message of a failure. A failure of OpenRouter
   is logged by its kind and status, any other by the name of its type: the message, cause or
   traceback of an OpenRouterError can hold the text of the key store.
@@ -41,25 +43,38 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import tzinfo
 from typing import Any
 
+from ..clock import wall_clock_ms
 from ..languages import chinese_variant, language_groups
-from ..protocol import INTERNAL_ERROR, INVALID_PARAMS, RpcError
+from ..protocol import INTERNAL_ERROR, RpcError, invalid_params
 from ..router import Router
-from .catalog import ROLE_OF_SETTING, ROLES, CatalogEntry, Role, catalog_view, choice_problem, find
-from .cleanup import CleanupService
+from .catalog import (
+    IMAGE_INPUT,
+    LLM,
+    ROLE_OF_SETTING,
+    ROLES,
+    CatalogEntry,
+    Role,
+    catalog_view,
+    choice_problem,
+    find,
+)
+from .cleanup import CleanupResult, CleanupService, already_clean_short, join_parts, split_for_cleanup
 from .cloud_stt import CloudTranscriber
 from .dictionary import DictionaryStore, Learned
 from .history import HistoryItem, HistoryStore
-from .openrouter import KeyInfo, OpenRouterClient, OpenRouterError
-from .pricing import PricingService
+from .openrouter import KeyInfo, OpenRouterError
+from .providers.base import ModelProvider
+from .pricing import PricingService, builtin_catalog
+from .providers.registry import ProviderRegistry, ProviderRouter
 from .secrets import KeyStore
 from .settings import SettingsStore, checked
 from .spend import SpendTracker
 from .stats import StatsStore
-from .suggest import suggest_words
+from .usage import UsageAnalytics
 from .textnorm import (
     apply_replacements,
     finish_cleaned_text,
@@ -75,10 +90,6 @@ HISTORY_MAX_LIMIT = 200
 IMPORT_MAX = 5000
 # The most corrections `dictionary.learn` takes from one dictation.
 LEARN_MAX = 3
-# The dictionary adds words by itself from this many days of history,
-SUGGESTION_DAYS = 7
-# and at most this many in one go.
-AUTO_ADD_LIMIT = 5
 # How long a key check may take in all. The client's timeout applies to each stage of a request
 # (connect, send, wait, read), so by itself a check could outlast the 15 s the app waits for it.
 KEY_CHECK_TIMEOUT_S = 10.0
@@ -90,8 +101,6 @@ _DAY_MS = 86_400_000
 # problem is a reason the role cannot use the model.
 _MODEL_PROBLEMS = {
     "not_listed": "Setting {key!r} must be a model that OpenRouter lists",
-    "not_curated": "Setting {key!r} must be one of Raphael's own models until OpenRouter's list"
-    " of models has been read",
 }
 _MODEL_UNUSABLE = "Setting {key!r} must be a model it can use, and this one cannot: {reason}"
 # SQLite stores integers in 64 bits and refuses to bind a larger one.
@@ -102,42 +111,33 @@ _SPEND_DAYS = 30
 PRUNE_INTERVAL_MS = _DAY_MS
 
 
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
 # --- params -------------------------------------------------------------------------------------
-
-
-def _invalid(message: str) -> RpcError:
-    """An INVALID_PARAMS error. `message` names a param, never a value: it may be the key."""
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
 
 
 def _required(params: dict, name: str) -> Any:
     if name not in params:
-        raise _invalid(f"{name} is required")
+        raise invalid_params(f"{name} is required")
     return params[name]
 
 
 def _str(params: dict, name: str) -> str:
     value = _required(params, name)
     if not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _opt_str(params: dict, name: str) -> str | None:
     value = params.get(name)
     if value is not None and not isinstance(value, str):
-        raise _invalid(f"{name} must be a string")
+        raise invalid_params(f"{name} must be a string")
     return value
 
 
 def _whole(value: Any, name: str) -> int:
     # `type is int`, not isinstance: True is an int to Python, but it is no id and no time.
     if type(value) is not int or not (-_SQLITE_MAX_INT - 1 <= value <= _SQLITE_MAX_INT):
-        raise _invalid(f"{name} must be a whole number")
+        raise invalid_params(f"{name} must be a whole number")
     return value
 
 
@@ -153,7 +153,7 @@ def _opt_int(params: dict, name: str) -> int | None:
 def _non_negative(params: dict, name: str) -> float:
     value = _required(params, name)
     if type(value) not in (int, float) or value < 0:
-        raise _invalid(f"{name} must be a number, 0 or more")
+        raise invalid_params(f"{name} must be a number, 0 or more")
     return value
 
 
@@ -161,7 +161,7 @@ def _milliseconds(params: dict, name: str) -> int:
     """A duration in ms. Any number is taken, since a float is a fair way to say 312.6 ms."""
     value = _non_negative(params, name)
     if value > _SQLITE_MAX_INT:
-        raise _invalid(f"{name} is too large")
+        raise invalid_params(f"{name} is too large")
     return round(value)
 
 
@@ -170,7 +170,7 @@ def _opt_strings(params: dict, name: str) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(text, str) for text in value):
-        raise _invalid(f"{name} must be a list of strings")
+        raise invalid_params(f"{name} must be a list of strings")
     return value
 
 
@@ -180,9 +180,9 @@ def _store_call() -> Iterator[None]:
     try:
         yield
     except KeyError as exc:
-        raise _invalid(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
+        raise invalid_params(f"unknown key {exc.args[0]!r}" if exc.args else "unknown key") from exc
     except (ValueError, TypeError) as exc:
-        raise _invalid(str(exc)) from exc
+        raise invalid_params(str(exc)) from exc
 
 
 # --- the key and the status ---------------------------------------------------------------------
@@ -223,14 +223,19 @@ class Brain:
     def __init__(
         self,
         conn: sqlite3.Connection,
-        client: OpenRouterClient,
+        client: ModelProvider,
         keys: KeyStore,
-        now_ms: Callable[[], int] = _wall_clock_ms,
+        now_ms: Callable[[], int] = wall_clock_ms,
         *,
         key_check_timeout_s: float = KEY_CHECK_TIMEOUT_S,
         tz: tzinfo | None = None,
+        providers: ProviderRegistry | None = None,
     ) -> None:
         self._client = client
+        self._providers = providers
+        self._notify_providers = lambda: None
+        self._notify_settings = lambda: None
+        from .runs import RunAnalytics
         self._keys = keys
         self._now_ms = now_ms
         self._key_check_timeout_s = key_check_timeout_s
@@ -244,28 +249,43 @@ class Brain:
         # The dictations whose text is being cleaned, by session; True once one was cancelled.
         self._cleaning: dict[str, bool] = {}
         self._pruned_at_ms: int | None = None
-        self._history = HistoryStore(conn)
+        self._history = HistoryStore(conn, tz=tz)
         self._dictionary = DictionaryStore(conn, now_ms)
         self._settings = SettingsStore(conn)
         self._spend = SpendTracker(conn, now_ms, tz)
+        self._runs = RunAnalytics(conn, now_ms, providers, spend=self._spend, settings=self._settings)
         self._stats = StatsStore(conn, now_ms, tz)
+        self._usage = UsageAnalytics(conn, now_ms, tz, providers)
         self._pricing = PricingService(conn, client, now_ms)
         self._cleanup = CleanupService(
             client,
             self._settings,
             self._dictionary,
             self._spend,
-            has_key=self._has_key,
-            on_result=self._on_cleanup_result,
+            has_key=lambda: self._model_available("cleanup_model"),
+            on_model_result=self._on_cleanup_result,
         )
-        self._stt = CloudTranscriber(client, self._settings, self._spend, has_key=self._has_key)
+        self._stt = CloudTranscriber(client, self._settings, self._spend,
+                                     has_key=lambda: self._model_available("stt_cloud_model"))
         self._prune_history()
 
     def known_models(self) -> list[CatalogEntry] | None:
         """The models of OpenRouter's list as it was given last, however old, without fetching it;
         None if it never gave one. What the assistant asks, request by request, what a model can
         do (`tool_calling`): quick, and never a wait for the network."""
-        return self._pricing.known()
+        known = self._pricing.known()
+        if self._providers and not self._providers.config("openrouter")["enabled"]:
+            known = []
+        extra = self._providers.catalog_entries() if self._providers else []
+        if not extra:
+            return known
+        return [*(known if known is not None else builtin_catalog()), *extra]
+
+    def _model_available(self, setting: str) -> bool:
+        if isinstance(self._client, ProviderRouter):
+            purpose = "stt" if setting == "stt_cloud_model" else setting.removesuffix("_model")
+            return self._client.for_purpose(purpose).available(self._settings.get(setting))
+        return self._has_key()
 
     async def aclose(self) -> None:
         """Stop the status refresh before its HTTP client is closed."""
@@ -278,6 +298,10 @@ class Brain:
 
     def register(self, router: Router) -> None:
         """Put every method of the brain on `router`."""
+        self._notify_settings = lambda: router.notify("settings.changed", {})
+        self._notify_action_mode = lambda: router.notify("action_mode.changed", {})
+        if self._providers:
+            self._notify_providers = lambda: router.notify("providers.changed", {})
         methods = {
             "brain.finalize_dictation": self._finalize_dictation,
             "brain.normalize_transcript": self._normalize_transcript,
@@ -286,12 +310,11 @@ class Brain:
             "history.list": self._history_list,
             "history.latest": self._history_latest,
             "history.delete": self._history_delete,
+            "history.clear": self._history_clear,
             "dictionary.list": self._dictionary_list,
             "dictionary.add": self._dictionary_add,
             "dictionary.import": self._dictionary_import,
             "dictionary.delete": self._dictionary_delete,
-            "dictionary.auto_add": self._dictionary_auto_add,
-            "dictionary.dismiss": self._dictionary_dismiss,
             "dictionary.learn": self._dictionary_learn,
             "settings.get": self._settings_get,
             "settings.set": self._settings_set,
@@ -303,6 +326,9 @@ class Brain:
             "status.check_openrouter": self._status_check_openrouter,
             "models.catalog": self._models_catalog,
             "stats.summary": self._stats_summary,
+            "usage.analytics": self._usage.read,
+            "usage.runs": self._runs.read,
+            "usage.export": self._runs.export,
         }
         for method, handler in methods.items():
             router.register(method, handler)
@@ -316,12 +342,30 @@ class Brain:
         target_app = _opt_str(params, "target_app")
         stt = _opt_str(params, "stt")
         session_id = _opt_str(params, "session_id")
-        self._prune_history_if_due()
+        purpose = params.get("purpose", "dictation")
+        if purpose not in ("dictation", "agent"):
+            raise invalid_params("Unknown dictation purpose")
+        incomplete = params.get("incomplete", False)
+        if not isinstance(incomplete, bool):
+            raise invalid_params("incomplete must be a boolean")
+        if purpose == "dictation":
+            self._prune_history_if_due()
 
         rules = self._dictionary.replacements()
         # The Chinese written form the user chose decides the script of the text (or none).
         chinese = chinese_variant(self._settings.get("languages"))
-        normalized = normalize_transcript(raw_text, rules, chinese=chinese)
+        if incomplete:
+            from ..agent.persona import DEFAULT_LANGUAGE, normalize_language, phrase
+
+            language = _opt_str(params, "ui_language") or DEFAULT_LANGUAGE
+            marker = phrase(normalize_language(language), "speech_missing")
+            # UI text keeps its language even when speech uses another written form or dictionary.
+            normalized = marker.join(
+                normalize_transcript(piece, rules, chinese=chinese)
+                for piece in raw_text.split(marker)
+            )
+        else:
+            normalized = normalize_transcript(raw_text, rules, chinese=chinese)
         if not normalized.strip():
             return {
                 "id": None,
@@ -335,22 +379,54 @@ class Brain:
         # The model reads the text as speech-to-text heard it, with the replacements but without
         # OpenCC: s2twp would hand it errors such as 隻要 for 只要, which it then keeps. The
         # normalized text is what is saved, and what is pasted when there is no cleanup.
+        # A long dictation is cleaned in pieces (cleanup.CLEANUP_CHUNK_CHARS), cut where
+        # speech-to-text ended a sentence, each made ready the way the whole is.
+        pieces = split_for_cleanup(raw_text)
+        chunks = (
+            [
+                (normalize_transcript(piece, rules, chinese=chinese), apply_replacements(piece, rules))
+                for piece in pieces
+            ]
+            if len(pieces) > 1
+            else None
+        )
         if session_id is not None:
             self._cleaning[session_id] = False
         try:
-            result = await self._cleanup.clean(
-                normalized,
-                audio_seconds=audio_seconds,
-                heard=apply_replacements(raw_text, rules),
-                target_app=target_app,
-            )
+            if incomplete:
+                result = CleanupResult(normalized, False, "incomplete_stt", None, 0, 0)
+            elif already_clean_short(raw_text.strip()) and already_clean_short(normalized):
+                result = CleanupResult(normalized, True, None, None, 0, 0)
+            else:
+                result = await self._cleanup.clean(
+                    normalized,
+                    audio_seconds=audio_seconds,
+                    heard=apply_replacements(raw_text, rules),
+                    target_app=target_app,
+                    chunks=chunks,
+                    is_cancelled=lambda: self._cleaning.get(session_id, False),
+                )
         finally:
             # Taken in the same breath as the text is saved, so that no cancel comes in between.
             cancelled = self._cleaning.pop(session_id, False)
-        if result.model is not None and self._openrouter.state == "ok":
+        if result.model is not None and not result.model.startswith("@") and self._openrouter.state == "ok":
             # The model answered, so the time it took is a round trip to OpenRouter.
             self._openrouter.latency_ms = result.llm_ms
-        if result.cleaned:
+        if result.parts:
+            # Cleaned in pieces, some of which may have fallen back: each is finished as it would
+            # be alone, and they are joined with what they were cut at: a paragraph break, a space.
+            text = join_parts(
+                [
+                    replace(
+                        part,
+                        text=finish_cleaned_text(part.text, rules, chinese=chinese)
+                        if part.cleaned
+                        else remove_stutters(part.text),
+                    )
+                    for part in result.parts
+                ]
+            )
+        elif result.cleaned:
             text = finish_cleaned_text(result.text, rules, chinese=chinese)
         else:
             # A fallback is the normalized text already; doing it twice could repeat a replacement.
@@ -376,6 +452,8 @@ class Brain:
         if cancelled:
             logger.info("A dictation was cancelled while its text was cleaned; not keeping it")
             entry_id = None
+        elif purpose == "agent":
+            entry_id = None
         else:
             entry_id = self._save(item)
         return {
@@ -390,14 +468,15 @@ class Brain:
     async def _normalize_transcript(self, params: dict) -> dict:
         """`{raw_text}` -> `{text}`: what speech-to-text heard, with the dictionary's replacements
         and the Chinese written form the user chose, as `brain.finalize_dictation` starts with.
-        This is the whole of it: for the voice assistant, whose requests are not cleaned."""
+        Used for transcript-only consumers and as a recovery path if finalization fails."""
         raw_text = _str(params, "raw_text")
         chinese = chinese_variant(self._settings.get("languages"))
         return {"text": normalize_transcript(raw_text, self._dictionary.replacements(), chinese=chinese)}
 
     async def _cancel_dictation(self, params: dict) -> dict:
         """`{session_id}`: the app cancelled that dictation. If its text is being cleaned, the
-        cleanup goes on (it is paid for) but the text is not saved. A session that is not being
+        current request goes on (it is paid for), without a retry, but the text is not saved.
+        A session that is not being
         cleaned, or no longer is, is no matter."""
         session_id = _str(params, "session_id")
         if session_id in self._cleaning:
@@ -437,6 +516,11 @@ class Brain:
         with _store_call():
             return {"deleted": self._history.delete(item_id)}
 
+    async def _history_clear(self, params: dict) -> dict:
+        """Delete the whole dictation history: Settings › 資料, once its 10 seconds of 復原 ran out."""
+        with _store_call():
+            return {"deleted": self._history.clear()}
+
     # --- dictionary -----------------------------------------------------------------------------
 
     async def _dictionary_list(self, params: dict) -> dict:
@@ -455,10 +539,10 @@ class Brain:
         letter case) or repeats is skipped, a blank one is invalid, and a word the user had
         dismissed is added all the same. Only the counts are logged."""
         if _required(params, "words") is None:
-            raise _invalid("words must be a list of strings")
+            raise invalid_params("words must be a list of strings")
         words = _opt_strings(params, "words")
         if len(words) > IMPORT_MAX:
-            raise _invalid(f"words takes at most {IMPORT_MAX} entries")
+            raise invalid_params(f"words takes at most {IMPORT_MAX} entries")
         with _store_call():
             added, skipped, invalid = self._dictionary.import_words(words)
         logger.info(
@@ -473,30 +557,6 @@ class Brain:
         entry_id = _int(params, "id")
         with _store_call():
             return {"deleted": self._dictionary.delete(entry_id)}
-
-    async def _dictionary_auto_add(self, params: dict) -> dict:
-        """`{}` -> `{words: [word]}`: adds the names and terms that keep coming up in the last
-        seven days of dictation to the dictionary, as learned entries, and returns the ones it
-        added (at most AUTO_ADD_LIMIT). A word that is in the dictionary, or that the user
-        deleted or dismissed, is never added. The app calls it after a dictation is pasted. Only
-        the number of words is logged."""
-        texts = self._history.texts_since(self._now_ms() - SUGGESTION_DAYS * _DAY_MS)
-        known = set(self._dictionary.hint_words())
-        found = suggest_words(texts, known, self._dictionary.dismissed(), limit=AUTO_ADD_LIMIT)
-        words: list[str] = []
-        with _store_call():
-            for word, _count in found:
-                self._dictionary.add(word, source="learned")
-                words.append(word)
-        if words:
-            logger.info("Added %d words to the dictionary by themselves", len(words))
-        return {"words": words}
-
-    async def _dictionary_dismiss(self, params: dict) -> dict:
-        word = _str(params, "word")
-        with _store_call():
-            self._dictionary.dismiss(word)
-        return {}
 
     async def _dictionary_learn(self, params: dict) -> dict:
         """`{corrections: [{word, misheard}]}` from the app's correction watch: the user replaced
@@ -513,11 +573,11 @@ class Brain:
         logged, only how many."""
         corrections = _required(params, "corrections")
         if not isinstance(corrections, list):
-            raise _invalid("corrections must be a list")
+            raise invalid_params("corrections must be a list")
         pairs: list[tuple[str, str]] = []
         for correction in corrections:
             if not isinstance(correction, dict):
-                raise _invalid("corrections must be a list of objects")
+                raise invalid_params("corrections must be a list of objects")
             pairs.append((_str(correction, "word").strip(), _str(correction, "misheard").strip()))
         learned: list[str] = []
         rules: list[str] = []
@@ -554,20 +614,48 @@ class Brain:
             role = ROLE_OF_SETTING.get(key)
             if role is not None:
                 self._check_model(role, value)
+            if key == "vision_model":
+                self._check_vision_model(value)
+            if key == "quick_model" and isinstance(value, str) and value.strip():
+                self._check_model(replace(ROLE_OF_SETTING["agent_model"], setting="quick_model"), value)
             self._settings.set(key, value)
+        if key == "action_mode":
+            self._notify_action_mode()
         if key == "history_retention_days":
             self._prune_history()
+        self._notify_settings()
         return {"settings": self._settings.all()}
 
     def _check_model(self, role: Role, value: Any) -> None:
         """ValueError (or the store's TypeError) if `value` cannot be chosen for `role`, by the
-        catalog OpenRouter gave last (catalog.choice_problem)."""
+        catalog OpenRouter gave last, or the builtin one if it never gave one: the catalog the
+        settings page showed (catalog.choice_problem)."""
+        from ..agent.cli.discovery import brain_ref
         _, model_id = checked(role.setting, value)
+        if role.setting in ("agent_model", "quick_model") and brain_ref(model_id):
+            return
         current = self._settings.get(role.setting)
-        problem = choice_problem(role, model_id, self._pricing.known(), current)
+        known = self.known_models()
+        listed = builtin_catalog() if known is None else known
+        problem = choice_problem(role, model_id, listed, current)
         if problem is not None:
             message = _MODEL_PROBLEMS.get(problem, _MODEL_UNUSABLE)
             raise ValueError(message.format(key=role.setting, reason=problem))
+
+    def _check_vision_model(self, value: Any) -> None:
+        """ValueError (or the store's TypeError) if `value` cannot be the model that reads images:
+        "" (the answer model) always can, and so can the model chosen now; another must be a
+        language model of OpenRouter's list that reads images (`IMAGE_INPUT`). Before any list
+        could be had, a model id is taken as it is: only the list says what a model reads."""
+        _, model_id = checked("vision_model", value)
+        known = self.known_models()
+        if not model_id or known is None or model_id == self._settings.get("vision_model"):
+            return
+        entry = find(known, LLM, model_id)
+        if entry is None:
+            raise ValueError(_MODEL_PROBLEMS["not_listed"].format(key="vision_model"))
+        if IMAGE_INPUT not in entry.capabilities:
+            raise ValueError(_MODEL_UNUSABLE.format(key="vision_model", reason="no_image_input"))
 
     async def _languages_list(self, params: dict) -> dict:
         """The languages the `languages` setting can hold, by group, in the order shown."""
@@ -631,6 +719,7 @@ class Brain:
         self._remember_key(key)
         self._key_check_revision += 1
         self._note("ok", latency_ms=latency_ms, key=info)
+        self._notify_providers()
         return {
             "valid": True,
             "label": info.label,
@@ -646,6 +735,7 @@ class Brain:
             raise _key_store_failure(exc, "remove") from None
         self._remember_key(None)
         self._openrouter = _OpenRouterState()  # what was known belonged to the key that is gone
+        self._notify_providers()
         return {}
 
     async def _check_key(self, key: str | None) -> tuple[KeyInfo, int]:
@@ -690,8 +780,10 @@ class Brain:
             key=key if key is not None else self._openrouter.key,
         )
 
-    def _on_cleanup_result(self, error: Exception | None) -> None:
+    def _on_cleanup_result(self, model: str, error: Exception | None) -> None:
         """How a call to the model went, as the cleanup service reports it."""
+        if model.startswith("@"):
+            return
         if error is None:
             self._note("ok")
         elif isinstance(error, OpenRouterError):
@@ -813,13 +905,26 @@ class Brain:
     async def _models_catalog(self, params: dict) -> dict:
         """Every OpenRouter model Raphael could use (catalog.py). A chosen model that OpenRouter no
         longer lists goes back to its role's default first, which `replaced` reports."""
-        entries, fetched_at_ms, source = await self._pricing.catalog()
+        if self._providers and not self._providers.config("openrouter")["enabled"]:
+            entries, fetched_at_ms, source = [], None, "builtin"
+        else:
+            entries, fetched_at_ms, source = await self._pricing.catalog()
+        if self._providers:
+            await self._providers.refresh_catalog()
+            entries = [*entries, *self._providers.catalog_entries()]
         replaced = [] if source == "builtin" else self._replace_vanished(entries)
-        return catalog_view(entries, fetched_at_ms, source, replaced)
+        view = catalog_view(entries, fetched_at_ms, source, replaced)
+        for kind in ("llm", "stt"):
+            for model in view[kind]:
+                pid = model["id"][1:].partition(":")[0] if model["id"].startswith("@") else "openrouter"
+                model["provider_id"] = pid
+                model["provider_name"] = self._providers.config(pid)["name"] if self._providers else "OpenRouter"
+        return view
 
     def _replace_vanished(self, entries: list[CatalogEntry]) -> list[dict[str, str]]:
-        """Set each chosen model that is not on OpenRouter's list (`entries`) back to its role's
-        default, and say which: `{key, role, model, default}`. Only while the default is on the
+        """Set each chosen OpenRouter model that is not on its list (`entries`) back to its role's
+        default (a model of another provider, `@id:…`, or of a subscription, `cli:…`, is not on that
+        list and stays), and say which: `{key, role, model, default}`. Only while the default is on the
         list: if it went too, it is no better a choice. A value that is no text is no choice and is
         left alone: the store's readers fall back on their own."""
         replaced: list[dict[str, str]] = []
@@ -827,6 +932,7 @@ class Brain:
             chosen, default = self._settings.get(role.setting), role.default
             if (
                 not isinstance(chosen, str)
+                or chosen.startswith(("@", "cli:"))  # another provider's, or a subscription's
                 or chosen == default
                 or find(entries, role.kind, chosen) is not None
                 or find(entries, role.kind, default) is None

@@ -26,6 +26,7 @@ class FakeHub:
     def __init__(self, **tiers):
         self.tiers = {f"mcp:s/{name}": Tier[tier] for name, tier in tiers.items()}
         self.calls = []
+        self.pools = []
         self.unrun = []
         self.result = PluginResult(True, None, "ok")
         self.error = None
@@ -36,14 +37,24 @@ class FakeHub:
     def tier_of(self, key):
         return self.tiers.get(key)
 
-    async def call(self, key, arguments, *, approver, task_id=None):
+    async def call(self, key, arguments, *, approver, task_id=None, pool=None):
         self.calls.append((key, dict(arguments), approver, task_id))
+        self.pools.append(pool)
         if self.error is not None:
             raise self.error
         return self.result
 
     def record_unrun(self, key, *, outcome, task_id=None):
         self.unrun.append((key, outcome, task_id))
+
+
+async def test_the_pool_goes_through_the_gate_to_the_hub_when_there_is_one():
+    hub = FakeHub(look="T0")
+    gate = ToolGate(hub)
+    pool = object()
+    await gate.call_plugin("mcp:s/look", {"topic": "tea"}, pool=pool)
+    await gate.call_plugin("mcp:s/look", {"topic": "tea"})
+    assert hub.pools == [pool, None]
 
 
 def approval_for(action, tier=Tier.T2):
@@ -190,3 +201,113 @@ def test_opening_is_refused_to_the_worker_whatever_the_tier():
     gate.check(Action("open", {"target_kind": "url", "target": "https://example.com/"}), None)
     with pytest.raises(NotApproved):
         gate.check(Action("open", {}), None, worker=True)
+
+
+# --- the owner's Always (P08c) ---------------------------------------------------------------------
+
+
+@pytest.fixture
+def owner_rules(conn):
+    from raphael_core.agent.safety import SafetyGuard, SafetyJudge, SafetyRules
+    from raphael_core.brain.settings import SettingsStore
+
+    from .conftest import FakeOpenRouter
+
+    rules = SafetyRules(conn)
+    client = FakeOpenRouter()
+
+    def build(hub, *, ask_first=False):
+        if ask_first:
+            SettingsStore(conn).set("action_mode", "ask")
+        return ToolGate(hub, conn=conn, safety=SafetyGuard(rules, SafetyJudge(client))), rules, client
+
+    return build
+
+
+async def test_always_on_a_tool_waives_its_t2_question_and_no_other_tools(owner_rules):
+    hub = FakeHub(note="T2", other="T2", burn="T3")
+    gate, rules, _ = owner_rules(hub)
+    note, other, burn = (Action(f"mcp:s/{name}", {"text": "x"}) for name in ("note", "other", "burn"))
+    with pytest.raises(NotApproved):
+        gate.check(note, None)
+    assert gate.always_allow("mcp:s/note", "Notes", "note", "en") is True
+    gate.check(note, None)  # the owner said Always to this very tool
+    assert gate.waived(note) and not gate.waived(other) and not gate.waived(burn)
+    with pytest.raises(NotApproved):
+        gate.check(other, None)  # a narrow rule covers one tool and nothing else
+    gate.always_allow("mcp:s/burn", "Notes", "burn", "en")
+    assert not gate.waived(burn)  # nothing that cannot be undone is ever waived
+    with pytest.raises(NotApproved):
+        gate.check(burn, None)
+
+
+async def test_a_call_waived_by_always_is_made_as_the_owners_and_one_changed_to_ask_first_is_not(owner_rules):
+    hub = FakeHub(note="T2")
+    gate, rules, _ = owner_rules(hub)
+    gate.always_allow("mcp:s/note", "Notes", "note", "en")
+    await gate.call_plugin("mcp:s/note", {"text": "x"})
+    assert hub.calls[-1][2] == "user"
+    rules.update(rules.scoped("tool:mcp:s/note")[0].id, verdict="ask")
+    await gate.call_plugin("mcp:s/note", {"text": "x"})
+    assert hub.calls[-1][2] == "none"  # Ask first has the last word over Always
+
+
+async def test_the_global_switch_asks_every_tool_but_the_one_the_owner_said_always_to(owner_rules, conn):
+    from raphael_core.agent.ledger import Ledger
+    from raphael_core.agent.safety import ASK, RUN, Proposed, narrow_scope
+    from raphael_core.brain.spend import SpendTracker
+
+    hub = FakeHub(note="T1", other="T1")
+    gate, rules, client = owner_rules(hub, ask_first=True)
+    ledger = Ledger(SpendTracker(conn))
+    rules.ensure_seeded("en")
+    for rule in rules.rules():
+        rules.delete(rule.id)
+    asked = await gate.screen(Proposed("Notes / other", scope=narrow_scope("mcp:s/other")), language="en", ledger=ledger)
+    assert asked.verdict == ASK and asked.switch and asked.rule is None  # only the switch asks
+    gate.always_allow("mcp:s/note", "Notes", "note", "en")
+    waived = await gate.screen(Proposed("Notes / note", scope=narrow_scope("mcp:s/note")), language="en", ledger=ledger)
+    assert waived.verdict == RUN and waived.narrow
+    still = await gate.screen(Proposed("Notes / other", scope=narrow_scope("mcp:s/other")), language="en", ledger=ledger)
+    assert still.verdict == ASK and still.switch
+    assert client.decide_calls == []
+
+
+async def test_a_rule_that_asks_beats_always_even_under_the_global_switch(owner_rules, conn):
+    from raphael_core.agent.ledger import Ledger
+    from raphael_core.agent.safety import ASK, Proposed, narrow_scope
+    from raphael_core.brain.spend import SpendTracker
+
+    from .test_safety import judged
+
+    hub = FakeHub(note="T1")
+    gate, rules, client = owner_rules(hub, ask_first=True)
+    ledger = Ledger(SpendTracker(conn))
+    rules.ensure_seeded("en")
+    for rule in rules.rules():
+        rules.delete(rule.id)
+    asking = rules.create("Mail something", ASK)
+    gate.always_allow("mcp:s/note", "Notes", "note", "en")
+    client.decisions.append(judged(asking.id))
+    screening = await gate.screen(Proposed("Notes / note", scope=narrow_scope("mcp:s/note")), language="en", ledger=ledger)
+    assert screening.verdict == ASK and screening.rule == "Mail something" and not screening.switch and not screening.narrow
+
+
+def test_always_makes_nothing_without_rules_and_a_rule_in_the_way_is_not_loosened(owner_rules):
+    hub = FakeHub(note="T2")
+    assert ToolGate(hub).always_allow("mcp:s/note", "Notes", "note", "en") is False  # no guard, no rules
+    gate, rules, _ = owner_rules(hub)
+    assert gate.always_allow("mcp:s/note", "Notes", "note", "en") is True
+    rules.update(rules.scoped("tool:mcp:s/note")[0].id, verdict="deny")
+    assert gate.always_allow("mcp:s/note", "Notes", "note", "en") is False  # the owner's Never stays
+    assert not gate.waived(Action("mcp:s/note", {}))
+
+
+def test_a_yes_for_one_action_does_not_pass_the_same_action_with_other_inputs(owner_rules):
+    gate = ToolGate(FakeHub(note="T2"))
+    args = {"text": "x"}
+    action = Action("mcp:s/note", args)
+    approval = approval_for(action)
+    args["text"] = "y"  # changed after the question
+    with pytest.raises(NotApproved):
+        gate.check(action, approval)

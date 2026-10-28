@@ -120,7 +120,7 @@ def call(name, arguments, id=None):
 
 
 def turn(content="", calls=(), cost=0.001, model="fake/model", usage_known=True):
-    return ChatTurn(content, list(calls), "stop", model, cost, 100, 10, 50, usage_known)
+    return ChatTurn(content, list(calls), model, cost, 100, 10, 50, usage_known)
 
 
 def report(text="All looked up.", prefix="告", detail="", cost=0.001):
@@ -182,6 +182,8 @@ class Servers:
 
     def __init__(self):
         self.by_name = {}
+        self.opened = 0  # connections made
+        self.active = 0  # connections open now
 
     def __call__(self, server, secrets):
         return self._open(server)
@@ -189,7 +191,12 @@ class Servers:
     @asynccontextmanager
     async def _open(self, server):
         async with Client(self.by_name[server.name]) as client:
-            yield client
+            self.opened += 1
+            self.active += 1
+            try:
+                yield client
+            finally:
+                self.active -= 1
 
 
 class StrictHub(IntegrationsService):
@@ -223,8 +230,8 @@ class Plugins:
             "integrations.add", {"name": name, "transport": "stdio", "command": "unused"}
         )
         server_id = added["server"]["id"]
-        await self.rpc.call("integrations.refresh", {"id": server_id})
-        tools = (await self.rpc.call("integrations.tools", {"id": server_id}))["tools"]
+        await self.rpc.call("integrations.set_enabled", {"id": server_id, "enabled": True})
+        tools = (await self.rpc.call("integrations.refresh", {"id": server_id}))["tools"]
         for tool in tools:
             await self.set_on(server_id, tool["name"], only.get(tool["name"]) is not None)
         # a tier above the one of a tool that is on: the tool would have to ask
@@ -261,7 +268,9 @@ class Rig:
     """A background service with a worker in the test, a model that plays what it is told to, and
     the plugins; `notifications` is what the app would be sent."""
 
-    def __init__(self, conn, plugins, *, limits=RunLimits(), host=None, links=None):
+    def __init__(
+        self, conn, plugins, *, limits=RunLimits(), host=None, links=None, safety=None, clock=None
+    ):
         self.conn = conn
         self.plugins = plugins
         self.client = FakeModel()
@@ -270,7 +279,7 @@ class Rig:
         self.meteo = Meteo()
         self.notifications: list[tuple[str, dict]] = []
         self.links = links if links is not None else Links()
-        self.gate = ToolGate(plugins.hub, conn=conn, now_ms=self.wall)
+        self.gate = ToolGate(plugins.hub, conn=conn, now_ms=self.wall, safety=safety)
         self.tools = Tools(self.client, http=self.meteo.http, now=lambda: LOCAL_NOW)
         self.host = host if host is not None else WorkerHost(connect=self.links, grace_s=0.3)
         self.service = BackgroundService(
@@ -283,6 +292,7 @@ class Rig:
             limits=limits,
             now_ms=self.wall,
             tz=timezone.utc,
+            **({} if clock is None else {"clock": clock}),
         )
         self.rpc = RpcRouter()
         self.service.register(self.rpc)

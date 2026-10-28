@@ -5,7 +5,7 @@
 import { formatLimit, formatUsd } from "./format";
 import { esc } from "./ui";
 
-/** From this share of the monthly limit on, the spend is drawn in the warning color. */
+/** From this share of the monthly limit on, the spend is drawn in the warning color and the home page's report warns. */
 export const WARN_FROM = 0.8;
 
 /** The share of the limit that is spent, from 0 up (1 or more is all of it; no limit counts as all). */

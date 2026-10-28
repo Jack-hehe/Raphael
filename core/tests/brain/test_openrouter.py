@@ -15,7 +15,6 @@ import pytest
 from raphael_core.brain import openrouter
 from raphael_core.brain.openrouter import (
     CLEANUP_FALLBACKS,
-    CLEANUP_MODEL_CHOICES,
     DEFAULT_CLEANUP_MODEL,
     Completion,
     KeyInfo,
@@ -33,6 +32,21 @@ SCHEMA = {
 }
 
 
+async def test_connection_warmup_uses_same_client_without_key_or_paid_request(client_with):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"data": []})
+
+    client = client_with(handler)
+    await client.warm_connection()
+    await client.models()
+    assert [r.method for r in calls] == ["HEAD", "GET"]
+    assert all(r.url.path == "/api/v1/models" for r in calls)
+    assert all("authorization" not in r.headers for r in calls)
+
+
 @pytest.fixture
 async def client_with():
     """`client_with(handler, key=KEY)` is a client whose HTTP goes to `handler`.
@@ -41,10 +55,10 @@ async def client_with():
     """
     opened: list[httpx.AsyncClient] = []
 
-    def make(handler, key=KEY):
+    def make(handler, key=KEY, **kwargs):
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         opened.append(http)
-        return OpenRouterClient(key if callable(key) else (lambda: key), http=http)
+        return OpenRouterClient(key if callable(key) else (lambda: key), http=http, **kwargs)
 
     yield make
     for http in opened:
@@ -540,7 +554,6 @@ BAD_REPLIES = {
     "choice without a message": lambda: httpx.Response(
         200, json={"choices": [{"finish_reason": "stop"}]}
     ),
-    "content is null": lambda: chat_reply(None),
     "content is not json": lambda: chat_reply("Sure! Here is the cleaned text."),
     "content is cut off": lambda: chat_reply('{"text": "明天'),
     "content is json but not an object": lambda: chat_reply("[1, 2]"),
@@ -552,6 +565,12 @@ async def test_a_reply_that_is_not_a_usable_completion_is_a_bad_response(client_
     with pytest.raises(OpenRouterError) as e:
         await complete(client_with(lambda r: reply()))
     assert (e.value.status, e.value.kind) == (200, "bad_response")
+
+
+async def test_empty_completion_is_truncated(client_with):
+    with pytest.raises(OpenRouterError) as caught:
+        await complete(client_with(lambda _: chat_reply(None)))
+    assert (caught.value.status, caught.value.kind) == (200, "truncated")
 
 
 @pytest.mark.parametrize("content", ['{"text": "par', '{"text": "fine"}'], ids=["cut off", "valid"])
@@ -986,6 +1005,25 @@ async def test_warm_up_makes_the_http_client_ahead_of_the_first_request():
     assert made.is_closed
 
 
+async def test_installed_h2_builds_the_real_http2_client_without_fallback(monkeypatch):
+    pytest.importorskip("h2")
+    build = httpx.AsyncClient
+    requested = []
+
+    def capture(**kwargs):
+        requested.append(kwargs.get("http2", False))
+        return build(**kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", capture)
+    client = OpenRouterClient(lambda: KEY)
+    try:
+        client.warm_up()
+        client.warm_up()
+        assert requested == [True]
+    finally:
+        await client.aclose()
+
+
 async def test_warm_up_leaves_a_client_it_was_given_alone():
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: ok_reply({"text": "x"}))
@@ -998,11 +1036,48 @@ async def test_warm_up_leaves_a_client_it_was_given_alone():
 # --- models -----------------------------------------------------------------------------------
 
 
-def test_the_model_choices_are_the_default_then_its_fallbacks():
-    assert DEFAULTS["cleanup_model"] == DEFAULT_CLEANUP_MODEL
+def test_the_cleanup_model_is_the_default_and_the_fallbacks_are_the_other_two():
+    assert DEFAULTS["cleanup_model"] == DEFAULT_CLEANUP_MODEL == "openai/gpt-6-luna"
     assert CLEANUP_FALLBACKS == ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
-    assert CLEANUP_MODEL_CHOICES == [
-        "openai/gpt-6-luna",
-        "anthropic/claude-haiku-5.5",
-        "google/gemini-3.1-flash-lite",
-    ]
+    # No list of models to offer is kept here: the settings page takes them from OpenRouter.
+    assert not hasattr(openrouter, "CLEANUP_MODEL_CHOICES")
+
+
+@pytest.mark.parametrize(("capabilities", "efforts", "expected"), [
+    ({"reasoning", "reasoning_off"}, ("high", "none"), "none"),
+    (set(), None, None),
+    ({"reasoning"}, ("high", "low", "minimal"), "minimal"),
+    ({"reasoning"}, ("high", "low"), "low"),
+    ({"reasoning"}, ("medium", "high"), "medium"),
+    ({"reasoning"}, None, "low"),
+])
+async def test_json_reasoning_follows_the_current_cached_entry(client_with, capabilities, efforts, expected):
+    from dataclasses import replace
+    from raphael_core.brain.pricing import builtin_catalog
+
+    seen = []
+    entry = replace(builtin_catalog()[0], id="test/model", capabilities=frozenset(capabilities), reasoning_efforts=efforts)
+    entries = [entry]
+    client = client_with(answering(lambda: ok_reply({"text": "x"}), seen), model_catalog=lambda: entries)
+    await complete(client, model=entry.id, fallbacks=[])
+    body = json.loads(seen[-1].content)
+    assert body.get("reasoning") == (None if expected is None else {"effort": expected})
+    assert ("reasoning" in body) == (expected is not None)
+    assert body["provider"] == {"require_parameters": True, "sort": "latency", "data_collection": "deny"}
+    assert set(body) == {"model", "messages", "response_format", "provider", "max_tokens"} | ({"reasoning"} if expected is not None else set())
+    # A later catalog snapshot is read on the next call, with no model-list request.
+    entries[:] = [replace(entry, capabilities=frozenset())]
+    await complete(client, model=entry.id, fallbacks=[])
+    assert "reasoning" not in json.loads(seen[-1].content)
+    assert all(r.url.path.endswith("/chat/completions") for r in seen)
+
+
+async def test_an_explicit_answer_effort_is_unchanged(client_with):
+    from dataclasses import replace
+    from raphael_core.brain.pricing import builtin_catalog
+
+    seen = []
+    entry = replace(builtin_catalog()[0], id="test/answer", capabilities=frozenset({"reasoning"}), reasoning_efforts=("minimal", "high"))
+    client = client_with(answering(lambda: ok_reply({"answer": "x"}), seen), model_catalog=lambda: [entry])
+    await complete(client, model=entry.id, reasoning_effort="high", fallbacks=[])
+    assert json.loads(seen[0].content)["reasoning"] == {"effort": "high"}

@@ -76,11 +76,11 @@ describe("main window translations", () => {
   });
 
   test("keeps an existing error translated through repeated locale changes", () => {
-    let message = t("onboarding.049");
+    let message = t("common.limitInvalid");
     for (const locale of ["en", "ja", "zh-TW"] as const) {
       setLocale(locale);
       message = translatedMessage(message)();
-      expect(message).toBe(t("onboarding.049"));
+      expect(message).toBe(t("common.limitInvalid"));
     }
     expect(translatedMessage("User data stays literal")()).toBe("User data stays literal");
   });
@@ -98,10 +98,10 @@ describe("main window translations", () => {
   });
 
   test("a captured notice resolver survives a large dictionary redraw", () => {
-    const message = translatedMessage(t("onboarding.049"));
+    const message = translatedMessage(t("common.limitInvalid"));
     for (let n = 0; n < 600; n++) t("dictionary.006", { p0: `word-${n}` });
     setLocale("en");
-    expect(message()).toBe(t("onboarding.049"));
+    expect(message()).toBe(t("common.limitInvalid"));
   });
 
   test("translates known Rust errors while preserving external diagnostic details", () => {
@@ -144,7 +144,7 @@ describe("main window translations", () => {
     // backend.ts, ...), so each key in use is written out as a string somewhere.
     const root = path.resolve(import.meta.dirname, "..");
     const catalogues = new Set(["zh-TW.ts", "en.ts", "ja.ts"]);
-    const files = [root, path.join(root, "pages"), path.join(root, "i18n")].flatMap((dir) =>
+    const files = [root, path.join(root, "pages"), path.join(root, "onboarding"), path.join(root, "i18n")].flatMap((dir) =>
       readdirSync(dir)
         .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !(dir.endsWith("i18n") && catalogues.has(f)))
         .map((f) => path.join(dir, f)),
@@ -163,7 +163,7 @@ describe("main window translations", () => {
 
   test("main-window source has no hard-coded CJK UI literals outside the catalogue", () => {
     const root = path.resolve(import.meta.dirname, "..");
-    const files = [root, path.join(root, "pages")].flatMap((dir) =>
+    const files = [root, path.join(root, "pages"), path.join(root, "onboarding")].flatMap((dir) =>
       readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts")).map((f) => path.join(dir, f)),
     );
     expect(cjkLiterals(files)).toEqual([]);

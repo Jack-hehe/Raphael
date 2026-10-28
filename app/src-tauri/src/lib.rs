@@ -2,8 +2,10 @@
 //! allows only one running copy.
 
 mod agent;
+mod avatar;
 mod background;
 mod commands;
+mod computer;
 mod core_process;
 mod data_layout;
 mod device_settings;
@@ -11,17 +13,20 @@ mod dictation;
 mod first_run;
 mod holdtap;
 mod hotkey;
+mod identity;
 mod learn;
 mod media;
+mod member_notifications;
+mod mic_access;
 mod notices;
 mod overlay;
 mod paste;
 mod rpc;
+mod schedule_awake;
 mod tray;
 
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, Runtime, WindowEvent, plugin::TauriPlugin};
-use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 use tauri_plugin_window_state::StateFlags;
 
@@ -30,9 +35,11 @@ const MAIN_WINDOW: &str = "main";
 /// Label of the overlay window. It is created in Rust, never by the config.
 const OVERLAY_WINDOW: &str = "overlay";
 
-/// Persist geometry without allowing saved state to choose the application's frame policy.
+/// Remember only whether the window was maximized: it always opens, and un-maximizes, at the default
+/// size from `tauri.conf.json`. Saved state never chooses the frame policy either.
 fn main_window_state_flags() -> StateFlags {
-    StateFlags::all() & !(StateFlags::VISIBLE | StateFlags::DECORATIONS)
+    StateFlags::all()
+        & !(StateFlags::VISIBLE | StateFlags::DECORATIONS | StateFlags::SIZE | StateFlags::POSITION)
 }
 
 /// Writes a panic to the log. The release build aborts on a panic (`panic = "abort"`) and has no
@@ -75,22 +82,34 @@ fn panic_report(thread: Option<&str>, location: Option<&std::panic::Location<'_>
 
 pub fn run() {
     log_panics();
-    // Before any window or the core exists: the webview and the core open the folders it moves.
-    let migration = data_layout::migrate_at_start();
-    let builder = tauri::Builder::default();
+    let identity = identity::current();
+    // Read before `use_own_data` sets it for a development build: only a folder the caller chose
+    // keeps the local files (Raphael's picture) away from this build's own local folder.
+    let caller_data_dir = std::env::var_os("RAPHAEL_DATA_DIR");
+    // SAFETY: no other thread runs yet.
+    unsafe { identity::use_own_data(identity) };
+    let local_dir = identity.local_dir(caller_data_dir, std::env::var_os("LOCALAPPDATA"));
+    let mut context = tauri::generate_context!();
+    identity.apply(context.config_mut());
 
-    // The single-instance plugin must come first: a second launch hands over to the running
-    // copy (which shows its main window) and exits before anything else starts.
-    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-        show_main_window(app);
-    }));
+    let builder = startup_plugins(
+        tauri::Builder::default(),
+        |app, _args| {
+            log::info!("another launch handed over: showing the main window");
+            show_main_window(app);
+        },
+        data_layout::migrate_at_start,
+    );
 
     builder
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
-        ))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg("--autostart")
+                .app_name(identity.autostart_name)
+                .build(),
+        )
+        // After the data layout: it reads the window position from the folder the migration
+        // moves it to.
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&[OVERLAY_WINDOW])
@@ -98,6 +117,9 @@ pub fn run() {
                 .build(),
         )
         .plugin(log_plugin())
+        // The file dialog of 頭像 (avatar.rs). Used from Rust only: no page may open it.
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             // The app lives in the tray, so closing the main window only hides it.
             // "Quit" in the tray menu is the way out.
@@ -117,14 +139,35 @@ pub fn run() {
             overlay::overlay_log,
             overlay::overlay_confirm,
             commands::core_call,
+            commands::save_usage_csv,
+            commands::schedule_keep_awake_get,
+            commands::schedule_keep_awake_set,
             commands::device_settings_get,
             commands::device_settings_set,
+            commands::device_computer_app_remove,
             commands::keyboard_has_altgr,
+            commands::open_link,
+            commands::open_external_url,
+            commands::open_attachment,
             commands::hotkeys_pause,
             commands::window_hotkey,
+            commands::hotkeys_practice,
+            commands::mic_access,
             commands::main_events,
+            commands::agent_ask_text,
+            commands::agent_retract,
+            commands::agent_question_open,
+            commands::agent_question_answer,
+            commands::agent_page_shown,
+            avatar::avatar_pick,
+            avatar::avatar_save,
+            avatar::avatar_get,
+            avatar::avatar_clear,
         ])
         .setup(move |app| {
+            if let Err(error) = schedule_awake::get() {
+                log::warn!("could not restore scheduler awake setting: {error}");
+            }
             // Tauri keeps only the last `setup` call, so each part of the app starts in its own
             // section of this one closure, in dependency order: a part that needs another part's
             // handle comes after it.
@@ -132,6 +175,7 @@ pub fn run() {
             // ---- Data folders ----
             // What the move of files from earlier builds did (it ran before the log existed), and
             // the copy of the speech models when they could not be renamed.
+            let migration = take_migration(app.handle());
             for (level, message) in &migration.notes {
                 log::log!(*level, "data folders: {message}");
             }
@@ -149,6 +193,13 @@ pub fn run() {
                     Ok(decorated) => log::info!("Main window native decorations: {decorated}"),
                     Err(error) => log::warn!("could not inspect the main window frame: {error}"),
                 }
+            }
+
+            // ---- Raphael's picture ----
+            // Kept in this build's own local data folder, which only Windows has (avatar.rs,
+            // `Identity::local_dir`): a development build never changes the release's picture.
+            if let Some(local) = &local_dir {
+                app.manage(std::sync::Arc::new(avatar::AvatarStore::new(local)));
             }
 
             // ---- Tray ----
@@ -226,11 +277,21 @@ pub fn run() {
                 drop(hotkey_event_rx);
             }
 
+            // ---- Operating the desktop ----
+            // The shell's half of a run on the owner's desktop: the core's requests answered with
+            // UI Automation, the 「操作中」 overlay, the watch on the owner's own input. It takes
+            // the core and the overlay from the app state; without the core there is no run.
+            #[cfg(windows)]
+            computer::spawn(app.handle());
+
             // ---- Device settings ----
             // `device.json`: loads it, puts it in force (hotkeys, overlay size and subtitles,
             // theme, autostart) and keeps the core told which microphone to use. It takes the
             // overlay, the core and the hotkeys from the app state, so it comes after them.
             commands::start(app.handle());
+
+            // A member's desktop notices follow the core even while the main window is hidden.
+            member_notifications::spawn(app.handle());
 
             // ---- First run ----
             // Until the first-run guide has been gone through, the main window opens by itself.
@@ -239,8 +300,62 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
+}
+
+/// What the data migration did, from its plugin to `setup`, which logs it and starts the copy.
+struct Migration(std::sync::Mutex<Option<data_layout::Outcome>>);
+
+/// The first plugins, which decide whether this launch runs at all and prepare what everything
+/// else opens. Plugins start in the order they are added, all of them before `setup`.
+///
+/// - Single instance: a second launch (from the Start menu, a shortcut, or Windows at sign-in
+///   with `--autostart`) hands its arguments to the running copy, which calls `on_second_launch`,
+///   and exits there: it makes no window, core, keyboard hook or tray icon, and migrates nothing.
+/// - Data layout: `migrate` moves the files of earlier builds before any window, the window
+///   position or the core opens them, and only in the copy that keeps running, since a running
+///   app's webview and core hold those folders open.
+fn startup_plugins<R: Runtime>(
+    builder: tauri::Builder<R>,
+    on_second_launch: impl Fn(&AppHandle<R>, Vec<String>) + Send + Sync + 'static,
+    migrate: impl FnOnce() -> data_layout::Outcome + Send + 'static,
+) -> tauri::Builder<R> {
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(
+        move |app, args, _cwd| on_second_launch(app, args),
+    ));
+    #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+    let _ = on_second_launch;
+    builder.plugin(
+        tauri::plugin::Builder::<R>::new("raphael-data-layout")
+            .setup(move |app, _api| {
+                app.manage(Migration(std::sync::Mutex::new(Some(migrate()))));
+                Ok(())
+            })
+            .build(),
+    )
+}
+
+/// [`startup_plugins`] with `on_migrate` in place of the data migration, for the tests that
+/// launch the app twice (`tests/second_launch.rs`). Not part of the app.
+#[doc(hidden)]
+pub fn startup_plugins_for_tests<R: Runtime>(
+    builder: tauri::Builder<R>,
+    on_second_launch: impl Fn(&AppHandle<R>, Vec<String>) + Send + Sync + 'static,
+    on_migrate: impl FnOnce() + Send + 'static,
+) -> tauri::Builder<R> {
+    startup_plugins(builder, on_second_launch, move || {
+        on_migrate();
+        data_layout::Outcome::default()
+    })
+}
+
+/// Takes what the data migration did; a later call gets nothing to do.
+fn take_migration<R: Runtime>(app: &AppHandle<R>) -> data_layout::Outcome {
+    app.try_state::<Migration>()
+        .and_then(|migration| migration.0.lock().ok()?.take())
+        .unwrap_or_default()
 }
 
 /// The webview's data folder for every window: `WebView2` in Raphael's local folder.
@@ -286,7 +401,7 @@ fn spawn_models_copy(job: data_layout::CopyJob) {
 }
 
 /// Shows the main window, restores it if it was minimized, and gives it focus.
-fn show_main_window(app: &AppHandle) {
+fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         log::warn!("the main window does not exist");
         return;
@@ -397,11 +512,38 @@ mod window_state_tests {
     fn restoring_saved_geometry_cannot_restore_a_native_titlebar_or_show_the_window() {
         let flags = main_window_state_flags();
         assert!(!flags.intersects(StateFlags::VISIBLE | StateFlags::DECORATIONS));
-        assert!(flags.contains(
-            StateFlags::SIZE
-                | StateFlags::POSITION
-                | StateFlags::MAXIMIZED
-                | StateFlags::FULLSCREEN
-        ));
+        assert!(flags.contains(StateFlags::MAXIMIZED | StateFlags::FULLSCREEN));
+    }
+
+    #[test]
+    fn the_window_always_opens_at_its_default_size() {
+        // The owner wants opening and un-maximizing to land on the default size (2026-10-24),
+        // so a size or place from an earlier session is never restored.
+        let flags = main_window_state_flags();
+        assert!(!flags.intersects(StateFlags::SIZE | StateFlags::POSITION));
+    }
+
+    #[test]
+    fn ctrl_plus_and_minus_zoom_the_main_window_within_three_steps() {
+        // The owner zooms with Ctrl + plus / minus (2026-10-25) but only three steps either way: the app's
+        // window-zoom.ts handles the keys, so WebView2's own 25%-500% zoom keys stay off.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let main = config["app"]["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["label"] == MAIN_WINDOW)
+            .unwrap();
+        assert_eq!(main["zoomHotkeysEnabled"], false);
+        let chrome: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main-window-chrome.json")).unwrap();
+        assert!(
+            chrome["permissions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p == "core:webview:allow-set-webview-zoom")
+        );
     }
 }

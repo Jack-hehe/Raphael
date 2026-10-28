@@ -9,8 +9,11 @@
 const TAU = Math.PI * 2;
 const clamp = (x: number, a = 0, b = 1): number => Math.max(a, Math.min(b, x));
 
-/** What the emblem shows while it is on screen. */
-export type Mode = "listening" | "thinking" | "speaking" | "steady";
+/**
+ * What the emblem shows while it is on screen. `operating` is Raphael working an app on the
+ * owner's PC: it looks like `thinking`, but the glyph ring turns `OPERATING_SPEEDUP` times faster.
+ */
+export type Mode = "listening" | "thinking" | "operating" | "steady";
 /** `hidden` draws nothing; `appear` and `vanish` are the two animations from the anime. */
 export type Phase = "hidden" | "appear" | "vanish" | Mode;
 
@@ -36,6 +39,8 @@ export const tick = (t: number): number => Math.floor(t * 24 + 1e-6) / 24;
 
 /** The glyph ring turns clockwise, in radians per second (3.55 degrees). */
 export const RATE = (3.55 * Math.PI) / 180;
+/** How much faster the glyph ring turns while Raphael operates an app (the `operating` mode). */
+export const OPERATING_SPEEDUP = 2.5;
 /** Half the texture's size in units of R. */
 const TEX_HALF = 104 / 97;
 const RING_R = 0.6;
@@ -86,7 +91,7 @@ export interface Params {
 /**
  * The look of the emblem `pt` seconds into `phase`; `lvl` (0 to 1) is the loudness that sets the
  * white ring's width. Returns null when nothing is drawn. Every phase that is not `hidden`,
- * `appear` or `vanish` looks the same (the modes differ in rotation speed, brightness and in
+ * `appear` or `vanish` looks the same, `operating` included (the modes differ in rotation speed, brightness and in
  * where `lvl` comes from, see `Emblem`).
  */
 export function params(phase: Phase, pt: number, lvl: number): Params | null {
@@ -517,6 +522,57 @@ const SPEAK_CYCLE = 36;
 
 // ---------- the emblem on a canvas ----------
 
+// ---------- the person's own picture in the emblem's place ----------
+
+/**
+ * Which part of a picture shows in its circle (the same as `AvatarCrop` of the main window): the
+ * picture covers the circle and is enlarged `zoom` times about the point at `x`, `y` (fractions of
+ * its width and height), which stays at the same fractions of the circle.
+ */
+export interface PictureCrop {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/**
+ * Where a picture `w` × `h` is drawn for a circle of diameter `side` whose top left is 0, 0: the
+ * rectangle the CSS of the main window gives it (`object-fit: cover`, `object-position` and
+ * `transform: scale` about the same point), so that both windows cut it alike.
+ */
+export function pictureRect(w: number, h: number, side: number, crop: PictureCrop): { x: number; y: number; w: number; h: number } {
+  const cover = side / Math.min(w, h);
+  const width = w * cover;
+  const height = h * cover;
+  const at = (fraction: number, over: number): number => (-fraction * over - fraction * side) * crop.zoom + fraction * side;
+  return { x: at(crop.x, width - side), y: at(crop.y, height - side), w: width * crop.zoom, h: height * crop.zoom };
+}
+
+/**
+ * The same cut in CSS, for an `<img>` with `object-fit: cover` that fills a square box: the main
+ * window's faces (`cropStyle` of avatar.ts) and the overlay's moving picture (`setPicture`).
+ */
+export function pictureStyle(crop: PictureCrop): string {
+  const x = `${Math.round(crop.x * 1000) / 10}%`;
+  const y = `${Math.round(crop.y * 1000) / 10}%`;
+  return `object-position:${x} ${y};transform-origin:${x} ${y};transform:scale(${Math.round(crop.zoom * 1000) / 1000})`;
+}
+
+/** The thin ring around the picture: this bright when quiet, up to 1 at full voice while listening. */
+export const PICTURE_RING_REST = 0.35;
+
+/** How bright the ring around the picture is for the loudness `lvl` while listening (else at rest). */
+export const pictureRingAlpha = (lvl: number, listening: boolean): number =>
+  listening ? PICTURE_RING_REST + (1 - PICTURE_RING_REST) * clamp((lvl - 0.05) / 0.6) : PICTURE_RING_REST;
+
+/** How large the picture is during the appear (growing in) and vanish (shrinking away) animations, 0 to 1. */
+export function pictureScale(phase: Phase, pt: number): number {
+  if (phase === "hidden") return 0;
+  if (phase === "appear") return 1 - (1 - clamp(pt / AP.dur)) ** 3;
+  if (phase === "vanish") return 1 - clamp(pt / VA.dur) ** 2;
+  return 1;
+}
+
 /** The canvas is this much larger than the emblem so that the rays have room. */
 export const CANVAS_RATIO = 1.3;
 
@@ -548,7 +604,7 @@ const prefersReducedMotion = (): boolean =>
  *
  * - `appear()` plays the 0.833 s appear animation and then shows the mode set with `set`.
  * - `vanish()` plays the 0.467 s vanish animation and then the emblem is hidden.
- * - `level` (0 to 1) sets the white ring's width while listening or speaking.
+ * - `level` (0 to 1) sets the white ring's width while listening.
  * - `speak(seconds)` moves the ring with a made-up loudness for that long.
  * - While listening (recording) the emblem looks as always and the glyph ring gets a little
  *   brighter with the voice (`boost`). The ring stays whole after the key is released.
@@ -581,6 +637,11 @@ export class Emblem {
   private steps = 0;
   /** The extra light on the glyph ring at the last tick: only a recording has any. */
   private shownBoost = 0;
+  /**
+   * The person's picture, in a circle in the emblem's place, or null for the emblem. `layer`, when
+   * there is one, shows the picture itself over the canvas (see `setPicture`).
+   */
+  private picture: { image: HTMLImageElement; crop: PictureCrop; layer: HTMLElement | null } | null = null;
 
   constructor(canvas: HTMLCanvasElement, sizePx: number, opts: EmblemOptions = {}) {
     this.canvas = canvas;
@@ -632,6 +693,30 @@ export class Emblem {
 
   set level(value: number) {
     this.external = Number.isFinite(value) ? clamp(value) : 0;
+  }
+
+  /**
+   * Shows the person's picture in a circle instead of the emblem (null: the emblem again). The
+   * circle grows in and shrinks away where the emblem appears and vanishes, and while listening a
+   * thin ring around it brightens with the voice instead of the emblem's own movement.
+   *
+   * A canvas paints only the first frame of a GIF or WebP that moves. So with `layer` (an element
+   * laid over the canvas's circle, holding the picture as an `<img>` cut with `pictureStyle`) the
+   * picture is shown there, grown and faded as the circle would be, and the canvas draws only the
+   * ring. With reduced motion the layer stays hidden and the canvas draws the first frame: nothing moves.
+   */
+  setPicture(image: HTMLImageElement | null, crop: PictureCrop = { x: 0.5, y: 0.5, zoom: 1 }, layer: HTMLElement | null = null): void {
+    const before = this.picture?.layer;
+    if (before && before !== layer) before.hidden = true;
+    this.picture = image ? { image, crop, layer } : null;
+    if (!image && layer) layer.hidden = true;
+    this.dirty = true;
+    wake();
+  }
+
+  /** Whether the person's picture is shown instead of the emblem. */
+  get hasPicture(): boolean {
+    return this.picture !== null;
   }
 
   /** Resizes the emblem to a diameter of `px` CSS pixels. */
@@ -704,7 +789,11 @@ export class Emblem {
       this.pt = 0;
       this.dirty = true;
     }
-    if (this._phase !== "hidden" && !this.reduce) this._rot += dt * RATE;
+    if (this._phase !== "hidden" && !this.reduce) {
+      // While appearing, the ring already turns at the pace of the mode it is appearing into.
+      const turning = this._phase === "appear" ? this.mode : this._phase;
+      this._rot += dt * RATE * (turning === "operating" ? OPERATING_SPEEDUP : 1);
+    }
     const tk = Math.floor(this.clock * 24);
     if (tk === this.lastTick) return false;
     this.lastTick = tk;
@@ -716,9 +805,8 @@ export class Emblem {
     if (shown === "listening") {
       // Only the microphone moves the ring while listening.
       raw = Math.max(raw, this.external);
-    } else {
-      if (shown === "speaking") raw = Math.max(raw, this.external);
-      if (this.clock < this.talkUntil) raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
+    } else if (this.clock < this.talkUntil) {
+      raw = Math.max(raw, envAt(SPEAK, (this.clock + this.talkOff) % SPEAK_CYCLE));
     }
     this._lvl = clamp(raw);
     this.shownBoost = this.mode === "listening" ? boostAmount(this._lvl) : 0;
@@ -737,6 +825,10 @@ export class Emblem {
     const k = this.dpr;
     ctx.setTransform(k, 0, 0, k, (this.side * k) / 2, (this.side * k) / 2);
     const ph = this._phase;
+    if (this.picture) {
+      this.drawPicture(ctx, this.picture);
+      return;
+    }
     drawEmblem(ctx, this.diameter / 2, params(ph, tick(this.pt), this._lvl), {
       tq: tick(this.clock),
       rot: this.shownRot,
@@ -746,6 +838,46 @@ export class Emblem {
       boost: this.shownBoost,
       surface: this.surface ?? (this.canvas.ownerDocument?.documentElement.dataset.theme === "light" ? "light" : "dark"),
     });
+  }
+
+  /**
+   * The person's picture in its circle, with the thin ring around it, centred on the canvas; or,
+   * with a layer and motion allowed, the layer grown and faded as that circle and only the ring.
+   */
+  private drawPicture(ctx: CanvasRenderingContext2D, picture: { image: HTMLImageElement; crop: PictureCrop; layer: HTMLElement | null }): void {
+    const scale = pictureScale(this._phase, this.pt);
+    const { image, crop, layer } = picture;
+    const alpha = Math.min(1, scale * 1.4);
+    const live = layer !== null && !this.reduce;
+    if (layer) {
+      layer.hidden = !live || scale <= 0;
+      if (live) {
+        layer.style.transform = `scale(${Math.round(scale * 1000) / 1000})`;
+        layer.style.opacity = String(Math.round(alpha * 1000) / 1000);
+      }
+    }
+    if (scale <= 0) return;
+    if (!live && (!image.complete || image.naturalWidth === 0)) return;
+    const r = (this.diameter / 2) * scale;
+    const listening = (this._phase === "appear" ? this.mode : this._phase) === "listening";
+    if (!live) {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, TAU);
+      ctx.clip();
+      const box = pictureRect(image.naturalWidth, image.naturalHeight, 2 * r, crop);
+      ctx.drawImage(image, box.x - r, box.y - r, box.w, box.h);
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.globalAlpha = pictureRingAlpha(this._lvl, listening) * alpha;
+    ctx.strokeStyle = "#ffffff"; // the white of the emblem's own listening ring
+    ctx.lineWidth = Math.max(1.5, this.diameter / 80);
+    ctx.beginPath();
+    ctx.arc(0, 0, r + ctx.lineWidth * 1.5, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
   }
 
   /** Stops animating this emblem for good. */

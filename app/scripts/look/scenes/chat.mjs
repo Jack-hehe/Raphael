@@ -1,0 +1,194 @@
+import { scene, click, hover, type, wait, waitGone, member, room, search, check, key, waitScrollEnd } from "./steps.mjs";
+
+const details = [member(1), { action: "open-details" }, check("member-details")];
+const composer = [click(".cmp-attach"), wait("#app-popover")];
+const dictationText = { before: "Please use Open Mouse Bot", after: "Please use OpenMausBot" };
+const firstBot = { name: "晨星", personality: "沉穩、精準", instructions: "規劃每週工作" };
+// A key made up for the scenes: it is typed into a secret card and must reach nothing but `integrations.card_save`.
+const lookKey = "sk-look-4c9f2b7e81d3";
+const secretField = '[data-secret-card="card-notion"] input[type="password"]';
+const pcCard = '[data-computer-card="card-pc"]';
+// The permission card of a step that needs the owner's yes, and the email card a member wrote for them (小晴's draft).
+const permCard = id => `[data-permission-card="${id}"]`;
+const mailCard = '[data-mail-card="mail-1"]';
+const mailField = field => `${mailCard} [data-mail-field="${field}"]`;
+// The owner's primary contact (P15b): 小森's menu, 設為主要, and 選擇主要成員 with 小森 chosen already.
+const primaryMenu = [{ action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), click('#app-popover [data-pick="primary"]'), wait(".mb-dialog.mb-primary-picker")];
+const firstBotAnswers = [wait('.first-bot:not([hidden])'), click('[data-first-choice="1"]'), click('[data-first-act="next"]'),
+  click('[data-first-choice="0"]'), click('[data-first-act="next"]'), click('[data-first-choice="0"]'), click('[data-first-act="next"]'), wait('.draft-panel:not([hidden])')];
+const adminDraftEdits = [wait('.draft-panel:not([hidden])'), type('[data-draft-group="group-1"]', "工作室"), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")];
+// Pick the quick conversation, then close the details panel, which covers the composer at compact width.
+const quickOpen = [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.tn[data-id="90"]'),
+  click('.mb-det [data-det="close"]'), wait('.conversation-trigger[aria-expanded="false"]')];
+// An Alt+Space answer as the core writes it: its public step, then the answer as the turn's text.
+const quickAnswer = { id: 91, session_id: "look-quick-umbrella", member_id: 0, conversation_id: 4, created_at_ms: 1792807160000,
+  question: "明天早上要帶傘嗎？", route: "answer", source: "voice", prefix: "答", text: "明天早上降雨機率七成，出門記得帶傘。",
+  detail: null, status: "done", cost_usd: 0.0008, model: "openai/gpt-6-luna", steps: [], attachments: [],
+  messages: [{ seq: 1, kind: "progress", text: "《告。正在查看明天早上的天氣。》", at_ms: 1792807161000 }] };
+const rosterRefresh = { action: "main-event", event: { type: "MembersChanged" } };
+const stopSlot = [wait('.composer[data-task-state]:not([data-task-state="idle"]) .cmp-voice svg'), check("composer-stop-slot")];
+const pendingReply = [type('.cmp-input', "請整理這週的研究重點。"), key("Enter"), rosterRefresh, ...stopSlot, check("pending-work")];
+// The key starts in a formal conversation; only quick owns the processing placeholder.
+const voiceReply = [{ action: "main-event", event: { type: "Dictation", phase: "listening", agent: true, member_id: 0 } },
+  { action: "main-event", event: { type: "Dictation", phase: "processing", agent: true, member_id: 0 } }, ...quickOpen, rosterRefresh, ...stopSlot, check("pending-work")];
+export default [
+  scene("composer-stop-roster", "Roster refresh cannot repaint a restored running reply's Stop as an emblem", [rosterRefresh, ...stopSlot], { running: true }),
+  { ...scene("composer-stop-pending", "A typed CLI request shares the running work line before its first turn", [...pendingReply, { action: "freeze-motion", at: 600 }, check("work-dots")], { stopPending: true }), motion: true },
+  scene("composer-stop-pending-result", "Stop cancels the pending request once without starting voice", [...pendingReply, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-pending-result")], { stopPending: true }),
+  scene("composer-stop-voice", "Alt+Space processing remains stoppable after opening quick with older history", voiceReply, { stopVoice: true }),
+  scene("composer-stop-voice-result", "Stop ends native voice processing before a turn exists", [...voiceReply, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-voice-result")], { stopVoice: true }),
+  scene("composer-stop-member", "A member voice reply shows Stop before the turn announcement", [member(1),
+    { action: "main-event", event: { type: "Dictation", phase: "processing", agent: true, member_id: 1 } }, rosterRefresh, ...stopSlot, check("pending-work")], { stopVoice: true, stopVoiceMember: 1 }),
+  scene("composer-stop-navigation", "A running member reply keeps Stop after visiting another thread", [member(1), member(0), member(1), rosterRefresh, ...stopSlot], { running: true, runningMember: 1 }),
+  scene("composer-stop-background", "A completed turn's live background task keeps Stop after roster refresh", [rosterRefresh, ...stopSlot], { running: true, stopBackground: true }),
+  scene("composer-stop-background-result", "The slot cancels its background worker and returns to voice", [rosterRefresh, ...stopSlot, click('.cmp-voice'), wait('.composer[data-task-state="idle"] .av'), check("composer-stop-background-result")], { running: true, stopBackground: true }),
+  scene("admin-description-draft", "Describe a new member from the conversation creation picker", [{ action: "member-column", collapsed: false }, click('[data-col="add"]'), click('[data-pick="conversation"]'), wait('.mb-chat-picker'), type('[data-chat-search]', "整理未讀信並準備回覆"), click('[data-dlg="describe"]'), check("admin-description-draft")]),
+  scene("admin-cli-draft-edit", "The common draft edits and removes sequential CLI proposals", adminDraftEdits, { adminApproval: "draft" }),
+  scene("admin-draft-cancel", "Cancel discards every proposal without changing the roster", [wait('.draft-panel:not([hidden])'), click('[data-draft-act="cancel"]'), wait('.composer:not([hidden])'), check("admin-draft-cancel")], { adminApproval: "draft" }),
+  scene("admin-draft-apply-result", "Apply settles once and updates the member column", [...adminDraftEdits, click('[data-draft-act="confirm"]'), wait('.draft-done'), click('[data-act="draft-done"]'), check("admin-edited-result")], { adminApproval: "draft" }),
+  scene("first-bot-choice", "First Bot offers conversation choices with a custom answer", [wait('.first-bot:not([hidden])'), check("first-bot-choice")], { firstBot }),
+  scene("first-bot-free-text", "Free text and Back preserve the owner's answers", [wait('.first-bot:not([hidden])'), type('[data-first-answer]', "星河"), click('[data-first-act="next"]'), type('[data-first-answer]', "直接、務實，保留重要細節。"), click('[data-first-act="back"]'), check("first-bot-free-text")], { firstBot }),
+  scene("admin-draft-onboarding", "First Bot answers use the ordinary editable proposal", [...firstBotAnswers, check("first-bot-draft")], { firstBot }),
+  scene("bot-renamed-centred", "Confirmed first Bot profile produces one centered rename line", [...firstBotAnswers, click('[data-draft-act="confirm"]'), wait('.bot-renamed'), check("bot-renamed-centred")], { firstBot }),
+  scene("live-scenario-owner-view", "Guardian S17 owner-visible failure and separate public work", [check("conversation-design"), check("live-scenario-owner-view")], { liveScenarioOwnerView: true }),
+  scene("quick-conversation-list", "Persistent quick questions at the top of Raphael conversations", [{ action: "open-details" }, check("quick-conversation-list")]),
+  scene("quick-conversation", "Open and continue the persistent quick conversation", [{ action: "open-details" }, click('[data-conversation-open="4"]'), wait('.ra .chat-message[data-expandable]'), check("quick-conversation")]),
+  scene("quick-question-result", "An Alt+Space answer arrives in the open quick conversation, answered by the quick model",
+    [...quickOpen, { action: "main-event", event: { type: "AgentTurn", turn_id: 91, member_id: 0 } }, wait('.tn[data-id="91"] .ra .chat-message[data-expandable]'), check("quick-question-result")],
+    { arrivals: [quickAnswer] }),
+  scene("quick-formal-isolation", "A formal question names its thread, a quick follow-up names the quick destination, and neither thread shows the other",
+    [check("quick-formal-isolation-formal"), type(".composer textarea", "整理這週的研究重點"), click(".cmp-send"),
+      ...quickOpen, type(".composer textarea", "那明天呢？"), click(".cmp-send"), check("quick-formal-isolation")]),
+  scene("quick-stop", "Stop in the gold slot ends a running quick question and leaves the formal thread alone",
+    [...quickOpen, wait('.composer[data-task-state="running"] .cmp-voice'), click('.composer[data-task-state="running"] .cmp-voice'),
+      wait('.tn[data-id="90"][data-status="denied"]'), check("quick-stop")], { quickRunning: true }),
+  scene("chat-connect-gmail", "A task in Raphael's chat that needs Gmail shows Gmail's connector card below his reply",
+    [wait('[data-connector="card-gmail"]'), check("connector-card")], { connectorCard: "gmail" }),
+  scene("chat-connect-calendar", "A task in a member's chat that needs Google Calendar shows its connector card there",
+    [member(1), wait('[data-connector="card-calendar"]'), check("connector-card")], { connectorCard: "calendar" }),
+  scene("connector-authorizing", "Connect on the card starts the browser sign-in; the card waits for it with Cancel",
+    [wait('[data-connector="card-gmail"]'), click('[data-connector="card-gmail"] [data-act="card-connect"]'),
+      wait('[data-connector="card-gmail"][data-card-state="authorizing"]'), check("connector-authorizing")], { connectorCard: "gmail" }),
+  scene("connector-expired", "An app whose sign-in expired shows a card that reconnects it",
+    [wait('[data-connector="card-gmail"]'), check("connector-expired")], { connectorCard: "expired" }),
+  scene("connector-reconnected", "Reconnect finishes the sign-in; the card counts the tools and the task resumes once below it",
+    [wait('[data-connector="card-gmail"]'), click('[data-connector="card-gmail"] [data-act="card-connect"]'),
+      wait('[data-connector="card-gmail"][data-card-state="connected"]'), wait('[data-resumed="121"]'), check("connector-reconnected")],
+    { connectorCard: "expired", cardSignIn: "approve" }),
+  scene("chat-secret-masked", "A task that needs a connection's key shows its secret card; the key typed into the masked field draws no characters",
+    [wait('[data-secret-card="card-notion"]'), type(secretField, lookKey), check("secret-masked")], { secretCard: "notion" }),
+  scene("chat-secret-saved-not-resumed", "The key is saved and its task did not continue: the card says both and offers Try again without asking for the key again",
+    [wait('[data-secret-card="card-notion"]'), type(secretField, lookKey), click('[data-secret-card="card-notion"] [data-act="card-save"]'),
+      wait('[data-secret-card="card-notion"][data-card-error="resume_failed"]'), check("secret-saved-not-resumed")], { secretCard: "notion", resumeFails: true }),
+  scene("chat-computer-takeover", "A computer task that reaches a sign-in pauses: the card names the window to use and gives the computer to the owner",
+    [member(1), wait(pcCard), check("pc-takeover")], { computerCard: "signin" }),
+  scene("chat-human-control", "我完成了 pressed before the sign-in is done: the form is still there, so the computer stays the owner's and the card says so",
+    [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait(`${pcCard}[data-card-note="still"]`), check("pc-human-control")], { computerCard: "signin" }),
+  scene("chat-handback", "我完成了 after the sign-in: the computer goes back, the same task carries on once and its answer follows the card",
+    [member(1), wait(pcCard), click(`${pcCard} [data-act="card-done"]`), wait('[data-resumed="141"]'), check("pc-handback")], { computerCard: "signin", signedIn: true }),
+  scene("local-permission-card", "A step that needs the owner's yes shows a permission card in the chat: the exact action, 拒絕, 一律允許 and 允許一次, and the gold card stays away",
+    [wait(permCard("perm-gmail")), check("local-permission-card")], { permissionCard: "tool" }),
+  scene("draft-preference-ask-first", "A member set to send mail itself still asks when the owner's rule says to ask first: the card names the rule and has no 一律允許",
+    [member(1), { action: "open-details" }, click('[data-det="edit"]'), wait(".mb-dialog"), click("#mp-tab-permissions"), wait('.mb-dialog [data-dlg="draft"]'), check("member-draft-switch"),
+      click('.mb-dialog [data-dlg="cancel"]'), click('.mb-det [data-det="close"]'), wait('.conversation-trigger[aria-expanded="false"]'),
+      wait(permCard("perm-rule")), check("draft-preference-ask-first")], { permissionCard: "ask-first", memberDraftFirst: false }),
+  scene("email-draft-edit", "The owner edits the copy and the subject of a member's email draft: each edit is a new version, the card holds the newest digest and nothing is sent",
+    [member(1), wait(mailCard), type(mailField("cc"), "boss@example.com"), type(mailField("subject"), "回覆：週四下午三點的會議（改期確認）"),
+      wait(`${mailCard}[data-version="3"]`), check("email-draft-edit")], { mailDraft: "draft" }),
+  scene("email-draft-discard", "捨棄 drops the draft: one quiet line, and nothing is saved or sent",
+    [member(1), wait(mailCard), click(`${mailCard} [data-act="mail-discard"]`), wait(`${mailCard}[data-mail-state="discarded"]`), check("email-draft-discard")], { mailDraft: "draft" }),
+  scene("email-draft-handed-off", "The owner lets 小森 send the reply: one centred line in 小晴's chat, and the same version editable in 小森's chat; nothing is sent",
+    [member(1), wait('[data-mail-offer="mail-1"]'), click('[data-mail-offer="mail-1"] [data-act="mail-handover-yes"]'), wait('[data-mail-handed="mail-1"]'), check("mail-handed-first"),
+      member(2), wait(mailCard), check("email-draft-handed-off")], { mailDraft: "draft", mailOffer: true }),
+  scene("composer-learn", "A corrected dictated name is learned on send with one notice", [
+    { action: "dictation-paste", selector: ".cmp-input", text: dictationText.before },
+    type(".cmp-input", dictationText.after), check("composer-pair"), click(".cmp-send"),
+    wait(".toast"), check("composer-learn"), check("composer-pair"),
+  ], { dictationText }),
+  scene("members-expanded", "Original Raphael emblem and expanded member column", [{ action: "member-column", collapsed: false }, check("member-column")]),
+  scene("members-collapsed", "Remembered member face strip with active and waiting markers", [{ action: "member-column", collapsed: true }, click('.mb-col [data-member="1"]'), check("member-column")], { waitingMember: 3 }),
+  scene("members-collapsed-hover", "Member name tooltip over the collapsed face strip", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="2"]'), check("member-column"), wait('.message-tooltip:not([hidden])')], { waitingMember: 3 }),
+  scene("members-reexpanded", "Expand the face strip back to its original column", [{ action: "member-column", collapsed: true }, click('[data-col="collapse"]'), check("member-column")]),
+  scene("primary-contact-column", "The primary takes the large top face and Raphael takes its group slot", [{ action: "member-column", collapsed: false }, check("member-column"), check("primary-column")], { primaryMember: 1 }),
+  scene("primary-member-picker", "The compact member picker swaps Raphael and the primary", [{ action: "member-column", collapsed: true }, { action: "member-picker" }, check("primary-member-picker")], { primaryMember: 1 }),
+  scene("primary-new-conversation", "New conversation choices swap Raphael and the primary", [{ action: "member-column", collapsed: false }, click('[data-col="add"]'), click('[data-pick="conversation"]'), wait('.mb-chat-picker'), check("primary-conversation-picker")], { primaryMember: 1 }),
+  scene("primary-contact-menu", "A member's menu gives 設為主要, without a star, right after 移到分組", [{ action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), wait('#app-popover [data-pick="primary"]'), check("primary-menu")]),
+  scene("primary-contact-picker", "設為主要 in 小森's menu opens 選擇主要成員 while 小晴 is the primary: Raphael and the other members as buttons, 小森 chosen, the primary action ready", [...primaryMenu, check("primary-picker")], { primaryMember: 1 }),
+  scene("primary-contact-strip", "The primary takes the first collapsed face slot and Raphael takes its old slot", [{ action: "member-column", collapsed: true }, hover('.mb-col [data-member="1"]'), wait(".message-tooltip:not([hidden])"), check("primary-strip")], { primaryMember: 1 }),
+  scene("primary-contact-set", "設為主要 on 小晴 exchanges display positions without changing rooms, tasks or conversations", [...primaryMenu, click('.mb-primary-picker [data-id="1"]'), click('.mb-primary-picker [data-dlg="set"]'), wait('.mb-col .mb-chief[data-member="1"]'), member(1), { action: "open-details" }, wait(".mb-det .mb-who-face"), check("primary-set")]),
+  scene("primary-room-chief", "With 小晴 as the primary contact Raphael is still in the room, wears the chief's crown and writes its one wrap-up", [{ action: "member-column", collapsed: false }, room(1), wait(".au-room-wrapup"), check("primary-room-chief")], { primaryMember: 1, roomWrapup: true }),
+  scene("chat", "Conversation with public progress, replies and an attachment", [wait(".ra .chat-message[data-expandable]"), check("conversation-design")]),
+  scene("plain-bot-chat", "Raphael's stored two-message 《答。…》 reply reads plainly", [wait(".ra .chat-message[data-expandable]"), check("conversation-design"), check("plain-bot-chat")], { splitReply: true }),
+  scene("centred-system-events", "Hand-off, consultation and meeting lines centred between question and answer", [wait("[data-handoff]"), check("centred-system-events")], { systemEvents: true }),
+  scene("bot-ask-centred", "The asker's chat names the colleague it asked in one centred line that opens on the question and the answer",
+    [member(2), wait('[data-handoff="x71"]'), check("bot-ask-centred"), click('[data-handoff="x71"] summary'), wait('[data-handoff="x71"][open]'), check("bot-ask-expanded")], { colleagues: 1 }),
+  scene("bot-message-from-centred", "A colleague's question is one centred 訊息來自 line where it came in the asked member's chat",
+    [member(1), wait('[data-exchange="71"]'), check("bot-message-from")], { colleagues: 1 }),
+  scene("bot-exchange-count", "Questions from one colleague in a row fold into one 則訊息往來 line",
+    [member(1), wait('[data-exchange="71"]'), check("bot-exchange-count")], { colleagues: 2 }),
+  scene("bot-exchange-expanded", "The folded line opens on each question and answer, each speaker named once",
+    [member(1), wait('[data-exchange="71"]'), click('[data-exchange="71"] summary'), wait('[data-exchange="71"][open]'), check("bot-exchange-expanded")], { colleagues: 2 }),
+  scene("global-private-memory", "A shared note names whom the owner told it to and when; the member's own notes stay its own",
+    [member(1), { action: "open-details" }, click('[data-det="tab"][data-tab="memory"]'), wait('.mb-det [data-mem-space="shared"] .mem-from'), check("global-private-memory")],
+    { sharedMemories: [{ name: "user-brand-color", description: "品牌主色是金色，色號 BC-2026", type: "user", origin: "said", updated: "2026-10-27T00:44:52+08:00", expires: null, member: 0 }] }),
+  scene("slash-commands", "Slash command menu follows the slash character", [type(".composer textarea", "/"), wait(".slash-menu"), check("slash-commands")], { commands: [{ id: 1, member_id: 0, name: "review", description: "整理研究重點", template: "整理研究重點" }] }),
+  scene("composer-task-stop", "Running private task uses the same composer slot", [wait('.composer[data-task-state="running"] .cmp-voice'), check('p04-task-slot')], {running:true}),
+  scene("running", "Conversation while a reply is being prepared", [wait('.work-section.is-live'), check("conversation-running")], { running: true }),
+  { ...scene("running-motion", "A reply that has just started: its dots move inside their row, held at the top of their bounce, and it says once what is happening", [wait('.work-section.is-live'), { action: "freeze-motion", at: 600 }, check("work-dots")], { running: "fresh" }), motion: true },
+  scene("admin-approval", "Raphael's approval survives a concurrent member question", [
+    wait('.ask-card:not([hidden])'),
+    { action: "main-event", event: { type: "AgentQuestion", id: "concurrent-member", member_id: 1, prefix: "問", text: "要儲存研究摘要嗎？", tier: "T2", timeout_ms: 30_000 } },
+    member(1), wait('.ask-card[data-id="concurrent-member"]:not([hidden])'),
+    member(0), wait('.ask-card:not([data-id="concurrent-member"]):not([hidden])'), check("admin-approval"),
+  ], { adminApproval: "create" }),
+  scene("admin-approval-batch", "One approval lists eight members and the new group", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-batch")], { adminApproval: "batch" }),
+  scene("admin-approval-long", "Complete long instructions remain readable in the approval card", [wait('.ask-card:not([hidden])'), click('.ask-q'), key("End"), waitScrollEnd('.ask-q'), check("admin-approval-long")], { adminApproval: "long" }),
+  scene("admin-delete-approval", "Deleting a member always requires held approval", [wait('.ask-card[data-tier="T3"]:not([hidden])'), check("admin-approval")], { adminApproval: "delete" }),
+  scene("admin-approved", "Approve creation and select the live member", [wait('.ask-card:not([hidden])'), click('.ask-yes'), member(8), { action: "open-details" }, wait('.mb-det:not([hidden])'), check("admin-created")], { adminApproval: "create" }),
+  scene("admin-denied", "Declining creation leaves the team unchanged", [wait('.ask-card:not([hidden])'), click('.ask-no'), wait('.composer:not([hidden])'), check("admin-denied")], { adminApproval: "create" }),
+  scene("member-draft", "Editable member draft cards in the conversation", [wait('.draft-panel:not([hidden])'), check("member-draft")], { adminApproval: "draft" }),
+  scene("member-draft-edit", "Owner edits a member draft and removes another before confirming", [wait('.draft-panel:not([hidden])'), type('[data-draft-id="draft-1"] [data-draft-field="role"]', "首席營運長"), click('[data-draft-id="draft-3"] [data-draft-act="remove"]'), check("member-draft-edit")], { adminApproval: "draft" }),
+  scene("member-draft-done", "Confirmed drafts settle into a summary and add members to the column", [wait('.draft-panel:not([hidden])'), click('[data-draft-act="confirm"]'), check('member-draft-submitted'), wait('.draft-done'), click('[data-act="draft-done"]'), wait('.draft-done.is-open'), check("member-draft-done")], { adminApproval: "draft" }),
+  scene("empty", "Conversation without turns", [], { turns: [] }),
+  scene("row-menu", "Conversation actions in the details panel", [...details, click(".mb-det [data-conversation-more]"), wait("#app-popover [data-pick]")]),
+  ...["rename", "delete"].map(action => scene(action, `Conversation ${action} dialog`, [...details, click(".mb-det [data-conversation-more]"), click(`[data-pick="${action}"]`), wait(".mb-dialog"), ...(action === "delete" ? [check("delete-confirmation")] : [])])),
+  scene("new-conversation", "Create a conversation", [...details, click(".mb-det [data-conversation-new]"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
+  // The owner's flows of 2026-10-27, each to its end in the real page.
+  scene("member-delete", "A member is deleted from its ⋯ menu after the confirmation: its row leaves and a notice says so", [
+    { action: "member-column", collapsed: false }, click('.mb-col [data-member-more="2"]'), click('#app-popover [data-pick="delete"]'), wait(".mb-dialog"),
+    click('.mb-dialog [data-dlg="delete"]'), waitGone('.mb-col [data-member="2"]'), wait(".toast"), check("member-deleted")]),
+  scene("sidebar-new-conversation", "新對話 in the sidebar's ＋ makes a new conversation with the picked member and opens it, twice, so also from that member's empty one", [
+    { action: "member-column", collapsed: false },
+    ...[1, 2].flatMap(() => [click('.mb-col [data-col="add"]'), click('#app-popover [data-pick="conversation"]'), type("[data-chat-search]", "小晴"),
+      click('[data-dlg="conversation"]'), waitGone(".mb-chat-picker"), wait(".page-agent:not([hidden]) .ra-empty:not([hidden])")]),
+    check("conversation-made")]),
+  scene("conversation-delete-main", "Deleting Raphael's main conversation: its row leaves, the latest one takes over, and no empty 新對話 takes its place", [
+    { action: "open-details" }, click('.mb-det [data-conversation-more="1"]'), click('#app-popover [data-pick="delete"]'), wait(".mb-dialog"),
+    click('.mb-dialog [data-dlg="delete"]'), waitGone('.mb-det [data-conversation-open="1"]'), wait(".toast"), check("conversation-deleted")]),
+  scene("details", "Title opens member details", [...details, { action: "icon-interactions", selector: '.mb-det [data-det="close"]' }]),
+  scene("raphael-details", "Title opens Raphael details", [{ action: "open-details" }, check("member-details")]),
+  scene("details-closed", "Title closes details after expanding the member column", [{ action: "member-column", collapsed: false }, ...details, click(".conversation-trigger"), wait('.conversation-trigger[aria-expanded="false"]')]),
+  scene("conversation-filter", "Search conversations in details", [...details, type(".mb-det .conversation-tools input", "no matching conversation"), wait(".mb-det .conversation-empty")]),
+  ...["routines", "memory", "skills", "commands", "voice"].map(tab => scene(`details-${tab}`, `Member ${tab} pane`, [...details, click(`[data-det="tab"][data-tab="${tab}"]`)])),
+  scene("member-avatar", "Member avatar picker above details", [...details, click('[data-det="avatar"]'), wait("#app-popover")]),
+  scene("member-edit", "Edit member dialog", [...details, click('[data-det="edit"]'), wait(".mb-dialog")]),
+  scene("work", "Expanded public work steps", [click('[data-act="thinking"]'), wait(".work-body:not([hidden])")]),
+  scene("composer", "Composer attachment menu", composer),
+  scene("mode", "Composer action mode submenu", [...composer, click('[data-action="1"]'), wait("#app-submenu, #app-popover [data-value]")]),
+  scene("actions", "Answer actions", [hover(".ra .chat-message[data-expandable]"), click('.ra .chat-message[data-expandable] [data-act="more-message"]'), wait("#app-popover")]),
+  scene("reply", "Quote a reply into the composer", [hover(".ra .chat-message[data-expandable]"), click('.ra .chat-message[data-expandable] [data-act="reply-message"]')]),
+  scene("search", "Search conversation messages", [search("研究"), wait("[data-message-result]")]),
+  scene("search-target", "Navigate to a message search match", [search("研究"), click("[data-message-result]"), wait(".is-search-target")]),
+  scene("tooltip", "Answer timestamp tooltip", [hover(".ra .chat-message[data-expandable] .message-actions time")]),
+  scene("room", "Room conversation", [room(1), wait(".au-room-thread .chat-message")]),
+  ...["member", "room", "team"].flatMap(context => {
+    const base = context === "member" ? [member(1)] : context === "room" ? [room(1)] : [click('[data-go="team"]')];
+    const form = context === "member" ? ".mb-chat:not(.au-room-pane) .composer" : context === "room" ? ".au-room-pane .composer" : ".team-composer .composer";
+    return [scene(`${context}-composer-learn`, `${context} dictated name correction reaches the dictionary`, [...base,
+      { action: "dictation-paste", selector: `${form} textarea`, text: dictationText.before },
+      type(`${form} textarea`, dictationText.after), check("composer-pair"), click(`${form} .cmp-send`), wait(".toast"), check("composer-learn"), check("composer-pair")], { dictationText }),
+      scene(`${context}-composer-empty`, `${context} empty composer`, [...base, check("composer-pair")], { ...(context === "room" ? { messages: [] } : {}), turns: [] }),
+      scene(`${context}-text`, `${context} composer draft`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), check("composer-pair")]),
+      scene(`${context}-composer-hover`, `${context} composer send hover`, [...base, type(`${form} textarea`, "請整理今天的研究進度。"), hover(`${form} .cmp-send`), wait('.message-tooltip:not([hidden])'), check("composer-pair")])];
+  }),
+];

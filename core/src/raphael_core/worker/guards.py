@@ -20,6 +20,9 @@ from typing import Any
 # The most of a result the model is shown, in characters. The beginning of a page says what it is
 # and the end often says how it ended, so both are kept.
 MAX_RESULT_CHARS = 6000
+# A skill import is already bounded to 128 KiB. Keep its complete Markdown (including JSON
+# escaping) when the dedicated reader returns it, while retaining the untrusted-data wrapper.
+MAX_SKILL_RESULT_CHARS = 2 * 128 * 1024 + 1000
 HEAD_SHARE = 0.65
 CUT_MARK = "\n[... {skipped} characters left out ...]\n"
 # How many of the latest rounds of calls keep their results in full.
@@ -33,7 +36,7 @@ REPEAT_LIMIT = 3
 
 # The tags the prompts are built from. A text that holds one is changed so that it does not close,
 # or open, what it is inside of.
-_TAGS = re.compile(r"<(/?)\s*(tool_result|task|question|conversation)\b", re.IGNORECASE)
+_TAGS = re.compile(r"<(/?)\s*(tool_result|task|question|conversation|previous_attempt|background_tasks)\b", re.IGNORECASE)
 
 
 def neutralize(text: str) -> str:
@@ -54,10 +57,13 @@ def head_tail_split(text: str, limit: int = MAX_RESULT_CHARS) -> tuple[str, bool
     return text[:head] + mark + (text[len(text) - tail :] if tail else ""), True
 
 
-def wrap_untrusted(tool: str, text: str, *, ok: bool) -> str:
+def wrap_untrusted(tool: str, text: str, *, ok: bool, limit: int | None = None) -> str:
     """A tool's result as the model reads it: cut, neutralized and inside tags that say it is data
-    from outside, never to be obeyed."""
-    shown, cut = head_tail_split(neutralize(text))
+    from outside, never to be obeyed. Inline attachments can supply their own budget;
+    ordinary tool results retain their default limits."""
+    if limit is None:
+        limit = MAX_SKILL_RESULT_CHARS if tool == "skill_read" else MAX_RESULT_CHARS
+    shown, cut = head_tail_split(neutralize(text), limit)
     status = "ok" if ok else "error"
     note = " cut_short=true" if cut else ""
     return (
@@ -88,6 +94,40 @@ def elide_old(messages: MutableSequence[dict[str, Any]], keep: int = KEEP_ROUNDS
 def canonical(arguments: Mapping[str, Any]) -> str:
     """The arguments of a call as one text, the same for the same arguments."""
     return json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+
+
+# Calls that fail one after another: after STEER_AT the model is told to change its approach, and
+# after STOP_AT the task stops instead of spending its limits on the same wall.
+STEER_AT = 5
+STOP_AT = 8
+STEER_NOTE = (
+    "<harness_note>Several tool calls in a row have failed. Do not retry the same approach: use a "
+    "different tool or source, or stop and report plainly what could not be done.</harness_note>"
+)
+
+
+class FailureGuard:
+    """Counts the calls that failed one after another (any tool); a call that works starts the count
+    again. `failed()` says what to do after a failure: "steer" once when the count reaches
+    `steer_at`, "stop" when it reaches `stop_at`, otherwise None."""
+
+    def __init__(self, steer_at: int = STEER_AT, stop_at: int = STOP_AT) -> None:
+        self._steer_at, self._stop_at = steer_at, stop_at
+        self._row = 0
+        self._steered = False
+
+    def succeeded(self) -> None:
+        self._row = 0
+        self._steered = False
+
+    def failed(self) -> str | None:
+        self._row += 1
+        if self._row >= self._stop_at:
+            return "stop"
+        if self._row >= self._steer_at and not self._steered:
+            self._steered = True
+            return "steer"
+        return None
 
 
 class RepeatGuard:

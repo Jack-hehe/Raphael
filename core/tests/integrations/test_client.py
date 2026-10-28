@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -367,27 +366,23 @@ async def test_a_command_that_does_not_exist_is_not_found(vault):
     assert failure.value.kind == "not_found"
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="counts the processes with PowerShell")
-async def test_a_job_leaves_no_server_running(vault):
-    def servers_running() -> int:
-        listing = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "(Get-CimInstance Win32_Process"
-                " | Where-Object { $_.CommandLine -like '*integrations*fake_server.py*' }).Count",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        return int(listing.stdout.strip() or 0)
+async def test_a_job_leaves_no_server_running(vault, monkeypatch):
+    import mcp.client.stdio as stdio
 
-    before = servers_running()
+    # Track the actual owned process; a denied OS inventory must never look like
+    # an empty process list, and localized shell diagnostics are not PID evidence.
+    processes = []
+    create = stdio._create_platform_compatible_process
+
+    async def tracked(**kwargs):
+        process = await create(**kwargs)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(stdio, "_create_platform_compatible_process", tracked)
     await McpConnector(vault).list_tools(stdio_server(), timeout_s=30)
-    await asyncio.sleep(0.5)
-    assert servers_running() == before
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
 
 
 async def test_a_real_http_server_gets_the_headers_and_its_tools_are_called(

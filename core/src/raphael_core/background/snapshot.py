@@ -5,28 +5,49 @@ tool an alias is stays here in the core. The snapshot holds:
 
 - the tools of the plugins the user connected that are on (`PluginHub.offered`), whether they read or
   change something there: the user turned off what a task must not use, and a tool that is on runs
-  without asking, for a task as for the assistant. (A tool that needed a yes would be left out: the
-  worker cannot ask at the overlay yet. None does, today.)
-- Raphael's own lookups on the web: the weather, a web search and the time.
+  without asking, for a task as for the assistant, unless one of the owner's safety rules asks
+  first. A tool at T2 is offered too: its call pauses the task and asks the owner in the app (the
+  waiting question, `service`), and goes on only after a yes there. A tool at T3 is left out.
+- Raphael's own lookups on the web: the weather, a web search (by the search service the owner
+  chose), the time, and the reading of a page (`web_read`, by the reader chosen). A page is read
+  only at an address the task has seen: in its request, or in what one of its tools returned
+  (`run.TaskRun`, which refuses any other with "url_not_seen"), so a task cannot be made to send
+  what it knows to an address of someone's making;
+- when the task came with files (an image, a PDF the owner handed over), `read_attachment`, which
+  reads one of them by its number: never a path;
+- and, when there is a memory, its two tools that only read (`memory_read`, `history_search`): a
+  task may read a note or look up what was said before. It never writes one: a task reads what
+  services return, and a memory is written only from the owner's own words.
+- the team tools (`agent.team`): `ask_member`, when there is someone to ask (for Raphael, a member;
+  for a member, Raphael), and for Raphael `create_member`.
+
+A task of a member of the owner's team is offered only what the member was given (`Speaker.uses`,
+`Speaker.uses_plugin`): Raphael's own web tools on its list, and the connections on it.
 
 Not the commands for this computer (open a site, the volume, lock the screen, copy): those stay with
 the fast tier, which the user speaks to; a task in the background must not open a page or lock the
-screen while the user is typing.
+screen while the user is typing. Nor the tools that operate the owner's desktop
+(`computer.tools.PRESENCE_TOOLS`, which `needs_presence`): no task is offered them, no plugin's
+tool takes one of their names, and the gate refuses them to the worker in any case.
 
 A snapshot is the offer, not the permission. Every call is judged again by the gate when it is made
 (`agent.gate`), against the tier the tool has then, so a tool whose tier was raised, taken away or
 changed since the snapshot is refused.
 """
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ..agent.gate import WEB_TOOLS
+from ..agent.gate import ATTACHMENT_TOOLS, MEMORY_READ_TOOLS, WEB_TOOLS
 from ..agent.history import Turn
 from ..agent.ledger import Ledger
 from ..agent.plugins import MAX_OFFERED, Offer, PluginHub, make_offer
 from ..agent.policy import Tier
+from ..agent.speaker import RAPHAEL, Speaker
+from ..agent.team import TEAM_TIER, TEAM_TOOLS, worker_definition
+from ..agent.harness_tools import DEFINITIONS as HARNESS_DEFINITIONS, definitions_for, tool as harness_tool
+from ..computer.tools import PRESENCE_TOOLS
 from ..agent.toolpick import (
     PICK_MAX,
     ToolPicker,
@@ -36,9 +57,9 @@ from ..agent.toolpick import (
     widen,
 )
 
-# The most a task is offered at the highest tier of its snapshot: the tier that runs at once. A tool
-# above it would have to ask, which the worker cannot.
-SNAPSHOT_MAX_TIER = Tier.T1
+# The highest tier a task is offered: T2, whose calls ask the owner through the waiting question
+# (and so only after a yes in the app). A tool that cannot be undone at all (T3) is never offered.
+SNAPSHOT_MAX_TIER = Tier.T2
 
 BUILTIN = "builtin"
 MCP = "mcp"
@@ -67,6 +88,33 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
             "required": ["query"],
         },
     },
+    "web_read": {
+        "description": (
+            "[Raphael] Read a web page as text. Only an address you have seen in the task or in "
+            "what a tool of this task returned (a search result, a page read) can be read."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "The page's address."}},
+            "required": ["url"],
+        },
+    },
+    "read_attachment": {
+        "description": (
+            "[Raphael] Read a file the user handed over with the task, by its number (1 for "
+            "the first): images, PDF/text/Office documents, or transcribed audio/video. Unsupported "
+            "formats return metadata and a reading limitation. Ask a question about it to "
+            "say what to look for."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "index": {"type": "integer", "description": "The file's number, from 1."},
+                "question": {"type": "string", "description": "What to look for in it."},
+            },
+            "required": ["index"],
+        },
+    },
     "find_tools": {
         "description": (
             "[Raphael] Look for more tools of the connected services by what you want to do "
@@ -84,6 +132,30 @@ _DEFINITIONS: dict[str, dict[str, Any]] = {
     "local_time": {
         "description": "[Raphael] The date and the time on the user's computer.",
         "parameters": {"type": "object", "properties": {}},
+    },
+    "memory_read": {
+        "description": (
+            "[Raphael] Read your own notes and shared user facts in full, by their names (the names in "
+            "the index of notes you were given)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "names": {"type": "array", "items": {"type": "string"}, "description": "Names."}
+            },
+            "required": ["names"],
+        },
+    },
+    "history_search": {
+        "description": (
+            "[Raphael] Search what the user and you said in this speaker's earlier conversations, by a few "
+            "words. Returns the matching turns with their dates."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"query": {"type": "string", "description": "A few words."}},
+            "required": ["query"],
+        },
     },
 }
 
@@ -149,24 +221,69 @@ class Snapshot:
         return added, lines
 
 
-def take_snapshot(plugins: PluginHub | None, question: str = "") -> Snapshot:
-    """The tools a task starting now may use. A plugin that fails to list its tools is left out.
-    When the plugins have more tools than fit, the task is shown the ones that share the most words
-    with `question` (`refine` chooses with the model) and can find the rest."""
+def take_snapshot(
+    plugins: PluginHub | None,
+    question: str = "",
+    *,
+    memory: bool = False,
+    history: bool = True,
+    attachments: bool = False,
+    speaker: Speaker = RAPHAEL,
+    team: Sequence[str] = (),
+    max_tier: Tier = SNAPSHOT_MAX_TIER,
+    interactive: bool = False,
+    turned_off: Collection[str] = (),
+) -> Snapshot:
+    """The tools a task starting now may use: with `memory`, the memory's tools that read too (the
+    conversation search only with `history`: a room's turn has no conversation of its own), and
+    with `attachments` (the task came with files) the tool that reads them. A
+    plugin that fails to list its tools is left out. When the plugins have more tools than fit, the
+    task is shown the ones that share the most words with `question` (`refine` chooses with the
+    model) and can find the rest. Every speaker shares the enabled tools and connections;
+    `team` are the team tools allowed by the request's depth and cycle guards
+    (`agent.team`: asking another member, adding one), T1 like the plugins' tools that are on.
+    `turned_off` are the tools of Raphael's own that the owner switched off (`Tools.turned_off`):
+    they are not offered, whatever the task or the speaker."""
     refs: dict[str, ToolRef] = {}
     definitions: list[dict[str, Any]] = []
     pool: Offer | None = None
-    for name in WEB_TOOLS:
+    builtin = (
+        *(name for name in WEB_TOOLS if speaker.uses(name) and name not in turned_off),
+        *(name for name in MEMORY_READ_TOOLS if memory and (history or name != "history_search")),
+        *(name for name in ATTACHMENT_TOOLS if attachments and name not in turned_off),
+    )
+    for name in builtin:
         refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, Tier.T0)
         definitions.append({"type": "function", "function": {"name": name, **_DEFINITIONS[name]}})
+    for name in team:
+        if name in TEAM_TOOLS:
+            refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, TEAM_TIER)
+            definitions.append(worker_definition(name))
     snapshot = Snapshot(refs, definitions)
+    if interactive:
+        for name, item in definitions_for(speaker.id):
+            native = harness_tool(name)
+            refs[name] = ToolRef(BUILTIN, name, BUILTIN_SERVER, name, native.tier)
+            definitions.append({"type": "function", "function": {"name": name, **item}})
     if plugins is not None:
         try:
-            tools = [tool for tool in plugins.offered() if tool.tier <= SNAPSHOT_MAX_TIER]
+            tools = [
+                tool
+                for tool in plugins.offered()
+                if tool.tier <= max_tier and speaker.uses_plugin(tool.key)
+            ]
         except Exception:  # a plugin that breaks leaves its tools out, not the task
             tools = []
         pool = make_offer(tools)
-        taken = set(WEB_TOOLS) | {"find_tools"}
+        taken = (
+            set(WEB_TOOLS)
+            | set(MEMORY_READ_TOOLS)
+            | set(ATTACHMENT_TOOLS)
+            | set(TEAM_TOOLS)
+            | {"find_tools"}
+            | PRESENCE_TOOLS
+            | set(HARNESS_DEFINITIONS)
+        )
         clash = set(pool.by_alias) & taken
         if clash:  # a plugin's tool never takes the name of one of Raphael's own
             pool = make_offer([tool for alias, tool in pool.by_alias.items() if alias not in clash])

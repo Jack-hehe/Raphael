@@ -21,6 +21,8 @@ use std::ops::Range;
 
 use super::corrections::{Correction, MIN_KEPT_SHARE, Tracker, is_cjk};
 
+mod panes;
+
 /// Bound both initial matching and later relocation, including when a provider returns history.
 const MAX_TAIL_CHARS: usize = 20_000;
 /// The most rows the pasted words may take up.
@@ -65,6 +67,11 @@ struct Place {
 
 #[derive(Clone, Debug)]
 pub struct TerminalTracker {
+    /// One unambiguous column of the original layout. A resize can move its borders; a pane
+    /// appearing/disappearing cannot prove identity and ends the watch rather than switching panes.
+    pane: usize,
+    pane_count: usize,
+    width: usize,
     /// The pasted words without blanks, for finding copies that appear later.
     needle: Vec<char>,
     /// The copies being followed, top to bottom; one once it is clear which is the input.
@@ -79,17 +86,28 @@ impl TerminalTracker {
     /// and frame characters. They may take up several rows, including physical wraps. If they
     /// are on screen more than once, the copies are followed until one of them is edited.
     pub fn new(buffer: &str, pasted: &str) -> Option<Self> {
-        let lines = screen_rows(buffer);
+        let columns = screen_columns(buffer);
         let needle = needle_of(pasted);
-        let mut places: Vec<Place> = find_places(&lines, &needle)
-            .iter()
-            .filter_map(|found| Place::new(&lines, found))
-            .collect();
+        let mut matches = columns.iter().enumerate().filter_map(|(pane, lines)| {
+            let places: Vec<Place> = find_places(lines, &needle)
+                .iter()
+                .filter_map(|found| Place::new(lines, found))
+                .collect();
+            (!places.is_empty()).then_some((pane, places))
+        });
+        let (pane, mut places) = matches.next()?;
+        // Identical text in different panes cannot identify the paste's input field.
+        if matches.next().is_some() {
+            return None;
+        }
         keep_lowest(&mut places);
         if places.is_empty() {
             return None;
         }
         Some(Self {
+            pane,
+            pane_count: columns.len(),
+            width: panes::width(&columns[pane]),
             needle,
             places,
             resolved: false,
@@ -97,15 +115,32 @@ impl TerminalTracker {
         })
     }
 
+    pub fn unambiguous(&self) -> bool {
+        self.places.len() == 1
+    }
+
     /// Follows the pasted rows to where the new screen has them. End decisions are sticky and
     /// keep the last valid snapshot. A row that grew or shrank by a wrap is followed; rows that
     /// the program adds above or below are not part of the region. The UIA caller may supply a
     /// caret-bounded active buffer instead of the whole text.
     pub fn observe(&mut self, buffer: &str) -> TerminalDecision {
+        self.observe_input(buffer, false)
+    }
+
+    /// A physical edit was observed in this exact vetted field. This permits a temporary
+    /// deletion/replacement in the same anchored row, without adopting a different row or pane.
+    pub fn observe_input(&mut self, buffer: &str, edited: bool) -> TerminalDecision {
         if self.decision != TerminalDecision::Continue {
             return self.decision;
         }
-        let lines = screen_rows(buffer);
+        let columns = screen_columns(buffer);
+        if columns.len() != self.pane_count {
+            return self.end(TerminalDecision::Lost);
+        }
+        let Some(lines) = columns.get(self.pane) else {
+            return self.end(TerminalDecision::Lost);
+        };
+        let width = panes::width(lines);
         if lines.is_empty() {
             return self.end(TerminalDecision::Sent);
         }
@@ -113,7 +148,29 @@ impl TerminalTracker {
         let mut moved = Vec::new();
         let mut cleared = false;
         for place in &self.places {
-            match relocate(place, &lines) {
+            let relocated = relocate(place, lines, width != self.width);
+            let relocated = if edited
+                && !matches!(relocated, Relocation::Moved(_))
+                && place.rows.len() == 1
+                && !place.anchor.is_empty()
+            {
+                lines
+                    .get(place.start)
+                    .filter(|row| row.starts_with(&place.anchor))
+                    .map(|row| {
+                        Relocation::Moved(Place {
+                            tracker: place.tracker.advanced(row),
+                            rows: vec![row.clone()],
+                            text: row.clone(),
+                            start: place.start,
+                            anchor: place.anchor.clone(),
+                        })
+                    })
+                    .unwrap_or(relocated)
+            } else {
+                relocated
+            };
+            match relocated {
                 Relocation::Moved(next) => {
                     // Only the pasted words count: a marker, a prompt or a status on the same
                     // rows changes without the user having edited anything.
@@ -148,9 +205,9 @@ impl TerminalTracker {
         let mut places: Vec<Place> = moved.into_iter().map(|(place, _)| place).collect();
         if !self.resolved {
             // The paste may have been drawn only now, below an older copy.
-            for found in find_places(&lines, &self.needle) {
+            for found in find_places(lines, &self.needle) {
                 if places.iter().all(|place| !place.rows_overlap(&found.rows))
-                    && let Some(place) = Place::new(&lines, &found)
+                    && let Some(place) = Place::new(lines, &found)
                 {
                     places.push(place);
                 }
@@ -159,6 +216,7 @@ impl TerminalTracker {
             keep_lowest(&mut places);
         }
         self.places = places;
+        self.width = width;
         TerminalDecision::Continue
     }
 
@@ -169,6 +227,12 @@ impl TerminalTracker {
         } else {
             self.decision
         }
+    }
+
+    /// Unsafe input or lost field identity cannot retain a draft correction.
+    pub fn invalidate(&mut self) {
+        self.places.clear();
+        self.decision = TerminalDecision::Lost;
     }
 
     /// The rows of the lowest copy, which is the input once that is known.
@@ -251,7 +315,12 @@ fn break_is_a_blank(above: &str, below: &str) -> bool {
 fn join_rows(rows: &[String]) -> String {
     let mut text = String::new();
     for (at, row) in rows.iter().enumerate() {
-        if at > 0 && break_is_a_blank(&rows[at - 1], row) {
+        let row = if at == 0 {
+            row.as_str()
+        } else {
+            without_prompt(row)
+        };
+        if at > 0 && break_is_a_blank(without_prompt(&rows[at - 1]), row) {
             text.push(' ');
         }
         text.push_str(row);
@@ -276,6 +345,15 @@ fn tidy_row(line: &str) -> String {
     bare.trim().to_owned()
 }
 
+fn without_prompt(row: &str) -> &str {
+    // TUI prompts may be repeated on continuation rows; they are decoration, not pasted text.
+    let row = row
+        .strip_prefix(['>', '›', '❯'])
+        .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        .unwrap_or(row);
+    row.trim()
+}
+
 /// The last [`MAX_TAIL_CHARS`] characters of the text, from the start of a row.
 fn bounded_tail(buffer: &str) -> &str {
     // Never begin matching in a partial history row cut by our own tail bound.
@@ -292,13 +370,44 @@ fn bounded_tail(buffer: &str) -> &str {
     }
 }
 
-fn screen_rows(buffer: &str) -> Vec<String> {
+fn screen_columns(buffer: &str) -> Vec<Vec<String>> {
     let text = normalize(bounded_tail(buffer));
-    let mut lines: Vec<String> = text.split('\n').map(tidy_row).collect();
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-    lines
+    panes::columns(&text)
+        .into_iter()
+        .map(|rows| {
+            let mut lines: Vec<String> = rows.iter().map(|row| tidy_row(row)).collect();
+            while lines.last().is_some_and(String::is_empty) {
+                lines.pop();
+            }
+            lines
+        })
+        .collect()
+}
+
+/// A collapsed paste exposes no message text. Count only the known numeric placeholder syntax;
+/// never treat it, nearby output, or a later post-Enter echo as the pasted region.
+pub(super) fn collapsed_pastes(buffer: &str) -> usize {
+    buffer
+        .match_indices("[Pasted text #")
+        .filter(|(at, prefix)| {
+            let rest = &buffer[at + prefix.len()..];
+            let Some((body, _)) = rest.split_once(']') else {
+                return false;
+            };
+            let (id, lines) = body
+                .split_once(" +")
+                .map_or((body, None), |(id, lines)| (id, Some(lines)));
+            let number =
+                |value: &str| !value.is_empty() && value.bytes().all(|c| c.is_ascii_digit());
+            number(id)
+                && lines.is_none_or(|lines| {
+                    lines
+                        .strip_suffix(" lines")
+                        .or_else(|| lines.strip_suffix(" line"))
+                        .is_some_and(number)
+                })
+        })
+        .count()
 }
 
 /// The pasted words without blanks and frame characters, which a screen does not keep as pasted.
@@ -327,26 +436,14 @@ fn find_places(lines: &[String], needle: &[char]) -> Vec<Found> {
     let mut chars = Vec::new();
     let mut at = Vec::new();
     for (row, line) in lines.iter().enumerate() {
-        for (column, c) in line.chars().enumerate() {
+        let prompt = line.chars().count() - without_prompt(line).chars().count();
+        for (column, c) in line.chars().enumerate().skip(prompt) {
             if !c.is_whitespace() {
                 chars.push(c);
                 at.push((row, column));
             }
         }
     }
-    // Where each row starts in the text of the rows from the first one on: its characters, and
-    // the blank that stands for the break after it.
-    let widths: Vec<usize> = lines
-        .iter()
-        .enumerate()
-        .map(|(row, line)| {
-            let blank = lines
-                .get(row + 1)
-                .is_some_and(|below| break_is_a_blank(line, below));
-            line.chars().count() + usize::from(blank)
-        })
-        .collect();
-
     let mut found: Vec<Found> = Vec::new();
     let mut i = 0;
     while let Some(window) = chars.get(i..i + needle.len()) {
@@ -354,7 +451,7 @@ fn find_places(lines: &[String], needle: &[char]) -> Vec<Found> {
             i += 1;
             continue;
         }
-        let (Some(&(first_row, first_column)), Some(&(last_row, last_column))) =
+        let (Some(&(first_row, _)), Some(&(last_row, _))) =
             (at.get(i), at.get(i + needle.len() - 1))
         else {
             break;
@@ -363,12 +460,22 @@ fn find_places(lines: &[String], needle: &[char]) -> Vec<Found> {
         if last_row - first_row >= MAX_REGION_ROWS {
             continue;
         }
-        let before_last: usize = widths
-            .get(first_row..last_row)
-            .map_or(0, |rows| rows.iter().sum());
+        let joined = join_rows(&lines[first_row..=last_row]);
+        let (joined_chars, positions): (Vec<char>, Vec<usize>) = joined
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| !c.is_whitespace())
+            .map(|(at, c)| (c, at))
+            .unzip();
+        let Some(start) = joined_chars
+            .windows(needle.len())
+            .rposition(|part| part == needle)
+        else {
+            continue;
+        };
         let place = Found {
             rows: first_row..last_row + 1,
-            span: first_column..before_last + last_column + 1,
+            span: positions[start]..positions[start + needle.len() - 1] + 1,
         };
         match found.last_mut() {
             Some(previous) if previous.rows.end > place.rows.start => *previous = place,
@@ -412,13 +519,20 @@ fn likeness(old: &[char], new: &str) -> f64 {
 /// Finds the rows of `place` on the new screen: where they were if they still look the same,
 /// otherwise the closest rows that do. A wrap may have added a row or taken one away. Rows that
 /// look equally like it at the same distance above and below cannot be told apart.
-fn relocate(place: &Place, lines: &[String]) -> Relocation {
+fn relocate(place: &Place, lines: &[String], rewrapped: bool) -> Relocation {
     let old: Vec<char> = place.text.chars().collect();
     let height = place.rows.len();
     // The best row count from `start` on, and how much the rows look like the place.
     let best_at = |start: usize| -> Option<(usize, f64)> {
         let mut best: Option<(usize, f64)> = None;
-        for len in [height, height + 1, height.saturating_sub(1)] {
+        let heights = if rewrapped {
+            std::iter::once(height)
+                .chain((1..=MAX_REGION_ROWS).filter(|&len| len != height))
+                .collect()
+        } else {
+            vec![height, height + 1, height.saturating_sub(1)]
+        };
+        for len in heights {
             if len == 0 {
                 continue;
             }
@@ -519,6 +633,60 @@ fn relocate(place: &Place, lines: &[String]) -> Relocation {
 mod tests {
     use super::*;
 
+    #[test]
+    fn observed_selection_delete_and_paste_keep_the_same_anchored_input() {
+        let mut tracker =
+            TerminalTracker::new("> Please use Open Mouse Bot", "Please use Open Mouse Bot")
+                .unwrap();
+        assert_eq!(
+            tracker.observe_input("> Please use ", true),
+            TerminalDecision::Continue
+        );
+        assert_eq!(
+            tracker.observe_input("> Please use OpenMausBot", true),
+            TerminalDecision::Continue
+        );
+        assert_eq!(
+            tracker.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into()
+            }],
+            "{tracker:?}"
+        );
+        tracker.submitted();
+        assert_eq!(
+            tracker.observe_input("> Please use WrongOutput", true),
+            TerminalDecision::Sent
+        );
+        assert_eq!(tracker.corrections()[0].word, "OpenMausBot");
+        tracker.invalidate();
+        assert!(tracker.corrections().is_empty());
+    }
+
+    #[test]
+    fn committed_chinese_and_japanese_text_is_read_from_the_same_terminal_field() {
+        // One Han character changed is a whole word only by the Windows zh-TW word breaker; a
+        // machine without it (the CI runner) fails closed and learns nothing (`cjk_words`).
+        let segmented = super::super::cjk_words::word_ranges("拉斐爾在臺北").is_some();
+        for (old, new) in [("拉菲爾", "拉斐爾"), ("ラファエル", "ラフィエル")] {
+            let pasted = format!("今天請用{old}來整理昨天的會議紀錄並且寄給大家確認。");
+            let fixed = pasted.replace(old, new);
+            let mut tracker = TerminalTracker::new(&format!("> {pasted}"), &pasted).unwrap();
+            assert_eq!(
+                tracker.observe_input(&format!("> {fixed}"), true),
+                TerminalDecision::Continue
+            );
+            let learned: Vec<String> = tracker.corrections().into_iter().map(|c| c.word).collect();
+            let expected = if new == "拉斐爾" && !segmented {
+                vec![]
+            } else {
+                vec![new.to_owned()]
+            };
+            assert_eq!(learned, expected, "{old} -> {new}");
+        }
+    }
+
     const PASTED: &str = "Use Tyeless and Open Router for the local command today";
     const FIRST: &str = "Use Typeless and Open Router for the local command today";
     const FIXED: &str = "Use Typeless and OpenRouter for the local command today";
@@ -552,6 +720,143 @@ mod tests {
     const CONVERSATION: [&str; 4] = ["● Sure, I can help with that.", "", "> run the tests", ""];
 
     // ---------- a shell prompt ----------
+
+    #[test]
+    fn a_wrapped_paste_is_found_in_the_middle_pane_without_neighbor_text() {
+        let before = "left status │╭────────────────────────────────╮│ right status\n\
+                      left output ││ › Use Tyeless and Open Router   ││ right output\n\
+                      left output ││   for the local command today   ││ right output\n\
+                      left status │╰────────────────────────────────╯│ right status";
+        let mut tracker = TerminalTracker::new(before, PASTED).expect("paste in middle pane");
+        assert_eq!(
+            tracker.observe(&before.replace("Tyeless", "Typeless")),
+            TerminalDecision::Continue
+        );
+        assert_eq!(pairs(&tracker), vec![typeless()]);
+        assert!(!tracker.region().contains("left"));
+        assert!(!tracker.region().contains("right"));
+    }
+
+    const HERDR: &str = include_str!("terminal/fixtures/herdr-anonymized.txt");
+    const HERDR_PASTE: &str = "名範例保留：cloud 畫面結構測試文，Archive Notebook 字用於匿名範例保留畫面結構測試文字用，於匿 Archive 名範例保留畫面結構。測試文字用於匿名範例保留畫 Cloud（面 cloud 結構測試文）。";
+
+    #[test]
+    fn the_anonymized_real_herdr_layout_finds_and_corrects_the_middle_pane() {
+        let mut tracker = TerminalTracker::new(HERDR, HERDR_PASTE).expect("middle-pane paste");
+        assert_eq!(tracker.pane, 1);
+        assert_eq!(tracker.pane_count, 3);
+        let edited = HERDR.replacen("：cloud", "：tools", 1);
+        assert_eq!(tracker.observe(&edited), TerminalDecision::Continue);
+        assert_eq!(pairs(&tracker), [("cloud".into(), "tools".into())]);
+    }
+
+    #[test]
+    fn edits_to_other_panes_in_the_real_layout_are_never_corrections() {
+        let mut tracker = TerminalTracker::new(HERDR, HERDR_PASTE).unwrap();
+        let edited = HERDR
+            .replace("● Archive", "● Project")
+            .replace("││› Notebook", "││› ChangedX");
+        assert_eq!(tracker.observe(&edited), TerminalDecision::Continue);
+        assert!(pairs(&tracker).is_empty());
+    }
+
+    fn multiplex(input: &str, width: usize) -> String {
+        wrapped_frame(input, width)
+            .lines()
+            .map(|row| format!("left status │{row}│ other output"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_resized_column_rewraps_by_several_rows_without_learning_the_redraw() {
+        let mut tracker = TerminalTracker::new(&multiplex(PASTED, 60), PASTED).unwrap();
+        assert_eq!(
+            tracker.observe(&multiplex(PASTED, 14)),
+            TerminalDecision::Continue
+        );
+        assert!(pairs(&tracker).is_empty());
+        assert_eq!(
+            tracker.observe(&multiplex(FIRST, 14)),
+            TerminalDecision::Continue
+        );
+        assert_eq!(pairs(&tracker), [typeless()]);
+    }
+
+    #[test]
+    fn a_different_pane_cannot_take_over_when_the_tracked_pane_is_removed() {
+        let mut tracker = TerminalTracker::new(&multiplex(PASTED, 30), PASTED).unwrap();
+        assert_eq!(tracker.observe(&command(FIRST)), TerminalDecision::Lost);
+        assert!(pairs(&tracker).is_empty());
+    }
+
+    #[test]
+    fn repeated_prompt_markers_are_not_words_in_a_wrapped_input() {
+        let screen = "╭────────────────────────────╮\n│ › Use Tyeless and Open     │\n│ > Router for the local     │\n│ › command today            │\n╰────────────────────────────╯\nready";
+        let mut tracker = TerminalTracker::new(screen, PASTED).unwrap();
+        assert_eq!(
+            tracker.observe(&screen.replace("Tyeless and Open     ", "Typeless and Open    ")),
+            TerminalDecision::Continue
+        );
+        assert_eq!(pairs(&tracker), [typeless()]);
+    }
+
+    #[test]
+    fn wide_cjk_words_wrap_inside_their_own_pane_and_can_be_corrected() {
+        let pasted = "我昨天買了一支新的首機，拍照很漂亮，電池也很耐用，整體來說我很滿意";
+        let screen = |input: &str| {
+            input
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(9)
+                .enumerate()
+                .map(|(row, text)| {
+                    let text: String = text.iter().collect();
+                    let prompt = if row == 0 { "› " } else { "  " };
+                    format!(
+                        "側欄狀態 │ {prompt}{text}{} │ other output",
+                        " ".repeat(18 - text.chars().count() * 2)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut tracker = TerminalTracker::new(&screen(pasted), pasted).unwrap();
+        let fixed = pasted.replace("首機", "電話");
+        assert_eq!(tracker.observe(&screen(&fixed)), TerminalDecision::Continue);
+        assert_eq!(pairs(&tracker), [("首機".into(), "電話".into())]);
+    }
+
+    #[test]
+    fn an_empty_neighbor_keeps_its_column_and_cannot_stop_the_watch() {
+        let before = multiplex(PASTED, 20);
+        let mut tracker = TerminalTracker::new(&before, PASTED).unwrap();
+        let cleared = before.replace("left status", "           ");
+        assert_eq!(tracker.observe(&cleared), TerminalDecision::Continue);
+        assert!(pairs(&tracker).is_empty());
+    }
+
+    #[test]
+    fn identical_pastes_in_different_panes_are_ambiguous() {
+        let screen = (0..3)
+            .map(|_| format!("{PASTED} │ {PASTED}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(TerminalTracker::new(&screen, PASTED).is_none());
+    }
+
+    #[test]
+    fn collapsed_paste_placeholders_are_counted_but_not_followed() {
+        let screen = "> [Pasted text #1 +3 lines]\n[Pasted text #2 +1 line]\n[Pasted text #3]";
+        assert_eq!(collapsed_pastes(screen), 3);
+        assert!(TerminalTracker::new(screen, PASTED).is_none());
+        assert_eq!(
+            collapsed_pastes(
+                "[Pasted text #unknown +3 lines] [Pasted text #1 +many lines] [1 +3 lines]"
+            ),
+            0
+        );
+    }
 
     #[test]
     fn last_active_occurrence_is_selected_instead_of_a_command_in_history() {

@@ -8,16 +8,17 @@ the question that led to it. The window lists the latest rows (`integrations.aud
   (nobody: the call was refused, denied or ran out of time, or never got to ask).
 - `outcome`: "ok", "error" (the call failed or the tool reported an error), "timeout" (no answer in
   time: it may or may not have been done), "denied" (the user said no, or pressed Esc), "expired"
-  (nobody answered in time), or "blocked" (the tool had no tier, the plugin was off, or the tool
-  was not the one the user gave its tier to).
+  (nobody answered in time), or "blocked" (the tool or its plugin was off, the server no longer
+  had the tool, or the gate refused the call).
 - `task_id`: the background task that made the call, or None for a call of the fast tier.
 """
 
 import logging
 import sqlite3
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
+
+from ..clock import wall_clock_ms
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +28,6 @@ OUTCOMES = ("ok", "error", "timeout", "denied", "expired", "blocked")
 KEEP_ROWS = 2000
 LIST_DEFAULT = 50
 LIST_MAX = 200
-
-
-def _wall_clock_ms() -> int:
-    return time.time_ns() // 1_000_000
 
 
 @dataclass
@@ -49,7 +46,7 @@ class AuditLog:
     """The `tool_audit` table. Use it on the thread that owns `conn`."""
 
     def __init__(
-        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = _wall_clock_ms
+        self, conn: sqlite3.Connection, now_ms: Callable[[], int] = wall_clock_ms
     ) -> None:
         self._conn = conn
         self._now_ms = now_ms

@@ -4,6 +4,8 @@
    --e is the emblem's diameter and --c its square canvas (1.3 times larger, room for the rays);
    overlay.ts sets both from the size in the settings. */
 
+@import "../assets/fonts/inter.css";
+
 :root {
   --e: 150px;
   --c: 195px;
@@ -23,7 +25,7 @@
   --ask-gap: 10px;
   --ask-bottom: calc(var(--margin) + var(--e) * 0.2 - 6px);
 
-  --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --ui: "Inter", "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", system-ui, sans-serif;
   --zh-sub: "Microsoft JhengHei UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
   --ja: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans JP", sans-serif;
 }
@@ -46,6 +48,31 @@ body {
   position: fixed;
   right: 0;
   bottom: 0;
+}
+
+/* The person's picture, laid exactly over the emblem's circle: an <img>, so that a GIF or WebP
+   that moves plays (a canvas paints only its first frame). The emblem grows and fades it with the
+   circle and draws the thin ring around it on the canvas; under reduced motion it stays hidden and
+   the canvas draws the first frame instead. The cut is set on the <img> (pictureStyle). */
+#picture {
+  position: fixed;
+  right: var(--margin);
+  bottom: var(--margin);
+  width: var(--e);
+  height: var(--e);
+  overflow: hidden;
+  border-radius: 50%;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+}
+
+#picture > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 /* Everything written beside the emblem is written one way: a dictation's percentage, the lines
@@ -98,8 +125,12 @@ body {
   opacity: 1;
 }
 
+/* A page is about two lines (caption.ts). One that still runs longer stops at its third line
+   instead of growing out of the top of the window. */
 .sub-line {
   text-wrap: balance;
+  max-height: calc(3 * 1.45em);
+  overflow: hidden;
 }
 
 /* With a question, the line rises over its buttons. */
@@ -123,6 +154,12 @@ body {
 
 .ask.on {
   opacity: 1;
+}
+
+/* The overlay never takes the keyboard's focus, so no ring ever has a reason to show on it: not
+   even the browser's own, after a click on a button of a question. */
+:focus-visible {
+  outline: none;
 }
 
 /* The page is click-through; only the buttons are not. */
@@ -154,7 +191,7 @@ body {
 }
 
 .ask-btn:hover:not(:disabled) {
-  background: rgba(36, 50, 80, 0.94);
+  background: rgba(52, 55, 61, 0.94);
 }
 
 .ask-btn:active:not(:disabled) {
@@ -180,6 +217,7 @@ body {
 }
 
 .ask[data-choice="yes"] .ask-yes,
+.ask[data-choice="always"] .ask-always,
 .ask[data-choice="no"] .ask-no {
   opacity: 1;
 }

@@ -124,6 +124,19 @@ pub trait CoreApi: Send + Sync + 'static {
         method: &str,
         params: Value,
     ) -> impl Future<Output = Result<Value, RpcError>> + Send;
+
+    /// Like [`Self::call`], but waiting for the answer for `timeout` rather than for as long as
+    /// the method is usually given: for a call whose work grows with what it is about (the stop
+    /// of a long dictation). A core that sets no time of its own, like a test's, ignores it.
+    fn call_within(
+        &self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Value, RpcError>> + Send {
+        let _ = timeout;
+        self.call(method, params)
+    }
 }
 
 type Reply = Result<Value, RpcError>;

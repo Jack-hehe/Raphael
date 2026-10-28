@@ -103,10 +103,9 @@ def test_the_second_pass_hands_a_task_to_a_worker_the_core_starts(report):
     asked = [c for c in report["calls"] if c["method"] == "agent.ask"]
     handed = [c["response"]["result"] for c in asked if "Handed" in str(c["response"])]
     assert [h["text"] for h in handed] == ["Handed to the background."]
-    steps = [c for c in report["calls"] if c["method"] == "worker.get"]
-    assert [s["kind"] for s in steps[0]["response"]["result"]["task"]["steps"]] == [
-        "model", "tool", "model",
-    ]  # fmt: skip
+    histories = [c["response"]["result"] for c in report["calls"] if c["method"] == "agent.history.list"]
+    [delegated] = [t for t in histories[-1]["turns"] if t["route"] == "delegate"]
+    assert [s["kind"] for s in delegated["steps"]] == ["model", "tool", "model"]
 
 
 def test_the_third_pass_starts_the_worker_by_itself_and_it_ends_with_its_stdin(report):
@@ -136,3 +135,14 @@ def test_the_smoke_fails_when_the_bundle_cannot_start_a_worker(smoke, launcher, 
         smoke.smoke_with_the_fake_llm(launcher)
     with pytest.raises(RuntimeError, match="The worker"):
         smoke.smoke_the_worker(launcher, {"PYTHONPATH": str(shadow)})
+
+
+def test_the_voice_pass_decodes_an_opus_clip(report):
+    assert report["voice_pass"]["passed"] is True
+
+
+def test_the_voice_pass_fails_when_the_decoder_does_not_work(smoke, tmp_path):
+    broken = tmp_path / "broken-core.cmd"
+    broken.write_text("@echo off\r\necho voice decoder failed\r\nexit /b 1\r\n", encoding="ascii")
+    with pytest.raises(RuntimeError, match="audio decoder"):
+        smoke.smoke_the_voice_decoder(broken)

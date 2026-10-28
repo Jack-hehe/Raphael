@@ -246,6 +246,24 @@ impl Tracker {
             merged.push(edit);
         }
         for edit in &mut merged {
+            // Terminal providers trim row padding during a delete-and-retype. A reinserted
+            // separator must not pull the unchanged preceding word into the correction.
+            while edit.old.start < edit.old.end
+                && edit.new.start < edit.new.end
+                && self.before[edit.old.start].is_whitespace()
+                && self.before[edit.old.start] == self.current[edit.new.start]
+            {
+                edit.old.start += 1;
+                edit.new.start += 1;
+            }
+            while edit.old.start < edit.old.end
+                && edit.new.start < edit.new.end
+                && self.before[edit.old.end - 1].is_whitespace()
+                && self.before[edit.old.end - 1] == self.current[edit.new.end - 1]
+            {
+                edit.old.end -= 1;
+                edit.new.end -= 1;
+            }
             if !self.touches_word(edit) {
                 continue;
             }
@@ -334,13 +352,23 @@ impl Tracker {
                 }
             })
             .sum();
-        if edited as f64 > MAX_EDITED_SHARE * self.span.len() as f64 {
+        let whole = self.whole_words(edits);
+        let name = whole.len() == 1 && {
+            let edit = &whole[0];
+            plausible_name(
+                &trimmed(&self.before[edit.old.clone()]),
+                &trimmed(&self.current[edit.new.clone()]),
+            )
+        };
+        if edited as f64 > MAX_EDITED_SHARE * self.span.len() as f64 && !name {
             return Vec::new();
         }
-        self.whole_words(edits)
+        whole
             .into_iter()
             .filter_map(|edit| {
-                let edit = if self.single_han_replacement(&edit) {
+                let edit = if self.current[edit.new.clone()].iter().any(|&c| is_kana(c)) {
+                    self.whole_kana_word(edit)
+                } else if self.single_han_replacement(&edit) {
                     self.whole_han_word(edit, before_words, current_words)?
                 } else {
                     edit
@@ -351,6 +379,29 @@ impl Tracker {
             })
             .take(MAX_CORRECTIONS)
             .collect()
+    }
+
+    fn whole_kana_word(&self, mut edit: Edit) -> Edit {
+        while edit.old.start > self.span.start
+            && edit.new.start > 0
+            && self.origin[edit.new.start - 1] == Some(edit.old.start - 1)
+            && same_kana_script(
+                self.before[edit.old.start - 1],
+                self.current[edit.new.start],
+            )
+        {
+            edit.old.start -= 1;
+            edit.new.start -= 1;
+        }
+        while edit.old.end < self.span.end
+            && edit.new.end < self.current.len()
+            && self.origin[edit.new.end] == Some(edit.old.end)
+            && same_kana_script(self.before[edit.old.end], self.current[edit.new.end - 1])
+        {
+            edit.old.end += 1;
+            edit.new.end += 1;
+        }
+        edit
     }
 
     fn single_han_replacement(&self, edit: &Edit) -> bool {
@@ -543,6 +594,16 @@ fn is_short(text: &str) -> bool {
 }
 
 /// Whether `text` looks like a term: 2 CJK characters or more, or a word of 3 letters or more.
+fn is_kana(c: char) -> bool {
+    matches!(c, '\u{3041}'..='\u{3096}' | '\u{30A1}'..='\u{30FA}' | '\u{30FC}' | '\u{FF66}'..='\u{FF9D}')
+}
+
+fn same_kana_script(a: char, b: char) -> bool {
+    let katakana =
+        |c: char| matches!(c, '\u{30A1}'..='\u{30FA}' | '\u{30FC}' | '\u{FF66}'..='\u{FF9D}');
+    is_kana(a) && is_kana(b) && katakana(a) == katakana(b)
+}
+
 fn is_term(text: &str) -> bool {
     text.chars().filter(|&c| is_cjk(c)).count() >= 2
         || words(text).any(|word| word.chars().filter(|c| c.is_alphabetic()).count() >= 3)
@@ -558,6 +619,42 @@ fn is_correction(misheard: &str, word: &str) -> bool {
         && is_short(misheard)
         && is_short(word)
         && is_term(word)
+}
+
+/// A retyped name can be most of a short utterance. Exempt one small, similarly spelled
+/// capitalized name from the rewrite share, never an arbitrary replacement sentence.
+fn plausible_name(misheard: &str, word: &str) -> bool {
+    if !is_correction(misheard, word)
+        || !word.chars().any(|c| c.is_ascii_uppercase())
+        || !word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '\''))
+    {
+        return false;
+    }
+    let compact = |text: &str| {
+        text.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect::<Vec<_>>()
+    };
+    let (old, new) = (compact(misheard), compact(word));
+    if old.len() < 3 || new.len() < 3 {
+        return false;
+    }
+    let mut row: Vec<usize> = (0..=new.len()).collect();
+    for (i, a) in old.iter().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, b) in new.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (above + 1)
+                .min(row[j] + 1)
+                .min(diagonal + usize::from(a != b));
+            diagonal = above;
+        }
+    }
+    row[new.len()] * 5 <= old.len().max(new.len()) * 2
 }
 
 #[cfg(test)]
@@ -952,6 +1049,22 @@ mod tests {
                 &[("首機", ""), ("新的，", "新的shou，"), ("shou", "手機")]
             ),
             pairs(&[("首機", "手機")])
+        );
+    }
+
+    #[test]
+    fn a_word_selected_and_retyped_the_same_is_no_correction() {
+        // speech-to-text had it right: deleting 電池 and typing 電池 again teaches nothing
+        assert_eq!(
+            learned_after(PASTED, &[("電池", ""), ("漂亮，也", "漂亮，電池也")]),
+            NONE
+        );
+        assert_eq!(
+            learned_after(
+                "Please ask Alice about the release plan today.",
+                &[("ask Alice", "ask "), ("ask ", "ask Alice")]
+            ),
+            NONE
         );
     }
 

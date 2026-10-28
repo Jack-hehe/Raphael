@@ -1,8 +1,9 @@
+import json
+
 import pytest
 
 from raphael_core.brain.settings import (
     DEFAULTS,
-    STT_CLOUD_MODELS,
     STT_ENGINES,
     SettingsStore,
 )
@@ -15,6 +16,12 @@ def test_defaults_and_set(conn):
     assert s.get("monthly_limit_usd") == 20.0
 
 
+def test_catppuccin_skin_is_saved_and_read_back(conn):
+    store = SettingsStore(conn)
+    store.set("skin", "catppuccin")
+    assert SettingsStore(conn).get("skin") == "catppuccin"
+
+
 def test_rejects_unknown_key_and_wrong_type(conn):
     s = SettingsStore(conn)
     with pytest.raises(KeyError):
@@ -25,17 +32,51 @@ def test_rejects_unknown_key_and_wrong_type(conn):
 
 def test_the_defaults_are_the_documented_ones():
     assert DEFAULTS == {
+        "first_bot_profile": {},
+        "owner_name": "",
+        "owner_about": "",
+        "owner_photo": "",
+        "skin": "default",
         "monthly_limit_usd": 10.0,
         "cleanup_model": "openai/gpt-6-luna",
         "languages": ["zh-TW"],
-        "language": "zh",
         "history_retention_days": 30,
         "stt_engine": "cloud",
         "stt_cloud_model": "elevenlabs/scribe-v2",
         "agent_model": "openai/gpt-6-luna",
+        "quick_model": "",
+        "quick_effort": "low",
+        "assistant_model": "",
+        "action_mode": "direct",
+        "router_model": "",
+        "memory_model": "",
+        "pdf_model": "",
+        "agent_fallbacks": [],
+        "cleanup_fallbacks": [],
+        "router_fallbacks": [],
+        "vision_fallbacks": [],
+        "pdf_fallbacks": [],
+        "stt_fallbacks": [],
+        "memory_fallbacks": [],
         "agent_city": "台北",
+        "worker_cost_cap_usd": 0.2,
         "stt_local_model": "qwen3-asr",
         "model_favorites": {"cleanup": [], "answer": [], "stt": []},
+        "disconnected_clis": [],
+        "web_search_service": "openrouter",
+        "web_read_service": "builtin",
+        "vision_model": "",
+        "pdf_service": "builtin",
+        "searxng_url": "",
+        "web_search_enabled": True,
+        "web_read_enabled": True,
+        "vision_enabled": True,
+        "pdf_enabled": True,
+        "tts_enabled": False,
+        "tts_service": "fish",
+        "tts_fish_voice": "",
+        "tts_fish_model": "s2.1-pro-free",
+        "tts_language": "ja",
     }
 
 
@@ -47,8 +88,8 @@ def test_get_rejects_an_unknown_key(conn):
 def test_all_is_the_defaults_with_saved_values_on_top(conn):
     s = SettingsStore(conn)
     assert s.all() == DEFAULTS
-    s.set("language", "ja")
-    assert s.all() == {**DEFAULTS, "languages": ["ja-JP"], "language": "ja"}
+    s.set("languages", ["ja-JP"])
+    assert s.all() == {**DEFAULTS, "languages": ["ja-JP"]}
     s.all()["languages"].append("changed behind its back")
     s.get("languages").append("changed behind its back")
     assert DEFAULTS["languages"] == ["zh-TW"]
@@ -73,7 +114,7 @@ def test_a_whole_number_for_a_float_setting_is_kept_as_a_float(conn):
         ("history_retention_days", True),
         ("monthly_limit_usd", True),
         ("monthly_limit_usd", "20"),
-        ("language", 1),
+        ("agent_city", 1),
         ("cleanup_model", None),
     ],
 )
@@ -86,7 +127,7 @@ def test_rejects_values_that_are_not_the_defaults_type(conn, key, value):
 
 def test_values_are_stored_as_json_text(conn):
     s = SettingsStore(conn)
-    s.set("language", "ja")
+    s.set("languages", ["ja-JP"])
     s.set("history_retention_days", 7)
     s.set("monthly_limit_usd", 20)
     stored = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM settings")}
@@ -122,7 +163,6 @@ def test_speech_to_text_is_in_the_cloud_with_scribe_by_default(conn):
     assert s.get("stt_engine") == "cloud"
     assert s.get("stt_cloud_model") == "elevenlabs/scribe-v2"
     assert STT_ENGINES == ("cloud", "local")
-    assert STT_CLOUD_MODELS[0] == "elevenlabs/scribe-v2"
 
 
 def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
@@ -137,8 +177,18 @@ def test_the_engine_can_be_local_or_cloud_and_nothing_else(conn):
     assert s.get("stt_engine") == "cloud"
 
 
-@pytest.mark.parametrize("model", STT_CLOUD_MODELS)
-def test_every_listed_cloud_model_can_be_chosen(conn, model):
+@pytest.mark.parametrize(
+    "model",
+    [
+        "elevenlabs/scribe-v2",
+        "openai/gpt-transcribe",
+        "qwen/qwen3-asr-1.7b",
+        "deepgram/nova-3",
+        "some-new-maker/a-model-of-next-year",
+    ],
+)
+def test_any_cloud_model_id_can_be_saved(conn, model):
+    # The store keeps no list of models: whatever OpenRouter lists can be chosen.
     s = SettingsStore(conn)
     s.set("stt_cloud_model", model)
     assert s.get("stt_cloud_model") == model
@@ -162,7 +212,6 @@ def test_the_store_takes_any_cloud_model_id_and_leaves_the_list_to_the_brain(con
 def test_languages_are_taiwan_chinese_by_default(conn):
     s = SettingsStore(conn)
     assert s.get("languages") == ["zh-TW"]
-    assert s.get("language") == "zh"
 
 
 def test_a_valid_selection_of_languages_is_saved_in_order(conn):
@@ -170,7 +219,6 @@ def test_a_valid_selection_of_languages_is_saved_in_order(conn):
     s.set("languages", ["en-GB", "zh-CN", "ja-JP"])
     assert s.get("languages") == ["en-GB", "zh-CN", "ja-JP"]
     assert s.all()["languages"] == ["en-GB", "zh-CN", "ja-JP"]
-    assert s.get("language") == "auto"
 
 
 @pytest.mark.parametrize(
@@ -191,29 +239,16 @@ def test_languages_that_are_not_a_list_of_strings_are_a_type_error(conn, value):
         SettingsStore(conn).set("languages", value)
 
 
-@pytest.mark.parametrize(
-    ("old", "new"),
-    [
-        ("auto", ["zh-TW", "en-US", "ja-JP"]),
-        ("zh", ["zh-TW"]),
-        ("ja", ["ja-JP"]),
-        ("en", ["en-US"]),
-    ],
-)
-def test_a_saved_old_language_reads_as_languages(conn, old, new):
-    conn.execute("INSERT INTO settings (key, value) VALUES ('language', ?)", (f'"{old}"',))
-    s = SettingsStore(conn)
-    assert s.get("languages") == new
-    assert s.all()["languages"] == new
-    assert s.get("language") == ("auto" if old == "auto" else old)
-
-
-def test_a_saved_selection_wins_over_the_old_language(conn):
+def test_the_single_language_of_before_the_first_release_is_no_longer_a_setting(conn):
+    # A database from a build older than the first release may hold it: it is neither read nor
+    # offered, and it cannot be set again.
     conn.execute("INSERT INTO settings (key, value) VALUES ('language', '\"ja\"')")
     s = SettingsStore(conn)
-    s.set("languages", ["zh-HK"])
-    assert s.get("languages") == ["zh-HK"]
-    assert s.get("language") == "zh"
+    assert s.get("languages") == ["zh-TW"] and "language" not in s.all()
+    with pytest.raises(KeyError):
+        s.get("language")
+    with pytest.raises(KeyError):
+        s.set("language", "ja")
 
 
 def test_a_saved_selection_that_is_no_longer_valid_reads_as_the_default(conn):
@@ -221,13 +256,6 @@ def test_a_saved_selection_that_is_no_longer_valid_reads_as_the_default(conn):
     assert SettingsStore(conn).get("languages") == ["zh-TW"]
 
 
-def test_setting_the_old_language_sets_languages(conn):
-    s = SettingsStore(conn)
-    s.set("language", "auto")
-    assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
-    with pytest.raises(ValueError, match="'language'"):
-        s.set("language", "de")
-    assert s.get("languages") == ["zh-TW", "en-US", "ja-JP"]
 
 def test_learning_corrections_is_no_longer_a_setting_and_a_saved_off_is_ignored(conn):
     # Learning is always on. A database from a version with the switch may hold it off: it is
@@ -404,3 +432,130 @@ def test_a_local_engine_that_is_not_in_the_catalogue_is_refused(conn, value):
 def test_the_local_engine_must_be_text(conn):
     with pytest.raises(TypeError):
         SettingsStore(conn).set("stt_local_model", 3)
+
+
+def test_there_can_be_no_local_model_while_the_cloud_is_the_engine(conn):
+    s = SettingsStore(conn)
+    s.set("stt_local_model", None)
+    assert s.get("stt_local_model") is None
+    assert s.all()["stt_local_model"] is None
+    s.set("stt_local_model", "sensevoice")
+    assert s.get("stt_local_model") == "sensevoice"
+
+
+def test_the_local_engine_needs_a_local_model(conn):
+    s = SettingsStore(conn)
+    s.set("stt_local_model", None)
+    with pytest.raises(ValueError, match="stt_local_model"):
+        s.set("stt_engine", "local")
+    assert s.get("stt_engine") == "cloud"
+    s.set("stt_local_model", "sensevoice")
+    s.set("stt_engine", "local")
+    with pytest.raises(ValueError, match="stt_local_model"):
+        s.set("stt_local_model", None)
+    assert s.get("stt_local_model") == "sensevoice"
+
+
+def test_raphaels_voice_provider_is_fish_and_no_voice_is_not_a_provider(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("tts_service") == "fish" and settings.get("tts_enabled") is False
+    settings.set("tts_service", "fish")
+    assert settings.get("tts_service") == "fish"
+    for bad in ("elevenlabs", "Fish", "", "none"):
+        with pytest.raises(ValueError):
+            settings.set("tts_service", bad)
+    with pytest.raises(TypeError):
+        settings.set("tts_service", 1)
+
+
+def test_the_voice_speaks_japanese_and_no_other_language_yet(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("tts_language") == "ja"
+    settings.set("tts_language", "ja")
+    for bad in ("zh-TW", "en", ""):
+        with pytest.raises(ValueError):
+            settings.set("tts_language", bad)
+
+
+ENABLED = ("web_search_enabled", "web_read_enabled", "vision_enabled", "pdf_enabled", "tts_enabled")
+
+
+def test_the_switches_are_on_or_off_and_nothing_else(conn):
+    settings = SettingsStore(conn)
+    assert [settings.get(key) for key in ENABLED] == [True, True, True, True, False]
+    for key in ENABLED:
+        settings.set(key, not DEFAULTS[key])
+        assert settings.get(key) is (not DEFAULTS[key])
+        for bad in (1, 0, "true", None):
+            with pytest.raises(TypeError):
+                settings.set(key, bad)
+
+
+def _save_raw(conn, key, value):
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+
+def test_a_saved_none_voice_reads_as_the_default_provider_with_the_voice_off(conn):
+    _save_raw(conn, "tts_service", "none")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_service") == "fish" and settings.get("tts_enabled") is False
+    everything = settings.all()
+    assert everything["tts_service"] == "fish" and everything["tts_enabled"] is False
+
+
+def test_a_saved_fish_voice_with_an_id_reads_as_on_and_without_one_as_off(conn):
+    _save_raw(conn, "tts_service", "fish")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_enabled") is False  # fish, but no voice id: it could not speak
+    settings.set("tts_fish_voice", "0123456789abcdef0123456789abcdef")
+    assert settings.get("tts_enabled") is True and settings.all()["tts_enabled"] is True
+
+
+def test_a_saved_switch_wins_over_what_the_older_voice_setting_says(conn):
+    _save_raw(conn, "tts_service", "fish")
+    _save_raw(conn, "tts_fish_voice", "0123456789abcdef0123456789abcdef")
+    settings = SettingsStore(conn)
+    assert settings.get("tts_enabled") is True
+    settings.set("tts_enabled", False)
+    assert settings.get("tts_enabled") is False and settings.all()["tts_enabled"] is False
+
+
+def test_the_fish_voice_is_32_hexadecimal_characters_or_none_and_is_not_in_the_defaults(conn):
+    settings = SettingsStore(conn)
+    assert DEFAULTS["tts_fish_voice"] == "" and settings.get("tts_fish_voice") == ""
+    settings.set("tts_fish_voice", "  0123456789ABCDEF0123456789abcdef  ")
+    assert settings.get("tts_fish_voice") == "0123456789abcdef0123456789abcdef"
+    settings.set("tts_fish_voice", "")
+    assert settings.get("tts_fish_voice") == ""
+    for bad in ("0123", "g" * 32, "0" * 33, "0123456789abcdef 123456789abcdef"):
+        with pytest.raises(ValueError):
+            settings.set("tts_fish_voice", bad)
+    with pytest.raises(TypeError):
+        settings.set("tts_fish_voice", 5)
+
+
+def test_the_fish_model_is_a_short_token(conn):
+    settings = SettingsStore(conn)
+    settings.set("tts_fish_model", " s2.1-pro ")
+    assert settings.get("tts_fish_model") == "s2.1-pro"
+    for bad in ("", "  ", "has space", "s2/pro", "x" * 41, "-s1", "好"):
+        with pytest.raises(ValueError):
+            settings.set("tts_fish_model", bad)
+
+
+def test_disconnected_clis_deduplicates_validates_and_repairs_damaged_values(conn):
+    settings = SettingsStore(conn)
+    assert settings.get("disconnected_clis") == []
+    settings.set("disconnected_clis", ["codex", "gemini", "codex"])
+    assert settings.get("disconnected_clis") == ["codex", "gemini"]
+    assert settings.all()["disconnected_clis"] == ["codex", "gemini"]
+    with pytest.raises(ValueError):
+        settings.set("disconnected_clis", ["nope"])
+    with pytest.raises(TypeError):
+        settings.set("disconnected_clis", [1])
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disconnected_clis', ?)", (json.dumps(["codex", "bad", 99, "codex"]),))
+    assert settings.get("disconnected_clis") == ["codex"]
+    assert settings.all()["disconnected_clis"] == ["codex"]
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disconnected_clis', ?)", (json.dumps("not-a-list"),))
+    assert settings.get("disconnected_clis") == []
+    assert settings.all()["disconnected_clis"] == []

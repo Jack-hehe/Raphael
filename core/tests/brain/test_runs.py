@@ -1,0 +1,118 @@
+import csv
+import io
+import json
+from datetime import UTC, datetime
+
+import pytest
+
+from raphael_core.brain.runs import RunAnalytics
+
+
+def at(day):
+    return int(datetime.fromisoformat(day).replace(tzinfo=UTC).timestamp() * 1000)
+
+
+@pytest.fixture
+def runs(conn):
+    conn.execute("INSERT INTO agent_turns(id,created_at_ms,session_id,question,route,prefix,text,status,cost_usd,model) VALUES(1,?,'s','=SUM(A1)','answer','','ok','done',0.03,'vendor/model')", (at('2026-10-24'),))
+    conn.execute("INSERT INTO agent_steps(turn_id,n,at_ms,kind,tool,server,outcome,ms) VALUES(1,1,?,'tool','web_search','Raphael','ok',600)", (at('2026-10-24')+1600,))
+    conn.execute("INSERT INTO run_metrics VALUES('turn',1,?,?,120,1,?)", (at('2026-10-24'), at('2026-10-24')+2000, json.dumps([{'at_ms':at('2026-10-24')+1000,'ms':1000,'model':'vendor/model','tokens':120,'outcome':'ok'}])))
+    conn.commit()
+    return RunAnalytics(conn, lambda: at('2026-10-24T12:00:00'))
+
+
+async def test_runs_have_real_metrics_and_local_calendar_periods(runs):
+    result = await runs.read({'range':'month','tz':'Asia/Taipei'})
+    assert result['summary'] == {'duration_ms':2000,'cost_usd':0.03,'tokens':120,'ai_steps':1,'tools':1,'errors':0}
+    assert result['groups']['member'][0]['label'] == 'Raphael'
+    assert 'runs' not in result
+    assert result['groups']['model'][0]['label'] == 'vendor/model'
+    assert result['start_day'] == '2026-10-01'
+    assert (await runs.read({'range':'last_month','tz':'UTC'}))['total'] == 0
+
+
+async def test_bill_survives_deleted_runs_and_uses_the_sidebar_tracker(conn):
+    from datetime import timedelta, timezone
+    from raphael_core.brain.settings import SettingsStore
+    from raphael_core.brain.spend import SpendTracker
+
+    now = lambda: at('2026-09-30T18:00:00')
+    ledger = SpendTracker(conn, now, timezone(timedelta(hours=8)))
+    for purpose in ('agent', 'stt', 'cleanup', 'memory', 'new-purpose'):
+        ledger.record(purpose=purpose, model='m', cost_usd=.1, prompt_tokens=1, completion_tokens=1)
+    settings = SettingsStore(conn)
+    reader = RunAnalytics(conn, now, spend=ledger, settings=settings)
+    conn.execute("INSERT INTO agent_turns(created_at_ms,session_id,question,route,prefix,text,status,cost_usd) VALUES(?,'s','Retained work','answer','','ok','done',.1)", (now(),))
+    # The report's requested display zone cannot move the sidebar's bill into September.
+    result = await reader.read({'range':'month', 'tz':'UTC'})
+    assert result['bill']['cost_usd'] == ledger.month_total() == .5
+    assert result['summary']['cost_usd'] == .1
+    assert not result['fish_voice']
+    settings.set('tts_enabled', True)
+    result = await reader.read({'range':'month', 'tz':'UTC'})
+    assert result['fish_voice']
+    conn.execute('DELETE FROM agent_turns')
+    after = await reader.read({'range':'month'})
+    assert after['bill'] == result['bill']
+    assert after['summary']['cost_usd'] == 0
+
+
+async def test_csv_exports_every_run_and_prevents_spreadsheet_formulas(runs, conn):
+    result = await runs.export({'range':'all','tz':'UTC'})
+    rows = list(csv.DictReader(io.StringIO(result['csv'])))
+    assert len(rows) == 1
+    assert rows[0]['title'] == "'=SUM(A1)"
+    assert rows[0]['tokens'] == '120'
+    conn.execute('DELETE FROM agent_turns WHERE id=1')
+    assert conn.execute('SELECT COUNT(*) FROM run_metrics').fetchone()[0] == 0
+
+
+async def test_aggregates_and_csv_do_not_double_count_linked_reports(runs, conn):
+    conn.execute("INSERT INTO agent_turns(id,created_at_ms,session_id,question,route,prefix,text,status,cost_usd,model) VALUES(2,?,'s','Copied report','routine','','ok','done',0.07,'m')", (at('2026-10-24'),))
+    conn.execute("INSERT INTO worker_tasks(id,created_at_ms,state,session_id,turn_id,language,text,cost_usd) VALUES(1,?,'done','s',2,'en','Research task',0.07)", (at('2026-10-24'),))
+    page = await runs.read({'range':'all','tz':'UTC'})
+    assert page['total'] == 2
+    assert page['summary']['cost_usd'] == pytest.approx(.1)
+    rows = list(csv.DictReader(io.StringIO((await runs.export({'range':'all','tz':'UTC'}))['csv'])))
+    assert {row['title'] for row in rows} == {"'=SUM(A1)", 'Research task'}
+    task = next(row for row in rows if row['title'] == 'Research task')
+    assert task['duration_ms'] == '' and task['tokens'] == ''
+
+
+@pytest.mark.parametrize('params', [{'range':'yesterday'}, {'tz':'not/a-zone'}])
+async def test_invalid_period_is_rejected(runs, params):
+    from raphael_core.protocol import RpcError
+    with pytest.raises(RpcError):
+        await runs.read(params)
+
+
+async def test_calendar_period_starts_at_local_midnight(runs, conn):
+    conn.execute("UPDATE agent_turns SET created_at_ms=? WHERE id=1", (at('2026-09-30T18:00:00'),))
+    assert (await runs.read({'range':'month','tz':'Asia/Taipei'}))['total'] == 1
+    assert (await runs.read({'range':'month','tz':'UTC'}))['total'] == 0
+    assert (await runs.read({'range':'week','tz':'UTC'}))['start_day'] == '2026-10-19'
+
+
+async def test_routine_runs_use_record_cost_and_metadata_without_counting_the_linked_task(runs, conn):
+    conn.execute("INSERT INTO routines(id,member_id,title,prompt,schedule,next_run_ms,created_at_ms) VALUES(1,0,'Daily review','Review','{}',0,0)")
+    conn.execute("INSERT INTO agent_turns(id,created_at_ms,session_id,question,route,prefix,text,status,cost_usd) VALUES(2,?,'r','Report','routine','','ok','done',0.07)", (at('2026-10-24'),))
+    conn.execute("INSERT INTO worker_tasks(id,created_at_ms,state,session_id,turn_id,language,text,cost_usd,routine_id) VALUES(1,?,'done','r',2,'en','Review',0.07,1)", (at('2026-10-24'),))
+    conn.execute("INSERT INTO routine_runs(id,routine_id,started,finished,status,turn_id,cost) VALUES(1,1,?,?,'done',2,.07)", (at('2026-10-24'), at('2026-10-24')+3000))
+    conn.execute("INSERT INTO run_metrics VALUES('task',1,?,?,42,1,'[]')", (at('2026-10-24'), at('2026-10-24')+2000))
+    result = await runs.read({'range':'all'})
+    assert result['total'] == 2
+    assert result['summary']['cost_usd'] == pytest.approx(.1)
+    rows = list(csv.DictReader(io.StringIO((await runs.export({'range':'all'}))['csv'])))
+    routine = next(row for row in rows if row['title'] == 'Daily review')
+    assert routine['tokens'] == '42'
+    assert any(group['label'] == 'Daily review' and group['runs'] == 1 for group in result['groups']['routine'])
+
+
+async def test_routine_run_without_retained_turn_still_has_cost_and_status(runs, conn):
+    conn.execute("INSERT INTO routines(id,member_id,title,prompt,schedule,next_run_ms,created_at_ms) VALUES(1,0,'Daily review','Review','{}',0,0)")
+    conn.execute("INSERT INTO routine_runs(id,routine_id,started,finished,status,cost) VALUES(3,1,?,?,'error',.02)", (at('2026-10-24'), at('2026-10-24')+3000))
+    result = await runs.read({'range':'all'})
+    assert result['total'] == 2
+    assert result['summary']['duration_ms'] == 5000
+    assert result['summary']['cost_usd'] == .05
+    assert result['summary']['errors'] == 1

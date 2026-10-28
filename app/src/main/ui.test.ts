@@ -2,7 +2,13 @@
 import { describe, expect, test } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { btn, menuPlacement, meter, sel, selText, setMeter } from "./ui";
+import { btn, iconButton, iconBtn, menuPlacement, submenuPlacement, meter, sel, selText, setMeter } from "./ui";
+
+test("trash actions share destructive styling while other icon controls remain neutral", () => {
+  expect(iconButton("trash", "Delete")).toContain('class="btn icon danger"');
+  expect(iconBtn("trash", "Remove", ' data-act="delete"', "mb-tool")).toContain('class="btn icon danger row mb-tool"');
+  expect(iconButton("search", "Search")).not.toContain("danger");
+});
 
 describe("popover placement", () => {
   const viewport = { width: 720, height: 480, headerBottom: 32 };
@@ -10,6 +16,21 @@ describe("popover placement", () => {
   test("a short menu stays below and right aligned with its trigger", () => {
     expect(menuPlacement({ top: 80, bottom: 112, right: 600 }, { width: 240, height: 120 }, viewport))
       .toEqual({ left: 360, top: 116, maxHeight: 356 });
+  });
+
+  test("text completions start at the character and prefer the space above", () => {
+    expect(menuPlacement({ left: 120, right: 120, top: 300, bottom: 320 }, { width: 240, height: 120 }, viewport, "start"))
+      .toEqual({ left: 120, top: 176, maxHeight: 256 });
+    expect(menuPlacement({ left: 120, right: 120, top: 60, bottom: 80 }, { width: 240, height: 120 }, viewport, "start"))
+      .toEqual({ left: 120, top: 84, maxHeight: 388 });
+    expect(menuPlacement({ left: 690, right: 690, top: 300, bottom: 320 }, { width: 240, height: 120 }, viewport, "start").left).toBe(472);
+  });
+
+  test("a menu at the pointer starts at the point, prefers the space below and keeps inside the window", () => {
+    const point = (x: number, y: number) => ({ left: x, right: x, top: y, bottom: y });
+    expect(menuPlacement(point(300, 200), { width: 240, height: 120 }, viewport, "pointer")).toEqual({ left: 300, top: 204, maxHeight: 268 });
+    expect(menuPlacement(point(300, 440), { width: 240, height: 120 }, viewport, "pointer")).toEqual({ left: 300, top: 316, maxHeight: 396 });
+    expect(menuPlacement(point(700, 200), { width: 240, height: 120 }, viewport, "pointer").left).toBe(472);
   });
 
   test("an upward menu is clamped below the custom header and scrolls instead of covering it", () => {
@@ -34,6 +55,21 @@ describe("popover placement", () => {
       .toEqual({ left: 392, top: 136, maxHeight: 336 });
     expect(menuPlacement({ top: 300, bottom: 332, right: 180 }, { width: 320, height: 400 }, { ...viewport, headerBottom: 0 }))
       .toEqual({ left: 8, top: 8, maxHeight: 288 });
+  });
+});
+
+describe("submenu placement", () => {
+  const viewport = { width: 720, height: 900, headerBottom: 32 };
+  test("a submenu prefers the right of its row and aligns with its top", () => {
+    expect(submenuPlacement({ left: 100, right: 350, top: 650 }, { width: 180, height: 120 }, viewport))
+      .toEqual({ left: 354, top: 650, maxHeight: 852 });
+  });
+  test("it flips left only when the right side has no room", () => {
+    expect(submenuPlacement({ left: 500, right: 700, top: 650 }, { width: 180, height: 120 }, viewport).left).toBe(316);
+  });
+  test("the viewport and custom header bound a tall submenu", () => {
+    expect(submenuPlacement({ left: 100, right: 350, top: 850 }, { width: 320, height: 1000 }, viewport))
+      .toEqual({ left: 354, top: 40, maxHeight: 852 });
   });
 });
 
@@ -108,6 +144,6 @@ describe("the main window's actions", () => {
     const css = read(path.join(root, "styles.css"));
     expect(css).toMatch(/\.btn \{[^}]*border: 1px solid var\(--btn-edge\)/);
     expect(css).toMatch(/\.btn:hover:not\(:disabled\) \{[^}]*background: var\(--hover\)/);
-    expect(css).toMatch(/\.btn:active:not\(:disabled\) \{[^}]*background: var\(--selected\)/);
+    expect(css).toMatch(/\.btn:active:not\(:disabled\) \{[^}]*background: var\(--pressed\)/);
   });
 });

@@ -1,21 +1,25 @@
 [project]
 name = "raphael-core"
-version = "0.2.0"
+version = "0.3.0"
 license = "MIT"
 requires-python = ">=3.12.11,<3.13"
 dependencies = [
-    "httpx>=0.28.1,<1",
+    "httpx[http2]>=0.28.1,<1",
+    "jsonschema==4.26.0",
     "keyring==25.7.0",
     "mcp>=2.3.0",
     "numpy>=2",
     "opencc==1.4.2",
+    "pypdf==6.21.2",
     "sherpa-onnx==1.13.8",
     # The libraries sherpa-onnx loads (onnxruntime.dll among them). Its wheels name this package as a
     # dependency, but uv locks from the metadata of the first wheel listed (linux_armv7l), which
     # does not, so it is pinned here. Without it Windows loads its own onnxruntime.dll and crashes.
     "sherpa-onnx-core==1.13.8",
     "sounddevice==0.5.6",
+    "soundfile==0.14.0",
     "soxr>=1.1",
+    "tzdata>=2025.3",
 ]
 
 [dependency-groups]

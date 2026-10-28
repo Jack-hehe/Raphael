@@ -1,0 +1,28 @@
+/* The owner's safety rules in the 「拉斐爾」 tab of the settings (safety-rules.ts): one card, the line
+   that adds a rule over the list of the rules. The card, the field, the dropdown and the buttons are
+   the app's own (styles.css); these are only the columns and their spacing. Colours are the app's
+   tokens. The icon-only buttons (the pencil, the trash can) are borderless, sized like the memory's. */
+.slist.rules-card { padding: 14px var(--slist-pad); display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-2); }
+.rules-add { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.rules-add > .rules-field { flex: 1 1 220px; min-width: 0; }
+.rules-card .sel { flex: none; width: 128px; justify-content: space-between; }
+.rules-add > .action-row { flex: none; margin-inline-start: auto; }
+.rules-card > .note { margin: -4px 0 0; padding: 0; }
+.rules-list { display: grid; grid-template-columns: minmax(0, 1fr); }
+.rules-head, .rules-row { display: grid; grid-template-columns: minmax(0, 1fr) 128px 68px; align-items: center; column-gap: var(--sp-2); }
+.rules-head { padding: 0 0 var(--sp-1); font-size: var(--fs-xs); color: var(--text-3); }
+.rules-row { min-height: 44px; padding: var(--sp-1) 0; border-top: 1px solid var(--line); font-size: var(--fs-sm); }
+.rules-what { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.rules-how { font-weight: 600; color: var(--text); }
+.rules-tools { display: flex; justify-content: flex-end; gap: var(--sp-1); }
+.rules-tools .btn.icon { width: 32px; min-height: 32px; padding: 0; }
+/* a rule being changed: its words in a field, its dropdown, then 取消 and 儲存 */
+.rules-row.is-editing { grid-template-columns: minmax(0, 1fr) 128px auto; padding: var(--sp-1) 0; }
+.rules-row.is-editing > .rules-field { min-width: 0; }
+.rules-list > .note { padding: 0 0 var(--sp-1); }
+.rules-none { padding: var(--sp-2) 0 var(--sp-1); border-top: 1px solid var(--line); font-size: var(--fs-sm); color: var(--text-3); }
+.rules-wait { display: flex; justify-content: center; padding: var(--sp-1) 0; }
+@media (max-width: 760px) {
+  .rules-row.is-editing { grid-template-columns: minmax(0, 1fr) 128px; row-gap: var(--sp-1); }
+  .rules-row.is-editing > .rules-acts { grid-column: 1 / -1; }
+}

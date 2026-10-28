@@ -136,7 +136,361 @@ SCHEMA_V10 = {
         "last_used_ms INTEGER NOT NULL",
     ],
 }
-LATEST = 10
+# Schema v11 adds what the conversation view shows: where a turn came from, the model that
+# answered, the fast tier's steps of a turn and why a step of the worker failed.
+SCHEMA_V11 = {
+    **SCHEMA_V10,
+    "agent_turns": [
+        *SCHEMA_V10["agent_turns"],
+        "source TEXT NOT NULL DEFAULT 'voice'",
+        "model TEXT",
+    ],
+    "worker_steps": [*SCHEMA_V10["worker_steps"], "reason TEXT"],
+    "agent_steps": [
+        "id INTEGER PK",
+        "turn_id INTEGER NOT NULL",
+        "n INTEGER NOT NULL",
+        "at_ms INTEGER NOT NULL",
+        "kind TEXT NOT NULL",
+        "tool TEXT NOT NULL",
+        "server TEXT",
+        "outcome TEXT NOT NULL",
+        "ms INTEGER NOT NULL DEFAULT 0",
+        "reason TEXT",
+    ],
+}
+# Schema v12 adds what a rerun and an interrupted task's report need: whether the report was
+# said yet and the task a rerun came from.
+SCHEMA_V12 = {
+    **SCHEMA_V11,
+    "worker_tasks": [
+        *SCHEMA_V11["worker_tasks"],
+        "announced INTEGER NOT NULL DEFAULT 1",
+        "rerun_of INTEGER",
+    ],
+}
+# Schema v13 adds one continuous conversation: its rolling summary, the numbers the memory keeps,
+# and the search over the turns (an FTS5 table, which SQLite keeps in shadow tables of its own).
+SCHEMA_V13 = {
+    **SCHEMA_V12,
+    "agent_summary": [
+        "id INTEGER PK",
+        "text TEXT NOT NULL",
+        "through_turn_id INTEGER NOT NULL",
+        "updated_at_ms INTEGER NOT NULL",
+    ],
+    "memory_state": ["key TEXT PK", "value INTEGER NOT NULL"],
+    "agent_turns_fts": [" ", " "],  # a virtual table: its columns have no type
+}
+# Schema v14 adds what the tools of the services leave: the names and types of the files handed with
+# a turn, and the service a step used.
+SCHEMA_V14 = {
+    **SCHEMA_V13,
+    "agent_turns": [*SCHEMA_V13["agent_turns"], "attachments TEXT"],
+    "agent_steps": [*SCHEMA_V13["agent_steps"], "detail TEXT"],
+    "worker_steps": [*SCHEMA_V13["worker_steps"], "detail TEXT"],
+}
+# Schema v15 adds the members of the owner's team: whose thread a turn is in and whose a task is, a
+# summary for each conversation in place of the one, the groups, the members, their routines and
+# which threads have news.
+SCHEMA_V15 = {
+    **{name: columns for name, columns in SCHEMA_V14.items() if name != "agent_summary"},
+    "agent_turns": [
+        *SCHEMA_V14["agent_turns"],
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "peer_id INTEGER",
+    ],
+    "worker_tasks": [
+        *SCHEMA_V14["worker_tasks"],
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "routine_id INTEGER",
+    ],
+    "conversation_summaries": [
+        "member_id INTEGER PK",
+        "text TEXT NOT NULL",
+        "through_turn_id INTEGER NOT NULL",
+        "updated_at_ms INTEGER NOT NULL",
+    ],
+    "member_groups": [
+        "id INTEGER PK",
+        "name TEXT NOT NULL",
+        "position INTEGER NOT NULL",
+        "sources TEXT NOT NULL DEFAULT '[]'",
+    ],
+    "members": [
+        "id INTEGER PK",
+        "name TEXT NOT NULL",
+        "role TEXT NOT NULL DEFAULT ''",
+        "instructions TEXT NOT NULL DEFAULT ''",
+        "avatar TEXT NOT NULL DEFAULT ''",
+        "group_id INTEGER",
+        "model TEXT NOT NULL DEFAULT ''",
+        "position INTEGER NOT NULL",
+        "created_at_ms INTEGER NOT NULL",
+        "tools TEXT",
+    ],
+    "routines": [
+        "id INTEGER PK",
+        "member_id INTEGER NOT NULL",
+        "title TEXT NOT NULL",
+        "prompt TEXT NOT NULL",
+        "schedule TEXT NOT NULL",
+        "enabled INTEGER NOT NULL DEFAULT 1",
+        "last_run_ms INTEGER",
+        "next_run_ms INTEGER",
+        "created_at_ms INTEGER NOT NULL",
+    ],
+    "member_unread": ["member_id INTEGER PK"],
+}
+# Where SQLite keeps the counters of the tables with AUTOINCREMENT.
+SEQUENCE = {"sqlite_sequence"}
+# Schema v16 adds the owner's safety rules (and whether the first run's were put there), and the
+# questions the background tasks wait on.
+SCHEMA_V16 = {
+    **SCHEMA_V15,
+    "safety_rules": [
+        "id INTEGER PK",
+        "action TEXT NOT NULL",
+        "verdict TEXT NOT NULL",
+        "position INTEGER NOT NULL",
+    ],
+    "safety_state": ["key TEXT PK", "value INTEGER NOT NULL"],
+    "worker_questions": [
+        "id TEXT PK",
+        "task_id INTEGER NOT NULL",
+        "member_id INTEGER NOT NULL DEFAULT 0",
+        "prefix TEXT NOT NULL",
+        "text TEXT NOT NULL",
+        "tier TEXT",
+        "created_at_ms INTEGER NOT NULL",
+        "expires_at_ms INTEGER NOT NULL",
+        "remaining_s REAL NOT NULL",
+        "state TEXT NOT NULL DEFAULT 'waiting'",
+        "answered_at_ms INTEGER",
+    ],
+}
+FTS_SHADOWS = {f"agent_turns_fts_{part}" for part in ("data", "idx", "content", "docsize", "config")}
+SCHEMA_V17 = {
+    **SCHEMA_V16,
+    "agent_messages": ["turn_id INTEGER PK NOT NULL", "seq INTEGER PK NOT NULL", "kind TEXT NOT NULL", "text TEXT NOT NULL", "at_ms INTEGER NOT NULL"],
+}
+SCHEMA_V19 = {**SCHEMA_V17, "members": [*SCHEMA_V17["members"], "personality TEXT NOT NULL DEFAULT ''"]}
+SCHEMA_V20 = {**SCHEMA_V19, "dictation_daily": [
+    "day TEXT PK NOT NULL", "dictations INTEGER NOT NULL DEFAULT 0", "words INTEGER NOT NULL DEFAULT 0",
+    "audio_seconds REAL NOT NULL DEFAULT 0", "processing_ms INTEGER NOT NULL DEFAULT 0",
+    "estimated INTEGER NOT NULL DEFAULT 0", "estimated_words INTEGER NOT NULL DEFAULT 0",
+    "estimated_dictations INTEGER NOT NULL DEFAULT 0",
+]}
+SCHEMA_V21 = {**SCHEMA_V20, "agent_turns": [*SCHEMA_V20["agent_turns"], "quote TEXT"]}
+SCHEMA_V22 = {
+    **SCHEMA_V21,
+    "members": [*SCHEMA_V21["members"], "blurb TEXT NOT NULL DEFAULT ''",
+                "reply_style TEXT NOT NULL DEFAULT 'full'", "voice TEXT NOT NULL DEFAULT ''",
+                *[f"{field} INTEGER NOT NULL DEFAULT 0" for field in
+                  ("read_aloud", "notify", "ask_before_members", "pinned", "hidden")]],
+    "member_skills": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                      "description TEXT NOT NULL", "source TEXT NOT NULL", "enabled INTEGER NOT NULL DEFAULT 1"],
+    "member_commands": ["id INTEGER PK", "member_id INTEGER NOT NULL", "name TEXT NOT NULL",
+                        "description TEXT NOT NULL", "template TEXT NOT NULL"],
+}
+SCHEMA_V23 = {**SCHEMA_V22,
+    "routine_runs": ["id INTEGER PK", "routine_id INTEGER NOT NULL", "started INTEGER NOT NULL", "scheduled INTEGER", "finished INTEGER", "status TEXT NOT NULL", "turn_id INTEGER", "summary TEXT NOT NULL DEFAULT ''", "cost REAL NOT NULL DEFAULT 0"],
+    "rooms": ["id INTEGER PK", "name TEXT NOT NULL", "group_id INTEGER", "created INTEGER NOT NULL", "is_team INTEGER NOT NULL DEFAULT 0"],
+    "room_members": ["room_id INTEGER PK NOT NULL", "member_id INTEGER PK NOT NULL"],
+    "room_messages": ["id INTEGER PK", "room_id INTEGER NOT NULL", "member_id INTEGER", "text TEXT NOT NULL", "created INTEGER NOT NULL", "request_id TEXT", "attachments TEXT", "reply_to INTEGER", "turn_id INTEGER"],
+}
+SCHEMA_V24 = {
+    **SCHEMA_V23,
+    "agent_turns": [*SCHEMA_V23["agent_turns"], "conversation_id INTEGER"],
+    "conversations": ["id INTEGER PK", "member_id INTEGER NOT NULL", "title TEXT NOT NULL DEFAULT ''", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "is_default INTEGER NOT NULL DEFAULT 0"],
+    "conversation_context_summaries": ["conversation_id INTEGER PK", "text TEXT NOT NULL", "through_turn_id INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL"],
+    "agent_conversation_cli_sessions": ["conversation_id INTEGER PK NOT NULL", "brain TEXT PK NOT NULL", "session_id TEXT NOT NULL"],
+    "subscription_quotas": ["provider TEXT PK NOT NULL", "reset_at_ms INTEGER", "updated_at_ms INTEGER NOT NULL"],
+}
+SCHEMA_V25 = {**SCHEMA_V24, "run_metrics": [
+    "kind TEXT PK NOT NULL", "run_id INTEGER PK NOT NULL", "started_at_ms INTEGER NOT NULL",
+    "finished_at_ms INTEGER", "tokens INTEGER NOT NULL DEFAULT 0", "ai_steps INTEGER NOT NULL DEFAULT 0",
+    "model_spans TEXT NOT NULL DEFAULT '[]'",
+]}
+SCHEMA_V26 = {**SCHEMA_V25, "subscription_allowances": [
+    "provider TEXT PK NOT NULL", "period TEXT PK NOT NULL", "remaining_percent REAL", "resets_at INTEGER",
+    "status TEXT NOT NULL", "updated_at_ms INTEGER NOT NULL",
+]}
+SCHEMA_V27 = {
+    **SCHEMA_V26,
+    "rooms": [*SCHEMA_V26["rooms"], "default_responder TEXT NOT NULL DEFAULT 'auto'"],
+    "room_messages": [*SCHEMA_V26["room_messages"], "reply_to_member INTEGER", "kind TEXT NOT NULL DEFAULT 'message'", "origin_message_id INTEGER", "exchange_settled INTEGER NOT NULL DEFAULT 0"],
+    "room_exchanges": [
+        "origin_message_id INTEGER PK", "room_id INTEGER NOT NULL", "state TEXT NOT NULL", "language TEXT NOT NULL",
+        "pending TEXT", "active_turn INTEGER", "turns_taken INTEGER NOT NULL DEFAULT 0", "spoken TEXT NOT NULL DEFAULT '[]'",
+        "hops INTEGER NOT NULL DEFAULT 0", "chime_ins INTEGER NOT NULL DEFAULT 0", "cost REAL NOT NULL DEFAULT 0",
+        "stop_requested INTEGER NOT NULL DEFAULT 0", "wrapup_sent INTEGER NOT NULL DEFAULT 0", "reason TEXT NOT NULL DEFAULT ''",
+    ],
+}
+LATEST = 39
+
+
+def test_v25_preserves_conversations_and_quotas_and_cleans_deleted_run_metrics(tmp_path):
+    path = tmp_path / "v24.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 25):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO subscription_quotas VALUES ('claude', 9999999999999, 100)")
+    raw.execute("INSERT INTO agent_turns (session_id,question,route,prefix,text,status,created_at_ms,conversation_id) SELECT 's','Kept','answer','','ok','done',100,id FROM conversations WHERE member_id=0")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert migrated.execute("SELECT provider FROM subscription_quotas").fetchone()[0] == "claude"
+    turn = migrated.execute("SELECT id,conversation_id FROM agent_turns").fetchone()
+    assert migrated.execute("SELECT id FROM conversations WHERE id=?", (turn[1],)).fetchone()
+    migrated.execute("INSERT INTO run_metrics VALUES('turn',?,100,200,5,1,'[]')", (turn[0],))
+    migrated.execute("DELETE FROM agent_turns WHERE id=?", (turn[0],))
+    assert migrated.execute("SELECT COUNT(*) FROM run_metrics").fetchone()[0] == 0
+    migrated.close()
+
+
+SCHEMA_V28 = {**SCHEMA_V27, "conversations": [*SCHEMA_V27["conversations"], "kind TEXT NOT NULL DEFAULT 'standard'"]}
+SCHEMA_V29 = {
+    **SCHEMA_V28,
+    "rooms": [*SCHEMA_V28["rooms"], "membership_state TEXT NOT NULL DEFAULT 'ready'", "creation_request_id TEXT"],
+    "room_messages": [*SCHEMA_V28["room_messages"], "thread_id INTEGER"],
+    "agent_turns": [*SCHEMA_V28["agent_turns"], "scope TEXT NOT NULL DEFAULT 'private'", "room_id INTEGER", "thread_id INTEGER", "source_turn_id INTEGER"],
+    "worker_tasks": [*SCHEMA_V28["worker_tasks"], "scope TEXT NOT NULL DEFAULT 'private'", "room_id INTEGER", "thread_id INTEGER"],
+    "room_threads": ["id INTEGER PK", "room_id INTEGER NOT NULL", "title TEXT NOT NULL DEFAULT ''", "created INTEGER NOT NULL"],
+    "scope_migrations": ["turn_id INTEGER PK", "original TEXT NOT NULL", "disposition TEXT NOT NULL", "reason TEXT NOT NULL"],
+    "room_membership_migrations": ["room_id INTEGER PK", "original_members TEXT NOT NULL", "disposition TEXT NOT NULL"],
+    "scope_context_archive": ["kind TEXT NOT NULL", "original TEXT NOT NULL"],
+}
+SCHEMA_V30 = {
+    **SCHEMA_V29,
+    "rooms": [*SCHEMA_V29["rooms"], "roles TEXT NOT NULL DEFAULT '{}'"],
+    "room_exchanges": [*SCHEMA_V29["room_exchanges"], "routing TEXT NOT NULL DEFAULT '{}'"],
+    "room_reply_intents": [
+        "id INTEGER PK", "origin_message_id INTEGER NOT NULL", "source_message_id INTEGER NOT NULL",
+        "recipient_id INTEGER NOT NULL", "recipient_name TEXT NOT NULL", "state TEXT NOT NULL DEFAULT 'queued'",
+        "reason TEXT NOT NULL DEFAULT ''", "turn_id INTEGER",
+    ],
+}
+SCHEMA_V31 = {
+    **SCHEMA_V30,
+    'worker_tasks': [*SCHEMA_V30['worker_tasks'], 'parent_task_id INTEGER','root_task_id INTEGER',
+        'stage_id TEXT','from_member_id INTEGER','source_turn_id INTEGER','model_ref TEXT','mode TEXT',
+        "done_when TEXT NOT NULL DEFAULT ''",'idempotency_key TEXT','ready_at_ms INTEGER',
+        "dispatch_policy TEXT NOT NULL DEFAULT 'immediate'","schedule_provenance TEXT NOT NULL DEFAULT '{}'",'continuation TEXT'],
+    'task_executions': ['id INTEGER PK','task_id INTEGER NOT NULL','attempt INTEGER NOT NULL','state TEXT NOT NULL',
+        'effective_model TEXT','started_at_ms INTEGER NOT NULL','ended_at_ms INTEGER','outcome TEXT'],
+    'task_outbox': ['event_id TEXT PK','task_id INTEGER NOT NULL','type TEXT NOT NULL','destination_turn_id INTEGER NOT NULL',
+        'room_id INTEGER','thread_id INTEGER','created_at_ms INTEGER NOT NULL','delivered_at_ms INTEGER','disposition TEXT'],
+    'task_inbox': ['event_id TEXT PK','parent_task_id INTEGER','consumed_at_ms INTEGER'],
+    'task_evidence': ['id INTEGER PK','task_id INTEGER NOT NULL','tool_call_id TEXT NOT NULL','kind TEXT NOT NULL',
+        'uri TEXT NOT NULL','digest TEXT NOT NULL','mime TEXT NOT NULL','scope TEXT NOT NULL','verified_at_ms INTEGER NOT NULL','verdict TEXT NOT NULL'],
+}
+
+
+SCHEMA_V32 = {
+    **SCHEMA_V31,
+    'worker_tasks': [*SCHEMA_V31['worker_tasks'], 'generation INTEGER NOT NULL DEFAULT 0'],
+    'task_evidence': [*SCHEMA_V31['task_evidence'], 'workspace TEXT'],
+    'task_stage_owners': ['scope_key TEXT PK NOT NULL', 'stage_id TEXT PK NOT NULL',
+        'owner_task_id INTEGER NOT NULL', "state TEXT NOT NULL DEFAULT 'queued'", "reason TEXT NOT NULL DEFAULT ''"],
+}
+# Schema v33 rebuilds room_messages with the same columns, without the one-reply-per-member key.
+SCHEMA_V33 = SCHEMA_V32
+# Schema v34: a room remembers that its saved parts open the owner's next message as a meeting.
+SCHEMA_V34 = {**SCHEMA_V33, "rooms": [*SCHEMA_V33["rooms"], "meeting_pending INTEGER NOT NULL DEFAULT 0"]}
+# Schema v35: an exchange remembers that it is a meeting.
+SCHEMA_V35 = {**SCHEMA_V34, "room_exchanges": [*SCHEMA_V34["room_exchanges"], "meeting INTEGER NOT NULL DEFAULT 0"]}
+# Schema v36: a chat's connector cards and the one resume of their task.
+SCHEMA_V36 = {**SCHEMA_V35, "connect_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "member_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "app TEXT NOT NULL", "language TEXT NOT NULL", "reconnect INTEGER NOT NULL DEFAULT 0", "state TEXT NOT NULL",
+    "error TEXT NOT NULL DEFAULT ''", "tool_count INTEGER", "done TEXT NOT NULL DEFAULT '[]'",
+    "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL",
+    "resumed_at_ms INTEGER"]}
+# Schema v37: the secret card and the owner's turn at the computer, each with the one resume of its task.
+SCHEMA_V37 = {**SCHEMA_V36, "secret_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "member_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "server_id TEXT NOT NULL", "kind TEXT NOT NULL", "secret TEXT NOT NULL", "name TEXT NOT NULL",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "error TEXT NOT NULL DEFAULT ''",
+    "attempts INTEGER NOT NULL DEFAULT 0", "done TEXT NOT NULL DEFAULT '[]'",
+    "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL",
+    "resumed_at_ms INTEGER"],
+    "handback_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "seq INTEGER NOT NULL", "member_id INTEGER NOT NULL",
+    "conversation_id INTEGER", "run_id TEXT NOT NULL", "reason TEXT NOT NULL", "app TEXT NOT NULL DEFAULT ''",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "error TEXT NOT NULL DEFAULT ''",
+    "note TEXT NOT NULL DEFAULT ''", "done TEXT NOT NULL DEFAULT '[]'", "created_at_ms INTEGER NOT NULL",
+    "updated_at_ms INTEGER NOT NULL", "expires_at_ms INTEGER NOT NULL", "returned_at_ms INTEGER"]}
+# Schema v38: a narrow rule's scope, a member's draft-first preference, the permission card of a chat and its
+# email drafts with their versions.
+SCHEMA_V38 = {**SCHEMA_V37,
+    "safety_rules": [*SCHEMA_V37["safety_rules"], "scope TEXT NOT NULL DEFAULT ''"],
+    "members": [*SCHEMA_V37["members"], "draft_first INTEGER NOT NULL DEFAULT 1"],
+    "permission_cards": [
+    "id TEXT PK", "turn_id INTEGER NOT NULL", "member_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "source TEXT NOT NULL", "kind TEXT NOT NULL", "service TEXT NOT NULL DEFAULT ''", "tool TEXT NOT NULL DEFAULT ''",
+    "summary TEXT NOT NULL", "reason TEXT NOT NULL DEFAULT ''", "digest TEXT NOT NULL", "always INTEGER NOT NULL DEFAULT 0",
+    "language TEXT NOT NULL", "state TEXT NOT NULL", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL",
+    "expires_at_ms INTEGER NOT NULL"],
+    "email_drafts": [
+    "id TEXT PK", "author_id INTEGER NOT NULL", "holder_id INTEGER NOT NULL", "conversation_id INTEGER",
+    "turn_id INTEGER NOT NULL", "origin_turn_id INTEGER NOT NULL", "language TEXT NOT NULL", "state TEXT NOT NULL",
+    "version INTEGER NOT NULL", "digest TEXT NOT NULL", "send_via TEXT NOT NULL DEFAULT ''", "to_addr TEXT NOT NULL DEFAULT ''",
+    "cc_addr TEXT NOT NULL DEFAULT ''", "subject TEXT NOT NULL DEFAULT ''", "body TEXT NOT NULL DEFAULT ''",
+    "offer_to INTEGER", "offer_state TEXT NOT NULL DEFAULT ''", "error TEXT NOT NULL DEFAULT ''",
+    "sent_digest TEXT NOT NULL DEFAULT ''", "created_at_ms INTEGER NOT NULL", "updated_at_ms INTEGER NOT NULL",
+    "sent_at_ms INTEGER"],
+    "email_draft_versions": [
+    "draft_id TEXT PK NOT NULL", "version INTEGER PK NOT NULL", "digest TEXT NOT NULL", "send_via TEXT NOT NULL DEFAULT ''",
+    "to_addr TEXT NOT NULL DEFAULT ''", "cc_addr TEXT NOT NULL DEFAULT ''", "subject TEXT NOT NULL DEFAULT ''",
+    "body TEXT NOT NULL DEFAULT ''", "by_owner INTEGER NOT NULL DEFAULT 0", "at_ms INTEGER NOT NULL"]}
+
+# Schema v39: the member that is the owner's primary contact carries a flag, and at most one does.
+SCHEMA_V39 = {**SCHEMA_V38, "members": [*SCHEMA_V38["members"], "primary_contact INTEGER NOT NULL DEFAULT 0"]}
+
+
+def test_v39_makes_raphael_the_primary_contact_of_every_older_team_and_allows_one_member_at_most(tmp_path):
+    path = tmp_path / "v38.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 39):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.executemany("INSERT INTO members(id,name,position,created_at_ms) VALUES(?,?,?,1)", [(1, "Alice", 0), (2, "Bob", 1)])
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert [tuple(row) for row in migrated.execute("SELECT id, primary_contact FROM members ORDER BY id")] == [(1, 0), (2, 0)]
+    migrated.execute("UPDATE members SET primary_contact = 1 WHERE id = 1")
+    with pytest.raises(sqlite3.IntegrityError):
+        migrated.execute("UPDATE members SET primary_contact = 1 WHERE id = 2")
+    with pytest.raises(sqlite3.IntegrityError):
+        migrated.execute("UPDATE members SET primary_contact = 2 WHERE id = 2")
+    migrated.close()
+
+
+def test_v30_preserves_accepted_recipients_from_a_v29_pending_exchange(tmp_path):
+    path = tmp_path / 'v29.db'
+    raw = sqlite3.connect(path)
+    raw.row_factory = sqlite3.Row
+    for version in range(1, 30):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO members(id,name,position,created_at_ms) VALUES(1,'Alice',0,1)")
+    raw.execute("INSERT INTO rooms(id,name,created) VALUES(1,'Plans',1)")
+    raw.executemany('INSERT INTO room_members VALUES(1,?)', [(0,), (1,)])
+    raw.execute("INSERT INTO room_messages(id,room_id,text,created) VALUES(1,1,'@Alice check',1)")
+    raw.execute("INSERT INTO room_exchanges(origin_message_id,room_id,state,language,pending) VALUES(1,1,'queued','en',?)",
+                (json.dumps([{'member':1,'reply_to':1}]),))
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    intent = dict(migrated.execute('SELECT * FROM room_reply_intents').fetchone())
+    assert (intent['origin_message_id'], intent['source_message_id'], intent['recipient_id'], intent['recipient_name'], intent['state']) == (1,1,1,'Alice','queued')
+    assert migrated.execute('PRAGMA foreign_key_check').fetchall() == []
+    migrated.close()
 
 
 def schema_names(conn, kind):
@@ -160,7 +514,7 @@ def describe_columns(conn, table):
 
 
 def test_connect_creates_the_latest_schema(conn):
-    assert schema_names(conn, "table") == set(SCHEMA_V10)
+    assert schema_names(conn, "table") == set(SCHEMA_V39) | FTS_SHADOWS | SEQUENCE
     assert {
         "history_created",
         "agent_turns_created",
@@ -168,10 +522,19 @@ def test_connect_creates_the_latest_schema(conn):
         "worker_tasks_created",
         "worker_steps_task",
         "open_targets_used",
+        "agent_steps_turn",
+        "agent_turns_member",
+        "routines_member",
+        "worker_questions_task",
     } <= schema_names(conn, "index")
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    for table, columns in SCHEMA_V10.items():
-        assert describe_columns(conn, table) == columns
+    for table, columns in SCHEMA_V39.items():
+        if table != "agent_turns_fts":
+            assert describe_columns(conn, table) == columns
+    assert [c["name"] for c in conn.execute("PRAGMA table_info(agent_turns_fts)")] == [
+        "pairs",
+        "chars",
+    ]
 
 
 def test_a_v1_database_is_migrated_to_v2_and_keeps_its_rows(tmp_path):
@@ -368,7 +731,7 @@ def test_a_v4_database_gets_the_turns_table_at_v5_and_keeps_its_rows(tmp_path):
 
     conn = db.connect(path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == LATEST
-    assert describe_columns(conn, "agent_turns") == SCHEMA_V5["agent_turns"]
+    assert describe_columns(conn, "agent_turns") == SCHEMA_V29["agent_turns"]
     assert conn.execute("SELECT count(*) FROM agent_turns").fetchone()[0] == 0
     assert HistoryStore(conn).latest().text == "A"
     assert [e.word for e in DictionaryStore(conn).list()] == ["拉斐爾"]
@@ -392,7 +755,7 @@ def assert_has_the_latest_schema(migrated, fresh):
     assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
     assert schema_names(migrated, "table") == schema_names(fresh, "table")
     assert schema_names(migrated, "index") == schema_names(fresh, "index")
-    for table in SCHEMA_V10:
+    for table in SCHEMA_V16:
         assert describe_columns(migrated, table) == describe_columns(fresh, table)
     assert migrated.execute("SELECT question FROM agent_turns").fetchone()[0] == "q"
     assert HistoryStore(migrated).latest().text == "A"
@@ -524,6 +887,46 @@ def test_a_failed_v10_migration_leaves_the_database_at_v9(tmp_path):
     raw.close()
 
 
+def v10_database(path):
+    """A database as the version before the conversation view left it: at v10, with a step of the
+    worker in it."""
+    v9_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(db._MIGRATION_V10)
+    raw.execute(
+        "INSERT INTO worker_steps (task_id, n, at_ms, kind, outcome) VALUES (1, 1, 8, 'tool', 'ok')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v10_database_gets_the_steps_at_v11_and_its_turns_are_voice(tmp_path, conn):
+    path = tmp_path / "v10.db"
+    v10_database(path)
+
+    migrated = db.connect(path)
+    assert_has_the_latest_schema(migrated, conn)
+    turn = migrated.execute("SELECT source, model FROM agent_turns").fetchone()
+    assert (turn["source"], turn["model"]) == ("voice", None)  # every turn so far was spoken
+    assert migrated.execute("SELECT reason FROM worker_steps").fetchone()[0] is None
+    assert migrated.execute("SELECT count(*) FROM agent_steps").fetchone()[0] == 0
+    migrated.close()
+
+
+def test_a_failed_v11_migration_leaves_the_database_at_v10(tmp_path):
+    path = tmp_path / "v10.db"
+    v10_database(path)
+    raw = sqlite3.connect(path)
+    raw.execute("CREATE TABLE agent_steps (x)")  # in the way of the v11 migration
+    raw.commit()
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate(raw)
+    assert not raw.in_transaction
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert "source" not in [c[1] for c in raw.execute("PRAGMA table_info(agent_turns)")]
+    raw.close()
+
+
 def test_a_failed_v8_migration_leaves_the_database_at_v7(tmp_path):
     path = tmp_path / "v7.db"
     v7_database(path)
@@ -624,7 +1027,7 @@ def test_every_write_the_stores_make_is_committed(tmp_path):
     assert [word for word, _ in dictionary_words()] == ["甲", "拉斐爾"]
     dictionary.delete(extra.id)
     assert [word for word, _ in dictionary_words()] == ["拉斐爾"]
-    dictionary.dismiss("Tailscale")
+    dictionary.delete(dictionary.add("Tailscale", source="learned").id)  # dismissed with it
     assert DictionaryStore(reader).dismissed() == {"Tailscale"}
 
     seen = DictionaryStore(reader)
@@ -675,3 +1078,262 @@ def test_connect_closes_the_connection_when_setting_it_up_fails(monkeypatch):
         db.connect(":memory:")
     with pytest.raises(sqlite3.ProgrammingError):  # "Cannot operate on a closed database."
         opened[0].execute("SELECT 1")
+
+
+def v14_database(path):
+    """A database as the version before the members left it: at v14, with a turn, its summary and a
+    task."""
+    raw = sqlite3.connect(path)
+    for version in range(1, 15):
+        step = db._MIGRATIONS[version]
+        if callable(step):
+            step(raw)
+        else:
+            raw.executescript(step)
+    raw.execute(
+        "INSERT INTO agent_turns (created_at_ms, session_id, question, route, prefix, text, status)"
+        " VALUES (1, 's', 'q', 'chat', '答', 'a', 'done')"
+    )
+    raw.execute(
+        "INSERT INTO agent_summary (id, text, through_turn_id, updated_at_ms)"
+        " VALUES (1, 'the summary', 1, 9)"
+    )
+    raw.execute(
+        "INSERT INTO worker_tasks (created_at_ms, state, session_id, language, text)"
+        " VALUES (2, 'done', 's', 'en', 't')"
+    )
+    raw.commit()
+    raw.close()
+
+
+def test_a_v14_database_gets_the_members_and_the_rules_and_everything_old_is_raphaels(tmp_path, conn):
+    path = tmp_path / "v14.db"
+    v14_database(path)
+
+    migrated = db.connect(path)
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert schema_names(migrated, "table") == schema_names(conn, "table")
+    assert schema_names(migrated, "index") == schema_names(conn, "index")
+    assert tuple(migrated.execute("SELECT member_id, peer_id FROM agent_turns").fetchone()) == (0, None)
+    assert tuple(migrated.execute("SELECT member_id, routine_id FROM worker_tasks").fetchone()) == (
+        0,
+        None,
+    )
+    assert tuple(migrated.execute("SELECT * FROM conversation_summaries").fetchone()) == (
+        0,
+        "the summary",
+        1,
+        9,
+    )
+    migrated.close()
+
+
+def test_a_failed_v15_migration_leaves_the_database_at_v14(tmp_path, monkeypatch):
+    path = tmp_path / "v14.db"
+    v14_database(path)
+    monkeypatch.setattr(db, "_MEMBERS_TABLES", (*db._MEMBERS_TABLES, "NOT SQL"))
+    with pytest.raises(sqlite3.Error):
+        db.connect(path)
+    raw = sqlite3.connect(path)
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 14
+    assert raw.execute("SELECT text FROM agent_summary").fetchone()[0] == "the summary"
+    assert "members" not in schema_names(raw, "table")
+    raw.close()
+
+
+# What the safety rules' branch made as its own v15, before the members took that number and the
+# rules moved to v16. A database the branch's build opened is at 15 with these tables and none of
+# the members'.
+SAFETY_BRANCH_V15 = """
+BEGIN;
+CREATE TABLE safety_rules (id INTEGER PRIMARY KEY, action TEXT NOT NULL, verdict TEXT NOT NULL,
+  position INTEGER NOT NULL);
+CREATE TABLE safety_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+CREATE TABLE worker_questions (id TEXT PRIMARY KEY, task_id INTEGER NOT NULL,
+  member_id INTEGER NOT NULL DEFAULT 0, prefix TEXT NOT NULL, text TEXT NOT NULL, tier TEXT,
+  created_at_ms INTEGER NOT NULL, expires_at_ms INTEGER NOT NULL, remaining_s REAL NOT NULL,
+  state TEXT NOT NULL DEFAULT 'waiting', answered_at_ms INTEGER);
+CREATE INDEX worker_questions_task ON worker_questions(task_id);
+PRAGMA user_version = 15;
+COMMIT;
+"""
+
+
+def assert_same_schema(migrated, fresh):
+    assert migrated.execute("PRAGMA user_version").fetchone()[0] == LATEST
+    assert schema_names(migrated, "table") == schema_names(fresh, "table")
+    assert schema_names(migrated, "index") == schema_names(fresh, "index")
+    for table in SCHEMA_V16:
+        assert describe_columns(migrated, table) == describe_columns(fresh, table)
+
+
+def test_a_database_at_the_members_v15_gets_only_the_rules(tmp_path, conn):
+    path = tmp_path / "v15.db"
+    v14_database(path)
+    raw = sqlite3.connect(path)
+    db._migrate_v15(raw)
+    raw.execute("INSERT INTO members (name, position, created_at_ms) VALUES ('Ann', 0, 1)")
+    raw.commit()
+    raw.close()
+
+    migrated = db.connect(path)
+    assert_same_schema(migrated, conn)
+    assert migrated.execute("SELECT name FROM members").fetchone()[0] == "Ann"
+    assert migrated.execute("SELECT text FROM conversation_summaries").fetchone()[0] == "the summary"
+    migrated.close()
+
+
+def test_a_database_at_the_safety_branchs_v15_gets_the_members_and_keeps_its_rules(tmp_path, conn):
+    path = tmp_path / "v15-safety.db"
+    v14_database(path)
+    raw = sqlite3.connect(path)
+    raw.executescript(SAFETY_BRANCH_V15)
+    raw.execute("INSERT INTO safety_rules (action, verdict, position) VALUES ('pay', 'ask', 0)")
+    raw.execute(
+        "INSERT INTO worker_questions (id, task_id, member_id, prefix, text, created_at_ms,"
+        " expires_at_ms, remaining_s) VALUES ('q1', 1, 0, '問', 'line', 1, 2, 3.0)"
+    )
+    raw.commit()
+    raw.close()
+
+    migrated = db.connect(path)
+    assert_same_schema(migrated, conn)
+    assert migrated.execute("SELECT action FROM safety_rules").fetchone()[0] == "pay"
+    assert migrated.execute("SELECT state FROM worker_questions").fetchone()[0] == "waiting"
+    assert tuple(migrated.execute("SELECT * FROM conversation_summaries").fetchone()) == (
+        0,
+        "the summary",
+        1,
+        9,
+    )
+    assert tuple(migrated.execute("SELECT member_id, peer_id FROM agent_turns").fetchone()) == (0, None)
+    migrated.close()
+
+
+def test_the_v15_and_v16_migrations_can_run_again_on_a_current_database(conn):
+    db._migrate_v15(conn)
+    db._migrate_v16(conn)
+    db._migrate_v16(conn)
+    # Historical migrations set their own version; compare their schema additions at today's version.
+    conn.execute(f"PRAGMA user_version = {LATEST}")
+    fresh = db.connect(":memory:")
+    assert_same_schema(conn, fresh)
+    fresh.close()
+
+
+def test_v18_preserves_live_messages_and_their_order_and_cascade(tmp_path):
+    path = tmp_path / "v17.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 18):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO agent_turns (session_id, question, route, prefix, text, status, created_at_ms) VALUES ('s', 'q', 'answer', '', '', 'done', 1)")
+    raw.execute("INSERT INTO agent_messages VALUES (1, 0, 'progress', 'Checking', 1)")
+    raw.execute("INSERT INTO agent_messages VALUES (1, 1, 'reply', 'Done', 2)")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    assert [tuple(row) for row in migrated.execute("SELECT seq, kind, text FROM agent_messages ORDER BY seq")] == [(0, "progress", "Checking"), (1, "reply", "Done")]
+    migrated.execute("INSERT INTO agent_messages VALUES (1, 2, 'thinking', 'A public decision', 3)")
+    migrated.execute("INSERT INTO agent_messages VALUES (1, 3, 'media', '{}', 4)")
+    migrated.execute("PRAGMA foreign_keys = ON")
+    migrated.commit()
+    migrated.execute("PRAGMA foreign_keys = ON")
+    migrated.execute("DELETE FROM agent_turns WHERE id = 1")
+    assert migrated.execute("SELECT COUNT(*) FROM agent_messages").fetchone()[0] == 0
+    migrated.close()
+
+
+def test_v21_quotes_preserve_old_turns_and_survive_reopening(tmp_path):
+    from raphael_core.agent.history import AgentHistory
+
+    path = tmp_path / "v20.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 21):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO agent_turns (session_id, question, route, prefix, text, status, created_at_ms) VALUES ('old', 'q', 'chat', '', 'a', 'done', 1)")
+    raw.commit(); raw.close()
+    migrated = db.connect(path)
+    history = AgentHistory(migrated)
+    assert history.get(1).quote is None
+    quote = {"text": "Selected passage", "author": "Teacher"}
+    new_id = history.add(session_id="new", question="Explain", route="chat", prefix="", text="Answer", status="done", quote=quote)
+    migrated.close()
+    reopened = db.connect(path)
+    assert AgentHistory(reopened).get(new_id).quote == quote
+    assert AgentHistory(reopened).get(1).question == "q"
+    reopened.close()
+
+
+def test_v23_automation_and_rooms_survive_reopen_and_keep_existing_routines(tmp_path):
+    path = tmp_path / "automations.db"
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    for version in range(1, 23):
+        step = db._MIGRATIONS[version]
+        step(conn) if callable(step) else conn.executescript(step)
+    conn.execute("INSERT INTO routines (member_id,title,prompt,schedule,enabled,created_at_ms) VALUES (0,'Report','Check','{\"kind\":\"daily\",\"time\":\"09:00\"}',1,1)")
+    conn.commit()
+    db.migrate(conn)
+    conn.execute("INSERT INTO routine_runs (routine_id, started, status) VALUES (1, 1, 'running')")
+    conn.execute("INSERT INTO rooms (name,created) VALUES ('Team',1)")
+    conn.execute("INSERT INTO room_members VALUES (1,0)")
+    conn.execute("INSERT INTO room_messages (room_id,text,created,request_id) VALUES (1,'Hello',1,'request')")
+    conn.commit(); conn.close()
+    reopened = db.connect(path)
+    assert reopened.execute("SELECT title FROM routines").fetchone()[0] == "Report"
+    assert reopened.execute("SELECT status FROM routine_runs").fetchone()[0] == "running"
+    assert reopened.execute("SELECT text FROM room_messages").fetchone()[0] == "Hello"
+    with pytest.raises(sqlite3.IntegrityError):
+        reopened.execute("INSERT INTO room_messages (room_id,text,created,request_id) VALUES (1,'Again',1,'request')")
+    reopened.close()
+
+
+def test_v22_preserves_old_members_and_adds_private_preferences(tmp_path):
+    path = tmp_path / "v21.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 22):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    raw.execute("INSERT INTO members (name, position, created_at_ms, instructions) VALUES ('Ada', 0, 1, 'Existing instructions')")
+    raw.commit()
+    raw.close()
+    migrated = db.connect(path)
+    row = migrated.execute("SELECT * FROM members").fetchone()
+    assert row["instructions"] == "Existing instructions"
+    assert row["reply_style"] == "full" and row["blurb"] == ""
+    assert all(row[field] == 0 for field in ("read_aloud", "notify", "ask_before_members", "pinned", "hidden"))
+    migrated.close()
+    reopened = db.connect(path)
+    assert reopened.execute("SELECT COUNT(*) FROM member_commands").fetchone()[0] == 0
+    assert reopened.execute("SELECT COUNT(*) FROM member_skills").fetchone()[0] == 0
+    reopened.close()
+
+
+def test_v24_assigns_each_legacy_member_a_stable_default_conversation(tmp_path, conn):
+    from raphael_core.agent.conversations import Conversations
+    from raphael_core.agent.history import AgentHistory
+
+    assert Conversations(conn).get(Conversations(conn).main(0))["created_at_ms"] > 0
+
+    path = tmp_path / "v23.db"
+    raw = sqlite3.connect(path)
+    for version in range(1, 24):
+        step = db._MIGRATIONS[version]
+        step(raw) if callable(step) else raw.executescript(step)
+    for member, question, stamp in [(0, "First\nquestion", 100), (7, "Member question", 200), (0, "Later", 300)]:
+        raw.execute("INSERT INTO agent_turns (session_id, member_id, question, route, prefix, text, status, created_at_ms) VALUES (?, ?, ?, 'chat', '', 'answer', 'done', ?)", (str(stamp), member, question, stamp))
+    raw.commit(); raw.close()
+    migrated = db.connect(path)
+    conversations = Conversations(migrated)
+    main, member = conversations.main(0), conversations.main(7)
+    assert main != member
+    assert conversations.get(main)["title"] == "First question"
+    assert [AgentHistory(migrated).get(id).conversation_id for id in (1, 2, 3)] == [main, member, main]
+    assert (conversations.get(main)["created_at_ms"], conversations.get(main)["updated_at_ms"]) == (100, 300)
+    migrated.close()
+    reopened = db.connect(path)
+    assert Conversations(reopened).main(0) == main
+    assert len(Conversations(reopened).list(7)) == 1
+    reopened.close()

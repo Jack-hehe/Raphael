@@ -2,18 +2,23 @@
 
 `build_app` makes an `App`, a Router with every method of the core on it: the brain's
 (raphael_core.brain), the dictation service's (`dictation.*`, raphael_core.device), the voice
-assistant's (`agent.*`, raphael_core.agent), the plugins' (`integrations.*`,
-raphael_core.integrations) and the few that belong to none of them (`core.*`, `models.*`,
-`audio.*`). `__main__` serves it on stdio.
+assistant's (`agent.*`, raphael_core.agent), the background worker's (`worker.*`,
+raphael_core.background), the plugins' (`integrations.*` and `toolsets.list`,
+raphael_core.integrations), the messaging apps' (`messaging.<app>.*`, raphael_core.messaging), the
+services of the tools' (`services.*`, raphael_core.services), Raphael's voice (`tts.*`,
+raphael_core.services.speaker), the owner's team's (`members.*`, `groups.*`, `routines.*`,
+raphael_core.members) and the few that belong to none of them (`core.*`, `models.*`, `audio.*`).
+`__main__` serves it on stdio.
 
 Start-up. The app's first calls come within seconds of the process starting (`core.hello`, the
 saved microphone, the settings page's questions), so the models, which take tens of seconds to
 load, are never waited for: the first sherpa-onnx object of a process pays about 15 s of ONNX
 Runtime start-up and the engine a few more. A worker thread imports the speech libraries (the
-"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the two models.
-A dictation started before they are loaded still records: the audio queues up, and
-`dictation.stop` waits for the models. `dictation.*` and the methods that need
-the kit wait for them instead of failing.
+"kit": numpy, sherpa-onnx, PortAudio), builds the dictation service and then loads the models that
+are downloaded: the voice activity detector and the local speech engine, if the user has one (with
+the cloud engine there need not be any). A dictation started before they are loaded still records:
+the audio queues up, and `dictation.stop` waits for the models. `dictation.*` and the methods that
+need the kit wait for them instead of failing.
 
 The libraries themselves are imported before the core reads its first request (`__main__` calls
 `wait_for_libraries`). On Windows, numpy's DLLs hang while they load if another thread is blocked
@@ -25,9 +30,10 @@ else heavy imported at run time (PyTorch for TTS, say) is exposed to the same tr
 
 Speech-to-text. The `stt_engine` setting, read at each `dictation.start`, picks the engine for that
 dictation: "local" is the engine on this computer; "cloud" sends each stretch of speech to the
-brain's `stt.transcribe` (OpenRouter) and falls back to the local engine, which still loads at
-start-up so the fallback costs no wait. Cloud stretches are cut at 30 s, not 10: the model hears
-more context, and it is fast enough that the last stretch is no long tail.
+brain's `stt.transcribe` (OpenRouter) and falls back to the local engine when there is one, which
+then loads at start-up so the fallback costs no wait (without one, the next stretch goes to the
+cloud again: device/cloud_stt.py). Cloud stretches are cut at 30 s, not 10: the model hears more
+context, and it is fast enough that the last stretch is no long tail.
 
 Threads. The event loop runs the brain and the router; the SQLite connection is used on it only.
 Everything that blocks (downloading a model, opening the microphone, loading a model) runs on a
@@ -39,15 +45,17 @@ stdout is the JSON-RPC channel (see stdio_server); everything this module says g
 from __future__ import annotations
 
 import asyncio
+import base64
 import concurrent.futures
 import functools
+import gc
 import json
 import logging
 import re
 import shutil
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -57,11 +65,22 @@ import keyring
 from . import __version__, paths
 from .agent.device import DeviceActions, NullActions, WindowsActions
 from .agent.gate import ToolGate
+from .agent.safety import SafetyGuard, SafetyJudge, SafetyRules
 from .agent.service import AgentService
+from .agent.routing import Router as DecisionRouter
 from .agent.tools import Tools
 from .background.service import BackgroundService
+from .background.tasks import FINAL_STATES
+from .members.service import MembersService
+from .members.rooms import RoomsService
+from .computer.bridge import ShellBridge
+from .agent.drafts import EmailDrafts
+from .agent.permissions import PermissionCards
+from .computer.handback import HandbackCards
+from .computer.run import ComputerRuns
 from .brain import textnorm
 from .brain.db import connect
+from .memory.service import MemoryService
 from .brain.openrouter import (
     ChatToolCall,
     ChatTurn,
@@ -74,21 +93,35 @@ from .brain.openrouter import (
     ToolPlan,
 )
 from .brain.secrets import CredentialKeyStore, KeyStore, MemoryKeyStore
+from .brain.providers.registry import ProviderRegistry, ProviderRouter
 from .brain.service import Brain
 from .brain.settings import SettingsStore
 from .device.models import LOCAL_STT_MODELS, REGISTRY, ModelDownloadError, ModelManager, local_model
 from .integrations.service import IntegrationsService
+from .connectors.cards import ConnectorCards
+from .connectors.secret_cards import SecretCards
+from .connectors.service import ConnectorsService
 from .integrations.vault import CredentialVault, MemoryVault, SecretVault
+from .messaging.config import MessagingStore
+from .messaging.service import MessagingService
+from .messaging.words import compose, words
 from .protocol import (
     BUSY,
-    INVALID_PARAMS,
     INTERNAL_ERROR,
-    NO_MICROPHONE,
     NOT_CONFIGURED,
+    NO_LOCAL_MODEL,
+    NO_MICROPHONE,
     PROTOCOL_VERSION,
     RpcError,
+    invalid_params,
 )
 from .router import Router
+from .home import ConnectedCalendar, HomeOverview
+from .services.attachments import Attachment
+from .services.attachment_store import AttachmentStore
+from .services.hub import ServiceHub, offline_transport
+from .services.keys import ServiceKeys, credential_keys, memory_keys
+from .services.speaker import Speaker
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +138,20 @@ VAD_MODEL = "silero-vad"
 ENGINE_MODEL = "qwen3-asr"
 APP_MODELS = (VAD_MODEL, ENGINE_MODEL)
 
-# Speech without a pause is cut into pieces of at most this long and transcribed while the key is
-# still held, so there is no long tail to wait for after the release (the engine takes 20 s).
+# Speech without a pause is cut into pieces of at most this long and transcribed while the
+# recording goes on, so there is no long tail to wait for after the stop (the engine takes 20 s).
+# It is the size of one request, not a limit on the dictation, which may run as long as the user
+# speaks.
 DICTATION_SEGMENT_SECONDS = 10.0
 # The same for cloud speech-to-text: longer, so the model gets context (OpenRouter's upstream limit
 # is 60 s a request).
 CLOUD_SEGMENT_SECONDS = 30.0
 # More threads do not make Qwen3-ASR faster.
 STT_THREADS = 4
+# Deleting a model folder on Windows can fail while ONNX Runtime still holds a file: it is tried
+# this many times, this far apart.
+DELETE_TRIES = 3
+DELETE_RETRY_S = 0.2
 # audio.level notifications a second, for the settings page's meter.
 LEVEL_HZ = 30.0
 # models.progress notifications are sent at most this often (the last one always is).
@@ -186,6 +225,10 @@ class EchoClient:
             data = {"prefix": "", "text": question.group(1) if question else "", "detail": ""}
         elif schema_name == "raphael_app":
             data = {"app": ""}
+        elif schema_name == "raphael_summary":  # the conversation folded into its summary
+            data = {"summary": "(the fake LLM keeps no summary)"}
+        elif schema_name == "raphael_memory":  # the reflection pass: nothing to change
+            data = {"actions": []}
         else:  # the cleanup
             text = user
             if text.startswith(_TRANSCRIPT_OPEN) and text.endswith(_TRANSCRIPT_CLOSE):
@@ -201,6 +244,11 @@ class EchoClient:
         )
 
     async def decide(self, **kwargs: Any) -> Decision:
+        questions = kwargs.get("questions")
+        if isinstance(questions, dict) and questions and all(k.startswith("rule_") for k in questions):
+            # The safety rules' judge: no rule matches what the fake LLM does.
+            rules = {name: {"type": "noul", "noul": 0.0} for name in questions}
+            return Decision(answers=rules, cost_usd=0.0, latency_ms=0)
         # Jev, sure that every request is small talk (or a task, for the scripted one).
         state = kwargs.get("state")
         spoken = state.get("utterance", "") if isinstance(state, dict) else ""
@@ -232,7 +280,16 @@ class EchoClient:
         def calling(name: str, arguments: dict) -> ChatTurn:
             raw = json.dumps(arguments)
             call = ChatToolCall(id=f"call_{seen}", name=name, arguments=arguments, raw_arguments=raw)
-            return ChatTurn("", [call], "tool_calls", "fake/echo", 0.0, 0, 0, 0)
+            return ChatTurn("", [call], "fake/echo", 0.0, 0, 0, 0)
+
+        if "routine_create" in offered and seen == 0:
+            # Exercise the interactive harness offline, including its explicit input tools.
+            from .services.urls import urls_in
+            if "read_attachment" in offered:
+                return calling("read_attachment", {"index": 1})
+            addresses = urls_in(task)
+            if addresses:
+                return calling("web_read", {"url": addresses[0]})
 
         look = next((name for name in sorted(offered) if name.endswith("__look")), None)
         slow = next((name for name in sorted(offered) if name.endswith("__slow")), None)
@@ -243,7 +300,7 @@ class EchoClient:
         if look is None and "local_time" in offered and seen == 0:
             return calling("local_time", {})
         report = {"prefix": "告", "text": f"The scripted task saw {seen} results.", "detail": ""}
-        return ChatTurn(json.dumps(report), [], "stop", "fake/echo", 0.0, 0, 0, 0)
+        return ChatTurn(json.dumps(report), [], "fake/echo", 0.0, 0, 0, 0)
 
     async def chat_text(self, **kwargs: Any) -> TextCompletion:
         return TextCompletion(
@@ -320,6 +377,11 @@ class _SharedSegmenter:
         segmenter = self._speech.built_segmenter()
         return 0.0 if segmenter is None else segmenter.speech_seconds
 
+    @property
+    def silence_seconds(self) -> float:
+        segmenter = self._speech.built_segmenter()
+        return 0.0 if segmenter is None else segmenter.silence_seconds
+
 
 class SpeechModels:
     """The voice activity detector and the speech engine, loaded once and kept.
@@ -342,7 +404,7 @@ class SpeechModels:
         *,
         make_segmenter: Callable[[Path], Any],
         make_engine: Callable[[str], Any],
-        engine_name: str = ENGINE_MODEL,
+        engine_name: str | None = ENGINE_MODEL,
     ) -> None:
         self._manager = manager
         self._make_segmenter = make_segmenter
@@ -375,8 +437,8 @@ class SpeechModels:
                 self._cond.notify_all()
 
     @property
-    def engine_name(self) -> str:
-        """The model the engine is, or is to be, built from."""
+    def engine_name(self) -> str | None:
+        """The model the engine is, or is to be, built from; None when there is no local model."""
         return self._engine_name
 
     @property
@@ -384,11 +446,22 @@ class SpeechModels:
         """The model the engine that is loaded was built from; None while there is none."""
         return self._engine_built_for
 
-    def select_engine(self, name: str) -> None:
-        """Make `name` (a model of the catalogue) the engine. Nothing is loaded yet: that is
-        `load_pending`, which builds it if it is downloaded."""
+    def select_engine(self, name: str | None) -> None:
+        """Make `name` (a model of the catalogue) the engine, or None for no local engine. Nothing
+        is loaded yet: that is `load_pending`, which builds it if it is downloaded."""
         with self._cond:
             self._engine_name = name
+
+    def unload_engine(self) -> None:
+        """Let go of the engine that is loaded, so that its model files are free to delete. Waits
+        for a load that is under way; the next `engine()` builds the selected one again."""
+        with self._cond:
+            while self._loading:
+                self._cond.wait()
+            self._loaded[ENGINE_MODEL] = None
+            self._engine_built_for = None
+            self._failures.pop(ENGINE_MODEL, None)
+        gc.collect()
 
     def _build_segmenter(self) -> Any:
         path = self._manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
@@ -398,6 +471,11 @@ class SpeechModels:
         """Build the engine of the selected model, if it is downloaded and not the one loaded. A
         failure is logged and the engine that is loaded stays."""
         name = self._engine_name
+        if name is None:  # no local model: let go of the engine that is loaded
+            with self._cond:
+                self._loaded[ENGINE_MODEL] = None
+                self._engine_built_for = None
+            return
         if self._engine_built_for == name or not self._manager.is_ready(name):
             return
         began = time.perf_counter()
@@ -449,6 +527,8 @@ class SpeechModels:
         return self._get(ENGINE_MODEL)
 
     def _get(self, name: str) -> Any:
+        if name == ENGINE_MODEL and self._engine_name is None:
+            raise RpcError(NO_LOCAL_MODEL, "There is no local speech model")
         with self._cond:
             while self._loaded[name] is None and self._loading:
                 self._cond.wait()
@@ -460,15 +540,21 @@ class SpeechModels:
         failure = self._failures.get(name)
         if failure is not None:
             raise failure
+        if name == ENGINE_MODEL and self._engine_name is None:
+            raise RpcError(NO_LOCAL_MODEL, "There is no local speech model")
         missing = self._engine_name if name == ENGINE_MODEL else name
         raise FileNotFoundError(f"The speech model {missing} is not downloaded")
 
-    def require_models(self) -> None:
+    def require_models(self, engine_needed: bool = True) -> None:
         """RpcError(NOT_CONFIGURED) if a model is neither loaded nor on disk: better to say so at
-        the key press than after the user has spoken."""
+        the key press than after the user has spoken. The engine is asked for only if
+        `engine_needed` (the cloud dictates without a local one) and there is one."""
+        wanted = [(VAD_MODEL, VAD_MODEL)]
+        if engine_needed and self._engine_name is not None:
+            wanted.append((ENGINE_MODEL, self._engine_name))
         missing = [
             name
-            for slot, name in ((VAD_MODEL, VAD_MODEL), (ENGINE_MODEL, self._engine_name))
+            for slot, name in wanted
             if self._loaded[slot] is None and not self._manager.is_ready(name)
         ]
         if missing:
@@ -634,10 +720,6 @@ def _import_kit() -> SimpleNamespace:
     )
 
 
-def _invalid(message: str) -> RpcError:
-    return RpcError(INVALID_PARAMS, f"Invalid params: {message}")
-
-
 class App(Router):
     """The Router of the whole core. `start()` begins loading the speech side; `aclose()` closes
     what the app opened (the microphone, the HTTP client, the database).
@@ -647,7 +729,8 @@ class App(Router):
     microphone; with `fake_llm`, an in-process client returns the transcript unchanged, the key and
     the plugins' secrets are kept in memory, and the voice assistant does nothing to this computer.
     `agent_actions` is what the assistant does to it otherwise (Windows, by default). `load_kit` is
-    for tests.
+    for tests. `memory_dir` is where Raphael's long-term memory is kept (`paths.memory_dir`, which
+    goes with `data_dir`, by default).
     """
 
     def __init__(
@@ -660,6 +743,10 @@ class App(Router):
         manager: ModelManager | None = None,
         load_kit: Callable[[], Any] | None = None,
         agent_actions: DeviceActions | None = None,
+        memory_dir: Path | None = None,
+        model_client: Any | None = None,
+        agent_tool_observer: Callable[..., None] | None = None,
+        agent_model_observer: Callable[..., None] | None = None,
     ) -> None:
         super().__init__()
         self._fake_audio = fake_audio
@@ -675,33 +762,121 @@ class App(Router):
             self.keys: KeyStore
             self.client: Any
             self.vault: SecretVault
+            service_keys: ServiceKeys
             if fake_llm:
                 self.keys = MemoryKeyStore()
                 self.keys.set(_FAKE_KEY)
-                self.client = EchoClient()
+                self.client = model_client if model_client is not None else EchoClient()
                 self.vault = MemoryVault()
+                service_keys = memory_keys()
             else:
                 self.keys = CredentialKeyStore()
-                self.client = OpenRouterClient(self.keys.get)
+                self.client = OpenRouterClient(self.keys.get, model_catalog=lambda: self.brain.known_models())
                 self.vault = CredentialVault()
-            self.brain = Brain(self._conn, self.client, self.keys)  # prunes the history
+                service_keys = credential_keys()
+            provider_keys: dict[str, MemoryKeyStore] = {}
+            self.providers = ProviderRegistry(
+                self._conn, self.client, self.keys,
+                credential=(lambda pid: provider_keys.setdefault(pid, MemoryKeyStore())) if fake_llm else None,
+                transport=offline_transport() if fake_llm else None,
+            )
+            self.client = ProviderRouter(self.providers, self.client)
+            self.brain = Brain(self._conn, self.client, self.keys, providers=self.providers)
         except BaseException:
             self._conn.close()
             raise
         self.brain.register(self)
+        self.providers.register(self)
+        # The services the tools stand on, as the owner chose them (`services.*`). With the fake LLM
+        # every one of them is offline: a run of the tests reaches no network.
+        self.attachment_store = AttachmentStore(data_dir)
+        self.attachment_store.register(self)
+        self.services = ServiceHub(
+            self._conn,
+            self.client,
+            service_keys,
+            models=self.brain.known_models,
+            transcribe=self._transcribe_from_messaging,
+            transport=offline_transport() if fake_llm else None,
+        )
+        self.services.register(self)
+        # Raphael's voice (`tts.*`): his answers aloud, through the service the owner chose.
+        self.speaker = Speaker(self.services)
+        self.speaker.register(self)
         if agent_actions is None:
             agent_actions = NullActions() if fake_llm else WindowsActions()
         # The plugins: servers the user connected, and the hub the assistant reaches their tools by.
-        self.integrations = IntegrationsService(self._conn, data_dir, self.vault)
+        self.integrations = IntegrationsService(self._conn, data_dir, self.vault, notify=self.notify)
         self.integrations.register(self)
+        self.connectors = ConnectorsService(data_dir, self.vault, self.integrations)
+        self.connectors.register(self)
+        # The card a chat shows for an app its task needs, and that task's one resume once connected.
+        self.cards = ConnectorCards(self._conn, self, self.connectors, notify=self._agent_notice)
+        self.cards.register(self)
+        # The card for a key a connection declares and the vault holds none of: the value goes from the
+        # window to the vault, and that task's one resume follows.
+        self.secret_cards = SecretCards(self._conn, self.integrations, notify=self._agent_notice)
+        self.secret_cards.register(self)
+        # The owner's safety rules (`safety.rules.*`), which the gate asks before every action that
+        # changes something, with their judge (Jev).
+        self.safety_rules = SafetyRules(self._conn)
+        self.safety_rules.register(self)
         # The one gate every tool call goes through, the assistant's and the worker's.
-        self.gate = ToolGate(self.integrations, conn=self._conn)
+        self.gate = ToolGate(
+            self.integrations,
+            conn=self._conn,
+            safety=SafetyGuard(self.safety_rules, SafetyJudge(self.client)),
+        )
         # The background worker: tasks the assistant hands over, carried out in a process of their
         # own that has no key, no database and no plugin (raphael_core.worker).
         self.background = BackgroundService(
-            self._conn, self.client, self.gate, Tools(self.client), notify=self.notify
+            self._conn,
+            self.client,
+            self.gate,
+            Tools(self.client, services=self.services),
+            notify=self._worker_notice,
+            model_observer=agent_model_observer,
         )
         self.background.register(self)
+        # The run on the owner's desktop: the core asks the shell, which reaches UI Automation
+        # (`computer.request`, answered with `computer.reply`; `computer.interrupt` stops it).
+        self.computer_bridge = ShellBridge(self.notify)
+        self.computer_bridge.register(self)
+        self.computer = ComputerRuns(self.computer_bridge)
+        # The card of the owner's turn at the computer (a sign-in, a password, a payment), which follows the
+        # run that waits for it and resumes that task once.
+        # The owner's yes in a typed private chat: the card of each question the gate has asked, and the door
+        # of the questions of a run that carries on after the owner gave the computer back.
+        self.permissions = PermissionCards(self._conn, self.computer, notify=self._agent_notice)
+        self.permissions.register(self)
+        # The mail a member writes for the owner to edit and send from a card, and hand to a colleague.
+        self.drafts = EmailDrafts(self._conn, self.integrations, self.gate, notify=self._agent_notice)
+        self.drafts.register(self)
+        self.handbacks = HandbackCards(self._conn, self.computer, notify=self._agent_notice, permissions=self.permissions)
+        self.handbacks.register(self)
+        # Raphael's memory: the notes on this PC, the summary of the conversation, the reflection.
+        memory_root = paths.memory_dir(data_dir) if memory_dir is None else memory_dir
+        self.memory = MemoryService(self._conn, memory_root, self.client, self.keys, notify=self.notify)
+        self.memory.register(self)
+        self.background.use_memory(self.memory)
+        # The members of the owner's team, their pictures (in the local folder the memory is in,
+        # beside the shell's copy of Raphael's own) and their routines.
+        self.members = MembersService(
+            self._conn,
+            memory_root.parent,
+            background=self.background,
+            memory=self.memory,
+            language=lambda: self.agent.language,
+            notify=self.notify,
+            connections=self.integrations.connections,
+        )
+        self.members.register(self)
+        self.rooms = RoomsService(self._conn, members=self.members, background=self.background,
+                                  notify=self.notify, transcribe=self._transcribe_from_messaging,
+                                  attachment_store=self.attachment_store, decision=DecisionRouter(self.client))
+        self.rooms.register(self)
+        self.members.use_speech(self.speaker)
+        self.memory.member_exists = self.members.member_exists
         self.agent = AgentService(
             self._conn,
             self.client,
@@ -711,8 +886,40 @@ class App(Router):
             models=self.brain.known_models,
             gate=self.gate,
             background=self.background,
+            notify=self._agent_notice,
+            computer=self.computer,
+            memory=self.memory,
+            services=self.services,
+            attachment_store=self.attachment_store,
+            team=self.members,
+            speaker=self.speaker,
+            tool_observer=agent_tool_observer,
+            model_observer=agent_model_observer,
+            cards=self.cards,
+            secret_cards=self.secret_cards,
+            handbacks=self.handbacks,
+            permissions=self.permissions,
+            drafts=self.drafts,
         )
         self.agent.register(self)
+        self.home = HomeOverview(self._conn, self, self.members, calendar_events=ConnectedCalendar(self, self.connectors))
+        self.home.register()
+        self.background.use_team(self.members, self.agent.team_tool)
+        self.background.use_cli(self.agent._cli_brains, self.agent.quotas.record)
+        # The questions the background waits on: a thread one waits in is `waiting` in the member
+        # column, and the overlay's notice of one names the member whose thread holds it.
+        self.members.add_waiting_source(self.background.waiting_members)
+        self.background.use_member_names(self.members.name_of)
+        # Messaging apps (Telegram): messages reach the assistant like a spoken question.
+        self.messaging = MessagingService(
+            MessagingStore(data_dir),
+            self.vault,
+            ask=self._ask_from_messaging,
+            stop=self._stop_from_messaging,
+            transcribe=self._transcribe_from_messaging,
+            language=lambda: self.agent.language,
+        )
+        self.messaging.register(self)
 
         self._speech = SpeechModels(
             self.manager, make_segmenter=self._make_segmenter, make_engine=self._make_engine
@@ -727,6 +934,7 @@ class App(Router):
         self._stt_engine = "local"  # the stt_engine setting, as read at the latest dictation.start
         self._local_download: str | None = None  # the model that models.local_use is fetching
         self._local_cancel = threading.Event()
+        self._models_lock = asyncio.Lock()  # one change of the chosen local model at a time
         self._stt_warned: set[str] = set()  # kinds of cloud failure already logged as warnings
         self._loop: asyncio.AbstractEventLoop | None = None
         self._threads: list[threading.Thread] = []
@@ -891,11 +1099,20 @@ class App(Router):
             self._conn.close()
 
         steps: list[tuple[str, Callable[[], Awaitable[None]]]] = [
+            ("end room routing calls", self.rooms.aclose),
             ("cancel the dictation", close_dictation),
             ("close the level meter", close_meter),
             ("stop the account usage refresh", self.brain.aclose),
+            ("end the messaging connections", self.messaging.aclose),
+            ("stop the routines' scheduler", self.members.aclose),
             ("end the background tasks", self.background.aclose),
+            ("end the connector cards' sign-ins", self.cards.aclose),
+            ("end the secret cards' resumes", self.secret_cards.aclose),
+            ("end the computer cards' runs", self.handbacks.aclose),
             ("end the assistant's requests", self.agent.aclose),
+            ("end Raphael's voice", self.speaker.aclose),
+            ("end the memory's background pass", self.memory.aclose),
+            ("close the services' HTTP client", self.services.aclose),
             ("close the HTTP client", self.client.aclose),
             ("wait for the start-up threads", join_threads),
             ("let go of the speech models", close_speech),
@@ -941,8 +1158,20 @@ class App(Router):
         from .device.cloud_stt import CloudSttEngine  # numpy: the kit has loaded it already
 
         return CloudSttEngine(
-            self._call_from_thread, fallback=self._speech.engine, warned=self._stt_warned
+            self._call_from_thread, fallback=self._fallback_engine, warned=self._stt_warned,
+            race_local=(self._speech.engine_name is not None
+                        and self.manager.is_ready(self._speech.engine_name)),
         )
+
+    def _fallback_engine(self) -> Any:
+        """The local engine behind the cloud. One that is not downloaded, or cannot be loaded, is
+        as good as none: RpcError(NO_LOCAL_MODEL)."""
+        try:
+            return self._speech.engine()
+        except RpcError:
+            raise
+        except Exception as exc:
+            raise RpcError(NO_LOCAL_MODEL, "There is no usable local speech model") from exc
 
     def _call_from_thread(self, method: str, params: dict, timeout: float) -> Any:
         """`self.call(method, params)` on the event loop, from a worker thread; waits `timeout`
@@ -975,6 +1204,11 @@ class App(Router):
     def _follow_local_model(self, name: Any) -> None:
         """The local model set in the settings is the engine from now on, if it is downloaded. The
         engine is built in the background: this dictation goes on with the one that is loaded."""
+        if name is None:  # set to none directly: the engine goes, the fallback with it
+            if self._speech.engine_name is not None:
+                self._speech.select_engine(None)
+                self._load_models_in_background()
+            return
         if not isinstance(name, str) or name == self._speech.engine_name:
             return
         if name in REGISTRY and self.manager.is_ready(name):
@@ -996,8 +1230,134 @@ class App(Router):
 
     # --- core -----------------------------------------------------------------------------------
 
+    async def _ask_from_messaging(
+        self,
+        session_id: str,
+        text: str,
+        language: str,
+        source: str,
+        /,
+        *,
+        attachments: Sequence[Attachment] = (),
+    ) -> str:
+        """A message from a messaging app, through the same entry as a spoken question. Whatever
+        needs a yes is refused on the spot: a yes is given at this computer, never from a message.
+
+        The images and PDFs the message came with (already checked by the switchboard) go as the
+        request's `attachments`, in the form `agent.ask` takes from the app: `{name, mime, data}`
+        with the bytes in base64. They stay in memory, for this request only."""
+        params: dict[str, Any] = {
+            "session_id": session_id,
+            "text": text,
+            "ui_language": language,
+            "source": source,
+        }
+        if attachments:
+            params["attachments"] = [
+                {"name": a.name, "mime": a.mime, "data": base64.b64encode(a.data).decode("ascii")}
+                for a in attachments
+            ]
+        reply = await self.call("agent.ask", params)
+        if reply.get("status") == "confirm":
+            question = reply["confirm"]
+            await self.call("agent.confirm", {"id": question["id"], "approved": False})
+            asked = compose(question["prefix"], question["text"], None)
+            return f"{asked}\n{words(language, 'confirm')}"
+        return compose(reply.get("prefix", ""), reply.get("text", ""), None)
+
+    async def _transcribe_from_messaging(self, audio: bytes, language: str) -> str:
+        """The words of a voice message, heard by the engine that dictation uses (the cloud, with
+        the local one behind it if there is one, or the local one), with the user's dictionary and
+        the same normalising. The audio stays in memory."""
+        from .device.dictation import dictionary_hints  # numpy: after the start-up
+        from .messaging import voice
+
+        await self._read_stt_engine()
+        hints = await dictionary_hints(self.call)
+        cloud = self._stt_engine == "cloud"
+
+        def hear() -> str:
+            engine = self._dictation_engine()
+            path = self.manager.dir(VAD_MODEL) / REGISTRY[VAD_MODEL].files[0]
+            seconds = CLOUD_SEGMENT_SECONDS if cloud else DICTATION_SEGMENT_SECONDS
+            segmenter = self._kit.result().Segmenter(path, max_segment_s=seconds)
+            return voice.transcribe_voice(audio, engine, segmenter, hints)
+
+        heard = await asyncio.to_thread(hear)
+        if not heard.strip():
+            return ""
+        try:
+            text = (await self.call("brain.normalize_transcript", {"raw_text": heard}))["text"]
+            return text if isinstance(text, str) else heard
+        except Exception as exc:
+            logger.warning("Could not normalize a voice message: %s", type(exc).__name__)
+            return heard
+
+    async def _stop_from_messaging(self, session_id: str) -> bool:
+        """Stop what this chat has under way: a request that still thinks and its background
+        tasks, never those of the computer or of another chat."""
+        thinking = self.agent.stop_session(session_id)
+        return await self.background.cancel_session(session_id) or thinking
+
+    def _agent_notice(self, method: str, params: dict) -> None:
+        """The assistant's notifications go to the app; a turn written or completed is news in its
+        thread, unless that thread is on screen (`MembersService.turn_arrived`)."""
+        if method == "agent.turn" and type(params.get("turn_id")) is int:
+            self.members.turn_arrived(params["turn_id"])
+            self.rooms.turn_arrived(params["turn_id"])
+        self.notify(method, params)
+
+    def _worker_notice(self, method: str, params: dict) -> None:
+        """The background worker's notifications go to the app, and the report of a task that a
+        messaging chat handed over goes back to that chat. When such a task waits for the owner's
+        yes, the chat is told that the answer is given at the computer: never there. A task that
+        ended completed its turn, which is news in its thread."""
+        self.notify(method, params)
+        if method == "background.question" and params.get("state") == "waiting":
+            if type(params.get("member_id")) is int:
+                self.members.needs_input(params["member_id"])
+            self._tell_chat_to_answer_here(params.get("task_id"))
+            return
+        if method == "worker.changed" and params.get("state") in FINAL_STATES:
+            ended = self.background.task(params["task_id"]) if type(params.get("task_id")) is int else None
+            if ended is not None and ended.turn_id:
+                self.members.turn_arrived(ended.turn_id)
+                self.rooms.turn_arrived(ended.turn_id)
+        if method != "worker.report" or type(params.get("task_id")) is not int:
+            return
+        task = self.background.task(params["task_id"])
+        if task is None or not self.messaging.handles(task.session_id):
+            return
+        if task.report_text is None:
+            return
+        text = compose(task.report_prefix or "", task.report_text, None)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        sent = loop.create_task(self.messaging.report(task.session_id, text))
+        sent.add_done_callback(lambda t: t.cancelled() or t.exception())
+
+    def _tell_chat_to_answer_here(self, task_id: object) -> None:
+        if type(task_id) is not int:
+            return
+        task = self.background.task(task_id)
+        if task is None or not self.messaging.handles(task.session_id):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        text = words(task.language, "confirm")
+        sent = loop.create_task(self.messaging.report(task.session_id, text))
+        sent.add_done_callback(lambda t: t.cancelled() or t.exception())
+
     async def _hello(self, params: dict) -> dict:
+        self.messaging.start()  # a Telegram bot that was left on polls again
         self.agent.prewarm()  # the app is up: read the Start menu now, not at the first "open"
+        self.memory.start()  # and look for turns the reflection pass has not read, soon
+        self.members.start()  # the routines: one missed while the core was not running runs now
+        self.rooms.start()
         return {"protocol": PROTOCOL_VERSION, "version": __version__}
 
     async def _shutdown(self, params: dict) -> dict:
@@ -1014,7 +1374,8 @@ class App(Router):
     # --- models ---------------------------------------------------------------------------------
 
     async def _models_status(self, params: dict) -> dict:
-        names = (VAD_MODEL, self._speech.engine_name)
+        engine = self._speech.engine_name
+        names = (VAD_MODEL,) if engine is None else (VAD_MODEL, engine)
         return {"models": [{"name": n, "ready": self.manager.is_ready(n)} for n in names]}
 
     def _progress_notifier(
@@ -1049,11 +1410,12 @@ class App(Router):
     async def _models_ensure(self, params: dict) -> dict:
         names = params.get("names")
         if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
-            raise _invalid("names must be a list of model names")
-        allowed = {*APP_MODELS, self._speech.engine_name}
+            raise invalid_params("names must be a list of model names")
+        engine = self._speech.engine_name
+        allowed = {VAD_MODEL} if engine is None else {VAD_MODEL, engine}
         unknown = [n for n in names if n not in allowed]
         if unknown:
-            raise _invalid(f"not a model the app downloads: {', '.join(unknown)}")
+            raise invalid_params(f"not a model the app downloads: {', '.join(unknown)}")
         loop = asyncio.get_running_loop()
 
         def download() -> None:
@@ -1071,11 +1433,11 @@ class App(Router):
         """The model of the catalogue that `params` name."""
         name = params.get("name")
         if not isinstance(name, str):
-            raise _invalid("name must be a model name")
+            raise invalid_params("name must be a model name")
         try:
             return local_model(name).name
         except ValueError:
-            raise _invalid(f"not a model of the catalogue: {name}") from None
+            raise invalid_params(f"not a model of the catalogue: {name}") from None
 
     async def _models_local(self, params: dict) -> dict:
         """The catalogue: each model with its size and whether it is on disk, the one the local
@@ -1098,6 +1460,7 @@ class App(Router):
         return {
             "models": await asyncio.to_thread(read),
             "active": settings["stt_local_model"],
+            "fallback": None if settings["stt_engine"] == "local" else settings["stt_local_model"],
             "downloading": self._local_download,
         }
 
@@ -1121,9 +1484,12 @@ class App(Router):
             raise RpcError(INTERNAL_ERROR, str(exc)) from exc
         finally:
             self._local_download = None
-        await self.call("settings.set", {"key": "stt_local_model", "value": name})
-        reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
-        self._speech.select_engine(name)
+        async with self._models_lock:
+            if not self.manager.is_ready(name):  # deleted while this waited for its turn
+                raise RpcError(BUSY, f"{name} was removed meanwhile")
+            await self.call("settings.set", {"key": "stt_local_model", "value": name})
+            reply = await self.call("settings.set", {"key": "stt_engine", "value": "local"})
+            self._speech.select_engine(name)
         self._load_models_in_background()  # built beside the engine in use, which serves until then
         return {"ok": True, "settings": reply["settings"]}
 
@@ -1134,36 +1500,80 @@ class App(Router):
         return {"cancelled": True}
 
     async def _models_local_delete(self, params: dict) -> dict:
+        async with self._models_lock:  # so that no two deletes choose each other's model
+            return await self._delete_local(params)
+
+    async def _delete_local(self, params: dict) -> dict:
         """Delete a downloaded model of the catalogue that is not in use. The detector is not one
-        of them. Answers whether anything was there to delete."""
+        of them. While the cloud is the engine the local model is only the fallback, and that can
+        be deleted too (not during a dictation): it is unloaded first, and another downloaded
+        model takes its place, or none does. Answers whether anything was there to delete and, in
+        that case, the fallback that follows."""
         name = self._local_name(params)
         if name == self._local_download:
             raise RpcError(BUSY, f"{name} is being downloaded")
         settings = (await self.call("settings.get", {}))["settings"]
-        in_use = {settings["stt_local_model"], self._speech.engine_name}
-        if name in in_use or name == self._speech.loaded_engine_name:
-            raise RpcError(BUSY, f"{name} is in use")
+        chosen = settings["stt_local_model"]
+        retire = settings["stt_engine"] != "local" and name == chosen
+        if not retire:
+            in_use = {chosen, self._speech.engine_name, self._speech.loaded_engine_name}
+            if name in in_use:
+                raise RpcError(BUSY, f"{name} is in use")
+        elif not self._dictation_idle():
+            raise RpcError(BUSY, f"{name} is needed by the dictation")
+        replacement: str | None = None
+        if retire:
+            replacement = next(
+                (
+                    entry.name
+                    for entry in LOCAL_STT_MODELS
+                    if entry.name != name and self.manager.is_ready(entry.name)
+                ),
+                None,
+            )
+            await self.call("settings.set", {"key": "stt_local_model", "value": replacement})
+            self._speech.select_engine(replacement)
+            await asyncio.to_thread(self._speech.unload_engine)
 
         def delete() -> bool:
             directory = self.manager.dir(name)
             if not directory.exists():
                 return False
-            try:
-                shutil.rmtree(directory)
-            except OSError as exc:
-                raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
+            for attempt in range(DELETE_TRIES):
+                try:
+                    shutil.rmtree(directory)
+                    return True
+                except PermissionError as exc:  # a file ONNX Runtime has not let go of yet
+                    if attempt == DELETE_TRIES - 1:
+                        raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
+                    time.sleep(DELETE_RETRY_S)
+                except OSError as exc:
+                    raise RpcError(INTERNAL_ERROR, f"Could not delete {name}: {exc}") from exc
             return True
 
-        deleted = await asyncio.to_thread(delete)
+        try:
+            deleted = await asyncio.to_thread(delete)
+        except BaseException:
+            # Some files may be gone: the old fallback comes back only if it still works.
+            if retire and self.manager.is_ready(name):
+                await self.call("settings.set", {"key": "stt_local_model", "value": name})
+                self._speech.select_engine(name)
+            raise
+        finally:
+            if retire:
+                self._load_models_in_background()  # the fallback, if there is one
         logger.info("Deleted the speech model %s", name)
-        return {"deleted": deleted}
+        reply: dict[str, Any] = {"deleted": deleted}
+        if retire:
+            reply["fallback"] = replacement
+        return reply
 
     # --- the microphone -------------------------------------------------------------------------
 
     async def _audio_devices(self, params: dict) -> dict:
         refresh = params.get("refresh", True)
         if type(refresh) is not bool:
-            raise _invalid("refresh must be true or false")
+            raise invalid_params("refresh must be true or false")
         kit = await self._wait_for(self._kit)
         # Listing reads the devices again, so that a headset plugged in since shows up, and that is
         # not done while a stream is open. The settings meter's stream is the one that usually is:
@@ -1187,7 +1597,7 @@ class App(Router):
     async def _audio_set_device(self, params: dict) -> dict:
         name = params.get("name")
         if name is not None and not isinstance(name, str):
-            raise _invalid("name must be a string or null")
+            raise invalid_params("name must be a string or null")
         name = name if name is not None and name.strip() else None  # blank: the default
         changed = name != self._device_name
         self._device_name = name
@@ -1198,7 +1608,7 @@ class App(Router):
     async def _audio_monitor(self, params: dict) -> dict:
         on = params.get("on")
         if type(on) is not bool:
-            raise _invalid("on must be true or false")
+            raise invalid_params("on must be true or false")
         if not on and self._monitor is None:
             return {}
         monitor = await self._get_monitor()
@@ -1231,16 +1641,22 @@ class App(Router):
         way the meter stays suspended, so a stop that ends meanwhile cannot reopen it beside the
         new dictation.
         """
+        if method == "dictation.start":
+            self.speaker.stop()  # a new recording ends what Raphael was saying
         service = await self._wait_for(self._service)
         if method != "dictation.start":
             try:
                 return await self._inner.call(method, params)
             finally:
                 await self._meter_settled()
-        self._speech.require_models()
         self._starts += 1
         try:
             await self._read_stt_engine()
+            if self._stt_engine == "cloud":
+                warm = getattr(self.client, "start_connection_warmup", None)
+                if warm is not None:
+                    warm()
+            self._speech.require_models(engine_needed=self._stt_engine == "local")
             await self._meter("make way for the dictation", lambda m: m.suspend())
             return await self._inner.call(method, params)
         finally:

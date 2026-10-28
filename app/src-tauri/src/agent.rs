@@ -52,8 +52,10 @@ pub fn parse_reply(reply: &Value) -> Result<Reply, Malformed> {
     }
 }
 
-/// The reply of `agent.confirm`, which is always an answer: `{"status": "done", "prefix",
-/// "text", ..}`. A second question is not something the controller can ask for.
+/// The reply of `agent.confirm` when the turn may ask no more: an answer, `{"status": "done",
+/// "prefix", "text", ..}`. A question in its place is refused (and denied by the controller). A
+/// turn asks again only for a run on the desktop, and only so many times
+/// (`dictation::MAX_QUESTIONS_IN_A_TURN`); up to then the reply is read with [`parse_reply`].
 pub fn parse_answer(reply: &Value) -> Result<Reply, Malformed> {
     match parse_reply(reply)? {
         say @ Reply::Say { .. } => Ok(say),
@@ -102,12 +104,17 @@ fn parse_ask(confirm: Option<&Value>) -> Result<Reply, Malformed> {
     };
     Ok(Reply::Ask(AskPrompt {
         id: id.to_owned(),
+        member_id: None,
+        conversation_id: None,
         tier: Tier::parse(confirm.get("tier").and_then(Value::as_str).unwrap_or("")),
         prefix: prefix.to_owned(),
         text: text.to_owned(),
         yes: yes.to_owned(),
         no: no.to_owned(),
         timeout_ms: ask_timeout_ms(confirm.get("timeout_ms")),
+        always: words("always").map(str::to_owned),
+        drafts: confirm.get("drafts").and_then(Value::as_array).cloned(),
+        groups: confirm.get("groups").and_then(Value::as_array).cloned(),
     }))
 }
 
@@ -138,10 +145,29 @@ pub fn say_hold_ms(text: &str) -> u64 {
         .min(SAY_MAX_MS)
 }
 
+/// Whether the reply of `agent.ask` says that Raphael also wrote down a memory, which the overlay
+/// tells after the answer ([`crate::notices::REMEMBERED`]): `"notice": "remembered"`.
+pub fn remembered(reply: &Value) -> bool {
+    reply.get("notice").and_then(Value::as_str) == Some("remembered")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_reply_says_when_a_memory_was_written_beside_the_answer() {
+        let done = json!({"status": "done", "prefix": "答", "text": "好。", "turn_id": 3});
+        assert!(!remembered(&done));
+        let mut noted = done.clone();
+        noted["notice"] = json!("remembered");
+        assert!(remembered(&noted));
+        for other in [json!("REMEMBERED"), json!(true), json!(null), json!("x")] {
+            noted["notice"] = other;
+            assert!(!remembered(&noted));
+        }
+    }
 
     fn confirm(extra: Value) -> Value {
         let mut confirm = json!({
@@ -205,18 +231,38 @@ mod tests {
             parse_reply(&confirm(json!({}))),
             Ok(Reply::Ask(AskPrompt {
                 id: "c-1".into(),
+                member_id: None,
+                conversation_id: None,
                 tier: Tier::T2,
                 prefix: "問".into(),
                 text: "要複製到剪貼簿嗎？".into(),
                 yes: "是".into(),
                 no: "否".into(),
                 timeout_ms: 30_000,
+                always: None,
+                drafts: None,
+                groups: None,
             }))
         );
         let Ok(Reply::Ask(prompt)) = parse_reply(&confirm(json!({"tier": "T3"}))) else {
             panic!("not a question");
         };
         assert_eq!(prompt.tier, Tier::T3);
+    }
+
+    #[test]
+    fn a_question_about_an_app_has_a_third_answer() {
+        let Ok(Reply::Ask(prompt)) = parse_reply(&confirm(json!({"always": "一律允許"})))
+        else {
+            panic!("not a question");
+        };
+        assert_eq!(prompt.always.as_deref(), Some("一律允許"));
+        for none in [json!(null), json!(""), json!("  "), json!(3)] {
+            let Ok(Reply::Ask(prompt)) = parse_reply(&confirm(json!({ "always": none }))) else {
+                panic!("not a question");
+            };
+            assert_eq!(prompt.always, None, "{none}");
+        }
     }
 
     #[test]

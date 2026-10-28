@@ -8,7 +8,70 @@ import threading
 import pytest
 
 from raphael_core.agent.commands import NONE
+from raphael_core.background.tasks import Refused
 from raphael_core.brain.openrouter import Completion, Decision, ToolCall, ToolPlan
+
+
+@pytest.fixture(autouse=True)
+def private_codex_environment(tmp_path, monkeypatch):
+    """Driver tests must never borrow the machine owner's real CLI credentials."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+
+
+class FakeBackground:
+    """A background worker that notes how it is called and carries nothing out. Every assistant has
+    a worker (the app always gives it one); this is the tests'. `refuse` makes `submit` refuse with
+    that phrase's kind, `fail` makes it raise, and `briefs` is what it tells the assistant."""
+
+    def handoff_views(self, **scope):
+        return []
+
+    def __init__(self):
+        self.submitted = []
+        self.attached = []
+        self.cleared = 0
+        self.refuse = None
+        self.fail = None
+        self.briefs = []
+        self.files = []  # the attachments of each task submitted
+        self.members = []  # whose task each one submitted was (0: Raphael's)
+        self.asked_by = []  # the speaker as another asked it, for a request from an exchange
+
+    def submit(self, *, session_id, text, language, model, attachments=(), member_id=0, asked_by=None):
+        self.members.append(member_id)
+        self.asked_by.append(asked_by)
+        if self.refuse:
+            raise Refused(self.refuse)
+        if self.fail:
+            raise self.fail
+        self.submitted.append((session_id, text, language, model))
+        self.files.append(list(attachments))
+        return len(self.submitted)
+
+    def brief_for_assistant(self, limit=3, *, member_id=0):
+        return list(self.briefs)
+
+    def attach_turn(self, task_id, turn_id):
+        self.attached.append((task_id, turn_id))
+
+    def clear(self):
+        self.cleared += 1
+
+    async def cancel_session(self, session_id):
+        return any(request[0] == session_id for request in self.submitted)
+
+    def tasks_for_turns(self, turn_ids):
+        # Each task as the history shows it with the turn that handed it over.
+        brief = {"id": 0, "state": "running", "started_at_ms": 5}
+        step = {"kind": "tool", "tool": "look", "server": "Notes", "outcome": "ok", "ms": 12,
+                "reason": None, "at_ms": 6}  # fmt: skip
+        return {
+            turn_id: ({**brief, "id": task_id}, [step])
+            for task_id, turn_id in self.attached
+            if turn_id in turn_ids
+        }
 
 
 class FakeActions:
@@ -65,7 +128,8 @@ class FakeOpenRouter:
     """Stands in for the OpenRouter client, which the assistant uses four ways.
 
     The answers are queued by kind (`decisions`, `replies` for complete_json, `texts` for
-    chat_text, `plans` for plan_tools); each call takes the first of its queue. An answer that is
+    chat_text, `plans` for plan_tools, `chats` for chat_tools, which a run on the desktop uses);
+    each call takes the first of its queue. An answer that is
     an exception is raised, and one that is a function is called with the keyword arguments of the
     call (and awaited, if it is a coroutine function: a call that hangs is one that sleeps). A call
     with nothing queued fails the test. `delay` is how long each call takes, in seconds, and the
@@ -78,7 +142,9 @@ class FakeOpenRouter:
         self.replies = []
         self.texts = []
         self.plans = []
+        self.chats = []
         self.decide_calls = []
+        self.chat_calls = []
         self.json_calls = []
         self.text_calls = []
         self.plan_calls = []
@@ -109,6 +175,9 @@ class FakeOpenRouter:
 
     async def plan_tools(self, **kwargs):
         return await self._answer(self.plans, self.plan_calls, kwargs, "plan_tools")
+
+    async def chat_tools(self, **kwargs):
+        return await self._answer(self.chats, self.chat_calls, kwargs, "chat_tools")
 
     @property
     def calls(self):

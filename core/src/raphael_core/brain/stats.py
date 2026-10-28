@@ -1,4 +1,4 @@
-"""Dictation statistics: `stats.summary`, what the history says about how much was dictated.
+"""Lasting dictation statistics: `stats.summary`, independent of retained text.
 
 A word is counted like this, in mixed text too: each Chinese, Japanese or Korean character
 (Han, kana, Hangul) is one word, and each run of letters or digits of any other script is one
@@ -7,10 +7,9 @@ decimal point or a thousands comma ("3.14", "1,000") each count as one; a hyphen
 splits.
 
 The days, weeks and months are local, like the spend tracker's: each starts at midnight in the time
-zone and ends where the next one starts (the week starts on Monday, the ISO week). The statistics
-see the history only as far as it is kept: the retention setting prunes older dictations, so they
-are not counted anywhere here, and "all" means all that is left. What the dictations cost comes
-from the spend table instead, which the retention does not prune.
+zone (the week starts on Monday, the ISO week). A dictation's local day is fixed when recorded.
+Daily aggregates retain counts and durations without text; history deletion never changes them.
+Costs still come from the spend table, which history retention does not prune.
 """
 
 import re
@@ -88,20 +87,40 @@ def _zone_and_today(now_ms: int, tz: tzinfo | None) -> tuple[tzinfo, date]:
     return zone, (_EPOCH + timedelta(milliseconds=now_ms)).astimezone(zone).date()
 
 
+def local_day(created_at_ms: int, tz: tzinfo | None = None) -> date:
+    """The owner's local calendar day at capture (or at migration for legacy rows)."""
+    return _zone_and_today(created_at_ms, tz)[1]
+
+
+def record_dictation(
+    conn: sqlite3.Connection, *, created_at_ms: int, text: str, audio_seconds: float,
+    stt_ms: int, llm_ms: int, tz: tzinfo | None = None,
+) -> None:
+    """Increment lasting counts inside the history writer's transaction; never commit here."""
+    conn.execute(
+        "INSERT INTO dictation_daily (day, dictations, words, audio_seconds, processing_ms)"
+        " VALUES (?, 1, ?, ?, ?) ON CONFLICT(day) DO UPDATE SET"
+        " dictations = dictations + 1, words = words + excluded.words,"
+        " audio_seconds = audio_seconds + excluded.audio_seconds,"
+        " processing_ms = processing_ms + excluded.processing_ms",
+        (local_day(created_at_ms, tz).isoformat(), count_words(text), audio_seconds, stt_ms + llm_ms),
+    )
+
+
 @dataclass
 class _Totals:
     dictations: int = 0
     words: int = 0
     audio_seconds: float = 0.0
 
-    def add(self, words: int, audio_seconds: float) -> None:
-        self.dictations += 1
+    def add(self, dictations: int, words: int, audio_seconds: float) -> None:
+        self.dictations += dictations
         self.words += words
         self.audio_seconds += audio_seconds
 
 
 class StatsStore:
-    """What the dictation history says, as `stats.summary`.
+    """The durable daily aggregates, as `stats.summary`.
 
     `now_ms` is the clock (milliseconds since the epoch), read on every call. `tz` is the time zone
     of the days; with the default, None, it is this machine's local zone, found on every call.
@@ -116,11 +135,9 @@ class StatsStore:
         self._tz = tz
 
     def summary(self, days: int = BY_DAY_DAYS) -> dict:
-        """The statistics of the dictation history.
+        """The lasting statistics, including marked estimates recovered during migration.
 
-        Only the dictations the history still keeps are counted: the history retention setting
-        prunes the older ones, and the statistics shrink with it. The cost comes from the spend
-        table, which is not pruned. See the module docstring for how words and days are counted.
+        History retention and deletion have no effect. Cost comes from the spend table.
 
         - today, week, month, all: dictations, words, audio_seconds and cost_usd of each period
         - streak_days: the days in a row, up to today or else up to yesterday, with a dictation
@@ -131,6 +148,7 @@ class StatsStore:
         - speed_wpm: all words over all speaking time in minutes, or None without any audio
         - time_saved_seconds: what typing all the words would have taken at TYPING_WPM, less the
           speaking and the processing time (speech-to-text and cleanup); 0 at the least
+        - estimated_words, estimated_dictations: the recovered estimates already included above
         """
         if isinstance(days, bool) or not isinstance(days, int):
             raise ValueError("days must be a whole number")
@@ -153,22 +171,24 @@ class StatsStore:
         by_day = {day: [0, 0] for day in chart_days}  # day -> [dictations, words]
         days_with_dictations: set[date] = set()
         processing_ms = 0
+        estimated_words = estimated_dictations = 0
 
         rows = self._conn.execute(
-            "SELECT created_at_ms, text, audio_seconds, stt_ms, llm_ms FROM history"
-            " WHERE kind = 'dictation'"
+            "SELECT day, dictations, words, audio_seconds, processing_ms, estimated_words,"
+            " estimated_dictations FROM dictation_daily"
         )
-        for created_at_ms, text, audio_seconds, stt_ms, llm_ms in rows:
-            words = count_words(text)
-            totals["all"].add(words, audio_seconds)
-            processing_ms += stt_ms + llm_ms
-            for name, (start, end) in bounds.items():
-                if start <= created_at_ms < end:
-                    totals[name].add(words, audio_seconds)
-            day = (_EPOCH + timedelta(milliseconds=created_at_ms)).astimezone(zone).date()
+        for day_text, dictations, words, audio_seconds, elapsed, est_words, est_count in rows:
+            day = date.fromisoformat(day_text)
+            totals["all"].add(dictations, words, audio_seconds)
+            processing_ms += elapsed
+            estimated_words += est_words
+            estimated_dictations += est_count
+            for name, (start, end) in ranges.items():
+                if start <= day < end:
+                    totals[name].add(dictations, words, audio_seconds)
             days_with_dictations.add(day)
             if day in by_day:
-                by_day[day][0] += 1
+                by_day[day][0] += dictations
                 by_day[day][1] += words
 
         everything = totals["all"]
@@ -196,6 +216,8 @@ class StatsStore:
         summary["longest_streak_days"] = _longest_streak(days_with_dictations)
         summary["speed_wpm"] = speed_wpm
         summary["time_saved_seconds"] = max(0.0, time_saved)
+        summary["estimated_words"] = estimated_words
+        summary["estimated_dictations"] = estimated_dictations
         return summary
 
     def _spent_between(self, start_ms: int | None, end_ms: int | None) -> float:

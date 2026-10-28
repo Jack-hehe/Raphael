@@ -7,6 +7,10 @@ and keeps for a day. This module reads it. Two kinds of model are kept:
 - `llm`: text in, text out. A model that also writes images or audio is not one.
 - `stt`: speech to text, the models whose output is a transcription.
 
+The kind is what the list says a model reads and writes: its `input_modalities` and
+`output_modalities`, or, for an entry that lacks those, its `modality` ("audio->transcription").
+Nothing else decides it: Raphael keeps no list of models of his own.
+
 Every other kind (embeddings, images, speech, video, reranking, decisions) is left out: no role can
 use one. So is a `:batch` variant, which runs on OpenRouter's batch API, whose answers come within a
 day: never in time for anything Raphael does. Jev, which sorts the assistant's requests, is a fixed
@@ -17,11 +21,13 @@ The roles (`ROLES`), and what each needs of a model, from the calls it makes:
 - `cleanup` (the `cleanup_model` setting) and `answer` (`agent_model`: Raphael's answers, his
   routing when Jev fails or is unsure, the app he picks to open, and his web search) call
   `complete_json`. It asks for JSON that fits a schema (`response_format` with a strict
-  `json_schema`), with no reasoning (`reasoning.effort: "none"`) and a `max_tokens`, under
-  `provider.require_parameters`, which leaves out every provider that does not take all of those.
-  So the model must list `response_format`, `structured_outputs`, `reasoning` and `max_tokens`
-  among its supported parameters, and must be able to answer without reasoning first: not
-  `reasoning.mandatory`, and "none" among its efforts when it lists them. Tool calling is not
+  `json_schema`) and a `max_tokens`, under `provider.require_parameters`, which leaves out every
+  provider that does not take exactly the parameters sent. The cached catalog decides reasoning:
+  `effort: "none"` when it can be turned off, no reasoning field without a reasoning setting,
+  or the lowest listed effort when it is required (minimal, then low, then the first listed;
+  low when no efforts are listed). An explicitly chosen answer effort is kept.
+  So the model must list `response_format`, `structured_outputs` and `max_tokens` among its
+  supported parameters. Tool calling is not
   needed: Raphael runs his tools himself and hands the model their results, and the web search
   (`chat_text` with OpenRouter's `web` plugin, which requires no parameter) takes any text model.
   The one thing that wants it is the call that picks a plugin's tools (agent/plugins.py), which
@@ -58,14 +64,21 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from .openrouter import CLEANUP_MODEL_CHOICES, STT_MODELS_WITH_HINTS
-from .settings import AGENT_TEXT_MAX_CHARS, DEFAULTS, STT_CLOUD_MODELS
+from .openrouter import STT_MODELS_WITH_HINTS
+from .settings import AGENT_TEXT_MAX_CHARS, DEFAULTS
 
 LLM = "llm"
 STT = "stt"
 KINDS = (LLM, STT)
 # The capability of a language model that takes `tools` and `tool_choice` (see the docstring).
 TOOL_CALLING = "tool_calling"
+# The capabilities of a language model that reads images, and files (a PDF), besides text: what
+# the list says it reads (its `input_modalities`, or its `modality`). The model that reads an image
+# for Raphael (the `vision_model` setting, raphael_core.services.vision) must have the first.
+IMAGE_INPUT = "image_input"
+FILE_INPUT = "file_input"
+# What the list calls each of those inputs.
+_INPUT_CAPABILITIES = {"image": IMAGE_INPUT, "file": FILE_INPUT}
 
 # What a minute of speech-to-text can plausibly cost at most, in US dollars. The dearest model
 # (Google Chirp 3) is 1.6 cents.
@@ -97,7 +110,6 @@ class Role:
     name: str  # "cleanup", "answer" or "stt"
     setting: str  # the setting that holds the chosen model
     kind: str  # the kind of model it takes
-    curated: tuple[str, ...]  # what the settings page offered before it offered every model
     # What it needs of a model, in the order it is checked: a capability, and the reason given for
     # a model without it.
     needs: tuple[tuple[str, str], ...]
@@ -111,21 +123,26 @@ class Role:
 # What `complete_json` needs (see the module's docstring).
 _JSON_WITHOUT_REASONING = (
     ("structured_output", "no_structured_output"),
-    ("reasoning_off", "reasoning_required"),
-    ("reasoning", "no_reasoning_setting"),
     ("max_tokens", "no_max_tokens"),
 )
 ROLES = (
-    Role("cleanup", "cleanup_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
-    # The settings page offered the cleanup models for the answers too.
-    Role("answer", "agent_model", LLM, tuple(CLEANUP_MODEL_CHOICES), _JSON_WITHOUT_REASONING),
-    Role("stt", "stt_cloud_model", STT, STT_CLOUD_MODELS, ()),
+    Role("cleanup", "cleanup_model", LLM, _JSON_WITHOUT_REASONING),
+    Role("answer", "agent_model", LLM, _JSON_WITHOUT_REASONING),
+    Role("stt", "stt_cloud_model", STT, ()),
 )
 ROLE_OF_SETTING = {role.setting: role for role in ROLES}
 
 # What the catalog tells of each kind of model, as the `capabilities` of its entries.
 CAPABILITIES = {
-    LLM: ("structured_output", "reasoning", "reasoning_off", "max_tokens", TOOL_CALLING),
+    LLM: (
+        "structured_output",
+        "reasoning",
+        "reasoning_off",
+        "max_tokens",
+        TOOL_CALLING,
+        IMAGE_INPUT,
+        FILE_INPUT,
+    ),
     STT: ("dictionary_hints",),
 }
 
@@ -143,6 +160,7 @@ class CatalogEntry:
     context_length: int | None  # in tokens, for a language model
     created_at_ms: int | None  # when OpenRouter added it
     capabilities: frozenset[str]  # those of CAPABILITIES[kind] that it has
+    reasoning_efforts: tuple[str, ...] | None = None
 
     @property
     def free(self) -> bool:
@@ -171,21 +189,19 @@ def find(entries: Iterable[CatalogEntry], kind: str, model_id: object) -> Catalo
 
 
 def choice_problem(
-    role: Role, model_id: str, entries: Sequence[CatalogEntry] | None, current: object
+    role: Role, model_id: str, entries: Sequence[CatalogEntry], current: object
 ) -> str | None:
     """Why `model_id` cannot be chosen for `role`; None when it can.
 
-    `entries` is the catalog OpenRouter gave last, however old, or None when it never gave one.
-    With it, any model it lists that the role can use may be chosen; otherwise the problem is
-    "not_listed", or why the role cannot use it (`refusal`). Without it, only the models the role
-    offered all along may be ("not_curated"). The model that is chosen now (`current`) may always
-    be chosen again, which changes nothing, and so may the default, which is what the setting
-    reads as anyway.
+    `entries` is the catalog the settings page shows: the one OpenRouter gave last, however old,
+    or, when it never gave one, the builtin table (pricing.builtin_catalog). Any model it lists
+    that the role can use may be chosen; otherwise the problem is "not_listed", or why the role
+    cannot use it (`refusal`). The model that is chosen now (`current`) may always be chosen
+    again, which changes nothing, and so may the default, which is what the setting reads as
+    anyway.
     """
     if model_id in (current, role.default):
         return None
-    if entries is None:
-        return None if model_id in role.curated else "not_curated"
     entry = find(entries, role.kind, model_id)
     return "not_listed" if entry is None else refusal(entry, role)
 
@@ -243,13 +259,6 @@ def stt_price(pricing: Mapping) -> ModelPrice:
     return ModelPrice(per_minute=per_minute if per_minute <= _MAX_PER_MINUTE else None)
 
 
-# Raphael's own models, by kind: what one of them is when the list does not say.
-_CURATED_KINDS = {
-    **{model_id: LLM for model_id in CLEANUP_MODEL_CHOICES},
-    **{model_id: STT for model_id in STT_CLOUD_MODELS},
-}
-
-
 def _modalities(architecture: object, key: str) -> list[str] | None:
     values = architecture.get(key) if isinstance(architecture, dict) else None
     if isinstance(values, list) and all(isinstance(value, str) for value in values):
@@ -257,14 +266,39 @@ def _modalities(architecture: object, key: str) -> list[str] | None:
     return None
 
 
-def kind_of(model: Mapping) -> str | None:
-    """LLM, STT, or None for a kind no role uses, by what the model reads and writes. A model whose
-    modalities the list does not give is of no kind, unless it is one of Raphael's own."""
+def _modality(architecture: object) -> tuple[list[str], list[str]] | None:
+    """What a model reads and what it writes, from the list's one-line `modality` of it:
+    (["text", "image"], ["text"]) for "text+image->text". None when it has none, or not of that
+    shape."""
+    value = architecture.get("modality") if isinstance(architecture, dict) else None
+    if not isinstance(value, str):
+        return None
+    reads, arrow, writes = value.partition("->")
+    inputs = [part.strip() for part in reads.split("+") if part.strip()]
+    outputs = [part.strip() for part in writes.split("+") if part.strip()]
+    if not arrow or not inputs or not outputs:
+        return None
+    return inputs, outputs
+
+
+def _reads_and_writes(model: Mapping) -> tuple[list[str], list[str]] | None:
+    """What a model reads and what it writes: the list's `input_modalities` and `output_modalities`
+    of it, or its `modality` when it lacks those; None when the list says neither."""
     architecture = model.get("architecture")
     inputs = _modalities(architecture, "input_modalities")
     outputs = _modalities(architecture, "output_modalities")
     if inputs is None or outputs is None:
-        return _CURATED_KINDS.get(str(model.get("id")))
+        return _modality(architecture)
+    return inputs, outputs
+
+
+def kind_of(model: Mapping) -> str | None:
+    """LLM, STT, or None for a kind no role uses, by what the model reads and writes
+    (`_reads_and_writes`). A model of which the list says neither is of no kind."""
+    read = _reads_and_writes(model)
+    if read is None:
+        return None
+    inputs, outputs = read
     if "transcription" in outputs:
         return STT
     if set(outputs) == {"text"} and "text" in inputs:
@@ -335,6 +369,10 @@ def _capabilities(model: Mapping, kind: str) -> frozenset[str]:
     # The tools, and the choice among them, which the call that picks a plugin's tools sends.
     if {"tools", "tool_choice"} <= parameters:
         found.add(TOOL_CALLING)
+    read = _reads_and_writes(model)
+    for modality in [] if read is None else read[0]:
+        if modality in _INPUT_CAPABILITIES:
+            found.add(_INPUT_CAPABILITIES[modality])
     return frozenset(found)
 
 
@@ -362,6 +400,9 @@ def _entry(model: Mapping, kind: str, makers: Mapping[str, str]) -> CatalogEntry
         context_length=_positive_int(model.get("context_length")) if kind == LLM else None,
         created_at_ms=None if created is None else created * _MS_PER_SECOND,
         capabilities=_capabilities(model, kind),
+        reasoning_efforts=tuple(model["reasoning"]["supported_efforts"]) if isinstance(model.get("reasoning"), dict)
+        and isinstance(model["reasoning"].get("supported_efforts"), list)
+        and all(isinstance(e, str) for e in model["reasoning"]["supported_efforts"]) else None,
     )
 
 
@@ -414,6 +455,7 @@ def entry_to_json(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": sorted(entry.capabilities),
+        "reasoning_efforts": list(entry.reasoning_efforts) if entry.reasoning_efforts is not None else None,
     }
 
 
@@ -445,10 +487,21 @@ def entry_from_json(data: object) -> CatalogEntry | None:
         context_length=_positive_int(data.get("context_length")),
         created_at_ms=_positive_int(data.get("created_at_ms")),
         capabilities=frozenset(c for c in capabilities if c in CAPABILITIES[kind]),
+        reasoning_efforts=tuple(data["reasoning_efforts"]) if isinstance(data.get("reasoning_efforts"), list)
+        and all(isinstance(e, str) for e in data["reasoning_efforts"]) else None,
     )
 
 
 # --- the answer ---------------------------------------------------------------------------------
+
+
+def input_modalities(entry: CatalogEntry) -> list[str]:
+    """What the model of `entry` reads, as OpenRouter's list names it: "text", and "image" and
+    "file" when it reads those; "audio" for a speech-to-text model."""
+    if entry.kind == STT:
+        return ["audio"]
+    extra = [name for name, capability in _INPUT_CAPABILITIES.items() if capability in entry.capabilities]
+    return ["text", *extra]
 
 
 def entry_view(entry: CatalogEntry) -> dict[str, Any]:
@@ -467,6 +520,10 @@ def entry_view(entry: CatalogEntry) -> dict[str, Any]:
         "context_length": entry.context_length,
         "created_at_ms": entry.created_at_ms,
         "capabilities": {name: name in entry.capabilities for name in CAPABILITIES[entry.kind]},
+        "reasoning_efforts": list(entry.reasoning_efforts) if entry.reasoning_efforts is not None else None,
+        # What the model reads, as the list names it: the image picker offers the language models
+        # whose list holds "image".
+        "input_modalities": input_modalities(entry),
         "roles": {
             role.name: {"usable": reason is None, "reason": reason}
             for role in roles

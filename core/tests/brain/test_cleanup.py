@@ -137,7 +137,12 @@ def cleanup_log(caplog):
 
 
 def test_timeout_scales_with_length():
-    assert timeout_for(0) == 10.0 and timeout_for(60) == 30.0 and timeout_for(600) == 90.0
+    assert timeout_for(0) == 10.0 and timeout_for(60) == 30.0 and timeout_for(600) == 210.0
+
+
+def test_an_hour_of_dictation_is_given_time_to_be_cleaned_too():
+    # No ceiling: the wait grows with what was said, however long the dictation.
+    assert timeout_for(3600) == 1210.0
 
 
 def test_a_long_dictation_is_given_time_to_be_cleaned():
@@ -152,13 +157,14 @@ async def test_cleans_and_records_spend(svc, fake_client, spend):
     assert spend.month_total() == pytest.approx(0.0003)
 
 
-async def test_no_key_and_budget_skip_the_llm(make_svc, fake_client, spend):
+async def test_no_key_skips_the_llm_but_spending_does_not(make_svc, fake_client, spend):
     assert (
         await make_svc(has_key=False).clean("你好", audio_seconds=1)
     ).fallback_reason == "no_key"
     spend.record(purpose="cleanup", model="m", cost_usd=10.0, prompt_tokens=1, completion_tokens=1)
-    assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason == "budget"
-    assert fake_client.calls == []
+    fake_client.reply = completion({"text": "你好。"})
+    assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason is None
+    assert len(fake_client.calls) == 1
 
 
 async def test_timeout_falls_back_to_raw(make_svc, fake_client):
@@ -191,6 +197,17 @@ async def test_prompt_carries_dictionary_and_transcript(svc, fake_client, dictio
     assert call["schema"] == CLEANUP_SCHEMA
 
 
+async def test_prompt_leaves_out_latin_words_with_nothing_like_them_in_the_dictation(
+    svc, fake_client, dictionary
+):
+    # Shown "Chief of Staff", the model wrote it for 幕僚長: a translation, not a spelling fix.
+    for word in ("Chief of Staff", "OpenRouter", "拉斐爾"):
+        dictionary.add(word)
+    fake_client.reply = completion({"text": "x"}, cost=0)
+    await svc.clean("拉斐爾當幕僚長，然後用歐噴 router 傳訊息", audio_seconds=2)
+    assert dictionary_lines(fake_client.calls[0]["system"]) == ["- 拉斐爾", "- OpenRouter"]
+
+
 # --- when the model is not asked ----------------------------------------------------------------
 
 
@@ -212,7 +229,7 @@ async def test_no_key_is_reported_before_the_budget(make_svc, spend):
     assert (r.text, r.cleaned, r.fallback_reason) == ("你好", False, "no_key")
 
 
-async def test_the_budget_is_the_monthly_limit_and_being_at_it_is_being_over(
+async def test_cleanup_continues_after_the_legacy_monthly_limit(
     make_svc, fake_client, settings, spend
 ):
     settings.set("monthly_limit_usd", 1.0)
@@ -221,8 +238,8 @@ async def test_the_budget_is_the_monthly_limit_and_being_at_it_is_being_over(
     assert (await make_svc().clean("你好", audio_seconds=1)).fallback_reason is None
     spend.record(purpose="cleanup", model="m", cost_usd=0.5, prompt_tokens=1, completion_tokens=1)
     r = await make_svc().clean("你好", audio_seconds=1)
-    assert (r.text, r.cleaned, r.fallback_reason) == ("你好", False, "budget")
-    assert len(fake_client.calls) == 1
+    assert (r.text, r.cleaned, r.fallback_reason) == ("你好。", True, None)
+    assert len(fake_client.calls) == 2
 
 
 async def test_the_fallbacks_without_a_call_cost_nothing_and_took_no_time(make_svc, spend):
@@ -305,8 +322,9 @@ async def test_the_service_asks_the_shared_functions(svc, fake_client, monkeypat
 async def test_the_whole_dictionary_reaches_the_prompt(svc, fake_client, dictionary):
     dictionary.add("OpenRouter")
     dictionary.add("拉斐爾", ["拉菲爾", "拉非爾"])
-    fake_client.reply = completion({"text": "你好。"})
-    await svc.clean("你好", audio_seconds=1)
+    fake_client.reply = completion({"text": "Hello."})
+    # English only: there is nothing to translate from, so no word is left out for the dictation.
+    await svc.clean("hello", audio_seconds=1)
     # The newest word first, as the dictionary lists them.
     assert dictionary_lines(fake_client.calls[0]["system"]) == [
         "- 拉斐爾（常被聽成：拉菲爾、拉非爾）",
@@ -513,7 +531,6 @@ def sabotage_store(request, monkeypatch, fixture, method):
 @pytest.mark.parametrize(
     ("fixture", "method"),
     [
-        ("spend", "is_over"),
         ("settings", "get"),
         ("dictionary", "hint_words"),
         ("dictionary", "hint_forms"),
@@ -579,7 +596,6 @@ async def test_on_result_hears_nothing_when_the_model_was_not_asked(make_svc, sp
     await make_svc(on_result=heard.append).clean("  ", audio_seconds=1)
     await make_svc(has_key=False, on_result=heard.append).clean("你好", audio_seconds=1)
     spend.record(purpose="cleanup", model="m", cost_usd=10.0, prompt_tokens=1, completion_tokens=1)
-    await make_svc(on_result=heard.append).clean("你好", audio_seconds=1)
     assert heard == []
 
 
@@ -656,7 +672,7 @@ async def test_the_dictated_text_and_the_reply_are_never_logged(make_svc, fake_c
 def test_the_prompt_is_package_data_with_one_placeholder_at_its_end():
     file = resources.files("raphael_core.brain.prompts").joinpath("cleanup_system.md")
     text = file.read_text(encoding="utf-8")
-    assert text.startswith("You are a careful editor of dictated text.")
+    assert text.startswith("You edit dictated text.")
     assert text.count("{dictionary}") == 1 and text.rstrip().endswith("\n{dictionary}")
     assert text.count("{target_app}") == 1
     assert text.count("{languages}") == 1 and text.count("{script_rules}") == 1
@@ -740,8 +756,8 @@ async def test_the_words_the_user_chose_survive_a_dictionary_full_of_learned_one
         dictionary.add(name)
     for n in range(130):
         dictionary.add(f"Learned{n:03d}", source="learned")
-    fake_client.reply = completion({"text": "你好。"})
-    await svc.clean("你好", audio_seconds=1)
+    fake_client.reply = completion({"text": "Hello."})
+    await svc.clean("hello", audio_seconds=1)
     lines = dictionary_lines(fake_client.calls[0]["system"])
     assert len(lines) == cleanup.PROMPT_MAX_WORDS
     assert set(lines[:3]) == {"- 拉斐爾", "- OpenRouter", "- Tailscale"}
@@ -1024,3 +1040,21 @@ async def test_the_service_uses_the_languages_of_the_settings(svc, fake_client, 
     system = fake_client.calls[0]["system"]
     assert languages_line(system) == "簡體中文（中國）, English (United Kingdom)"
     assert "Simplified characters with Mainland usage" in system
+
+
+def test_the_dictionary_block_keeps_only_words_the_transcript_may_hold():
+    words = ["Commit", "OpenRouter", "Alt", "拉斐爾"]
+    prompt = build_system_prompt(words, [("O S", "Alt")], heard="右邊那個O S鍵，用歐噴 router 看提交記錄")
+    assert dictionary_lines(prompt) == ["- OpenRouter", "- Alt（常被聽成：O S）", "- 拉斐爾"]
+    assert dictionary_lines(build_system_prompt(words, [("O S", "Alt")])) == [
+        "- Commit",
+        "- OpenRouter",
+        "- Alt（常被聽成：O S）",
+        "- 拉斐爾",
+    ]
+
+
+def test_words_left_out_for_the_transcript_do_not_count_towards_the_limit():
+    words = [f"Unrelated{i}" for i in range(cleanup.PROMPT_MAX_WORDS)] + ["Telegram"]
+    prompt = build_system_prompt(words, [], heard="用 tele gram 傳訊息")
+    assert dictionary_lines(prompt) == ["- Telegram"]

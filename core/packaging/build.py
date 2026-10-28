@@ -29,6 +29,7 @@ def required_files() -> list[str]:
         "_internal/sherpa_onnx/lib/sherpa-onnx-c-api.dll",
         "_internal/sherpa_onnx/lib/sherpa-onnx-cxx-api.dll",
         "_internal/_sounddevice_data/portaudio-binaries/libportaudio64bit.dll",
+        "_internal/_soundfile_data/libsndfile_x64.dll",
         "_internal/raphael_core/brain/prompts/cleanup_system.md",
         "_internal/licenses/python/LICENSE.txt",
         "_internal/licenses/pyinstaller/pyinstaller-6.22.3.dist-info/licenses/COPYING.txt",

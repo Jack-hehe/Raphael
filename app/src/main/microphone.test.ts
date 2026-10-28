@@ -1,14 +1,25 @@
 import { afterEach, expect, it } from "vitest";
 import {
+  AUTO_MICROPHONE,
   DROPDOWN_ROOM,
   MENU_ROOM,
   automaticMicrophoneLabel,
   automaticMicrophoneShort,
   cutToFit,
+  microphoneChoices,
   microphoneText,
   shortMicrophoneName,
 } from "./microphone";
 import { setLocale } from "./i18n";
+import type { AudioDevices } from "./types";
+
+const TWO: AudioDevices = {
+  devices: [
+    { index: 0, name: "Headset", is_default: true },
+    { index: 1, name: "USB Mic", is_default: false },
+  ],
+  selected: null,
+};
 
 afterEach(() => setLocale("zh-TW"));
 
@@ -21,7 +32,23 @@ it("shows the microphone that automatic detection actually resolved to in each U
   expect(automaticMicrophoneLabel(devices)).toBe("自動検出（現在：Realtek Array）");
 });
 
-it("keeps the automatic option usable before detection or with an older core", () => {
+it("offers the automatic choice first, then each microphone", () => {
+  expect(microphoneChoices(TWO, null).map((c) => c.value)).toEqual([AUTO_MICROPHONE, "Headset", "USB Mic"]);
+  expect(microphoneChoices(TWO, "USB Mic").map((c) => c.value)).toEqual([AUTO_MICROPHONE, "Headset", "USB Mic"]);
+});
+
+it("still offers a saved microphone that is not plugged in, said so", () => {
+  const choices = microphoneChoices(TWO, "Old Mic");
+  const last = choices[choices.length - 1];
+  expect(last).toMatchObject({ value: "Old Mic", label: "Old Mic（未連接）" });
+  expect(last.short).toBeUndefined(); // the guide's menu has room for the whole name
+});
+
+it("offers only the automatic choice without a list of microphones", () => {
+  expect(microphoneChoices(null, null).map((c) => c.value)).toEqual([AUTO_MICROPHONE]);
+});
+
+it("keeps the automatic option usable before detection", () => {
   expect(automaticMicrophoneLabel(null)).toBe("自動偵測");
   expect(automaticMicrophoneLabel({ devices: [], selected: null })).toBe("自動偵測");
   expect(automaticMicrophoneLabel({ devices: [], selected: null, automatic_device: null })).toBe("自動偵測");
@@ -62,9 +89,9 @@ it("cuts a text to its room after a whole word, a wide character taking two colu
 });
 
 it("puts a microphone's name in a text as it fits the room of the whole text", () => {
-  expect(microphoneText("onboarding.006", "USB Mic (C-Media)")).toBe("USB Mic (C-Media)（未連接）");
-  expect(microphoneText("onboarding.006", "USB Mic (C-Media)", DROPDOWN_ROOM)).toBe("USB Mic（未連接）");
-  expect(microphoneText("onboarding.006", "麥克風 (5- HyperX Cloud II Core Wireless)", DROPDOWN_ROOM)).toBe("HyperX Cloud II…（未連接）");
+  expect(microphoneText("mic.disconnected", "USB Mic (C-Media)")).toBe("USB Mic (C-Media)（未連接）");
+  expect(microphoneText("mic.disconnected", "USB Mic (C-Media)", DROPDOWN_ROOM)).toBe("USB Mic（未連接）");
+  expect(microphoneText("mic.disconnected", "麥克風 (5- HyperX Cloud II Core Wireless)", DROPDOWN_ROOM)).toBe("HyperX Cloud II…（未連接）");
 });
 
 it("says which microphone automatic detection uses, briefly, on the closed dropdown", () => {

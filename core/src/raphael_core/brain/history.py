@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import asdict, dataclass
+from datetime import tzinfo
+
+from .stats import record_dictation
 
 
 @dataclass
@@ -46,11 +49,12 @@ def _contains_pattern(query: str) -> str:
 
 
 class HistoryStore:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, tz: tzinfo | None = None) -> None:
         self._conn = conn
+        self._tz = tz
 
     def add(self, item: HistoryItem) -> int:
-        """Store a new row and return its id (the id on `item` is ignored)."""
+        """Store history and lasting dictation counts atomically; return the new history id."""
         values = {**asdict(item), "cleaned": int(item.cleaned)}
         with self._conn:
             cursor = self._conn.execute(
@@ -61,6 +65,12 @@ class HistoryStore:
                 " :cost_usd, :stt)",
                 values,
             )
+            if item.kind == "dictation":
+                record_dictation(
+                    self._conn, created_at_ms=item.created_at_ms, text=item.text,
+                    audio_seconds=item.audio_seconds, stt_ms=item.stt_ms, llm_ms=item.llm_ms,
+                    tz=self._tz,
+                )
         return cursor.lastrowid
 
     def get(self, id: int) -> HistoryItem | None:
@@ -104,6 +114,12 @@ class HistoryStore:
             cursor = self._conn.execute("DELETE FROM history WHERE id = ?", (id,))
         return cursor.rowcount > 0
 
+    def clear(self) -> int:
+        """Delete every item; return how many went. Lasting statistics and spend are kept."""
+        with self._conn:
+            cursor = self._conn.execute("DELETE FROM history")
+        return cursor.rowcount
+
     def latest(self) -> HistoryItem | None:
         row = self._conn.execute(
             f"SELECT {_COLUMNS} FROM history {_NEWEST_FIRST} LIMIT 1"
@@ -117,10 +133,3 @@ class HistoryStore:
                 "DELETE FROM history WHERE created_at_ms < ?", (older_than_ms,)
             )
         return cursor.rowcount
-
-    def texts_since(self, ms: int) -> list[str]:
-        """The text of every item created at or after `ms`, newest first."""
-        rows = self._conn.execute(
-            f"SELECT text FROM history WHERE created_at_ms >= ? {_NEWEST_FIRST}", (ms,)
-        )
-        return [row["text"] for row in rows]

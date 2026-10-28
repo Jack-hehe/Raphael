@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.2.0"
+version = "0.3.0"
 description = "Raphael: a tray app for dictation and voice assistance"
 license = "MIT"
 edition = "2024"
@@ -24,6 +24,10 @@ tauri = { version = "2.12", features = ["tray-icon", "image-png"] }
 tauri-plugin-autostart = "2.7"
 tauri-plugin-window-state = "2.5"
 tauri-plugin-log = "2"
+# The file dialog of 頭像 (Settings › 拉斐爾): opened from Rust, never from a page.
+tauri-plugin-dialog = "2"
+# Member desktop notifications are sent from Rust, never from a page.
+tauri-plugin-notification = "2.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
@@ -55,8 +59,9 @@ webview2-com = "0.39"
 # whether the person can see it: cloaking, virtual desktops; and what happens to the screen: the
 # display's power, the session), pasting (clipboard, focus), the core process (Job Object), the
 # settings page's AltGr check (keyboard layouts), learning from corrections (UI Automation, COM,
-# the Chinese word breaker) and pausing the media that plays during a recording (the media
-# controls). `Data_Text` and `Media_Control` bring `Foundation` with them, and the lists their
+# the Chinese word breaker), pausing the media that plays during a recording (the media
+# controls) and operating the desktop (UI Automation, input, the version resource that names an
+# app). `Data_Text` and `Media_Control` bring `Foundation` with them, and the lists their
 # calls return come from windows-collections, which `windows` always uses.
 windows = { version = "0.62", features = [
   "Data_Text",
@@ -65,6 +70,7 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
   "Win32_Security",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_DataExchange",
   "Win32_System_JobObjects",
@@ -72,6 +78,7 @@ windows = { version = "0.62", features = [
   "Win32_System_Memory",
   "Win32_System_Ole",
   "Win32_System_Power",
+  "Win32_System_Registry",
   "Win32_System_RemoteDesktop",
   "Win32_System_SystemServices",
   "Win32_System_Threading",
@@ -85,6 +92,9 @@ windows = { version = "0.62", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# The mock runtime, for tests that start the app's first plugins in processes of their own (a
+# second launch handing over to the first).
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "test"] }
 # Tests of the controller's timers (a question that is not answered, an answer on screen) run on
 # a clock that they move themselves.
 tokio = { version = "1", features = ["test-util"] }

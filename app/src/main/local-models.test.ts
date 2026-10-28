@@ -12,7 +12,6 @@ import {
   localListHTML,
   localState,
   stateText,
-  tabsHTML,
 } from "./local-models";
 import type { LocalModel } from "./types";
 
@@ -145,27 +144,28 @@ describe("the list", () => {
   });
 });
 
-describe("choosing a model that is not downloaded", () => {
-  test("asks first, with the size, and has a button to download and one to cancel", () => {
-    const row = rowOf(localListHTML(view(), { kind: "download", name: "sensevoice" }), "sensevoice");
-    expect(row).toContain("下載 SenseVoice（163 MB）？");
-    expect(row).toMatch(/<button type="button" class="btn pri sm" data-act="confirm"[^>]*>下載<\/button>/);
-    expect(row).toMatch(/<button type="button" class="btn sm" data-act="dismiss"[^>]*>取消<\/button>/);
-    expect(row).not.toContain('data-act="use"');
+describe("a model that is not downloaded", () => {
+  test("has a button that downloads it at once, named with the size, and no question", () => {
+    const row = rowOf(localListHTML(view(), null), "sensevoice");
+    expect(row).toMatch(/<button type="button" class="btn sm" data-act="download" data-name="sensevoice" aria-label="下載 SenseVoice（163 MB）">下載<\/button>/);
+    expect(row).toContain('data-act="use"');
+    expect(row).not.toContain('data-act="confirm"');
   });
 
-  test("asks in the language of the window", () => {
+  test("the button speaks the language of the window", () => {
     setLocale("en");
-    const row = rowOf(localListHTML(view(), { kind: "download", name: "breeze-asr-25" }), "breeze-asr-25");
-    expect(row).toContain("Download Breeze-ASR-25 (1.8 GB)?");
-    expect(row).toContain(">Download</button>");
-    expect(row).toContain(">Cancel</button>");
+    const row = rowOf(localListHTML(view(), null), "breeze-asr-25");
+    expect(row).toContain('aria-label="Download Breeze-ASR-25 (1.8 GB)">Download</button>');
   });
 
-  test("only the row asked about asks", () => {
-    const html = localListHTML(view(), { kind: "download", name: "sensevoice" });
-    expect(rowOf(html, "breeze-asr-25")).toContain('data-act="use"');
-    expect(html.match(/data-act="confirm"/g)).toHaveLength(1);
+  test("a downloaded model has no download button", () => {
+    expect(rowOf(localListHTML(view(), null), "paraformer-zh")).not.toContain('data-act="download"');
+  });
+
+  test("while another model downloads, nothing else can be downloaded", () => {
+    const html = localListHTML(view({ download: { name: "breeze-asr-25", done: 1, total: 4 } }), null);
+    expect(html).not.toContain('data-act="download"');
+    expect(rowOf(html, "breeze-asr-25")).toMatch(/data-act="cancel"[^>]*>取消<\/button>/);
   });
 });
 
@@ -175,6 +175,54 @@ describe("deleting a model", () => {
     expect(row).toContain("刪除 Paraformer（釋出 227 MB）？");
     expect(row).toMatch(/data-act="confirm"[^>]*>刪除<\/button>/);
     expect(row).toMatch(/data-act="dismiss"[^>]*>取消<\/button>/);
+  });
+});
+
+describe("the model that backs up the cloud", () => {
+  const backup = view({ active: null, fallback: "qwen3-asr" });
+
+  test("is called the fallback, not downloaded", () => {
+    expect(localState(qwen, backup).kind).toBe("fallback");
+    expect(localState(paraformer, backup).kind).toBe("ready");
+    expect(stateText({ kind: "fallback" })).toBe("備援");
+    setLocale("en");
+    expect(stateText({ kind: "fallback" })).toBe("Fallback");
+    setLocale("ja");
+    expect(stateText({ kind: "fallback" })).toBe("予備");
+  });
+
+  test("a fallback that is not on disk is just absent", () => {
+    expect(localState(sense, view({ active: null, fallback: "sensevoice" })).kind).toBe("absent");
+  });
+
+  test("shows the word in its row, and can still be deleted", () => {
+    const row = rowOf(localListHTML(backup, null), "qwen3-asr");
+    expect(row).toContain("備援");
+    expect(row).not.toContain("已下載");
+    expect(row).toContain('data-act="delete"');
+  });
+
+  test("asks about deleting it with half a sentence more: another model takes over", () => {
+    const row = rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr");
+    expect(row).toContain("刪除 Qwen3-ASR（釋出 879 MB）？之後改由 Paraformer 備援。");
+  });
+
+  test("or the cloud has nothing to fall back on", () => {
+    const only = view({ active: null, fallback: "qwen3-asr", models: [qwen, sense] });
+    const row = rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr");
+    expect(row).toContain("刪除 Qwen3-ASR（釋出 879 MB）？之後雲端失敗時無法改用本機。");
+    setLocale("en");
+    expect(rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("Delete Qwen3-ASR (frees 879 MB)? A cloud failure then cannot fall back to local.");
+    expect(rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("Paraformer will be the fallback.");
+    setLocale("ja");
+    expect(rowOf(localListHTML(only, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("以後クラウドが失敗してもローカルに切り替わりません。");
+    expect(rowOf(localListHTML(backup, { kind: "delete", name: "qwen3-asr" }), "qwen3-asr")).toContain("以後はParaformerが予備になります。");
+  });
+
+  test("the question about another model has no such half sentence", () => {
+    const row = rowOf(localListHTML(backup, { kind: "delete", name: "paraformer-zh" }), "paraformer-zh");
+    expect(row).toContain("刪除 Paraformer（釋出 227 MB）？");
+    expect(row).not.toContain("備援");
   });
 });
 
@@ -208,27 +256,6 @@ describe("while there is no catalogue", () => {
   test("says it is being read, or that it cannot be had", () => {
     expect(localListHTML(view({ models: "loading" }), null)).toContain("正在載入…");
     expect(localListHTML(view({ models: "failed" }), null)).toContain("目前無法取得本機模型清單");
-  });
-});
-
-describe("the tabs", () => {
-  test("are two real buttons, the open one selected", () => {
-    const html = tabsHTML("local");
-    expect(html).toContain('role="tablist"');
-    expect(html).toMatch(/<button type="button" class="mp-tab" role="tab" id="mp-tab-cloud"[^>]*aria-selected="false"[^>]*>雲端<\/button>/);
-    expect(html).toMatch(/<button type="button" class="mp-tab" role="tab" id="mp-tab-local"[^>]*aria-selected="true"[^>]*>本機<\/button>/);
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-cloud"[^>]*aria-selected="true"/);
-  });
-
-  test("only the open one is a stop of the Tab key", () => {
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-cloud"[^>]*tabindex="0"/);
-    expect(tabsHTML("cloud")).toMatch(/id="mp-tab-local"[^>]*tabindex="-1"/);
-  });
-
-  test("speak the language of the window", () => {
-    setLocale("ja");
-    expect(tabsHTML("cloud")).toContain(">クラウド</button>");
-    expect(tabsHTML("cloud")).toContain(">ローカル</button>");
   });
 });
 

@@ -10,6 +10,7 @@ with the real models, is tests/test_e2e.py.
 import asyncio
 import json
 import logging
+import shutil
 import subprocess
 import sys
 import threading
@@ -41,7 +42,9 @@ from raphael_core.device import audio, dictation, models
 from raphael_core.device.models import REGISTRY, ModelFile, ModelManager, ModelSpec
 from raphael_core.protocol import (
     BUSY,
+    INTERNAL_ERROR,
     INVALID_PARAMS,
+    NO_LOCAL_MODEL,
     NO_MICROPHONE,
     NOT_CONFIGURED,
     NOT_FOUND,
@@ -123,14 +126,17 @@ class FakeWav:
 
 
 class FakeSegmenter:
-    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush."""
+    """One segment per chunk. `speech_seconds` starts again at the first chunk after a flush.
+    Every chunk is speech, so `silence_seconds` stays at 0 unless a test sets it."""
 
     def __init__(self, kit, path, **kwargs):
         self.path = path
         self.kwargs = kwargs
         self.speech_seconds = 0.0
+        self.silence_seconds = 0.0
         self.flushes = 0
         self._flushed = False
+        self.fail_on_accept = False
         self.calls_from: set[int] = set()
         self.max_segment_s: list[float] = []  # each limit it was told, as set_max_segment_s keeps
         kit.segmenters.append(self)
@@ -141,6 +147,8 @@ class FakeSegmenter:
 
     def accept(self, frames):
         self.calls_from.add(threading.get_ident())
+        if self.fail_on_accept:
+            raise RuntimeError("vad failed")
         if self._flushed:
             self._flushed = False
             self.speech_seconds = 0.0
@@ -816,6 +824,7 @@ async def test_deleting_a_model_that_is_not_there_is_no_error(make_app):
 
 async def test_the_model_in_use_is_not_deleted(make_app, tmp_path):
     app = make_app()
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
     with pytest.raises(RpcError) as caught:
         await app.call("models.local_delete", {"name": "qwen3-asr"})
     assert caught.value.code == BUSY and "in use" in caught.value.message
@@ -1083,8 +1092,6 @@ EXPECTED_METHODS = {
     "dictionary.add",
     "dictionary.import",
     "dictionary.delete",
-    "dictionary.auto_add",
-    "dictionary.dismiss",
     "settings.get",
     "settings.set",
     "secrets.status",
@@ -1092,7 +1099,6 @@ EXPECTED_METHODS = {
     "secrets.clear_openrouter_key",
     "status.get",
     "status.check_openrouter",
-    "integrations.list",
     "integrations.catalog",
     "integrations.connect",
     "integrations.connect_cancel",
@@ -1100,10 +1106,10 @@ EXPECTED_METHODS = {
     "integrations.set_enabled",
     "integrations.disconnect",
     "integrations.refresh",
-    "integrations.tools",
     "integrations.set_tool_enabled",
     "integrations.set_tools_enabled",
     "integrations.audit",
+    "toolsets.list",
 }
 
 
@@ -1224,7 +1230,7 @@ async def test_the_plugins_are_there_and_keep_their_secrets_in_memory_with_the_f
     make_app, memory_keyring, tmp_path
 ):
     app = make_app()
-    assert await app.call("integrations.list") == {"servers": []}
+    assert await app.call("toolsets.list") == {"groups": []}
     added = await app.call(
         "integrations.add",
         {
@@ -1333,7 +1339,7 @@ async def test_the_opencc_converter_is_warmed_up_at_start(make_app):
 
 async def test_the_openrouter_client_is_warmed_up_at_start(make_app):
     app = make_app(make_kit())
-    await wait_until(lambda: app.client.warmed_up)
+    await wait_until(lambda: app.client.openrouter.warmed_up)
 
 
 # --- models.status and models.ensure ----------------------------------------------------------
@@ -1725,6 +1731,26 @@ async def test_a_stop_that_ends_while_a_new_start_makes_way_does_not_reopen_the_
     assert kit.mics[-1].open and sum(mic.open for mic in kit.mics) == 1  # the meter is back
 
 
+async def test_silence_never_ends_a_dictation_and_a_failed_detector_tells_the_app(make_app, notes):
+    kit = make_kit()
+    app = make_app(kit)
+    listen(app, notes)
+    await dictate(app)  # the first dictation has the detector built
+    assert notes.methods("dictation.silence") == []
+    kit.segmenters[-1].silence_seconds = 60.0
+    await app.call("dictation.start", {"session_id": "s2"})
+    await asyncio.sleep(0.05)
+    assert notes.methods("dictation.silence") == []  # silence never ends a recording
+    result = await app.call("dictation.stop", {"session_id": "s2", "target_app": None})
+    assert result["text"] == WORDS + WORDS
+    kit.segmenters[-1].fail_on_accept = True
+    await app.call("dictation.start", {"session_id": "s3"})
+    await wait_until(lambda: notes.methods("dictation.silence"))
+    assert notes.methods("dictation.silence") == [{"session_id": "s3"}]
+    with pytest.raises(RpcError):
+        await app.call("dictation.stop", {"session_id": "s3", "target_app": None})
+
+
 async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, monkeypatch):
     monkeypatch.setattr(dictation, "LOST_SESSION_SECONDS", 0.3)
     kit = make_kit()
@@ -1732,6 +1758,7 @@ async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, mon
     await app.call("audio.monitor", {"on": True})
     await app.call("dictation.start", {"session_id": "s"})  # and nobody stops it
     service = app._service.result()
+    service._tell_silence(service._session)  # it can hear nothing more, and the app was told
     await wait_until(lambda: not service.active)  # the watchdog cancelled it
     await wait_until(lambda: len(kit.mics) == 3 and kit.mics[2].open)  # the meter is back
     assert sum(mic.open for mic in kit.mics) == 1
@@ -1740,6 +1767,7 @@ async def test_the_meter_comes_back_after_a_session_nobody_stopped(make_app, mon
 async def test_a_dictation_that_fails_to_start_gives_the_microphone_back_too(make_app):
     kit = make_kit()
     app = make_app(kit, ready=("silero-vad",))
+    await app.call("settings.set", {"key": "stt_engine", "value": "local"})
     await app.call("audio.monitor", {"on": True})
     with pytest.raises(RpcError) as caught:
         await app.call("dictation.start", {"session_id": "s"})  # no engine downloaded
@@ -1755,7 +1783,7 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     app = make_app(kit)
     listen(app, notes)
     await app.call("dictionary.add", {"word": "拉斐爾"})
-    await app.call("settings.set", {"key": "language", "value": "zh"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
     result = await dictate(app)
     assert result["text"] == WORDS + WORDS  # joined without a space: CJK on both sides
     assert result["cleaned"] is True and result["fallback_reason"] is None
@@ -1770,18 +1798,18 @@ async def test_a_dictation_goes_through_the_whole_app(make_app, notes):
     assert {level["session_id"] for level in notes.methods("audio.level")} == {"s1"}
 
 
-async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_history(make_app):
+async def test_an_agent_dictation_goes_through_shared_cleanup_without_history(make_app):
     kit = make_kit()
     app = make_app(kit)
     await app.call("dictionary.add", {"word": "哈囉", "misheard": ["你好"]})
     asked = []
-    echo = app.client.complete_json
+    echo = app.client.openrouter.complete_json
 
     async def spy(**kwargs):
         asked.append(kwargs)
         return await echo(**kwargs)
 
-    app.client.complete_json = spy
+    app.client.openrouter.complete_json = spy
     assert await app.call("dictation.start", {"session_id": "a1", "purpose": "agent"}) == {}
     result = await app.call("dictation.stop", {"session_id": "a1", "target_app": "notepad.exe"})
     assert result == {
@@ -1791,13 +1819,13 @@ async def test_an_agent_dictation_goes_through_the_whole_app_without_cleanup_or_
         "audio_seconds": pytest.approx(1.0),
         "silent": False,
     }
-    assert asked == []  # no cleanup
+    assert len(asked) == 1  # the same cleanup request as dictation
     assert (await app.call("history.list"))["items"] == []  # no history row
     assert (await app.call("history.latest"))["item"] is None  # nothing for "paste last"
     assert (await app.call("status.get"))["spend"]["month_usd"] == 0
     # The next one is a dictation as ever.
     again = await dictate(app, "d1")
-    assert again["cleaned"] is True and len(asked) == 1
+    assert again["cleaned"] is True and len(asked) == 2
 
 
 async def test_one_segmenter_and_one_engine_serve_every_dictation(make_app):
@@ -1897,14 +1925,14 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
     await dictate(app, "s0")
     kept = (await app.call("history.latest"))["item"]
     entered, gate = asyncio.Event(), asyncio.Event()
-    echo = app.client.complete_json
+    echo = app.client.openrouter.complete_json
 
     async def slow(**kwargs):
         entered.set()
         await gate.wait()
         return await echo(**kwargs)
 
-    app.client.complete_json = slow
+    app.client.openrouter.complete_json = slow
     await app.call("dictation.start", {"session_id": "s1"})
     stopping = asyncio.ensure_future(
         app.call("dictation.stop", {"session_id": "s1", "target_app": None})
@@ -1920,18 +1948,31 @@ async def test_a_dictation_cancelled_while_its_text_is_cleaned_is_not_the_latest
     assert (await app.call("history.latest"))["item"] == kept
     assert len((await app.call("history.list"))["items"]) == 1
     # The next dictation is kept as ever.
-    app.client.complete_json = echo
+    app.client.openrouter.complete_json = echo
     again = await dictate(app, "s2")
     assert (await app.call("history.latest"))["item"]["id"] == again["id"]
 
 
 # --- the voice assistant ----------------------------------------------------------------------
 
+async def test_home_overview_is_wired_without_waiting_for_speech(make_app, monkeypatch):
+    async def no_clis(brains):
+        return {"brains": []}
+
+    monkeypatch.setattr("raphael_core.agent.cli.allowances.read_allowances", no_clis)
+    app = make_app()
+    value = await app.call("home.overview", {"tz": "Asia/Taipei", "ui_language": "en"})
+    assert value["today"] == value["reports"] == value["calendar"] == []
+    assert len(value["usage"]["daily"]) == 14
+    assert value["dictation"]["words"] == 0
+
+
 ASSISTANT_METHODS = {
     "agent.ask",
     "agent.confirm",
     "agent.cancel",
     "agent.history.list",
+    "agent.history.search",
     "agent.history.clear",
 }
 
@@ -1967,7 +2008,7 @@ class RecordingActions:
 
 
 def ask_params(text, language="zh-TW", session="a1"):
-    return {"session_id": session, "text": text, "ui_language": language, "target_app": None}
+    return {"session_id": session, "text": text, "ui_language": language, "target_app": None, "destination": "quick"}
 
 
 async def test_the_assistants_methods_are_on_the_app_from_the_start(tmp_path):
@@ -1990,7 +2031,7 @@ async def test_the_assistant_answers_through_the_whole_app_with_the_fake_llm(mak
     assert result == {"status": "done", "turn_id": 1, "prefix": "答", "text": "你好"}
     en = await app.call("agent.ask", ask_params("hello", language="en", session="a2"))
     assert (en["prefix"], en["text"]) == ("Answer", "hello")
-    turns = (await app.call("agent.history.list", {}))["turns"]
+    turns = (await app.call("agent.history.list", {"conversation_id": app.agent.conversations.quick()}))["turns"]
     assert [(t["question"], t["route"], t["status"]) for t in turns] == [
         ("hello", "chat", "done"),
         ("你好", "chat", "done"),
@@ -2054,18 +2095,18 @@ async def test_closing_the_app_ends_the_assistants_requests_before_closing_the_c
     closing = app.agent.aclose
 
     async def agent_aclose():
-        order.append(("agent", app.client.closed))
+        order.append(("agent", app.client.openrouter.closed))
         await closing()
 
     app.agent.aclose = agent_aclose
     await app.aclose()
     assert order == [("agent", False)]
-    assert app.client.closed
+    assert app.client.openrouter.closed
 
 
 # --- the background worker --------------------------------------------------------------------
 
-WORKER_METHODS = {"worker.list", "worker.get", "worker.cancel"}
+WORKER_METHODS = {"worker.cancel", "worker.rerun", "worker.announce_pending"}
 
 
 async def test_the_workers_methods_are_on_the_app_from_the_start(make_app):
@@ -2091,14 +2132,15 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
         "done", "Notice", "The scripted task saw 1 results.",
     )  # fmt: skip
     # The turn that handed it over was completed with the report, at no cost.
-    (turn,) = (await app.call("agent.history.list", {}))["turns"]
+    (turn,) = (await app.call("agent.history.list", {"conversation_id": app.agent.conversations.quick()}))["turns"]
     assert (turn["route"], turn["prefix"], turn["text"], turn["status"]) == (
         "delegate", "Notice", "The scripted task saw 1 results.", "done",
     )  # fmt: skip
-    task = (await app.call("worker.get", {"id": report["task_id"]}))["task"]
-    assert [(step["kind"], step["tool"], step["tier"]) for step in task["steps"]] == [
+    # The conversation shows the task with the turn, and the worker's steps.
+    assert (turn["task"]["id"], turn["task"]["state"]) == (report["task_id"], "done")
+    assert [(step["kind"], step["tool"], step["server"]) for step in turn["steps"]] == [
         ("model", None, None),
-        ("tool", "local_time", "T0"),
+        ("tool", "local_time", "Raphael"),
         ("model", None, None),
     ]
     audit = (await app.call("integrations.audit", {}))["entries"]
@@ -2107,7 +2149,7 @@ async def test_a_task_for_the_background_goes_through_the_whole_app_with_the_fak
     ]
     assert (await app.call("status.get"))["spend"]["month_usd"] == 0
     assert await app.call("agent.history.clear", {}) == {"deleted": 1}
-    assert (await app.call("worker.list", {}))["tasks"] == []  # the tasks go with the history
+    assert app.background.task(report["task_id"]) is None  # the tasks go with the history
 
 
 async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_the_client(make_app):
@@ -2116,7 +2158,7 @@ async def test_closing_the_app_ends_the_background_tasks_and_the_worker_before_t
     closing = app.background.aclose
 
     async def background_aclose():
-        order.append(("background", app.client.closed))
+        order.append(("background", app.client.openrouter.closed))
         await closing()
 
     app.background.aclose = background_aclose
@@ -2141,7 +2183,7 @@ async def test_closing_the_app_closes_the_meter_and_the_client(make_app):
     await app.call("audio.monitor", {"on": True})
     await app.aclose()
     assert not kit.mics[0].open
-    assert app.client.closed
+    assert app.client.openrouter.closed
 
 
 async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(make_app):
@@ -2153,7 +2195,7 @@ async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(mak
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
-            assert not app.client.closed
+            assert not app.client.openrouter.closed
             cancelled.set()
             raise
 
@@ -2161,7 +2203,7 @@ async def test_closing_the_app_stops_usage_refresh_before_closing_the_client(mak
     await app.call("status.get")
     await asyncio.wait_for(started.wait(), 1)
     await app.aclose()
-    assert cancelled.is_set() and app.client.closed
+    assert cancelled.is_set() and app.client.openrouter.closed
 
 
 async def test_a_close_step_that_fails_does_not_skip_the_rest(make_app, caplog):
@@ -2218,7 +2260,7 @@ async def test_core_shutdown_closes_everything_and_answers(make_app):
     app = make_app(kit)
     await app.call("audio.monitor", {"on": True})
     assert await app.call("core.shutdown") == {}
-    assert not kit.mics[0].open and app.client.closed
+    assert not kit.mics[0].open and app.client.openrouter.closed
 
 
 async def test_core_shutdown_tells_the_server_to_stop(make_app):
@@ -2477,15 +2519,24 @@ CLOUD_KEY = "sk-or-v1-test"
 async def openrouter_mock():
     """`openrouter_mock(app, transcription)` sends the app's OpenRouter requests to a mock.
 
-    `transcription(request)` answers POST /audio/transcriptions; every cleanup call fails with a
-    500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by path.
+    `transcription(request)` answers POST /audio/transcriptions; GET /models is OpenRouter's
+    model list as recorded (tests/brain/fixtures/openrouter_catalog.json); every cleanup call fails
+    with a 500, so the cleanup falls back to the text as heard. `requests` keeps the bodies, by
+    path.
     """
     opened: list[httpx.AsyncClient] = []
+    listed = json.loads(
+        (Path(__file__).parent / "brain" / "fixtures" / "openrouter_catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
 
     def install(app, transcription):
         requests: dict[str, list] = {"transcriptions": [], "chat": []}
 
         def handler(request):
+            if request.method == "GET" and request.url.path.endswith("/models"):
+                return httpx.Response(200, json=listed)
             body = json.loads(request.content) if request.content else None
             if request.url.path.endswith("/audio/transcriptions"):
                 requests["transcriptions"].append(body)
@@ -2495,7 +2546,7 @@ async def openrouter_mock():
 
         http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         opened.append(http)
-        app.client._http = http
+        app.client.openrouter._http = http
         app.keys.set(CLOUD_KEY)
         return requests
 
@@ -2510,12 +2561,20 @@ def cloud_says(text="cloud words", cost=0.0001):
     )
 
 
+async def choose_from_the_list(app, key, model):
+    """Choose `model` for `key` as the settings page does: from OpenRouter's list of models, which
+    `models.catalog` reads first."""
+    catalog = await app.call("models.catalog")
+    assert catalog["source"] == "live"
+    await app.call("settings.set", {"key": key, "value": model})
+
+
 async def test_speech_to_text_is_in_the_cloud_by_default(make_app, openrouter_mock):
     kit = make_kit()
     app = make_app(kit, fake_llm=False)
     requests = openrouter_mock(app, cloud_says())
-    await app.call("settings.set", {"key": "language", "value": "zh"})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await app.call("settings.set", {"key": "languages", "value": ["zh-TW"]})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     result = await dictate(app)
     assert result["text"] == "cloud words cloud words"
     assert kit.transcriptions == []  # the local engine heard nothing
@@ -2539,7 +2598,7 @@ async def test_several_languages_go_to_gpt_transcribe_as_the_ones_to_detect_amon
     requests = openrouter_mock(app, cloud_says())
     languages = ["zh-HK", "en-GB", "ja-JP"]
     await app.call("settings.set", {"key": "languages", "value": languages})
-    await app.call("settings.set", {"key": "stt_cloud_model", "value": "openai/gpt-transcribe"})
+    await choose_from_the_list(app, "stt_cloud_model", "openai/gpt-transcribe")
     await dictate(app)
     body = requests["transcriptions"][0]
     assert body["provider"]["options"]["openai"]["languages"] == ["zh", "en", "ja"]
@@ -2606,3 +2665,303 @@ async def test_a_change_of_engine_takes_effect_from_the_next_dictation(make_app,
     await dictate(app, "c")
     assert len(requests["transcriptions"]) == 4 and len(kit.transcriptions) == 2
     assert kit.segmenters[0].max_segment_s == [30.0, 10.0, 30.0]
+
+
+# --- the local model that backs up the cloud ----------------------------------------------------
+
+
+def test_with_no_local_model_the_engine_is_none_and_asking_for_it_says_so(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    speech.unload_engine()
+    speech.select_engine(None)
+    assert speech.engine_name is None and speech.loaded_engine_name is None
+    speech.load_pending()
+    assert len(loads.engines) == 1
+    with pytest.raises(RpcError) as caught:
+        speech.engine()
+    assert caught.value.code == NO_LOCAL_MODEL
+
+
+def test_unloading_the_engine_lets_it_go_and_the_next_use_builds_it_again(speech_in):
+    speech, loads, _ = speech_in()
+    speech.load_pending()
+    assert speech.loaded_engine_name == "qwen3-asr"
+    speech.unload_engine()
+    assert speech.loaded_engine_name is None
+    assert speech.engine() is loads.engines[1]
+
+
+def test_unloading_waits_for_a_load_that_is_under_way(speech_in):
+    gate = threading.Event()
+    speech, loads, _ = speech_in(engine_gate=gate)
+    loader = threading.Thread(target=speech.load_pending)
+    loader.start()
+    deadline = time.monotonic() + 10
+    while not loads.segmenters and time.monotonic() < deadline:
+        time.sleep(0.005)
+    unloader = threading.Thread(target=speech.unload_engine)
+    unloader.start()
+    unloader.join(0.2)
+    assert unloader.is_alive()
+    gate.set()
+    loader.join(10)
+    unloader.join(10)
+    assert speech.loaded_engine_name is None
+
+
+def test_without_a_local_engine_only_the_detector_is_required(speech_in):
+    speech, _, _ = speech_in(ready=("silero-vad",))
+    speech.require_models(engine_needed=False)
+    with pytest.raises(RpcError) as caught:
+        speech.require_models(engine_needed=True)
+    assert caught.value.code == NOT_CONFIGURED and "qwen3-asr" in caught.value.message
+    speech.select_engine(None)
+    speech.require_models(engine_needed=False)
+
+
+async def test_the_fallback_can_be_deleted_while_the_cloud_is_the_engine(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit, ready=(*APP_MODELS, "sensevoice"))
+    await wait_until(lambda: kit.engines)
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result == {"deleted": True, "fallback": "sensevoice"}
+    assert not (tmp_path / "data" / "models" / "qwen3-asr").exists()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "sensevoice"
+    assert (await app.call("models.local"))["fallback"] == "sensevoice"
+    await wait_until(lambda: kit.engines[-1].kwargs["name"] == "sensevoice")
+    assert (await dictate(app))["text"] == WORDS + WORDS
+
+
+async def test_deleting_the_last_fallback_leaves_no_local_model(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result == {"deleted": True, "fallback": None}
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] is None
+    assert (await app.call("models.local"))["fallback"] is None
+    assert await app.call("models.status") == {"models": [{"name": "silero-vad", "ready": True}]}
+    assert not (tmp_path / "data" / "models" / "qwen3-asr").exists()
+
+
+async def test_the_next_fallback_is_the_first_one_of_the_catalogue_that_is_downloaded(make_app):
+    app = make_app(ready=(*APP_MODELS, "paraformer-zh", "sensevoice"))
+    result = await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert result["fallback"] == "sensevoice"
+
+
+async def test_without_a_local_model_the_cloud_still_dictates_and_the_start_asks_for_nothing(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    requests = openrouter_mock(app, cloud_says())
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    result = await dictate(app)
+    assert result["text"] == "cloud words cloud words"
+    assert kit.transcriptions == [] and len(requests["transcriptions"]) == 2
+
+
+async def test_a_cloud_failure_without_a_local_model_is_a_recognisable_error(make_app):
+    kit = make_kit()
+    app = make_app(kit)  # the fake LLM cannot transcribe: the cloud fails
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert caught.value.code == NO_LOCAL_MODEL
+
+
+async def test_the_fallback_is_not_deleted_while_a_dictation_runs(make_app, tmp_path):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == BUSY
+    assert (tmp_path / "data" / "models" / "qwen3-asr").is_dir()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "qwen3-asr"
+    await app.call("dictation.cancel", {"session_id": "s1"})
+
+
+async def test_a_file_lock_is_waited_out_when_deleting(make_app, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    real = app_module.shutil.rmtree
+    attempts: list[int] = []
+
+    def locked_twice(path, *args, **kwargs):
+        attempts.append(1)
+        if len(attempts) <= 2:
+            raise PermissionError("in use by another process")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked_twice)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    assert await app.call("models.local_delete", {"name": "sensevoice"}) == {"deleted": True}
+    assert len(attempts) == 3
+
+
+async def test_a_file_lock_that_stays_is_an_internal_error(make_app, tmp_path, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "sensevoice"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (tmp_path / "data" / "models" / "sensevoice").is_dir()
+
+
+async def test_the_start_up_copes_with_no_local_model(tmp_path):
+    kit = make_kit()
+    data = tmp_path / "data"
+    make_models(data / "models", ("silero-vad",))
+    app = App(data_dir=data, fake_llm=True, load_kit=lambda: kit, agent_actions=None)
+    try:
+        await app.call("settings.set", {"key": "stt_local_model", "value": None})
+        app.start()
+        await wait_until(lambda: kit.segmenters)
+        assert kit.engines == []
+        assert await app.call("models.status") == {
+            "models": [{"name": "silero-vad", "ready": True}]
+        }
+    finally:
+        await app.aclose()
+
+
+@pytest.mark.parametrize(("language", "marker"), [
+    ("zh-TW", "（這段沒有聽清楚）"),
+    ("ja", "（この部分は聞き取れませんでした）"),
+    ("en", "(this part was not heard)"),
+])
+async def test_a_later_segment_that_fails_with_no_local_model_keeps_the_first_part_and_says_so(
+    make_app, openrouter_mock, language, marker,
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False)
+    heard = []
+
+    def first_then_fail(request):
+        heard.append(1)
+        if len(heard) == 1:
+            return httpx.Response(200, json={"text": "one", "usage": {"seconds": 0.5, "cost": 0.0}})
+        return httpx.Response(500)
+
+    openrouter_mock(app, first_then_fail)
+    await wait_until(lambda: kit.engines)
+    await app.call("models.local_delete", {"name": "qwen3-asr"})
+    await app.call("dictation.start", {"session_id": "s1", "ui_language": language})
+    result = await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert result["text"] == f"one {marker}" and result["incomplete"] is True
+    assert (await app.call("history.latest"))["item"]["text"] == f"one {marker}"
+
+
+async def test_a_complete_dictation_is_not_marked_incomplete(make_app):
+    app = make_app(make_kit())
+    assert (await dictate(app))["incomplete"] is False
+
+
+async def test_a_delete_that_fails_puts_the_fallback_back(make_app, tmp_path, monkeypatch):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+
+    def locked(path, *args, **kwargs):
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "qwen3-asr"
+    assert (await app.call("models.local"))["fallback"] == "qwen3-asr"
+    names = [m["name"] for m in (await app.call("models.status"))["models"]]
+    assert names == ["silero-vad", "qwen3-asr"]
+    monkeypatch.undo()
+    assert (await dictate(app))["text"] == WORDS + WORDS
+
+
+async def test_setting_no_local_model_directly_takes_effect_at_the_next_dictation(make_app):
+    kit = make_kit()
+    app = make_app(kit)
+    await wait_until(lambda: kit.engines)
+    await app.call("settings.set", {"key": "stt_local_model", "value": None})
+    await app.call("dictation.start", {"session_id": "s1"})
+    with pytest.raises(RpcError) as caught:
+        await app.call("dictation.stop", {"session_id": "s1", "target_app": "notepad.exe"})
+    assert caught.value.code == NO_LOCAL_MODEL
+    assert await app.call("models.status") == {"models": [{"name": "silero-vad", "ready": True}]}
+
+
+async def test_a_fallback_that_is_not_downloaded_cuts_the_dictation_short_like_none(
+    make_app, openrouter_mock
+):
+    kit = make_kit()
+    app = make_app(kit, fake_llm=False, ready=("silero-vad",))  # qwen3-asr is named, not there
+    heard = []
+
+    def first_then_fail(request):
+        heard.append(1)
+        if len(heard) == 1:
+            return httpx.Response(200, json={"text": "one", "usage": {"seconds": 0.5, "cost": 0.0}})
+        return httpx.Response(500)
+
+    openrouter_mock(app, first_then_fail)
+    result = await dictate(app)
+    assert result["text"] == "one （這段沒有聽清楚）" and result["incomplete"] is True
+
+
+async def test_deletes_that_overlap_never_leave_the_fallback_on_a_deleted_model(
+    make_app, tmp_path
+):
+    app = make_app(ready=(*APP_MODELS, "sensevoice", "paraformer-zh"))
+    first, second = await asyncio.gather(
+        app.call("models.local_delete", {"name": "qwen3-asr"}),
+        app.call("models.local_delete", {"name": "sensevoice"}),
+    )
+    assert first["deleted"] and second["deleted"]
+    models_dir = tmp_path / "data" / "models"
+    assert not (models_dir / "qwen3-asr").exists() and not (models_dir / "sensevoice").exists()
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "paraformer-zh"
+    assert (await app.call("models.local"))["fallback"] == "paraformer-zh"
+
+
+async def test_a_delete_that_breaks_the_model_keeps_the_replacement(make_app, monkeypatch):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+
+    def breaks_then_locked(path, *args, **kwargs):
+        for file in path.rglob("*"):
+            if file.is_file():
+                file.unlink()
+        raise PermissionError("in use by another process")
+
+    monkeypatch.setattr(app_module.shutil, "rmtree", breaks_then_locked)
+    monkeypatch.setattr(app_module, "DELETE_RETRY_S", 0.001)
+    with pytest.raises(RpcError) as caught:
+        await app.call("models.local_delete", {"name": "qwen3-asr"})
+    assert caught.value.code == INTERNAL_ERROR
+    assert (await app.call("settings.get"))["settings"]["stt_local_model"] == "sensevoice"
+    assert (await app.call("models.local"))["fallback"] == "sensevoice"
+
+
+async def test_choosing_a_model_that_was_deleted_while_waiting_for_the_lock_fails_cleanly(
+    make_app, tmp_path
+):
+    app = make_app(ready=(*APP_MODELS, "sensevoice"))
+    async with app._models_lock:  # a delete of the model holds it
+        task = asyncio.create_task(app.call("models.local_use", {"name": "sensevoice"}))
+        await asyncio.sleep(0.1)  # it has found the model on disk and waits
+        shutil.rmtree(tmp_path / "data" / "models" / "sensevoice")
+    with pytest.raises(RpcError) as caught:
+        await asyncio.wait_for(task, 10)
+    assert caught.value.code == BUSY
+    settings = (await app.call("settings.get"))["settings"]
+    assert settings["stt_local_model"] == "qwen3-asr" and settings["stt_engine"] == "cloud"

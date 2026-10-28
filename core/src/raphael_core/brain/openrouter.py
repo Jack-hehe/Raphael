@@ -9,6 +9,7 @@ the Authorization header. Nothing here logs it: a failure is logged with its sta
 the type of the exception behind it when there is one, and nothing else.
 """
 
+import asyncio
 import json
 import logging
 import math
@@ -18,7 +19,10 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .catalog import CatalogEntry
 
 import httpx
 
@@ -34,7 +38,6 @@ DEFAULT_CLEANUP_MODEL: str = DEFAULTS["cleanup_model"]
 # Tried in this order when the chosen model fails. All three models can run with reasoning off,
 # which google/gemini-3.8-flash cannot.
 CLEANUP_FALLBACKS = ["anthropic/claude-haiku-5.5", "google/gemini-3.1-flash-lite"]
-CLEANUP_MODEL_CHOICES = [DEFAULT_CLEANUP_MODEL, *CLEANUP_FALLBACKS]
 
 # Sent with every request: OpenRouter lists them as the name of the app that made the call.
 _APP_HEADERS = {"HTTP-Referer": "http://localhost/raphael", "X-OpenRouter-Title": "Raphael"}
@@ -67,6 +70,7 @@ class Completion:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 @dataclass
@@ -88,6 +92,7 @@ class TextCompletion:
     completion_tokens: int
     latency_ms: int  # of the HTTP call
     sources: list[dict[str, str]]  # {"title", "url"} of the pages a web search drew on
+    usage_known: bool = True
 
 
 @dataclass
@@ -107,6 +112,7 @@ class ToolPlan:
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 @dataclass
@@ -130,14 +136,13 @@ class ChatTurn:
 
     content: str
     calls: list[ChatToolCall]
-    finish_reason: str | None
     model: str  # the model that answered, which can be one of the fallbacks
     cost_usd: float  # always a number the spend can store: 0 or more, and finite
     prompt_tokens: int
     completion_tokens: int
     latency_ms: int  # of the HTTP call
-    # Whether the reply said what it cost. A reply that did not has cost_usd 0.0, which is not a
-    # price: the caller that limits spending must charge an estimate for it.
+    # Whether the reply supplied a usable cost (or a provider adapter priced its usage). When
+    # unknown, cost_usd 0.0 is not a price: a spending guard must charge an estimate for it.
     usage_known: bool = True
 
 
@@ -162,6 +167,7 @@ class Transcription:
     input_tokens: int
     output_tokens: int
     latency_ms: int  # of the HTTP call
+    usage_known: bool = True
 
 
 class OpenRouterError(Exception):
@@ -178,6 +184,7 @@ class OpenRouterError(Exception):
     - timeout: no answer in time (httpx timeout, or 408)
     - network: no connection
     - bad_response: a reply that is not what the API sends
+    - truncated: empty output, or an output limit reached before usable JSON
     """
 
     def __init__(self, status: int, kind: str, message: str) -> None:
@@ -308,6 +315,10 @@ def _usage_cost(usage: dict) -> float:
     return cost if math.isfinite(cost) and cost >= 0 else 0.0
 
 
+def _known_cost(usage: dict) -> bool:
+    return _is_number(usage.get("cost")) and _usage_cost(usage) == usage.get("cost")
+
+
 def _usage_count(usage: dict, field: str) -> int:
     """usage[field], or 0 if it is missing, null or no whole number."""
     value = usage.get(field)
@@ -334,8 +345,15 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
     try:
         data = json.loads(content)
     except (TypeError, ValueError) as exc:  # not a string, or not JSON
+        empty = isinstance(message, dict) and (content is None or isinstance(content, str) and not content.strip())
+        if empty or choice.get("finish_reason") == "length":
+            logger.warning("Completion failed: model=%s kind=truncated", requested_model)
+            raise OpenRouterError(reply.status, "truncated", "Incomplete JSON response") from None
         raise _failure(reply.status, "bad_response", "The reply is not valid JSON") from exc
     if not isinstance(data, dict):
+        if choice.get("finish_reason") == "length":
+            logger.warning("Completion failed: model=%s kind=truncated", requested_model)
+            raise OpenRouterError(reply.status, "truncated", "Incomplete JSON response") from None
         raise _failure(reply.status, "bad_response", "The reply is JSON but not an object")
 
     raw_usage = body.get("usage")
@@ -348,6 +366,7 @@ def _to_completion(reply: _Reply, requested_model: str) -> Completion:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -414,6 +433,7 @@ def _to_text_completion(reply: _Reply, requested_model: str) -> TextCompletion:
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
         sources=_sources(message.get("annotations")),
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -452,6 +472,7 @@ def _to_tool_plan(reply: _Reply, requested_model: str) -> ToolPlan:
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=body.get("_usage_known", _known_cost(usage)),
     )
 
 
@@ -507,17 +528,15 @@ def _to_chat_turn(reply: _Reply, requested_model: str) -> ChatTurn:
         )
     usage = _usage_of(body)
     answered_by = body.get("model")
-    finish = choice.get("finish_reason")
     return ChatTurn(
         content=_content_text(message.get("content")),
         calls=calls,
-        finish_reason=finish if isinstance(finish, str) else None,
         model=answered_by if isinstance(answered_by, str) and answered_by else requested_model,
         cost_usd=_usage_cost(usage),
         prompt_tokens=_usage_count(usage, "prompt_tokens"),
         completion_tokens=_usage_count(usage, "completion_tokens"),
         latency_ms=reply.latency_ms,
-        usage_known=_is_number(usage.get("cost")) and _usage_cost(usage) == usage.get("cost"),
+        usage_known=_known_cost(usage),
     )
 
 
@@ -623,6 +642,7 @@ def _to_transcription(reply: _Reply, model: str) -> Transcription:
         input_tokens=_usage_count(usage, "input_tokens"),
         output_tokens=_usage_count(usage, "output_tokens"),
         latency_ms=reply.latency_ms,
+        usage_known=_known_cost(usage),
     )
 
 
@@ -636,12 +656,15 @@ class OpenRouterClient:
     """
 
     def __init__(
-        self, key_provider: Callable[[], str | None], http: httpx.AsyncClient | None = None
+        self, key_provider: Callable[[], str | None], http: httpx.AsyncClient | None = None,
+        *, model_catalog: Callable[[], Sequence["CatalogEntry"] | None] | None = None,
     ) -> None:
         self._key_provider = key_provider
+        self._model_catalog = model_catalog
         self._http = http
         self._own_http: httpx.AsyncClient | None = None
         self._own_http_lock = threading.Lock()  # warm_up runs on another thread than the requests
+        self._connection_warm: asyncio.Task | None = None
 
     async def complete_json(
         self,
@@ -661,8 +684,10 @@ class OpenRouterClient:
         Only the parameters OpenRouter documents for structured output are sent. In particular
         there is no temperature or top_p: with require_parameters, a model that cannot take one
         (gpt-6-luna has no temperature; claude-haiku-5.5 rejects any value but its default) would
-        be left out. Reasoning is off unless `reasoning_effort` asks for some, and every caller
-        keeps it off (agent/answers.py has what thinking first cost an answer, measured live).
+        be left out. Unless an answer effort is explicitly chosen, the cached catalog decides:
+        turn reasoning off where supported, omit it where absent, or use the lowest listed effort
+        where required (minimal, then low, then the first listed; low if no efforts are listed).
+        An unknown model retains the existing "none" default. Reading the catalog never fetches it.
         `data_collection: "deny"` keeps the dictated text away from providers that may store or
         train on what they are sent, as it does for the audio of a transcription
         (`transcription_body`). `timeout_s` applies to each stage of the request (connect, send,
@@ -679,9 +704,19 @@ class OpenRouterClient:
                 "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             },
             "provider": {"require_parameters": True, "sort": "latency", "data_collection": "deny"},
-            "reasoning": {"effort": reasoning_effort},
             "max_tokens": max_tokens,
         }
+        effort = reasoning_effort
+        if effort == "none" and self._model_catalog is not None:
+            entry = next((e for e in self._model_catalog() or () if e.id == model), None)
+            if entry is not None:
+                if "reasoning" not in entry.capabilities:
+                    effort = None
+                elif "reasoning_off" not in entry.capabilities:
+                    efforts = entry.reasoning_efforts or ("low",)
+                    effort = next((e for e in ("minimal", "low") if e in efforts), efforts[0])
+        if effort is not None:
+            body["reasoning"] = {"effort": effort}
         # The chosen model is tried first, so listing it again would only repeat a failed attempt.
         models = [m for m in fallbacks if m != model]
         if models:
@@ -720,7 +755,7 @@ class OpenRouterClient:
         *,
         model: str,
         system: str,
-        user: str,
+        user: str | Sequence[dict],
         timeout_s: float,
         max_tokens: int,
         plugins: Sequence[dict] | None = None,
@@ -728,6 +763,9 @@ class OpenRouterClient:
     ) -> TextCompletion:
         """Ask `model` for text, with the OpenRouter `plugins` given (`{"id": "web",
         "max_results": 3}` lets it search the web first). The pages it drew on are in `sources`.
+        `user` is the text of the user's message, or its content parts (`{"type": "text"}`,
+        `{"type": "image_url"}`, `{"type": "file"}`: an image or a PDF for a model to read, with the
+        `file-parser` plugin for the PDF; raphael_core.services.vision).
 
         Like complete_json, this sends no temperature and denies data collection. Unlike it, the
         reply is not JSON and the routing does not require every parameter, since the plugins are
@@ -737,7 +775,7 @@ class OpenRouterClient:
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": user if isinstance(user, str) else list(user)},
             ],
             "provider": {"sort": "latency", "data_collection": "deny"},
             "reasoning": {"effort": reasoning_effort},
@@ -886,11 +924,27 @@ class OpenRouterClient:
         """
         self._client()
 
+    def start_connection_warmup(self) -> None:
+        """Start TLS while recording, without delaying the microphone or making a paid call."""
+        if self._connection_warm is None or self._connection_warm.done():
+            self._connection_warm = asyncio.create_task(self.warm_connection())
+
+    async def warm_connection(self) -> None:
+        try:
+            client = await asyncio.to_thread(self._client)
+            await client.head(BASE_URL + "/models", headers=_APP_HEADERS, timeout=2.0)
+        except Exception as exc:
+            logger.debug("OpenRouter connection warmup failed: %s", type(exc).__name__)
+
     async def aclose(self) -> None:
         """Close the httpx client this object made. One it was given stays open.
 
         A call after this makes a new client.
         """
+        if self._connection_warm is not None and not self._connection_warm.done():
+            self._connection_warm.cancel()
+            await asyncio.gather(self._connection_warm, return_exceptions=True)
+        self._connection_warm = None
         own_http, self._own_http = self._own_http, None
         if own_http is not None:
             await own_http.aclose()
@@ -914,7 +968,14 @@ class OpenRouterClient:
                 # Dictations can be minutes apart, and httpx drops an idle connection after 5 s.
                 # Two minutes spares most dictations the DNS, TCP and TLS set-up. A connection the
                 # server closed in the meantime is noticed and replaced before it is used.
-                self._own_http = httpx.AsyncClient(limits=httpx.Limits(keepalive_expiry=120))
+                limits = httpx.Limits(keepalive_expiry=120)
+                try:
+                    self._own_http = httpx.AsyncClient(http2=True, limits=limits)
+                except ImportError:
+                    # An existing dev venv may not have been synced after the HTTP/2 extra was
+                    # added. Keep dictation usable until `uv sync --locked` can install it.
+                    logger.warning("HTTP/2 dependencies missing; using HTTP/1.1 until uv sync --locked")
+                    self._own_http = httpx.AsyncClient(limits=limits)
             return self._own_http
 
     async def _request(

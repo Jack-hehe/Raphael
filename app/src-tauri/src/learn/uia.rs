@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use handy_keys::{
-    EditCancellation, EditEvent, EditObservation, observe_edits, observe_submissions,
+    EditCancellation, EditEvent, EditObservation, observe_edits, observe_terminal_edits,
 };
 use windows::Win32::Foundation::{E_INVALIDARG, E_POINTER, HWND};
 use windows::Win32::System::Com::{
@@ -33,7 +33,7 @@ use windows::core::{Interface, Ref, implement};
 
 use super::apps::{AppKind, classify, editor_id, needs_accessibility_hint};
 use super::keystrokes::{EnterKey, Keystrokes};
-use super::terminal::{TerminalDecision, TerminalTracker};
+use super::terminal::{TerminalDecision, TerminalTracker, collapsed_pastes};
 use super::{
     Correction, FieldProbe, LimitReason, Snapshot, Tracker, WatchScope, WatchedField,
     report_limited,
@@ -179,7 +179,7 @@ impl FieldProbe for UiaProbe {
             {
                 return probe_step(None, "terminal_checkpoint_or_subscription");
             }
-            field.set_observation(observe_submissions(
+            field.set_observation(observe_terminal_edits(
                 target.hwnd,
                 expires.saturating_duration_since(Instant::now()),
             ));
@@ -454,6 +454,8 @@ fn discover(
         readers,
         keyboard_field,
         hidden_input: false,
+        collapsed_pastes: 0,
+        terminal_edited: false,
         terminal_panel,
         retried: false,
         hwnd: target.hwnd,
@@ -502,6 +504,11 @@ fn readable_role(role: i32, terminal: bool, focused: bool) -> bool {
 
 fn safe_password_status(password: Option<bool>) -> bool {
     password == Some(false)
+}
+
+/// Identity policy shared by the polling guard and its regression tests.
+fn poll_identity_matches(same: bool, stale_own: bool, original_focused: Option<bool>) -> bool {
+    same || (stale_own && original_focused == Some(true))
 }
 
 fn keyboard_field_role(role: i32) -> bool {
@@ -807,6 +814,10 @@ struct UiaField {
     /// Whether every source that was read came back empty: a code editor's input box while its
     /// accessibility support is off, as opposed to one that holds other text than the paste.
     hidden_input: bool,
+    /// The largest placeholder count already reported for this paste, never its text or ID.
+    collapsed_pastes: usize,
+    /// An edit was captured since the last authoritative terminal snapshot.
+    terminal_edited: bool,
     /// Whether the focused element is the hidden input of an editor's terminal panel (xterm.js).
     terminal_panel: bool,
     /// Whether discovery took more than one attempt. A retry may have adopted another element
@@ -878,7 +889,12 @@ impl WatchedField for UiaField {
 
     fn corrections(&self) -> Option<Vec<Correction>> {
         match &self.mode {
-            ReadMode::Terminal { tracker, .. } => Some(tracker.corrections()),
+            ReadMode::Terminal { tracker, .. } => Some(
+                self.keys
+                    .as_ref()
+                    .map(Keystrokes::corrections)
+                    .unwrap_or_else(|| tracker.corrections()),
+            ),
             ReadMode::Keys => Some(
                 self.keys
                     .as_ref()
@@ -913,10 +929,26 @@ impl UiaField {
             return false;
         }
         if self.kind == AppKind::Terminal {
-            let stopped = self
+            let events = self
                 .observation
                 .as_mut()
-                .is_none_or(|observation| ends_terminal(&observation.drain()));
+                .map(EditObservation::drain)
+                .unwrap_or_else(|| vec![EditEvent::Invalidated]);
+            let stopped = ends_terminal(&events);
+            for event in events {
+                self.terminal_edited |= !matches!(event, EditEvent::Enter | EditEvent::Invalidated);
+                if event == EditEvent::Resync {
+                    // IME, clipboard and pointer edits use committed provider text, never VK guesses.
+                    self.keys.take();
+                } else if let Some(keys) = &mut self.keys {
+                    keys.apply(event);
+                }
+                if event == EditEvent::Invalidated
+                    && let ReadMode::Terminal { tracker, .. } = &mut self.mode
+                {
+                    tracker.invalidate();
+                }
+            }
             if stopped {
                 if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
                     tracker.submitted();
@@ -963,12 +995,23 @@ impl UiaField {
             }
             if terminal {
                 if let Some(tracker) = TerminalTracker::new(&text, &self.pasted) {
+                    if !tracker.unambiguous() || collapsed_pastes(&text) > 0 {
+                        self.keys.take();
+                    }
                     let region = tracker.region().to_owned();
                     self.mode = ReadMode::Terminal {
                         tracker: Box::new(tracker),
                         reader: index,
                     };
                     return Some(region);
+                }
+                let count = collapsed_pastes(&text);
+                if count > self.collapsed_pastes {
+                    self.collapsed_pastes = count;
+                    log::info!(
+                        "learn: terminal paste collapsed (placeholders: {count}, pasted_characters: {}); post-submit echoes are not followed",
+                        self.pasted.chars().count()
+                    );
                 }
             } else if Tracker::new(&text, &self.pasted).is_some() {
                 self.mode = ReadMode::Field(index);
@@ -1030,13 +1073,35 @@ impl UiaField {
     /// Follows the pasted rows of a terminal. The checks around the read also drain the keyboard
     /// observer, so an Enter ends the watch before any later screen is read.
     fn read_terminal(&mut self, reader: usize) -> Snapshot {
+        if !self.read_allowed() {
+            return Snapshot::Left;
+        }
+        if let Some(keys) = &self.keys {
+            if let Some(text) = keys.text() {
+                return Snapshot::Text(text.to_owned());
+            }
+            // A caret that crossed the pasted boundary cannot be safely reconstructed.
+            // Only an explicit Resync event may switch to authoritative screen text.
+            if let ReadMode::Terminal { tracker, .. } = &mut self.mode {
+                tracker.invalidate();
+            }
+            self.ended = true;
+            self.observation.take();
+            return Snapshot::Left;
+        }
         let Some(text) = self.read_source(reader) else {
             return Snapshot::Left;
         };
         let ReadMode::Terminal { tracker, .. } = &mut self.mode else {
             return Snapshot::Left;
         };
-        if tracker.observe(&text) == TerminalDecision::Continue {
+        let edited = std::mem::take(&mut self.terminal_edited);
+        let decision = if edited {
+            tracker.observe_input(&text, true)
+        } else {
+            tracker.observe(&text)
+        };
+        if decision == TerminalDecision::Continue {
             Snapshot::Text(tracker.region().to_owned())
         } else {
             self.observation.take();
@@ -1132,22 +1197,39 @@ impl UiaField {
             hresult: Some(error.code().0),
             ..FocusFailure::new("focused_element_error")
         })?;
-        let password = declared_password(&now);
+        // A non-activating overlay can leave UIA's global focused-element cache pointing at
+        // our unfocused Pane. Never adopt it or another terminal pane: revalidate the exact
+        // original element, including its explicit non-password status and current focus.
+        let stale_own = unsafe { now.CurrentProcessId() }.ok() == Some(std::process::id() as i32)
+            && unsafe { now.CurrentHasKeyboardFocus() }
+                .ok()
+                .is_some_and(|has| !has.as_bool());
+        let password = declared_password(if stale_own { &self.focused } else { &now });
         if !safe_password_status(password) {
             return Err(FocusFailure {
                 declared_password: password,
                 ..FocusFailure::new("password_unknown_or_true")
             });
         }
-        let same =
-            unsafe { self.automation.CompareElements(&now, &self.focused) }.map_err(|error| {
-                FocusFailure {
+        let same = if stale_own {
+            false
+        } else {
+            unsafe { self.automation.CompareElements(&now, &self.focused) }
+                .map_err(|error| FocusFailure {
                     declared_password: password,
                     hresult: Some(error.code().0),
                     ..FocusFailure::new("identity_mismatch_or_error")
-                }
-            })?;
-        if !same.as_bool() {
+                })?
+                .as_bool()
+        };
+        let original_focused = stale_own
+            .then(|| {
+                unsafe { self.focused.CurrentHasKeyboardFocus() }
+                    .ok()
+                    .map(|has| has.as_bool())
+            })
+            .flatten();
+        if !poll_identity_matches(same, stale_own, original_focused) {
             return Err(FocusFailure {
                 declared_password: password,
                 ..FocusFailure::new("identity_mismatch_or_error")
@@ -1297,6 +1379,7 @@ impl FocusWatch {
         has_keyboard_focus: Option<bool>,
         foreground_matches: bool,
         sender_in_target: Option<bool>,
+        sender_is_own: bool,
     ) -> Option<bool> {
         let same = self
             .runtime_id
@@ -1304,6 +1387,14 @@ impl FocusWatch {
             .filter(|identity| !identity.is_empty())
             .zip(sender_runtime_id.filter(|identity| !identity.is_empty()))
             .map(|(original, sender)| original == sender || self.is_container(sender));
+        // Our overlay's non-activating UIA notifications are not a user leaving the target.
+        // Check foreground independently; polling still verifies the original focused field.
+        if foreground_matches
+            && (sender_is_own
+                || (sender_in_target == Some(false) && has_keyboard_focus == Some(false)))
+        {
+            return same;
+        }
         if !foreground_matches || same.is_none() || has_keyboard_focus.is_none() {
             self.changed();
         } else if has_keyboard_focus == Some(false) {
@@ -1380,14 +1471,15 @@ impl IUIAutomationFocusChangedEventHandler_Impl for FocusChanged_Impl {
             .and_then(|element| unsafe { element.CurrentProcessId() }.ok())
             .map(|pid| pid as u32);
         let sender_id = identity.as_ref().and_then(|result| result.as_deref().ok());
+        let own_process = sender_pid == Some(std::process::id());
         let same = self.0.changed_from(
             sender_id,
             has_keyboard_focus.and_then(Result::ok),
             foreground_matches,
             sender_pid.map(|pid| pid == self.0.target_pid),
+            own_process,
         );
         let container = sender_id.is_some_and(|id| self.0.is_container(id));
-        let own_process = sender_pid == Some(std::process::id());
         // A small per-watch cap keeps repeated provider notifications from spamming the log.
         if self.0.event_reports.fetch_add(1, Ordering::Relaxed) < 3 {
             let metadata = sender
@@ -1455,11 +1547,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn logged_terminal_paste_overlay_backspaces_and_retyping_learns_the_name() {
+        let pasted = "Please use Open Mouse Bot";
+        let focus = FocusWatch::new(Some(vec![1, 2]), 7, 42);
+        let mut keys = Keystrokes::with_enter(pasted, EnterKey::Submit).unwrap();
+        // 2026-10-25 11:39:03: own unfocused Pane, target still foreground.
+        focus.changed_from(Some(&[9]), Some(false), true, Some(false), true);
+        assert!(focus.input_observation_allowed());
+        for _ in 0.."Open Mouse Bot".len() {
+            keys.apply(EditEvent::Backspace);
+        }
+        for byte in b"OpenMausBot" {
+            keys.apply(EditEvent::Ascii(*byte));
+        }
+        keys.apply(EditEvent::Enter);
+        assert_eq!(keys.text(), Some("Please use OpenMausBot"));
+        assert_eq!(
+            keys.corrections(),
+            [Correction {
+                word: "OpenMausBot".into(),
+                misheard: "Open Mouse Bot".into(),
+            }]
+        );
+    }
+
+    #[test]
     fn repeated_focus_events_for_the_same_runtime_id_do_not_cancel() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
         for _ in 0..3 {
-            focus.changed_from(Some(&original), Some(true), true, Some(true));
+            focus.changed_from(Some(&original), Some(true), true, Some(true), false);
             assert!(!focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1475,7 +1592,7 @@ mod tests {
             (Some(Vec::new()), Some(Vec::new())),
         ] {
             let focus = FocusWatch::new(original, 0, 11);
-            focus.changed_from(sender.as_deref(), Some(true), true, Some(true));
+            focus.changed_from(sender.as_deref(), Some(true), true, Some(true), false);
             assert!(focus.left.load(Ordering::SeqCst));
         }
     }
@@ -1491,7 +1608,7 @@ mod tests {
             .with_containers(vec![document.clone(), window.clone()]);
         for sender in [&document, &window] {
             assert_eq!(
-                focus.changed_from(Some(sender), Some(true), true, Some(true)),
+                focus.changed_from(Some(sender), Some(true), true, Some(true), false),
                 Some(true)
             );
         }
@@ -1503,8 +1620,8 @@ mod tests {
     fn an_element_around_the_field_does_not_hide_a_move_to_another_field() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![vec![42, 7, 3]]);
-        focus.changed_from(Some(&[42, 7, 3]), Some(true), true, Some(true));
-        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
+        focus.changed_from(Some(&[42, 7, 3]), Some(true), true, Some(true), false);
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true), false);
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1525,13 +1642,14 @@ mod tests {
                 has_keyboard_focus,
                 foreground_matches,
                 Some(true),
+                false,
             );
             assert!(focus.left.load(Ordering::SeqCst));
         }
         // An empty id never matches a container.
         let focus = FocusWatch::new(Some(original), 0, 11).with_containers(vec![Vec::new()]);
         assert!(!focus.is_container(&[]));
-        focus.changed_from(Some(&[]), Some(true), true, Some(true));
+        focus.changed_from(Some(&[]), Some(true), true, Some(true), false);
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1539,8 +1657,8 @@ mod tests {
     fn a_matching_focus_event_never_revives_a_cancelled_watch() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true));
-        focus.changed_from(Some(&original), Some(true), true, Some(true));
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true), false);
+        focus.changed_from(Some(&original), Some(true), true, Some(true), false);
         assert!(focus.left.load(Ordering::SeqCst));
     }
 
@@ -1548,12 +1666,12 @@ mod tests {
     fn unfocused_background_event_preserves_field_and_blocks_input_observation() {
         let original = vec![42, 7, 19];
         let focus = FocusWatch::new(Some(original.clone()), 0, 11);
-        focus.changed_from(Some(&[42, 7, 20]), Some(false), true, Some(true));
+        focus.changed_from(Some(&[42, 7, 20]), Some(false), true, Some(true), false);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(focus.input_blocked.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
         // A later duplicate cannot re-arm keyboard capture for the same watch.
-        focus.changed_from(Some(&original), Some(true), true, Some(true));
+        focus.changed_from(Some(&original), Some(true), true, Some(true), false);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
     }
@@ -1564,9 +1682,52 @@ mod tests {
         // keyboard focus: the terminal still gets every key, so the watch and its keyboard
         // observation go on.
         let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
-        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, Some(false));
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, Some(false), false);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn an_unfocused_external_overlay_without_a_runtime_id_does_not_end_the_watch() {
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
+        focus.changed_from(None, Some(false), true, Some(false), false);
+        assert!(!focus.left.load(Ordering::SeqCst));
+        assert!(focus.input_observation_allowed());
+    }
+
+    #[test]
+    fn a_stale_own_overlay_in_the_focus_poll_keeps_the_original_focused_field() {
+        assert!(poll_identity_matches(false, true, Some(true)));
+        assert!(!poll_identity_matches(false, true, Some(false)));
+        assert!(!poll_identity_matches(false, true, None));
+        assert!(!poll_identity_matches(false, false, Some(true)));
+    }
+
+    #[test]
+    fn own_process_focus_events_are_ignored_only_while_the_target_stays_in_front() {
+        for runtime in [None, Some(vec![61, 2, 8])] {
+            for focused in [None, Some(false), Some(true)] {
+                let focus = FocusWatch::new(Some(vec![42, 7, 19]), 7, 11);
+                focus.changed_from(runtime.as_deref(), focused, true, Some(false), true);
+                assert!(!focus.left.load(Ordering::SeqCst));
+                assert!(focus.input_observation_allowed());
+                focus.changed_from(runtime.as_deref(), focused, false, Some(false), true);
+                assert!(focus.left.load(Ordering::SeqCst));
+            }
+        }
+    }
+
+    #[test]
+    fn another_native_terminal_control_is_a_different_field_even_in_the_same_process() {
+        let focus = FocusWatch::new(Some(vec![42, 7, 19]), 7, 11)
+            .with_containers(vec![vec![42, 7], vec![42]]);
+        // Native Windows Terminal splits expose distinct focused Text providers; the readers
+        // walk ancestors, never siblings, and a sibling control's focus ends the original watch.
+        assert!(readable_role(UIA_TextControlTypeId.0, true, true));
+        assert!(!readable_role(UIA_TextControlTypeId.0, true, false));
+        focus.changed_from(Some(&[42, 7, 20]), Some(true), true, Some(true), false);
+        assert!(focus.left.load(Ordering::SeqCst));
+        assert!(!focus.input_observation_allowed());
     }
 
     #[test]
@@ -1580,6 +1741,7 @@ mod tests {
                 has_keyboard_focus,
                 foreground_matches,
                 Some(false),
+                false,
             );
             assert!(
                 focus.left.load(Ordering::SeqCst),
@@ -1591,7 +1753,7 @@ mod tests {
     #[test]
     fn an_unfocused_sender_of_unknown_process_still_blocks_keyboard_observation() {
         let focus = FocusWatch::new(Some(vec![42, 7, 19]), 0, 11);
-        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, None);
+        focus.changed_from(Some(&[61, 2, 8]), Some(false), true, None, false);
         assert!(!focus.left.load(Ordering::SeqCst));
         assert!(!focus.input_observation_allowed());
     }
@@ -1612,6 +1774,7 @@ mod tests {
                 has_keyboard_focus,
                 foreground_matches,
                 Some(true),
+                false,
             );
             assert!(focus.left.load(Ordering::SeqCst));
         }

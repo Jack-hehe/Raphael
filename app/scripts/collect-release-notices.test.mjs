@@ -9,7 +9,7 @@ import {
 } from "./collect-release-notices.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const fixtureDirectory = join(scripts, "..", "node_modules", ".cache", "release-notices-tests");
+const fixtureDirectory = join(scripts, "..", ".test-cache", "release-notices-tests");
 const temporaryRoots = [];
 // `rustc --print cfg --target x86_64-pc-windows-msvc`, kept here so the tests need no Rust toolchain.
 const windowsX64Cfg = [
@@ -436,7 +436,7 @@ describe("pinned binary and ported components", () => {
     const directory = join(scripts, "release-licenses");
     const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"));
     expect(manifest.components.map((entry) => `${entry.name} ${entry.version}`)).toEqual([
-      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47", "Simple Icons 16.35.0", "Brand logos 1",
+      "Handy 9e57a0d", "Microsoft Edge WebView2 SDK loader 1.0.3800.47", "Simple Icons 16.35.0", "Brand logos 1", "Inter 4.1",
     ]);
     for (const entry of manifest.components) {
       expect(entry.source).toMatch(/^https:\/\//);
@@ -463,6 +463,15 @@ describe("pinned binary and ported components", () => {
     expect(icons.files[0].sourceUrl).toContain("/955f17f35634cd58de1748204059bce380d379af/");
     expect(readFileSync(join(directory, icons.files[0].file), "utf8")).toContain("CC0 1.0 Universal");
     expect(readFileSync(join(scripts, "..", "src", "main", "service-icons.ts"), "utf8")).toContain("Simple Icons 16.35.0");
+  });
+
+  it("ships the full Inter OFL notice even without a linked Rust crate", () => {
+    const test = fixture();
+    const result = collectReleaseNotices({ ...test.options, supplementalDirectory: join(scripts, "release-licenses") });
+    const inter = result.records.find((record) => record.name === "Inter");
+    expect(inter).toMatchObject({ ecosystem: "Component", version: "4.1", spdx: "OFL-1.1" });
+    expect(result.text).toContain("SIL OPEN FONT LICENSE Version 1.1");
+    expect(result.text).toContain(readFileSync(join(scripts, "release-licenses", "inter-4.1-LICENSE.txt"), "utf8").trim());
   });
 });
 

@@ -5,6 +5,10 @@ import { backendMessage } from "./i18n/backend";
 
 const pad = (n: number): string => String(n).padStart(2, "0");
 
+/** Bytes in a megabyte and a gigabyte, as download sizes are written (powers of ten). */
+export const MB = 1_000_000;
+export const GB = 1_000_000_000;
+
 /** `3.42` -> `US$3.42`. Under a cent shows four decimals, so a month of a few dictations
  * (`0.0037`) does not read as nothing spent. */
 export function formatUsd(n: number): string {

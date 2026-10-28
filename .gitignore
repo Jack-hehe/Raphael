@@ -37,3 +37,7 @@ coverage/
 # Editor settings
 /.vscode/
 /app/.vscode/
+
+# Shared visual verification output
+/app/.look/
+/core/.live/
