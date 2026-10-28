@@ -18,6 +18,34 @@ can still be deleted. Opening it and typing continues with the quick model and e
 Alt+Space and a question typed there name the quick destination; nothing reaches quick or
 formal by default (see Quick questions below).
 
+## One waiting line (2026-10-28, R-UI-38/42)
+
+Pending typed and spoken requests share the running turn's `work-section think-box is-live`
+line: the same three animated dots, `agent.thinking` and `chat.workingFor`, with no answer
+bubble or empty toggle. Their clock starts at the owner's send/voice-processing time and
+continues across the history announcement, subsequent refreshes and member navigation.
+`pages/agent-stop.test.ts` exercises pending rendering, ticking and typed/spoken handoff.
+Finished replies still being paced show settled work, never another dots bubble;
+`pages/agent-members.test.ts` also covers finish, navigation, search and reduced motion.
+
+The look `pending-work` check requires the shared line, elapsed seconds and no empty
+expander; `work-dots` checks the running and pending dots held mid-bounce. The shared
+rendered audit rejects `.page-agent .ans.thinking` in every captured conversation.
+The affected scene set includes every private-thread pending/live fixture and the
+pending/Stop result journeys; room speaking rows use a separate room contract.
+
+```powershell
+npm run look -- composer-stop-pending composer-stop-pending-result work composer-stop-roster composer-stop-voice composer-stop-voice-result composer-stop-member composer-stop-navigation composer-stop-background composer-stop-background-result composer-task-stop running running-motion quick-stop quick-formal-isolation --theme both --width 1120,720,1920x1080
+```
+
+Compare full-size `composer-stop-pending` and `running-motion` images in every size and
+theme: identical line/dot/text geometry, with no pending chevron. Inspect every contact
+sheet. Group rooms name the current speaker (`rooms.speaking`); onboarding lessons
+show their own phase (`onboarding.lessonThinking`); the desktop overlay uses its emblem
+and rotating/static waiting caption. These are separate surfaces and remain unchanged.
+Offline fixtures do not prove native microphone, providers or transport. Judge requires
+network authorization; a no-network brief records it as SKIP.
+
 ## How to get to it (user POV)
 
 From Home, click Raphael in the rail or open a member report. Select Raphael or another member in the sidebar (compact width:

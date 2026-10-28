@@ -8,7 +8,7 @@ import { permissionCardsHTML } from "./permission-card";
 import { secretCardsHTML, secretResumedLineHTML } from "./secret-card";
 // A turn of the conversation as the 拉斐爾 page shows it: the person's words on the right, with a
 // their actions below each bubble; Raphael on the left, with his face and each public message
-// in order. Events are small chips, questions mount inline, and pending work shows three dots.
+// in order. Events are small chips, questions mount inline, and pending work shares the live work line.
 // Raw steps remain available to older detail callers, outside the main conversation flow.
 //
 // The functions make HTML from plain data; `TimelineState` says what is open and which steps are new,
@@ -222,6 +222,8 @@ export interface TimelineState {
   open: Map<number, boolean>;
   /** Turns whose thinking block the reader opened or closed: their choice beats the default. */
   thinkingOpen: Map<number, boolean>;
+  /** The owner's send time, retained when a pending request becomes a history turn. */
+  workStartedAt: Map<number, number>;
   /** The steps drawn before; any other is new and comes in with a movement. */
   seen: Set<string>;
   /** Tasks the reader asked to stop, which have not stopped yet. */
@@ -239,6 +241,7 @@ export interface TimelineState {
 export const emptyTimelineState = (): TimelineState => ({
   open: new Map(),
   thinkingOpen: new Map(),
+  workStartedAt: new Map(),
   seen: new Set(),
   stopping: new Set(),
   rerunning: new Set(),
@@ -527,8 +530,10 @@ export function filesHTML(files: readonly TurnAttachment[] | undefined): string 
   return `<div class="me-files">${visual.length ? `<div class="attachment-grid${visual.length > 1 ? " is-multiple" : ""}">${visual.map(sentFileHTML).join("")}</div>` : ""}${rest.map(sentFileHTML).join("")}</div>`;
 }
 
-/** Three dots while the next public line is pending. */
-const typingHTML = (): string => `<p class="ans thinking"><span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span></p>`;
+/** Pending requests and running turns share the same public work line. */
+const liveWorkHTML = (seconds: number, latest = t("agent.thinking")): string =>
+  `<span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span>` +
+  `<span class="work-latest">${esc(latest)}</span><span class="work-time">${esc(t("chat.workingFor", { p0: seconds }))}</span>`;
 
 /** Background task controls without raw tool labels or a collapsed steps box. */
 function taskActionsHTML(turn: AgentTurn, state: TimelineState): string {
@@ -651,24 +656,23 @@ function meetingEvent(text: string): { room_id: number; name: string } | null {
 const plainLine = (text: string): string => plainReplies([text])[0];
 
 /** Keep all work behind one closed chip; running turns show their latest public update. */
-function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string): string {
+function workSectionHTML(turn: AgentTurn, state: TimelineState, query: string, revealing = false): string {
   const messages = (turn.messages ?? []).filter(m => m.kind !== "reply" && m.kind !== "media" && !meetingEvent(m.text) && m.text.trim())
     .map(m => ({ ...m, text: plainLine(m.text) }));
-  if (!messages.length && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task)) return "";
+  if (!messages.length && !(turn.steps?.length) && turn.status !== "running" && !isLive(turn.task) && !revealing) return "";
   const live = turn.status === "running" || isLive(turn.task);
+  const start = state.workStartedAt.get(turn.id) ?? turn.created_at_ms;
   const firstReply = (turn.messages ?? []).find(m => m.kind === "reply" && m.at_ms >= turn.created_at_ms)?.at_ms;
   const end = live ? state.nowMs : turn.task?.finished_at_ms ?? firstReply ?? Math.max(turn.created_at_ms, ...messages.map(m => m.at_ms), ...(turn.steps ?? []).map(step => step.at_ms + step.ms));
-  const seconds = Math.max(0, Math.round((end - turn.created_at_ms) / 1000));
+  const seconds = Math.max(0, Math.round((end - start) / 1000));
   const open = state.thinkingOpen.get(turn.id) ?? false;
   const latest = [...messages].reverse().find(m => m.kind === "progress" || m.kind === "thinking");
-  const label = live
-    ? `<span class="work-latest">${esc(latest?.text ?? t("agent.thinking"))}</span><span class="work-time">${esc(t("chat.workingFor", { p0: seconds }))}</span>`
-    : `<span>${esc(t("chat.workedFor", { p0: seconds }))}</span>`;
-  const indicator = live ? `<span class="think" role="img" aria-label="${esc(t("agent.thinking"))}"><i></i><i></i><i></i></span>` : ico("check");
+  const label = live ? liveWorkHTML(seconds, latest?.text) : `${ico("check")}<span>${esc(t("chat.workedFor", { p0: seconds }))}</span>`;
   const body = messages.map(m => `<div class="chat-message" data-message="${m.seq}"><div class="${m.kind === "event" ? "turn-event" : "work-progress"}">${messageHTML(m.text, query)}</div></div>`).join("") +
     ((turn.steps?.length ?? 0) > 0 ? `<ol class="step-list">${shownSteps(turn).map(step => stepHTML(step, false)).join("")}</ol>` : "");
-  return `<div class="work-section think-box${open ? " is-open" : ""}${live ? " is-live" : ""}" data-thinking-turn="${turn.id}">` +
-    btn(`${indicator}${label}<span class="work-chevron">${ico("right")}</span>`, "work-toggle", ` data-act="thinking" aria-expanded="${open}" aria-controls="work-${turn.id}"`) +
+  if (!body) return `<div class="work-section think-box${live ? " is-live" : ""}" data-thinking-turn="${turn.id}"${live ? ` data-work-start="${start}"` : ""}><div class="btn work-toggle" role="status">${label}</div></div>`;
+  return `<div class="work-section think-box${open ? " is-open" : ""}${live ? " is-live" : ""}" data-thinking-turn="${turn.id}"${live ? ` data-work-start="${start}"` : ""}>` +
+    btn(`${label}<span class="work-chevron">${ico("right")}</span>`, "work-toggle", ` data-act="thinking" aria-expanded="${open}" aria-controls="work-${turn.id}"`) +
     `<div class="work-body think-body" id="work-${turn.id}"${open ? "" : " hidden"}>${body}</div></div>`;
 }
 
@@ -742,12 +746,12 @@ export function mediaCardHTML(payload: MediaPayload, query: string, seq?: number
 }
 
 /** Renders all ordered items in `turn.messages` (thinking block, progress, media cards, event chips, replies). */
-function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, regenerate: boolean): string {
+function turnMessagesHTML(turn: AgentTurn, state: TimelineState, query: string, regenerate: boolean, revealing: boolean): string {
   const ordered = [...(turn.messages ?? [])].sort((a, b) => a.seq - b.seq);
   const replies = ordered.filter(m => m.kind === "reply");
   const said = new Map(plainReplies(replies.map(m => m.text)).map((text, index) => [replies[index].seq, text.trim()]));
   const lastReply = [...replies].reverse().find(m => said.get(m.seq))?.seq;
-  const work = workSectionHTML(turn, state, query);
+  const work = workSectionHTML(turn, state, query, revealing);
   const settledDraft = isSettledDraftTurn(turn);
   return work + ordered.filter(message => (message.kind === "reply" && !(settledDraft && said.get(message.seq) === turn.text.trim())) || message.kind === "media").map(message => {
     const text = message.kind === "reply" ? said.get(message.seq) ?? "" : message.text.trim();
@@ -812,13 +816,12 @@ export function turnHTML(turn: AgentTurn, state: TimelineState, detailOpen: bool
     `<div class="ra${isBotRename(turn) ? " is-system-result" : ""}">` +
     (isBotRename(turn) ? "" : `<span class="ra-face"${meta ? ` title="${meta}"` : ""}>${look.face(live || revealing)}</span>`) + `<div class="ra-body">` +
     (hasMsgs
-      ? turnMessagesHTML(turn, state, query, regenerate) + (turn.messages!.some(m => m.kind === "reply") ? "" : textAnswer)
-      : workSectionHTML(turn, state, query) + textAnswer) +
+      ? turnMessagesHTML(turn, state, query, regenerate, revealing) + (turn.messages!.some(m => m.kind === "reply") ? "" : textAnswer)
+      : workSectionHTML(turn, state, query, revealing) + textAnswer) +
     (settledDraft ? settledDraftHTML(turn, detailOpen, query) : "") +
     connectorCardsHTML(turn) + secretCardsHTML(turn) + computerCardsHTML(turn) +
     permissionCardsHTML(turn, look.answerable) + mailCardsHTML(turn, look) +
     (turn.status === "confirm" ? `<div class="turn-question" data-question-turn="${id}"></div>` : "") +
-    (!live && revealing ? typingHTML() : "") +
     (detail ? `<div class="tn-detail" id="tn-detail-${id}"${detailOpen ? "" : " hidden"}>${messageHTML(turn.detail, query, true)}</div>` : "") +
     more +
     taskActionsHTML(turn, state) +
@@ -834,14 +837,15 @@ export const dayHTML = (label: string): string => `<li class="day"><span>${esc(l
  * a bubble with light passing over it until the words arrive) and Raphael thinking. A typed
  * question shows the chips of the files it was sent with.
  */
-export function pendingTurnHTML(question: string | null, _source: string, look: TurnLook, files: readonly TurnAttachment[] = [], request?: { id: string; time: number; quote?: MessageQuote }): string {
+export function pendingTurnHTML(question: string | null, _source: string, look: TurnLook, files: readonly TurnAttachment[] = [], request?: { id?: string; time: number; quote?: MessageQuote }, nowMs = Date.now()): string {
+  const start = request?.time ?? nowMs;
   const words =
     question === null ? `<span class="shimmer">${esc(t("agent.hearing"))}</span>` : question.trim() === "" ? "" : messageHTML(question.trim());
   return (
-    `<li class="tn is-pending"${request ? ` data-session="${esc(request.id)}"` : ""}>` +
-    `<div class="me"><div class="chat-message owner-message" data-message="question">${bubbleHTML(words, files, request?.quote)}${request ? messageActionsHTML(request.time, false, "cancel") : ""}</div></div>` +
+    `<li class="tn is-pending"${request?.id ? ` data-session="${esc(request.id)}"` : ""}>` +
+    `<div class="me"><div class="chat-message owner-message" data-message="question">${bubbleHTML(words, files, request?.quote)}${request?.id ? messageActionsHTML(request.time, false, "cancel") : ""}</div></div>` +
     `<div class="ra"><span class="ra-face">${look.face(true)}</span><div class="ra-body">` +
-    typingHTML() +
+    `<div class="work-section think-box is-live" data-work-start="${start}"><div class="btn work-toggle" role="status">${liveWorkHTML(Math.max(0, Math.round((nowMs - start) / 1000)))}</div></div>` +
     `</div></div></li>`
   );
 }

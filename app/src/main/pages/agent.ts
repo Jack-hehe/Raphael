@@ -761,8 +761,8 @@ export function createAgent(app: AppContext): Page {
           : { key: item.key, html: turnHTML(pacing.view(item.turn), state, details.has(item.turn.id), shape), turnId: item.turn.id },
     );
     if (!(searching && query.trim() !== "")) {
-      for (const sent of outgoing) if (belongs(sent)) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }) });
-      if (hearingBelongs()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape) });
+      for (const sent of outgoing) if (belongs(sent)) out.push({ key: sent.key, html: pendingTurnHTML(sent.text, TYPED, shape, sent.files, { id: sent.requestId, time: sent.sentAt, quote: sent.quote }, state.nowMs) });
+      if (hearingBelongs()) out.push({ key: "hearing", html: pendingTurnHTML(null, VOICE, shape, [], { time: hearing!.since }, state.nowMs) });
     }
     return out;
   }
@@ -867,7 +867,7 @@ export function createAgent(app: AppContext): Page {
     older.hidden = !loadingEarlier;
     older.innerHTML = loadingEarlier ? loadingHTML() : "";
     if (keepUp) scroller.scrollTop = scroller.scrollHeight;
-    if (shown.some((turn) => isLive(turn.task) || turn.status === "running")) startTicker();
+    if (thread.querySelector(".work-section.is-live")) startTicker();
     else stopTicker();
     // A first page that does not fill the window has no scrolling to bring the earlier ones.
     if (canLoadEarlier && !loadingEarlier && !searchingNow && scroller.scrollHeight <= scroller.clientHeight) void load(true);
@@ -877,9 +877,9 @@ export function createAgent(app: AppContext): Page {
   function tick(): void {
     const now = Date.now();
     state.nowMs = now;
-    for (const turn of turns.filter(turn => turn.status === "running" || isLive(turn.task))) {
-      const label = thread.querySelector<HTMLElement>(`[data-thinking-turn="${turn.id}"] .work-time`);
-      if (label) label.textContent = t("chat.workingFor", { p0: Math.max(0, Math.round((now - turn.created_at_ms) / 1000)) });
+    for (const line of thread.querySelectorAll<HTMLElement>(".work-section.is-live[data-work-start]")) {
+      const label = line.querySelector<HTMLElement>(".work-time");
+      if (label) label.textContent = t("chat.workingFor", { p0: Math.max(0, Math.round((now - Number(line.dataset.workStart)) / 1000)) });
     }
     for (const line of thread.querySelectorAll<HTMLElement>("[data-since]")) line.textContent = formatDuration(now - Number(line.dataset.since));
   }
@@ -995,11 +995,17 @@ export function createAgent(app: AppContext): Page {
               turn.created_at_ms >= sent.sentAt - 5_000,
           )
         : undefined;
-    outgoing = outgoing.filter((sent) => sinceSent(sent) === undefined);
+    outgoing = outgoing.filter(sent => {
+      const turn = sinceSent(sent);
+      if (turn) state.workStartedAt.set(turn.id, sent.sentAt);
+      return turn === undefined;
+    });
+    const spoken = hearingBelongs() ? turns.find(turn => sourceOf(turn) === VOICE &&
+      (hearing!.after === null ? turn.created_at_ms >= hearing!.since : turn.id > hearing!.after)) : undefined;
+    if (spoken) state.workStartedAt.set(spoken.id, hearing!.since);
     if (
       hearing &&
-      ((hearingBelongs() && turns.some((turn) => sourceOf(turn) === VOICE &&
-        (hearing!.after === null ? turn.created_at_ms >= hearing!.since : turn.id > hearing!.after))) ||
+      (spoken ||
         Date.now() - hearing.since > HEARING_MAX_MS)
     ) {
       stopHearing();

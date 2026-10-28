@@ -357,7 +357,7 @@ test("a selected member reply travels separately, renders on the pending bubble,
   agent.hide();
 });
 
-test.each(["finish", "switch", "search", "reduced"])("a live member burst reveals with typing dots; %s completes or flushes it", async mode => {
+test.each(["finish", "switch", "search", "reduced"])("a finished member burst reveals with its settled work chip; %s completes or flushes it", async mode => {
   vi.useFakeTimers();
   let reduce = false;
   let preferenceChanged: () => void = () => {};
@@ -372,7 +372,8 @@ test.each(["finish", "switch", "search", "reduced"])("a live member burst reveal
   await vi.advanceTimersByTimeAsync(150); await flush();
   const replies = () => [...document.querySelectorAll('[data-id="50"] .message-text')].map(element => element.textContent);
   expect(replies()).toEqual(["First"]);
-  expect(document.querySelector('[data-id="50"] .thinking')).not.toBeNull();
+  expect(document.querySelector('[data-id="50"] .ans.thinking, [data-id="50"] .work-section.is-live')).toBeNull();
+  expect($('[data-id="50"] .work-toggle').textContent).toContain("已處理");
   if (mode === "finish") await vi.advanceTimersByTimeAsync(2000);
   if (mode === "switch") { await pick(4); await pick(3); }
   if (mode === "search") $('[data-act="search"]').click();

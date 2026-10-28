@@ -304,7 +304,6 @@
 
 /* a turn not in the history yet */
 .tn.is-pending .bubble { color: var(--on-accent); }
-.ans.thinking { padding-top: var(--sp-1); }
 
 /* what was done: one line that opens on the steps */
 .steps { display: grid; grid-template-columns: minmax(0, 1fr); }

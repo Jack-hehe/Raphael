@@ -34,7 +34,8 @@
 .work-section { margin: var(--sp-1) 0 var(--sp-2); }
 /* Work is a muted one-line state above the answer, not a framed control. */
 .page-agent .btn.work-toggle { display: inline-flex; justify-self: start; align-items: center; gap: var(--sp-1); min-height: 0; max-width: 100%; padding: 2px 0; border-color: transparent; border-radius: var(--r-sm); background: transparent; font-size: var(--fs-xs); color: var(--text-3); }
-.page-agent .btn.work-toggle:hover:not(:disabled) { border-color: transparent; background: transparent; color: var(--text-2); }
+.page-agent button.btn.work-toggle:hover:not(:disabled) { border-color: transparent; background: transparent; color: var(--text-2); }
+.page-agent div.work-toggle { cursor: default; }
 .work-chevron { display: inline-flex; flex-shrink: 0; }
 .work-toggle[aria-expanded="true"] .work-chevron .i { transform: rotate(90deg); }
 .work-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
